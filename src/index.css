@@ -1,0 +1,20 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.icon-muted {
+  color: var(--muted-icon);
+  transition: color 300ms ease-in-out;
+}
+.icon-muted:hover {
+  color: var(--brand-primary);
+}
+.icon-muted path,
+.icon-muted circle,
+.icon-muted rect,
+.icon-muted line,
+.icon-muted polygon {
+  stroke: currentColor;
+  fill: currentColor;
+}
