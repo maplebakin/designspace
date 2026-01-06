@@ -1,14 +1,13 @@
-
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { useEditorStore } from '../state/editorStore';
 import * as objectFactories from '../fabric/objectFactories';
 import * as frameFactories from '../fabric/frameFactories';
 import { loadPdfAsBackground } from '../fabric/pdfUtils';
 import { StickerTab } from './StickerTab';
-import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, Upload, Hexagon, FileImage, FileUp, FileText, LayoutTemplate, Sticker, Trash2 } from 'lucide-react';
+import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, Hexagon, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
 import * as fabric from 'fabric';
-import { loadApocapalette } from '../fabric/themeUtils';
-import { TemplateData } from '../utils/indexedDb';
+import { SAFE_MARGIN_PX } from '../utils/units';
+
 const INSERT_ICON = 'icon-muted w-4 h-4 stroke-[1.5]';
 
 // --- Main Inserter Panel ---
@@ -16,8 +15,8 @@ export const Inserter: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'design' | 'stickers' | 'templates'>('design');
 
     return (
-    <div className='flex flex-col h-full bg-[#1c0d0d]/80 backdrop-blur-md border border-[color:var(--border-subtle)] rounded-xl overflow-hidden transition-all duration-300 ease-in-out'>
-            <div className="flex justify-center border-b">
+    <div className='flex flex-col h-full bg-[#1c0d0d]/80 backdrop-blur-md'>
+            <div className="flex justify-center border-b border-[color:var(--border-subtle)]">
                 <TabButton
                     label="Design"
                     icon={<Square />}
@@ -48,7 +47,6 @@ export const Inserter: React.FC = () => {
 
 const DesignTab: React.FC = () => {
     const { canvas, saveState } = useEditorStore();
-    const jsonInputRef = useRef<HTMLInputElement>(null);
 
     const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
         if (canvas) {
@@ -61,25 +59,6 @@ const DesignTab: React.FC = () => {
             objectFactories.addIText(canvas, options);
             saveState();
         }
-    };
-
-    const handleJsonFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file && canvas) {
-            const reader = new FileReader();
-            reader.onload = (f: ProgressEvent<FileReader>) => {
-                try {
-                    const jsonString = f.target?.result as string;
-                    const apocapaletteData = JSON.parse(jsonString);
-                    loadApocapalette(apocapaletteData, canvas);
-                } catch (error) {
-                    console.error('Error parsing Apocapalette JSON:', error);
-                    alert('Invalid Apocapalette JSON file.');
-                }
-            };
-            reader.readAsText(file);
-        }
-        if(jsonInputRef.current) jsonInputRef.current.value = '';
     };
 
     return (
@@ -110,14 +89,8 @@ const DesignTab: React.FC = () => {
                     { label: 'Fixed Textbox', icon: <FileText className={INSERT_ICON} />, onClick: () => handleAddItem(objectFactories.addFixedTextbox) },
                 ]}
             />
+            <LayoutsDropdown />
             <UploadsDropdown />
-            <div className='p-4 border-t border-[color:var(--border-subtle)]'>
-                <input type="file" accept=".json" ref={jsonInputRef} onChange={handleJsonFileChange} className="hidden" />
-                <button onClick={() => jsonInputRef.current?.click()} className='group w-full flex items-center justify-center gap-2 text-xs uppercase tracking-widest text-slate-200 hover:text-[color:var(--brand-primary)] p-2 rounded-lg hover:bg-white/5 transition-all duration-300 ease-in-out'>
-                    <Upload className={INSERT_ICON} />
-                    Load Brand JSON
-                </button>
-            </div>
         </div>
     );
 };
@@ -133,7 +106,7 @@ const UploadsDropdown: React.FC = () => {
         if (file && canvas) {
             const reader = new FileReader();
                 reader.onload = (f: ProgressEvent<FileReader>) => {
-                    const data = f.target?.result;
+                    const data = f.target?.result as string;
                     fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
                         canvas.add(img);
                         canvas.centerObject(img);
@@ -152,17 +125,8 @@ const UploadsDropdown: React.FC = () => {
             const reader = new FileReader();
                 reader.onload = (f: ProgressEvent<FileReader>) => {
                     const svgString = f.target?.result as string;
-                    fabric.loadSVGFromString(svgString).then(({ objects, options }) => {
-                        const validObjects = objects.filter(
-                            (obj): obj is fabric.FabricObject => obj !== null,
-                        );
-                        const group = new fabric.Group(validObjects, options);
-                    canvas.add(group);
-                    canvas.centerObject(group);
-                    canvas.requestRenderAll();
-                    saveState();
-                });
-            };
+                    objectFactories.addSvgFromUrl(canvas, svgString);
+                };
             reader.readAsText(file);
         }
         if(svgInputRef.current) svgInputRef.current.value = '';
@@ -193,6 +157,230 @@ const UploadsDropdown: React.FC = () => {
     );
 }
 
+const LayoutsDropdown: React.FC = () => {
+    const { canvas, saveState, themeData, bleedPx } = useEditorStore();
+    const [isOpen, setIsOpen] = useState(false);
+    const [showCustomGrid, setShowCustomGrid] = useState(false);
+    const [rows, setRows] = useState(2);
+    const [cols, setCols] = useState(2);
+    const gutter = 20;
+
+    const resolveThemeValue = (obj: object | null, path: string): string | null => {
+        if (!obj) return null;
+        const getValueByPath = (target: object, keyPath: string): any =>
+            keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], target);
+        let value = getValueByPath(obj, path);
+        if (!value && !path.endsWith('.value')) {
+            value = getValueByPath(obj, `${path}.value`);
+        }
+        if (value && typeof value === 'object' && 'value' in value) {
+            return (value as { value: string }).value;
+        }
+        return typeof value === 'string' ? value : null;
+    };
+
+    const toRgba = (color: string, alpha: number) => {
+        if (color.startsWith('#')) {
+            const hex = color.replace('#', '');
+            const normalized = hex.length === 3
+                ? hex.split('').map((c) => c + c).join('')
+                : hex;
+            const r = parseInt(normalized.slice(0, 2), 16);
+            const g = parseInt(normalized.slice(2, 4), 16);
+            const b = parseInt(normalized.slice(4, 6), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+        const rgbMatch = color.match(/rgba?\(([^)]+)\)/i);
+        if (rgbMatch) {
+            const parts = rgbMatch[1].split(',').map((v) => Number.parseFloat(v.trim()));
+            if (parts.length >= 3) {
+                return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
+            }
+        }
+        return `rgba(148, 163, 184, ${alpha})`;
+    };
+
+    const drawGhostGrid = (gridRows: number, gridCols: number) => {
+        if (!canvas) return;
+        const ctx = canvas.contextTop;
+        canvas.clearContext(ctx);
+        if (gridRows <= 0 || gridCols <= 0) return;
+
+        const safeInset = bleedPx + SAFE_MARGIN_PX;
+        const safeWidth = canvas.getWidth() - safeInset * 2;
+        const safeHeight = canvas.getHeight() - safeInset * 2;
+        if (safeWidth <= 0 || safeHeight <= 0) return;
+
+        const cellWidth = (safeWidth - gutter * (gridCols - 1)) / gridCols;
+        const cellHeight = (safeHeight - gutter * (gridRows - 1)) / gridRows;
+        if (cellWidth <= 0 || cellHeight <= 0) return;
+
+        const strokeColor = toRgba(
+            resolveThemeValue(themeData, 'borders.border-subtle') || '#94a3b8',
+            0.5
+        );
+        const vpt = canvas.viewportTransform;
+
+        ctx.save();
+        if (vpt) {
+            ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+        }
+        ctx.strokeStyle = strokeColor;
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1 / (canvas.getZoom() || 1);
+
+        for (let row = 0; row < gridRows; row += 1) {
+            for (let col = 0; col < gridCols; col += 1) {
+                const left = safeInset + col * (cellWidth + gutter);
+                const top = safeInset + row * (cellHeight + gutter);
+                ctx.strokeRect(left, top, cellWidth, cellHeight);
+            }
+        }
+
+        ctx.restore();
+    };
+
+    const clearGhostGrid = () => {
+        if (!canvas) return;
+        canvas.clearContext(canvas.contextTop);
+    };
+
+    const handleGenerateGrid = (gridRows: number, gridCols: number) => {
+        if (!canvas) return;
+        objectFactories.generateGrid(canvas, gridRows, gridCols);
+        saveState();
+        setIsOpen(false);
+        setShowCustomGrid(false);
+        clearGhostGrid();
+    };
+
+    const handleNumberInput =
+        (setter: React.Dispatch<React.SetStateAction<number>>) =>
+        (e: React.ChangeEvent<HTMLInputElement>) => {
+            const parsed = Number.parseInt(e.target.value, 10);
+            const clamped = Number.isFinite(parsed) ? Math.min(12, Math.max(1, parsed)) : 1;
+            const next = Number.isFinite(clamped) ? clamped : 1;
+            setter(next);
+        };
+
+    React.useEffect(() => {
+        if (!canvas) return;
+        const shouldPreview = isOpen && showCustomGrid;
+        const draw = () => drawGhostGrid(rows, cols);
+        if (shouldPreview) {
+            draw();
+            canvas.on('after:render', draw);
+        } else {
+            canvas.off('after:render', draw);
+            clearGhostGrid();
+        }
+        return () => {
+            canvas.off('after:render', draw);
+            clearGhostGrid();
+        };
+    }, [canvas, isOpen, showCustomGrid, rows, cols, themeData, bleedPx]);
+
+    return (
+        <div className="relative">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
+            >
+                Layouts
+                <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isOpen && (
+                <div className="mt-1 p-1 bg-[#120707] rounded-lg shadow-lg border border-[color:var(--border-subtle)] absolute w-full z-20 backdrop-blur-md">
+                    <ul className="space-y-1">
+                        <li>
+                            <button
+                                onClick={() => handleGenerateGrid(1, 3)}
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                            >
+                                <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
+                                    <LayoutGrid className={INSERT_ICON} />
+                                </span>
+                                <span>Triptych</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button
+                                onClick={() => handleGenerateGrid(1, 7)}
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                            >
+                                <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
+                                    <LayoutGrid className={INSERT_ICON} />
+                                </span>
+                                <span>Weekly Tracker</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button
+                                onClick={() => {
+                                    if (!canvas) return;
+                                    objectFactories.addHerbProfileLayout(canvas);
+                                    saveState();
+                                    setIsOpen(false);
+                                    setShowCustomGrid(false);
+                                }}
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                            >
+                                <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
+                                    <LayoutGrid className={INSERT_ICON} />
+                                </span>
+                                <span>Herb Profile</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button
+                                onClick={() => setShowCustomGrid((prev) => !prev)}
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                            >
+                                <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
+                                    <LayoutGrid className={INSERT_ICON} />
+                                </span>
+                                <span>Custom Grid</span>
+                            </button>
+                        </li>
+                    </ul>
+                    {showCustomGrid && (
+                        <div className="mt-2 rounded-md border border-[color:var(--border-subtle)] bg-[#0f0707] p-3 text-xs uppercase tracking-widest text-slate-300 space-y-3">
+                            <div className="flex items-center gap-2">
+                                <label className="w-16 text-[10px] text-slate-400">Rows</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={12}
+                                    value={rows}
+                                    onChange={handleNumberInput(setRows)}
+                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+                                />
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <label className="w-16 text-[10px] text-slate-400">Columns</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={12}
+                                    value={cols}
+                                    onChange={handleNumberInput(setCols)}
+                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+                                />
+                            </div>
+                            <button
+                                onClick={() => handleGenerateGrid(rows, cols)}
+                                className="w-full rounded-md bg-white/10 px-3 py-2 text-[10px] uppercase tracking-widest text-slate-200 hover:bg-white/20"
+                            >
+                                Generate
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 // --- Generic Dropdown Component ---
 interface DropdownItem {
     label: string;
@@ -212,18 +400,18 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
         <div className="relative">
             <button 
                 onClick={() => setIsOpen(!isOpen)}
-                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out"
+                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
             >
                 {label}
-                <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && (
                 <div className="mt-1 p-1 bg-[#120707] rounded-lg shadow-lg border border-[color:var(--border-subtle)] absolute w-full z-20 backdrop-blur-md">
                     <ul className="space-y-1">
                         {items.map(item => (
                              <li key={item.label}>
-                                <button onClick={() => { item.onClick(); setIsOpen(false); }} className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out">
-                                    <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)] transition-all duration-300 ease-in-out">{item.icon}</span>
+                                <button onClick={() => { item.onClick(); setIsOpen(false); }} className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10">
+                                    <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">{item.icon}</span>
                                     <span>{item.label}</span>
                                 </button>
                             </li>
@@ -236,92 +424,9 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
 };
 
 const TemplatesTab: React.FC = () => {
-    const { templates, loadTemplates, loadTemplate, deleteTemplate, isTemplateLoading, isLoading: isEditorBusy } = useEditorStore((state) => ({
-        templates: state.templates,
-        loadTemplates: state.loadTemplates,
-        loadTemplate: state.loadTemplate,
-        deleteTemplate: state.deleteTemplate,
-        isTemplateLoading: state.isTemplateLoading,
-        isLoading: state.isLoading,
-    }));
-
-    useEffect(() => {
-        void loadTemplates();
-    }, [loadTemplates]);
-
-    const handleLoad = async (template: TemplateData) => {
-        if (isEditorBusy) return;
-        const confirmed = window.confirm('Loading a template will clear your current work. Proceed?');
-        if (!confirmed) return;
-        await loadTemplate(template);
-    };
-
-    const handleDelete = async (template: TemplateData) => {
-        const confirmed = window.confirm(`Delete ${template.name}? This cannot be undone.`);
-        if (!confirmed) return;
-        await deleteTemplate(template.id);
-    };
-
-    if (isTemplateLoading) {
-        return (
-            <div className="p-4 text-[11px] uppercase tracking-widest text-slate-400">
-                Loading templates...
-            </div>
-        );
-    }
-
-    if (templates.length === 0) {
-        return (
-            <div className="p-4 text-[11px] uppercase tracking-widest text-slate-500">
-                Save your current design as a template to view it here.
-            </div>
-        );
-    }
-
     return (
-        <div className="p-4 space-y-3">
-            {templates.map((template) => (
-                <div key={template.id} className="flex gap-3 p-3 bg-white/5 border border-white/10 rounded-2xl items-start">
-                    <div className="w-24 h-20 bg-[#120707] border border-white/10 rounded-xl overflow-hidden">
-                        {template.thumbnail ? (
-                            <img src={template.thumbnail} alt={template.name} className="w-full h-full object-cover" />
-                        ) : (
-                            <span className="text-[9px] uppercase tracking-widest text-slate-500 flex items-center justify-center h-full">
-                                Preview
-                            </span>
-                        )}
-                    </div>
-                    <div className="flex-1 flex flex-col gap-2">
-                        <div className="flex items-start justify-between gap-3">
-                            <div>
-                                <p className="text-[11px] uppercase tracking-widest text-slate-200">{template.name}</p>
-                                {template.themeName && (
-                                    <p className="text-[9px] uppercase tracking-widest text-slate-400">{template.themeName}</p>
-                                )}
-                            </div>
-                            <span className="text-[10px] uppercase tracking-widest text-slate-500">
-                                {new Date(template.createdAt).toLocaleDateString()}
-                            </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={() => void handleLoad(template)}
-                                disabled={isEditorBusy}
-                                className="px-3 py-1 text-[10px] uppercase tracking-widest rounded-full border border-[color:var(--brand-primary)] text-[color:var(--brand-primary)] hover:bg-[color:var(--brand-primary)] hover:text-white transition-all duration-300 ease-in-out disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                                Load
-                            </button>
-                            <button
-                                onClick={() => void handleDelete(template)}
-                                className="p-2 rounded-full border border-white/10 text-slate-400 hover:border-rose-400 hover:text-rose-200 transition-all duration-300 ease-in-out"
-                                aria-label={`Delete ${template.name}`}
-                            >
-                                <Trash2 className="w-4 h-4 stroke-[1.5]" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            ))}
+        <div className="p-4 text-[11px] uppercase tracking-widest text-slate-500">
+            Template functionality is temporarily disabled.
         </div>
     );
 };
@@ -338,8 +443,8 @@ const TabButton: React.FC<TabButtonProps> = ({ label, icon, isActive, onClick, d
     <button
         onClick={onClick}
         disabled={disabled}
-        className={`flex-1 flex justify-center items-center gap-2 p-3 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out disabled:text-slate-500 disabled:cursor-not-allowed ${
-            isActive ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)]' : 'text-slate-300 hover:bg-white/5 hover:text-[color:var(--brand-primary)]'
+        className={`flex-1 flex justify-center items-center gap-2 p-3 text-[11px] uppercase tracking-widest transition-all disabled:text-slate-500 ${
+            isActive ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)]' : 'text-slate-300 hover:bg-white/5'
         }`}
     >
         {React.cloneElement(icon as React.ReactElement, { className: 'w-4 h-4 stroke-[1.5]' })}

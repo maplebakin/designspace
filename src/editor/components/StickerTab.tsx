@@ -8,23 +8,23 @@ const STICKER_CATEGORIES: { name: string; stickers: StickerData[] }[] = [
     {
         name: 'Celestial',
         stickers: [
-            { id: 'cel-1', imageUrl: 'https://via.placeholder.com/150/FFD700/000000?text=Sun', tags: ['sun', 'star', 'celestial'], category: 'Celestial', name: 'Sun' },
-            { id: 'cel-2', imageUrl: 'https://via.placeholder.com/150/A020F0/FFFFFF?text=Moon', tags: ['moon', 'night', 'celestial'], category: 'Celestial', name: 'Moon' },
-            { id: 'cel-3', imageUrl: 'https://via.placeholder.com/150/ADD8E6/000000?text=Cloud', tags: ['cloud', 'weather', 'celestial'], category: 'Celestial', name: 'Cloud' },
+            { id: 'cel-1', url: 'https://via.placeholder.com/150/FFD700/000000?text=Sun', tags: ['sun', 'star', 'celestial']},
+            { id: 'cel-2', url: 'https://via.placeholder.com/150/A020F0/FFFFFF?text=Moon', tags: ['moon', 'night', 'celestial']},
+            { id: 'cel-3', url: 'https://via.placeholder.com/150/ADD8E6/000000?text=Cloud', tags: ['cloud', 'weather', 'celestial']},
         ]
     },
     {
         name: 'Boho',
         stickers: [
-            { id: 'boho-1', imageUrl: 'https://via.placeholder.com/150/D2B48C/000000?text=Feather', tags: ['feather', 'boho', 'hippie'], category: 'Boho', name: 'Feather' },
-            { id: 'boho-2', imageUrl: 'https://via.placeholder.com/150/8B4513/FFFFFF?text=Dreamcatcher', tags: ['dreamcatcher', 'boho', 'native'], category: 'Boho', name: 'Dreamcatcher' },
+            { id: 'boho-1', url: 'https://via.placeholder.com/150/D2B48C/000000?text=Feather', tags: ['feather', 'boho', 'hippie']},
+            { id: 'boho-2', url: 'https://via.placeholder.com/150/8B4513/FFFFFF?text=Dreamcatcher', tags: ['dreamcatcher', 'boho', 'native']},
         ]
     },
     {
         name: 'Frames',
         stickers: [
-            { id: 'frame-1', imageUrl: 'https://via.placeholder.com/150/F0F8FF/000000?text=Polaroid', tags: ['polaroid', 'frame', 'vintage'], category: 'Frames', name: 'Polaroid' },
-            { id: 'frame-2', imageUrl: 'https://via.placeholder.com/150/FFFAF0/000000?text=Floral', tags: ['floral', 'frame', 'nature'], category: 'Frames', name: 'Floral' },
+            { id: 'frame-1', url: 'https://via.placeholder.com/150/F0F8FF/000000?text=Polaroid', tags: ['polaroid', 'frame', 'vintage']},
+            { id: 'frame-2', url: 'https://via.placeholder.com/150/FFFAF0/000000?text=Floral', tags: ['floral', 'frame', 'nature']},
         ]
     }
 ];
@@ -38,9 +38,7 @@ export const StickerTab: React.FC = () => {
     const allStickers = [...STICKER_CATEGORIES.flatMap(cat => cat.stickers), ...customStickers];
 
     const filteredStickers = allStickers.filter(sticker =>
-        sticker.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        sticker.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sticker.name?.toLowerCase().includes(searchTerm.toLowerCase()) // assuming custom stickers might have names
+        sticker.tags.some((tag: string) => tag.toLowerCase().includes(searchTerm.toLowerCase()))
     );
 
     const categorizedStickers: { [key: string]: StickerData[] } = {};
@@ -48,7 +46,7 @@ export const StickerTab: React.FC = () => {
     categorizedStickers['My Stickers'] = []; // Ensure 'My Stickers' category exists
 
     filteredStickers.forEach(sticker => {
-        const categoryName = sticker.category || 'Other'; // Default category if not specified
+        const categoryName = 'Stickers'; // Default category if not specified
         if (!categorizedStickers[categoryName]) {
             categorizedStickers[categoryName] = [];
         }
@@ -65,15 +63,13 @@ export const StickerTab: React.FC = () => {
         if (file) {
             const reader = new FileReader();
             reader.onload = async (f) => {
-                const imageUrl = f.target?.result as string;
+                const url = f.target?.result as string;
                 const newSticker: StickerData = {
                     id: uuidv4(),
-                    imageUrl: imageUrl,
-                    name: file.name.split('.')[0],
+                    url: url,
                     tags: [file.name.split('.')[0].toLowerCase(), 'custom', 'upload'],
-                    category: 'My Stickers',
                 };
-                await addCustomSticker(newSticker);
+                await addCustomSticker(newSticker.url);
             };
             reader.readAsDataURL(file);
         }
@@ -102,10 +98,10 @@ export const StickerTab: React.FC = () => {
                                 {stickers.map((sticker) => (
                                     <div key={sticker.id} className="relative group">
                                         <img
-                                            src={sticker.imageUrl}
-                                            alt={sticker.name || 'Sticker'}
+                                            src={sticker.url}
+                                            alt={'Sticker'}
                                             draggable="true"
-                                            onDragStart={(e) => handleDragStart(e, sticker.imageUrl)}
+                                            onDragStart={(e) => handleDragStart(e, sticker.url)}
                                             className="w-full h-full object-contain rounded-lg border border-white/10 cursor-grab bg-white/5 p-1 transition-all duration-300 ease-in-out group-hover:border-[color:var(--brand-primary)]"
                                         />
                                         {categoryName === 'My Stickers' && (

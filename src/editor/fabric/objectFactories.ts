@@ -2,9 +2,27 @@
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { v4 as uuidv4 } from 'uuid';
+import { SAFE_MARGIN_PX } from '../utils/units';
 
 const DEFAULT_STROKE_COLOR = '#000000';
 const DEFAULT_STROKE_WIDTH = 2;
+const DEFAULT_PLACEHOLDER_TOKEN_ROLE = 'surfaces.surface-plain';
+
+const getValueByPath = (obj: object, path: string): any => {
+    return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
+};
+
+const resolveTokenValue = (themeData: object | null, tokenRole: string) => {
+    if (!themeData) return null;
+    let value = getValueByPath(themeData, tokenRole);
+    if (!value && !tokenRole.endsWith('.value')) {
+        value = getValueByPath(themeData, `${tokenRole}.value`);
+    }
+    if (value && typeof value === 'object' && 'value' in value) {
+        return (value as { value: string }).value;
+    }
+    return typeof value === 'string' ? value : null;
+};
 
 /**
  * Adds a styled rectangle with rounded corners to the center of the canvas.
@@ -12,8 +30,6 @@ const DEFAULT_STROKE_WIDTH = 2;
  */
 export const addRectangle = (canvas: fabric.Canvas) => {
   const rect = new fabric.Rect({
-    id: uuidv4(),
-    tokenRole: 'brand.primary.value',
     width: 150,
     height: 100,
     fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
@@ -24,6 +40,8 @@ export const addRectangle = (canvas: fabric.Canvas) => {
     originX: 'center',
     originY: 'center',
   });
+  (rect as any).id = uuidv4();
+  (rect as any).tokenRole = 'brand.primary.value';
   canvas.add(rect);
   canvas.centerObject(rect);
   canvas.requestRenderAll();
@@ -35,8 +53,6 @@ export const addRectangle = (canvas: fabric.Canvas) => {
  */
 export const addCircle = (canvas: fabric.Canvas) => {
   const circle = new fabric.Circle({
-    id: uuidv4(),
-    tokenRole: 'brand.primary.value',
     radius: 75,
     fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
     stroke: DEFAULT_STROKE_COLOR,
@@ -44,6 +60,8 @@ export const addCircle = (canvas: fabric.Canvas) => {
     originX: 'center',
     originY: 'center',
   });
+  (circle as any).id = uuidv4();
+  (circle as any).tokenRole = 'brand.primary.value';
   canvas.add(circle);
   canvas.centerObject(circle);
   canvas.requestRenderAll();
@@ -55,8 +73,6 @@ export const addCircle = (canvas: fabric.Canvas) => {
  */
 export const addTriangle = (canvas: fabric.Canvas) => {
     const triangle = new fabric.Triangle({
-        id: uuidv4(),
-        tokenRole: 'brand.primary.value',
         width: 150,
         height: 130,
         fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
@@ -65,6 +81,8 @@ export const addTriangle = (canvas: fabric.Canvas) => {
         originX: 'center',
         originY: 'center',
     });
+    (triangle as any).id = uuidv4();
+    (triangle as any).tokenRole = 'brand.primary.value';
     canvas.add(triangle);
     canvas.centerObject(triangle);
     canvas.requestRenderAll();
@@ -89,14 +107,14 @@ export const addStar = (canvas: fabric.Canvas) => {
     };
 
     const star = new fabric.Polygon(starPoints(80, 40), {
-        id: uuidv4(),
-        tokenRole: 'brand.primary.value',
         fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
         stroke: DEFAULT_STROKE_COLOR,
         strokeWidth: DEFAULT_STROKE_WIDTH,
         originX: 'center',
         originY: 'center',
     });
+    (star as any).id = uuidv4();
+    (star as any).tokenRole = 'brand.primary.value';
     canvas.add(star);
     canvas.centerObject(star);
     canvas.requestRenderAll();
@@ -135,8 +153,6 @@ export const addIText = (canvas: fabric.Canvas, options: ITextOptions) => {
   const tokenRole = role === 'heading' || role === 'subheading' ? 'typography.heading.value' : 'typography.body.value';
   
   const text = new fabric.IText(options.text, {
-    id: uuidv4(),
-    tokenRole: tokenRole,
     fontSize: options.fontSize,
     fontWeight: options.fontWeight || 'normal',
     fill: getThemeTextColor(role),
@@ -144,6 +160,8 @@ export const addIText = (canvas: fabric.Canvas, options: ITextOptions) => {
     originY: 'center',
     fontFamily: getThemeFontFamily(role),
   });
+  (text as any).id = uuidv4();
+  (text as any).tokenRole = tokenRole;
   canvas.add(text);
   canvas.centerObject(text);
   canvas.setActiveObject(text);
@@ -205,8 +223,6 @@ export const addFixedTextbox = (canvas: fabric.Canvas) => {
     const defaultFontSize = 30;
 
     const textbox = new fabric.Textbox('Type here...', {
-        id: uuidv4(),
-        tokenRole: 'typography.body.value',
         width: defaultWidth,
         height: defaultHeight,
         fontSize: defaultFontSize,
@@ -222,6 +238,8 @@ export const addFixedTextbox = (canvas: fabric.Canvas) => {
         hasControls: false,
         hasBorders: true,
     });
+    (textbox as any).id = uuidv4();
+    (textbox as any).tokenRole = 'typography.body.value';
 
     canvas.add(textbox);
     canvas.centerObject(textbox);
@@ -232,5 +250,188 @@ export const addFixedTextbox = (canvas: fabric.Canvas) => {
     // Attach listener for text changes
     textbox.on('changed', () => {
         adjustFontSizeToFit(textbox, canvas);
+    });
+};
+
+interface PlaceholderOptions {
+    width?: number;
+    height?: number;
+    tokenRole?: string;
+    lockMovement?: boolean;
+}
+
+const createPlaceholderRect = (options: PlaceholderOptions = {}) => {
+    const { themeData } = useEditorStore.getState();
+    const width = options.width ?? 200;
+    const height = options.height ?? 200;
+    const tokenRole = options.tokenRole ?? DEFAULT_PLACEHOLDER_TOKEN_ROLE;
+    const themedFill = resolveTokenValue(themeData, tokenRole);
+    const lockMovement = options.lockMovement ?? false;
+
+    const placeholder = new fabric.Rect({
+        width,
+        height,
+        fill: themedFill || 'rgba(148, 163, 184, 0.35)',
+        stroke: 'rgba(148, 163, 184, 0.6)',
+        strokeWidth: 1,
+        rx: 12,
+        ry: 12,
+        originX: 'center',
+        originY: 'center',
+        lockMovementX: lockMovement,
+        lockMovementY: lockMovement,
+        hasControls: !lockMovement,
+    });
+    (placeholder as any).id = uuidv4();
+    (placeholder as any).tokenRole = tokenRole;
+    (placeholder as any).isPlaceholder = true;
+    (placeholder as any).colorLocked = false;
+
+    return placeholder;
+};
+
+export const addPlaceholder = (canvas: fabric.Canvas, options: PlaceholderOptions = {}) => {
+    const placeholder = createPlaceholderRect(options);
+    canvas.add(placeholder);
+    canvas.centerObject(placeholder);
+    canvas.requestRenderAll();
+};
+
+interface GridOptions {
+    gutter?: number;
+    tokenRole?: string;
+}
+
+export const generateGrid = (canvas: fabric.Canvas, rows: number, cols: number, options: GridOptions = {}) => {
+    if (rows <= 0 || cols <= 0) return;
+    const { bleedPx } = useEditorStore.getState();
+    const gutter = options.gutter ?? 20;
+    const tokenRole = options.tokenRole ?? DEFAULT_PLACEHOLDER_TOKEN_ROLE;
+
+    const safeInset = bleedPx + SAFE_MARGIN_PX;
+    const safeWidth = canvas.getWidth() - safeInset * 2;
+    const safeHeight = canvas.getHeight() - safeInset * 2;
+    if (safeWidth <= 0 || safeHeight <= 0) return;
+
+    const cellWidth = (safeWidth - gutter * (cols - 1)) / cols;
+    const cellHeight = (safeHeight - gutter * (rows - 1)) / rows;
+    if (cellWidth <= 0 || cellHeight <= 0) return;
+
+    const placeholders: fabric.Object[] = [];
+    for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < cols; col += 1) {
+            const placeholder = createPlaceholderRect({
+                width: cellWidth,
+                height: cellHeight,
+                tokenRole,
+                lockMovement: true,
+            });
+            placeholder.set({
+                left: safeInset + col * (cellWidth + gutter) + cellWidth / 2,
+                top: safeInset + row * (cellHeight + gutter) + cellHeight / 2,
+            });
+            placeholders.push(placeholder);
+        }
+    }
+
+    const group = new fabric.Group(placeholders, {
+        subTargetCheck: true,
+    });
+    (group as any).id = uuidv4();
+    canvas.add(group);
+    canvas.setActiveObject(group);
+    canvas.requestRenderAll();
+    useEditorStore.getState().saveState();
+};
+
+export const addTriptychLayout = (canvas: fabric.Canvas) => {
+    generateGrid(canvas, 1, 3);
+};
+
+export const addWeeklyTrackerLayout = (canvas: fabric.Canvas) => {
+    generateGrid(canvas, 1, 7);
+};
+
+export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
+    const { bleedPx } = useEditorStore.getState();
+    const gutter = 20;
+    const safeInset = bleedPx + SAFE_MARGIN_PX;
+    const safeWidth = canvas.getWidth() - safeInset * 2;
+    const safeHeight = canvas.getHeight() - safeInset * 2;
+    if (safeWidth <= 0 || safeHeight <= 0) return;
+
+    const columnWidth = safeWidth - gutter;
+    const imageWidth = columnWidth * 0.6;
+    const textWidth = columnWidth * 0.4;
+    const textHeight = (safeHeight - gutter * 2) / 3;
+    const tokenRole = DEFAULT_PLACEHOLDER_TOKEN_ROLE;
+
+    const placeholders: fabric.Object[] = [];
+    const imagePlaceholder = createPlaceholderRect({
+        width: imageWidth,
+        height: safeHeight,
+        tokenRole,
+        lockMovement: true,
+    });
+    imagePlaceholder.set({
+        left: safeInset + imageWidth / 2,
+        top: safeInset + safeHeight / 2,
+    });
+    placeholders.push(imagePlaceholder);
+
+    for (let i = 0; i < 3; i += 1) {
+        const textPlaceholder = createPlaceholderRect({
+            width: textWidth,
+            height: textHeight,
+            tokenRole,
+            lockMovement: true,
+        });
+        textPlaceholder.set({
+            left: safeInset + imageWidth + gutter + textWidth / 2,
+            top: safeInset + i * (textHeight + gutter) + textHeight / 2,
+        });
+        placeholders.push(textPlaceholder);
+    }
+
+    const group = new fabric.Group(placeholders, {
+        subTargetCheck: true,
+    });
+    (group as any).id = uuidv4();
+    canvas.add(group);
+    canvas.setActiveObject(group);
+    canvas.requestRenderAll();
+    useEditorStore.getState().saveState();
+};
+
+/**
+ * Loads an SVG from a URL and adds it to the canvas, linking it to the theme.
+ * @param canvas The fabric.Canvas instance.
+ * @param url The URL of the SVG file.
+ */
+export const addSvgFromUrl = async (canvas: fabric.Canvas, url: string) => {
+    const { themeData } = useEditorStore.getState();
+    const accentColor = themeData?.brand?.accent?.value || '#A133FF';
+
+    fabric.loadSVGFromURL(url, (objects, options) => {
+        const objArray = Array.isArray(objects) ? objects : [objects];
+        objArray.forEach((obj: fabric.Object) => {
+            (obj as any).id = uuidv4();
+            (obj as any).tokenRole = 'brand.accent.value';
+            obj.set({
+                colorLocked: false,
+                fill: accentColor,
+            });
+        });
+
+        const group = new fabric.Group([...objArray], {
+            ...options,
+        });
+        (group as any).id = uuidv4();
+
+        canvas.add(group);
+        group.scaleToWidth(150);
+        canvas.centerObject(group);
+        canvas.requestRenderAll();
+        useEditorStore.getState().saveState();
     });
 };

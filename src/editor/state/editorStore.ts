@@ -1,518 +1,490 @@
-
 import { create } from 'zustand';
 import * as fabric from 'fabric';
 import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
 import { 
-    addTemplateToDb, 
-    deleteTemplateFromDb, 
-    getTemplatesFromDb, 
-    TemplateData,
-    getBrandVaultFromDb,
     saveBrandVaultToDb
 } from '../utils/indexedDb';
-import { clearBleedGuides, clearSafeMarginGuides } from '../fabric/canvasUtils';
+import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
+import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 
+// --- CONSTANTS ---
 const MAX_HISTORY_SIZE = 50;
-const CUSTOM_STICKERS_STORAGE_KEY = 'witchclick_custom_stickers';
 
-type UnitMode = 'px' | 'in';
+export interface Template {
+  id: string;
+  name: string;
+  canvasData: string; // Stored as stringified JSON
+  defaultThemeId: string;
+  thumbnail?: string;
+}
 
+// --- INTERFACES ---
 export interface Layer {
   id: string;
   name: string;
   type: string;
   visible: boolean;
-  locked: boolean;
-}
-
-export interface StickerData {
-  id: string;
-  imageUrl: string;
-  name?: string;
-  tags: string[];
-  category: string;
+  movementLocked: boolean;
+  colorLocked: boolean;
 }
 
 export interface ApocapaletteTheme {
-    meta: {
-        schema: string;
-        name: string;
-    };
-    [key: string]: any; // for foundation, brand, etc.
+    meta: { schema: string; name: string; };
+    [key: string]: any;
 }
 
-export interface CategorizedSwatches {
-    [category: string]: { [name: string]: string };
+export interface StickerData {
+    id: string;
+    url: string;
+    tags: string[];
 }
 
 export interface BrandCollection {
     id: string;
     name: string;
-    themeData: ApocapaletteTheme; // Store the whole theme
-    swatches: CategorizedSwatches;
+    themeData: ApocapaletteTheme;
+    swatches: {
+        [key: string]: {
+            [key: string]: string;
+        }
+    }
 }
 
+// --- UTILITY FUNCTIONS ---
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const formatObjectType = (type: string | undefined) => {
   if (!type) return 'Object';
   return type.replace(/-/g, ' ').split(' ').map(capitalize).join(' ');
 };
+const getValueByPath = (obj: object, path: string): any => {
+    return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
+};
 
+const resolveThemeValue = (obj: object, path: string): string | null => {
+    let value = getValueByPath(obj, path);
+    if (!value && !path.endsWith('.value')) {
+        value = getValueByPath(obj, `${path}.value`);
+    }
+    if (value && typeof value === 'object' && 'value' in value) {
+        return (value as { value: string }).value;
+    }
+    return typeof value === 'string' ? value : null;
+};
+
+// --- EDITOR STATE INTERFACE ---
 interface EditorState {
   canvas: fabric.Canvas | null;
   selectedObject: fabric.Object | null;
-  hoveredObject: fabric.Object | null;
   layers: Layer[];
   selectedLayerId: string | null;
   showGuides: boolean;
   brandVault: BrandCollection[];
   activeBrandCollectionId: string | null;
-  themeData: ApocapaletteTheme | null; // Full active theme
-  themeFonts: {
-    heading: string;
-    body: string;
-  };
-  customFonts: string[];
-  customStickers: StickerData[];
-  templates: TemplateData[];
+  themeData: ApocapaletteTheme | null;
   toastMessage: string | null;
-  unitMode: UnitMode;
-  bleedPx: number;
   history: string[];
   historyIndex: number;
-  isLoading: boolean;
-  isTemplateSaving: boolean;
-  isTemplateLoading: boolean;
+  unitMode: 'px' | 'in' | 'cm' | 'mm';
   zoom: number;
   vpt: number[];
-  setVpt: (vpt: number[]) => void;
+  isPreviewMode: boolean;
+  brandPalette: { [key: string]: string };
+  bleedPx: number;
+  customStickers: StickerData[];
+  templates: Template[];
+  userTemplates: Template[];
+
   setCanvas: (canvas: fabric.Canvas | null) => void;
   setSelectedObject: (object: fabric.Object | null) => void;
-  setHoveredObject: (object: fabric.Object | null) => void;
-  setObjectFill: (fill: string) => void;
-  setObjectThemedFill: (tokenRole: string, fill: string) => void;
   setLayers: (objects: fabric.Object[]) => void;
   setSelectedLayerId: (id: string | null) => void;
-  setThemeData: (themeData: ApocapaletteTheme | null) => void;
   toggleShowGuides: () => void;
   saveState: () => void;
-  undo: () => void;
-  redo: () => void;
+  setToastMessage: (message: string | null) => void;
+  setUnitMode: (mode: 'px' | 'in' | 'cm' | 'mm') => void;
+  setCanvasBackgroundColor: (color: string) => void;
   setZoom: (zoom: number) => void;
-  fitToScreen: () => void;
+  resetViewCanvas: () => void;
+  addCustomSticker: (url: string) => void;
+  removeCustomSticker: (id: string) => void;
+  setTemplates: (templates: Template[]) => void;
+  loadTemplate: (template: Template) => void;
+  saveCurrentAsTemplate: () => void;
+  
+  // Theme Actions
   addThemeToVault: (jsonString: string) => void;
+  setActiveBrandCollectionId: (id:string) => void;
   applyTheme: (theme: ApocapaletteTheme) => void;
   resetTheme: () => void;
-  setToastMessage: (message: string | null) => void;
-  setUnitMode: (mode: UnitMode) => void;
-  setBleedPx: (value: number) => void;
-  resetViewCanvas: (() => void) | null;
-  setResetViewCanvas: (fn: (() => void) | null) => void;
-  isPreviewMode: boolean; 
-  togglePreviewMode: () => void;
-  loadBrandVault: () => Promise<void>;
-  setActiveBrandCollectionId: (id: string) => void;
-  addCustomFont: (fontName: string) => void;
-  addCustomSticker: (sticker: StickerData) => Promise<void>;
-  removeCustomSticker: (id: string) => void;
-  loadTemplates: () => Promise<void>;
-  saveTemplate: (name: string) => Promise<void>;
-  deleteTemplate: (id: string) => Promise<void>;
-  loadTemplate: (template: TemplateData) => Promise<void>;
+  toggleMovementLock: (layerId: string) => void;
+  toggleColorLock: (layerId: string) => void;
+  setObjectFill: (fill: string) => void;
+  setObjectThemedFill: (tokenRole: string) => void;
+  applyTint: (tokenRole: string) => void;
+  resetObjectToDefaultTheme: () => void;
+  
+  // Other actions from original file
+  undo: () => void;
+  redo: () => void;
 }
 
-const loadCustomStickersFromLocalStorage = (): StickerData[] => {
-  const savedStickers = localStorage.getItem(CUSTOM_STICKERS_STORAGE_KEY);
-  if (savedStickers) {
-    return JSON.parse(savedStickers);
-  }
-  return [];
-};
-
-const saveCustomStickersToLocalStorage = (stickers: StickerData[]) => {
-  localStorage.setItem(CUSTOM_STICKERS_STORAGE_KEY, JSON.stringify(stickers));
-};
-
-const swatchCategories: { [category: string]: { [name: string]: string } } = {
-    'Brand': {
-        'Primary': 'brand.primary.value',
-        'Secondary': 'brand.secondary.value',
-        'Accent': 'brand.accent.value',
-    },
-    'Foundation': {
-        'Base': 'foundation.base.value',
-        'Surface': 'foundation.surface.value',
-        'Overlay': 'foundation.overlay.value',
-    },
-    'Typography & UI': {
-        'Heading': 'typography.heading.value',
-        'Body': 'typography.body.value',
-        'Muted': 'typography.muted.value',
-    }
-};
-
-const recursivelyExtractValues = (obj: any, path: string = ''): { [key: string]: string } => {
-    let result: { [key: string]: string } = {};
-    for (const key in obj) {
-        if (typeof obj[key] === 'object' && obj[key] !== null && 'value' in obj[key]) {
-             const newPath = path ? `${path}.${key}` : key;
-             result[newPath] = obj[key].value;
-        } else if (typeof obj[key] === 'object' && obj[key] !== null) {
-            const newPath = path ? `${path}.${key}` : key;
-            result = { ...result, ...recursivelyExtractValues(obj[key], newPath) };
-        }
-    }
-    return result;
-};
-
-const useEditorStore = create<EditorState>((set, get) => {
-  const initialCustomStickers = loadCustomStickersFromLocalStorage();
-
-  return {
+// --- ZUSTAND STORE IMPLEMENTATION ---
+export const useEditorStore = create<EditorState>((set, get) => ({
     canvas: null,
     selectedObject: null,
-    hoveredObject: null,
     layers: [],
     selectedLayerId: null,
     showGuides: true,
     brandVault: [],
     activeBrandCollectionId: null,
     themeData: null,
-    themeFonts: {
-      heading: 'serif',
-      body: 'sans-serif',
-    },
-    customFonts: [],
-    customStickers: initialCustomStickers,
     toastMessage: null,
-    unitMode: 'px',
     history: [],
     historyIndex: -1,
-    isLoading: false,
-    isTemplateSaving: false,
-    isTemplateLoading: false,
+    unitMode: 'px',
     zoom: 1,
     vpt: [1, 0, 0, 1, 0, 0],
-    bleedPx: 8,
-    templates: [],
     isPreviewMode: false,
+    brandPalette: {},
+    bleedPx: 0,
+    customStickers: [],
+    templates: [],
+    userTemplates: (() => {
+        if (typeof window === 'undefined') return [];
+        try {
+            const stored = localStorage.getItem('designspace_user_templates');
+            return stored ? (JSON.parse(stored) as Template[]) : [];
+        } catch {
+            return [];
+        }
+    })(),
 
-    setVpt: (vpt) => set({ vpt }),
     setCanvas: (canvas) => {
-        set({
-            canvas,
-            zoom: canvas ? canvas.getZoom() : 1,
-            vpt: canvas ? canvas.viewportTransform : [1, 0, 0, 1, 0, 0],
-        });
+        set({ canvas });
         if (canvas) {
             get().setLayers(canvas.getObjects());
         }
-        get().loadBrandVault();
     },
     setSelectedObject: (object) => set({ selectedObject: object }),
-    setHoveredObject: (object) => set({ hoveredObject: object }),
-    resetViewCanvas: null, 
-    setResetViewCanvas: (fn) => set({ resetViewCanvas: fn }),
-    togglePreviewMode: () => set((state) => ({ isPreviewMode: !state.isPreviewMode })),
-    toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
     setSelectedLayerId: (id) => set({ selectedLayerId: id }),
-    setThemeData: (themeData) => set({ themeData }),
-
-    setObjectFill: (fill) => {
-      const { canvas, selectedObject } = get();
-      if (selectedObject && canvas) {
-        // When setting a raw color, remove the token role
-        selectedObject.set('tokenRole', null);
-        if (selectedObject.type === 'i-text' || selectedObject.type === 'textbox') {
-            selectedObject.set('fill', fill);
-        } else if (selectedObject.stroke) {
-            selectedObject.set('stroke', fill);
-        } else {
-            selectedObject.set('fill', fill);
-        }
-        canvas.requestRenderAll();
-        get().saveState();
-      }
-    },
-
-    setObjectThemedFill: (tokenRole, fill) => {
-      const { canvas, selectedObject } = get();
-      if (selectedObject && canvas) {
-        selectedObject.set('tokenRole', tokenRole);
-        if (selectedObject.type === 'i-text' || selectedObject.type === 'textbox') {
-            selectedObject.set('fill', fill);
-        } else if (selectedObject.stroke) {
-            selectedObject.set('stroke', fill);
-        } else {
-            selectedObject.set('fill', fill);
-        }
-        canvas.requestRenderAll();
-        get().saveState();
-      }
-    },
-
     setLayers: (objects) => {
-      const newLayers = objects
-        .filter(obj => !(obj as any).isGuide)
-        .map((obj): Layer => ({
-          id: (obj as any).id || '',
-          name: formatObjectType(obj.type),
-          type: obj.type || 'object',
-          visible: obj.visible ?? true,
-          locked: !!obj.lockMovementX, // Use actual lock status
-        }));
-      set({ layers: newLayers });
+        const newLayers = objects
+            .filter(obj => !(obj as any).isGuide)
+            .map((obj): Layer => ({
+                id: (obj as any).id || '',
+                name: (obj as any).name || formatObjectType(obj.type),
+                type: obj.type || 'object',
+                visible: obj.visible ?? true,
+                movementLocked: !!obj.lockMovementX,
+                colorLocked: !!(obj as any).colorLocked,
+            }));
+        set({ layers: newLayers });
     },
+    toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
+    setToastMessage: (message) => set({ toastMessage: message }),
+    setUnitMode: (mode) => set({ unitMode: mode }),
+    setCanvasBackgroundColor: (color) => {
+        const { canvas, saveState } = get();
+        if (canvas) {
+            canvas.backgroundColor = color;
+            canvas.requestRenderAll();
+            saveState();
+        }
+    },
+    setZoom: (zoom) => set({ zoom }),
+    resetViewCanvas: () => {
+        const { canvas } = get();
+        if (canvas) {
+            const center = canvas.getCenter();
+            canvas.setViewportTransform([1, 0, 0, 1, center.left, center.top]);
+            canvas.setZoom(1);
+            set({ zoom: 1 });
+        }
+    },
+    addCustomSticker: (url) => {
+        const newSticker: StickerData = { id: uuidv4(), url, tags: [] };
+        set((state) => ({ customStickers: [...state.customStickers, newSticker] }));
+    },
+    removeCustomSticker: (id) => {
+        set((state) => ({
+            customStickers: state.customStickers.filter((s) => s.id !== id),
+        }));
+    },
+    setTemplates: (templates) => set({ templates }),
+    loadTemplate: (template) => {
+        const { canvas, setLayers, brandVault, applyTheme, setToastMessage } = get();
+        if (!canvas) return;
 
+        canvas.clear();
+        const themeToApply = template.defaultThemeId
+            ? brandVault.find((brand) => brand.id === template.defaultThemeId)
+            : null;
+
+        canvas.loadFromJSON(template.canvasData, reviveCustomFabricProps).then(() => {
+            canvas.requestRenderAll();
+            sanityCheckCanvas(canvas, themeToApply?.themeData ?? get().themeData);
+            setLayers(canvas.getObjects());
+            setToastMessage(`Template loaded: ${template.name}`);
+
+            if (template.defaultThemeId) {
+                if (themeToApply) {
+                    applyTheme(themeToApply.themeData);
+                    setToastMessage(`Applied template theme: ${themeToApply.name}`);
+                } else {
+                    setToastMessage(`Template theme not found: ${template.defaultThemeId}`);
+                }
+            }
+        });
+    },
+    saveCurrentAsTemplate: () => {
+        const { canvas, activeBrandCollectionId, userTemplates } = get();
+        if (!canvas) return;
+        const json = canvas.toJSON();
+        const thumbnail = canvas.toDataURL({ multiplier: 0.1 });
+        const newTemplate: Template = {
+            id: uuidv4(),
+            name: `Template ${new Date().toISOString()}`,
+            canvasData: JSON.stringify(json),
+            defaultThemeId: activeBrandCollectionId || '',
+            thumbnail,
+        };
+        const nextTemplates = [newTemplate, ...userTemplates];
+        set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
+        try {
+            localStorage.setItem('designspace_user_templates', JSON.stringify(nextTemplates));
+        } catch {
+            // ignore storage failures
+        }
+    },
+    
     saveState: debounce(() => {
-      const { canvas, isLoading, history, historyIndex } = get();
-      if (isLoading || !canvas) return;
-
-      const json = canvas.toJSON(['id', 'tokenRole']);
-      localStorage.setItem('witchclick_current_design', JSON.stringify(json));
-
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push(JSON.stringify(json));
-
-      if (newHistory.length > MAX_HISTORY_SIZE) {
-        newHistory.shift();
-      }
-      const newIndex = newHistory.length - 1;
-      if (history[historyIndex] === newHistory[newIndex] && history.length > 0) {
-        return;
-      }
-      set({ history: newHistory, historyIndex: newIndex });
+        const { canvas, history, historyIndex } = get();
+        if (!canvas) return;
+        const json = canvas.toJSON();
+        
+        const newHistory = history.slice(0, historyIndex + 1);
+        newHistory.push(JSON.stringify(json));
+        if (newHistory.length > MAX_HISTORY_SIZE) newHistory.shift();
+        
+        set({ history: newHistory, historyIndex: newHistory.length - 1 });
     }, 300),
 
     undo: () => {
-      const { history, historyIndex, canvas } = get();
-      if (historyIndex > 0 && canvas) {
-        set({ isLoading: true });
-        const prevState = JSON.parse(history[historyIndex - 1]);
-        canvas.loadFromJSON(prevState, () => {
-          canvas.requestRenderAll();
-          set({ historyIndex: historyIndex - 1, isLoading: false, selectedObject: null, zoom: canvas.getZoom() });
-          get().setLayers(canvas.getObjects());
-        });
-      }
+        const { history, historyIndex, canvas, setLayers } = get();
+        if (historyIndex > 0 && canvas) {
+            const prevState = JSON.parse(history[historyIndex - 1]);
+            canvas.loadFromJSON(prevState, () => {
+                canvas.requestRenderAll();
+                set({ historyIndex: historyIndex - 1, selectedObject: null });
+                setLayers(canvas.getObjects());
+            });
+        }
     },
 
     redo: () => {
-      const { history, historyIndex, canvas } = get();
-      if (historyIndex < history.length - 1 && canvas) {
-        set({ isLoading: true });
-        const nextState = JSON.parse(history[historyIndex + 1]);
-        canvas.loadFromJSON(nextState, () => {
-          canvas.requestRenderAll();
-          set({ historyIndex: historyIndex + 1, isLoading: false, selectedObject: null, zoom: canvas.getZoom() });
-          get().setLayers(canvas.getObjects());
-        });
-      }
+        const { history, historyIndex, canvas, setLayers } = get();
+        if (historyIndex < history.length - 1 && canvas) {
+            const nextState = JSON.parse(history[historyIndex + 1]);
+            canvas.loadFromJSON(nextState, () => {
+                canvas.requestRenderAll();
+                set({ historyIndex: historyIndex + 1, selectedObject: null });
+                setLayers(canvas.getObjects());
+            });
+        }
     },
 
-    setZoom: (zoom) => set({ zoom }),
-
-import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
-...
-    fitToScreen: () => {
-      const { canvas } = get();
-      if (canvas) {
-        canvas.setZoom(1);
-        canvas.absolutePan(new fabric.Point(0, 0));
-        set({ zoom: 1 });
-      }
-    },
-    
+    // --- THEME ACTIONS ---
     addThemeToVault: (jsonString: string) => {
         try {
             const json: ApocapaletteTheme = JSON.parse(jsonString);
-
             if (json.meta?.schema !== 'generic-token-pack-v1') {
-                set({ toastMessage: 'Invalid Theme: Schema is not generic-token-pack-v1' });
+                set({ toastMessage: 'Invalid Schema' });
                 return;
             }
-
-            const flatSwatches = recursivelyExtractValues(json);
-            
-            const categorizedSwatches: CategorizedSwatches = {};
-            for (const category in swatchCategories) {
-                categorizedSwatches[category] = {};
-                for (const name in swatchCategories[category]) {
-                    const path = swatchCategories[category][name];
-                    const color = Object.entries(flatSwatches).find(([p]) => p === path)?.[1];
-                    if (color) {
-                         categorizedSwatches[category][name] = color;
-                    }
-                }
-            }
-
             const newCollection: BrandCollection = {
                 id: uuidv4(),
                 name: json.meta.name || 'Untitled Theme',
                 themeData: json,
-                swatches: categorizedSwatches,
+                swatches: {
+                    'Brand': {
+                        'Primary': json.brand?.primary?.value || '#000000',
+                        'Secondary': json.brand?.secondary?.value || '#888888',
+                        'Accent': json.brand?.accent?.value || '#ff00ff',
+                    }
+                }
             };
-
             const newVault = [...get().brandVault, newCollection];
-            set({ brandVault: newVault });
+            set({ brandVault: newVault, activeBrandCollectionId: newCollection.id });
             saveBrandVaultToDb(newVault);
-            get().applyTheme(json); // Immediately apply the newly added theme
-            set({ toastMessage: `Theme Imported & Applied: ${newCollection.name}` });
-
-        } catch (error: any) {
-            console.error('Failed to import theme:', error.message);
+            get().applyTheme(json);
+            set({ toastMessage: `Theme Imported: ${newCollection.name}` });
+        } catch (e) {
             set({ toastMessage: 'Invalid Theme File' });
         }
     },
 
-    applyTheme: (theme: ApocapaletteTheme) => {
+    setActiveBrandCollectionId: (id) => {
+        const { brandVault, applyTheme } = get();
+        const selectedTheme = brandVault.find(brand => brand.id === id);
+        if (selectedTheme) {
+            applyTheme(selectedTheme.themeData);
+            set({ activeBrandCollectionId: id, toastMessage: `Theme Changed: ${selectedTheme.name}` });
+        }
+    },
+    
+    applyTheme: (theme) => {
         set({ themeData: theme });
-        // Use a timeout to ensure state update has propagated before applying
-        setTimeout(() => applyActiveThemeToCanvas(), 0);
+        setTimeout(() => applyActiveThemeToCanvas(), 50);
     },
 
     resetTheme: () => {
-        const { canvas } = get();
+        const { canvas, saveState } = get();
         if (!canvas) return;
-
         canvas.getObjects().forEach(obj => {
             (obj as any).tokenRole = null;
         });
-
         canvas.requestRenderAll();
-        get().saveState();
-        set({ toastMessage: 'Theme links have been reset.' });
+        saveState();
+        set({ toastMessage: 'Theme links reset' });
     },
 
-
-    setToastMessage: (message) => set({ toastMessage: message }),
-    setUnitMode: (mode) => set({ unitMode: mode }),
-    setBleedPx: (value) => set({ bleedPx: value }),
-
-    loadBrandVault: async () => {
-        const vault = await getBrandVaultFromDb();
-        set({ brandVault: vault });
-        if (vault.length > 0 && !get().activeBrandCollectionId) {
-            const firstCollection = vault[0];
-            set({ activeBrandCollectionId: firstCollection.id, themeData: firstCollection.themeData });
+    toggleMovementLock: (layerId) => {
+        const { canvas, setLayers, saveState } = get();
+        const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
+        if (obj) {
+            const isLocked = !obj.lockMovementX;
+            obj.set({
+                lockMovementX: isLocked,
+                lockMovementY: isLocked,
+                lockRotation: isLocked,
+                lockScalingX: isLocked,
+                lockScalingY: isLocked,
+                hasControls: !isLocked,
+            });
+            setLayers(canvas!.getObjects());
+            saveState();
         }
     },
 
-    setActiveBrandCollectionId: (id: string) => {
-        const activeCollection = get().brandVault.find(b => b.id === id);
-        if (activeCollection) {
-            set({ activeBrandCollectionId: id, themeData: activeCollection.themeData });
+    toggleColorLock: (layerId) => {
+        const { canvas, setLayers, saveState } = get();
+        const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
+        if (obj) {
+            (obj as any).colorLocked = !(obj as any).colorLocked;
+            setLayers(canvas!.getObjects());
+            saveState();
         }
     },
 
-    addCustomFont: (fontName) => set((state) => {
-      if (state.customFonts.includes(fontName)) return state;
-      return { customFonts: [...state.customFonts, fontName] };
-    }),
-
-    addCustomSticker: async (sticker) => {
-      const updatedStickers = [...get().customStickers, sticker];
-      saveCustomStickersToLocalStorage(updatedStickers);
-      set({ customStickers: updatedStickers });
+    setObjectFill: (fill) => {
+        const { canvas, selectedObject, saveState } = get();
+        if (selectedObject && canvas) {
+            selectedObject.set({ fill, tokenRole: null });
+            canvas.requestRenderAll();
+            saveState();
+        }
     },
 
-    removeCustomSticker: (id) => {
-      const updatedStickers = get().customStickers.filter((sticker) => sticker.id !== id);
-      saveCustomStickersToLocalStorage(updatedStickers);
-      set({ customStickers: updatedStickers });
+    setObjectThemedFill: (tokenRole) => {
+        const { canvas, selectedObject, themeData, saveState } = get();
+        if (selectedObject && canvas && themeData) {
+            const colorValue = resolveThemeValue(themeData, tokenRole);
+            if (colorValue) {
+                selectedObject.set({ fill: colorValue, tokenRole, colorLocked: false });
+                canvas.requestRenderAll();
+                saveState();
+            }
+        }
     },
 
-    loadTemplates: async () => {
-      set({ isTemplateLoading: true });
-      try {
-        const templates = await getTemplatesFromDb();
-        const sorted = templates.sort((a, b) => b.createdAt - a.createdAt);
-        set({ templates: sorted });
-      } catch (error) {
-        console.error('Failed to load templates', error);
-        set({ toastMessage: 'Failed to load templates.' });
-      } finally {
-        set({ isTemplateLoading: false });
-      }
+    applyTint: (tokenRole) => {
+        const { canvas, selectedObject, themeData, saveState } = get();
+        const image = selectedObject as fabric.Image;
+        if (image && image.type === 'image' && canvas && themeData) {
+            const colorValue = resolveThemeValue(themeData, tokenRole);
+            if (!colorValue) return;
+
+            image.filters = image.filters?.filter(f => f.type !== 'BlendColor');
+            image.filters?.push(new fabric.filters.BlendColor({
+                color: colorValue,
+                mode: 'tint',
+                alpha: 0.5
+            }));
+            
+            image.applyFilters();
+            canvas.requestRenderAll();
+            saveState();
+        }
     },
 
-    saveTemplate: async (name) => {
-      const { canvas, unitMode } = get();
-      if (!canvas) {
-        set({ toastMessage: 'No canvas to save as a template.' });
-        return;
-      }
+    resetObjectToDefaultTheme: () => {
+        const { canvas, selectedObject, themeData, saveState, setLayers } = get();
+        if (!selectedObject || !canvas || !themeData) return;
 
-      const trimmedName = name.trim();
-      const templateName = trimmedName || 'Untitled Template';
-      set({ isTemplateSaving: true });
-
-      try {
-        const width = canvas.getWidth() || canvas.width || 1;
-        const height = canvas.getHeight() || canvas.height || 1;
-        const maxThumb = 320;
-        const scale = Math.min(1, maxThumb / Math.max(width, height));
-        const thumbnail = canvas.toDataURL({ format: 'png', multiplier: scale });
-        const json = canvas.toJSON(['id', 'tokenRole']);
-        const template: TemplateData = {
-          id: uuidv4(),
-          name: templateName,
-          json,
-          unitMode,
-          themeName: null,
-          thumbnail,
-          createdAt: Date.now(),
-        };
-
-        await addTemplateToDb(template);
-        await get().loadTemplates();
-        set({ toastMessage: `Template saved: ${templateName}` });
-      } catch (error) {
-        console.error('Failed to save template', error);
-        set({ toastMessage: 'Failed to save template.' });
-      } finally {
-        set({ isTemplateSaving: false });
-      }
+        let defaultTokenRole: string | null = null;
+        if (selectedObject.type === 'i-text' || selectedObject.type === 'textbox') {
+             defaultTokenRole = (selectedObject as any).role === 'heading' ? 'typography.heading.value' : 'typography.body.value';
+        } else if (selectedObject.type === 'image') {
+            defaultTokenRole = 'brand.accent.value';
+        } else {
+            defaultTokenRole = 'brand.primary.value';
+        }
+        
+        if (defaultTokenRole) {
+            const colorValue = resolveThemeValue(themeData, defaultTokenRole);
+            if (colorValue) {
+                selectedObject.set({
+                    fill: colorValue,
+                    tokenRole: defaultTokenRole,
+                    colorLocked: false,
+                });
+                if (selectedObject.type === 'image') {
+                    (selectedObject as fabric.Image).filters = [];
+                    (selectedObject as fabric.Image).applyFilters();
+                }
+                canvas.requestRenderAll();
+                saveState();
+                setLayers(canvas.getObjects());
+            }
+        }
     },
+}));
 
-    deleteTemplate: async (id) => {
-      set({ isTemplateLoading: true });
-      try {
-        await deleteTemplateFromDb(id);
-        await get().loadTemplates();
-        set({ toastMessage: 'Template removed.' });
-      } catch (error) {
-        console.error('Failed to delete template', error);
-        set({ toastMessage: 'Failed to delete template.' });
-      } finally {
-        set({ isTemplateLoading: false });
-      }
-    },
+export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: ApocapaletteTheme | null) => {
+    let changed = false;
+    const report = { missingIds: 0, invalidRoles: 0 };
 
-    loadTemplate: async (template) => {
-      const { canvas } = get();
-      if (!canvas) return;
+    const walk = (obj: fabric.Object) => {
+        const target = obj as any;
+        if (!target.id) {
+            target.id = uuidv4();
+            report.missingIds += 1;
+            changed = true;
+        }
+        if (target.colorLocked === undefined) {
+            target.colorLocked = false;
+            changed = true;
+        }
+        const tokenRole = target.tokenRole;
+        if (themeData && tokenRole != null) {
+            if (typeof tokenRole !== 'string' || !getValueByPath(themeData, tokenRole)) {
+                target.tokenRole = null;
+                report.invalidRoles += 1;
+                changed = true;
+            }
+        }
+        if (obj.type === 'group' || obj.type === 'activeSelection') {
+            (obj as fabric.Group).getObjects().forEach(walk);
+        }
+    };
 
-      set({ isLoading: true });
-      clearSafeMarginGuides(canvas);
-      clearBleedGuides(canvas);
+    canvas.getObjects().forEach(walk);
 
-      await new Promise<void>((resolve) => {
-        canvas.loadFromJSON(template.json, () => {
-          canvas.renderAll();
-          resolve();
-        });
-      });
+    if (changed) {
+        canvas.requestRenderAll();
+        useEditorStore.getState().setLayers(canvas.getObjects());
+    }
 
-      set({ isLoading: false, selectedObject: null });
-      get().setLayers(canvas.getObjects());
-      get().saveState();
-      get().setUnitMode(template.unitMode);
-      set({ toastMessage: `Loaded template: ${template.name}` });
-    },
-  };
-});
-
-export { useEditorStore };
-
+    return report;
+};

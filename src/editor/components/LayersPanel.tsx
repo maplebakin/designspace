@@ -1,11 +1,11 @@
 
 import React from 'react';
 import { useEditorStore, Layer } from '../state/editorStore';
-import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock } from 'lucide-react';
+import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet } from 'lucide-react';
 import * as fabric from 'fabric';
 
 export const LayersPanel: React.FC = () => {
-  const { canvas, layers, setLayers, selectedLayerId, setSelectedLayerId } = useEditorStore();
+  const { canvas, layers, setLayers, selectedLayerId, toggleMovementLock, toggleColorLock } = useEditorStore();
 
   // Helper to find an object on canvas by its ID
   const findObjectById = (id: string): fabric.Object | null => {
@@ -34,9 +34,9 @@ export const LayersPanel: React.FC = () => {
     const object = findObjectById(id);
     if (canvas && object) {
       if (direction === 'up') {
-        canvas.bringForward(object);
+        canvas.bringObjectForward(object);
       } else {
-        canvas.sendBackwards(object);
+        canvas.sendObjectBackwards(object);
       }
       canvas.requestRenderAll();
       setLayers(canvas.getObjects()); // Refresh layers to show new order
@@ -53,22 +53,12 @@ export const LayersPanel: React.FC = () => {
     }
   };
 
-  const handleToggleLock = (id: string) => {
-      const object = findObjectById(id);
-      if (canvas && object) {
-          const isLocked = object.lockMovementX; // Check one of the lock properties
-          // "Soft Lock": still selectable, but not movable/rotatable/scalable
-          object.set({
-              lockMovementX: !isLocked,
-              lockMovementY: !isLocked,
-              lockRotation: !isLocked,
-              lockScalingX: !isLocked,
-              lockScalingY: !isLocked,
-              hasControls: isLocked,
-          });
-          canvas.requestRenderAll();
-          setLayers(canvas.getObjects()); // Refresh layers to show new state
-      }
+  const handleToggleMovementLock = (id: string) => {
+      toggleMovementLock(id);
+  }
+
+  const handleToggleColorLock = (id: string) => {
+      toggleColorLock(id);
   }
 
   return (
@@ -97,8 +87,11 @@ export const LayersPanel: React.FC = () => {
                 <button onClick={(e) => { e.stopPropagation(); handleToggleVisibility(layer.id)}} aria-label="Toggle Visibility">
                   {layer.visible ? <Eye className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out"/> : <EyeOff className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out"/>}
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); handleToggleLock(layer.id)}} aria-label="Toggle Lock">
-                    {layer.locked ? <Lock className="icon-muted w-4 h-4 stroke-[1.5] text-rose-400"/> : <Unlock className="icon-muted w-4 h-4 stroke-[1.5]"/>}
+                <button onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id)}} aria-label="Toggle Movement Lock">
+                    {layer.movementLocked ? <Lock className="icon-muted w-4 h-4 stroke-[1.5] text-rose-400"/> : <Unlock className="icon-muted w-4 h-4 stroke-[1.5]"/>}
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); handleToggleColorLock(layer.id)}} aria-label="Toggle Color Lock">
+                    <Droplet className={`w-4 h-4 stroke-[1.5] transition-colors ${layer.colorLocked ? 'text-rose-400 fill-rose-400/20' : 'icon-muted'}`} />
                 </button>
                  <button onClick={(e) => { e.stopPropagation(); handleDelete(layer.id)}} aria-label="Delete Object">
                     <Trash2 className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out hover:text-rose-400"/>
@@ -111,3 +104,4 @@ export const LayersPanel: React.FC = () => {
     </div>
   );
 };
+

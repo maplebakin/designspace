@@ -2,6 +2,7 @@
 import * as fabric from 'fabric';
 import { PDFDocument } from 'pdf-lib';
 import { useEditorStore } from '../state/editorStore';
+import { PRINT_DPI } from '../utils/units';
 
 // Helper function to trigger a browser download
 const triggerDownload = (blob: Blob, filename: string) => {
@@ -102,16 +103,11 @@ export const downloadPdf = async (canvas: fabric.Canvas) => {
     toggleGuideVisibility(canvas, false); // Hide guides
 
     const bleedPx = useEditorStore.getState().bleedPx;
-    const PRINT_DPI = 300;
     const pxToPoints = (px: number) => (px / PRINT_DPI) * 72;
 
     const canvasWidth = canvas.getWidth();
     const canvasHeight = canvas.getHeight();
     
-    // The final trim size of the document
-    const trimWidth = canvasWidth - (bleedPx * 2);
-    const trimHeight = canvasHeight - (bleedPx * 2);
-
     // Create a new PDF document
     const pdfDoc = await PDFDocument.create();
 
@@ -123,7 +119,7 @@ export const downloadPdf = async (canvas: fabric.Canvas) => {
     // Embed the canvas image
     const imgData = canvas.toDataURL({
         format: 'png',
-        multiplier: PRINT_DPI / 72, // Export at 300 DPI resolution
+        multiplier: 1, // Canvas presets are already sized at 300 DPI
     });
     const pngImage = await pdfDoc.embedPng(imgData);
     
@@ -145,22 +141,22 @@ export const downloadPdf = async (canvas: fabric.Canvas) => {
     page.setTrimBox(
         bleed_pt, // x starts after the left bleed
         bleed_pt, // y starts after the bottom bleed
-        pageW_pt - bleed_pt, // new width is total width minus right bleed
-        pageH_pt - bleed_pt  // new height is total height minus top bleed
+        pageW_pt - bleed_pt * 2, // width excludes left + right bleed
+        pageH_pt - bleed_pt * 2  // height excludes top + bottom bleed
     );
 
     // ArtBox: The area of the page that contains the actual artwork. 
     // Often the same as the TrimBox for printables.
     page.setArtBox(
-        bleed_pt, 
-        bleed_pt, 
-        pageW_pt - bleed_pt, 
-        pageH_pt - bleed_pt
+        bleed_pt,
+        bleed_pt,
+        pageW_pt - bleed_pt * 2,
+        pageH_pt - bleed_pt * 2
     );
 
     // Save the PDF and trigger download
     const pdfBytes = await pdfDoc.save();
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
     triggerDownload(blob, 'design-print-ready.pdf');
 
     toggleGuideVisibility(canvas, true); // Show guides again

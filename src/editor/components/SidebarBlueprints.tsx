@@ -9,7 +9,7 @@ export const SidebarBlueprints: React.FC = () => {
 
   const handleLoadTemplate = () => {
     if (canvas) {
-      loadDailyPlannerTemplate(canvas, brandPalette);
+      loadDailyPlannerTemplate(canvas, Object.values(brandPalette));
     }
   };
 

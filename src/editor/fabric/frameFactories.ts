@@ -26,10 +26,10 @@ const applyFrameProps = (shape: fabric.FabricObject) => {
  */
 export const addCircleFrame = (canvas: fabric.Canvas) => {
   const circle = new fabric.Circle({
-    id: uuidv4(),
     ...FRAME_DEFAULTS,
     radius: 100,
   });
+  (circle as any).id = uuidv4();
   applyFrameProps(circle);
   canvas.add(circle);
   canvas.centerObject(circle);
@@ -55,9 +55,9 @@ export const addHexagonFrame = (canvas: fabric.Canvas) => {
     };
 
     const hexagon = new fabric.Polygon(hexagonPoints(100), {
-        id: uuidv4(),
         ...FRAME_DEFAULTS,
     });
+    (hexagon as any).id = uuidv4();
     applyFrameProps(hexagon);
     canvas.add(hexagon);
     canvas.centerObject(hexagon);
@@ -84,9 +84,9 @@ export const addStarFrame = (canvas: fabric.Canvas) => {
     };
 
     const star = new fabric.Polygon(starPoints(100, 50), {
-        id: uuidv4(),
         ...FRAME_DEFAULTS,
     });
+    (star as any).id = uuidv4();
     applyFrameProps(star);
     canvas.add(star);
     canvas.centerObject(star);

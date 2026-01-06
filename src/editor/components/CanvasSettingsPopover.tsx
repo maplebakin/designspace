@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
-import { PRINT_DPI } from '../utils/units';
 import { ChevronDown, Check } from 'lucide-react';
 
 type CanvasPreset = {

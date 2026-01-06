@@ -29,7 +29,7 @@ const confirmClearMessage =
   'Selecting a new preset will clear your current design. Save first if needed before continuing.';
 
 export const ProjectPresets: React.FC = () => {
-  const { canvas, setUnitMode, setLayers, setCanvasBackgroundColor } = useEditorStore();
+  const { canvas, setLayers, setUnitMode, setCanvasBackgroundColor } = useEditorStore();
 
   const applyPreset = (preset: ProjectPreset) => {
     if (!canvas) return;

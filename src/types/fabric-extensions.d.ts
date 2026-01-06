@@ -2,6 +2,11 @@ import type { FabricObject } from 'fabric';
 
 declare module 'fabric' {
   interface FabricObject {
+    id?: string;
+    name?: string;
+    tokenRole?: string | null;
+    colorLocked?: boolean;
+    isPlaceholder?: boolean;
     originalFontSize?: number;
     selectionId?: string;
     isFrame?: boolean;
