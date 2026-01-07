@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { ChevronDown, Check } from 'lucide-react';
@@ -33,20 +33,26 @@ export const CanvasSettingsPopover: React.FC = () => {
   } = useEditorStore();
   const [isOpen, setIsOpen] = useState(false);
   const [currentSize, setCurrentSize] = useState('');
+  const lastSizeRef = useRef<{ width: number; height: number } | null>(null);
 
   const updateSize = useCallback(() => {
     if (!canvas) return;
-    const w = canvas.getWidth();
-    const h = canvas.getHeight();
-    setCurrentSize(`${Math.round(w)} × ${Math.round(h)} px`);
+    const width = Math.round(canvas.getWidth());
+    const height = Math.round(canvas.getHeight());
+    const lastSize = lastSizeRef.current;
+    if (lastSize && lastSize.width === width && lastSize.height === height) return;
+    lastSizeRef.current = { width, height };
+    setCurrentSize(`${width} × ${height} px`);
   }, [canvas]);
 
   useEffect(() => {
     if (!canvas) return;
     updateSize();
     canvas.on('object:modified', updateSize);
+    canvas.on('after:render', updateSize);
     return () => {
       canvas.off('object:modified', updateSize);
+      canvas.off('after:render', updateSize);
     };
   }, [canvas, updateSize]);
 

@@ -210,7 +210,7 @@ export const LayersPanel: React.FC = () => {
   return (
     <div className="p-4 bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border border-[color:var(--ui-border)] rounded-xl transition-all duration-300 ease-in-out">
       <div className="mb-4 space-y-3">
-        <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Tools</h3>
+        <h3 className="text-[11px] uppercase tracking-widest text-[#F8F9FA]">Tools</h3>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setActiveTool('select')}
@@ -285,7 +285,7 @@ export const LayersPanel: React.FC = () => {
         )}
       </div>
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm uppercase tracking-widest text-slate-200">Layers</h3>
+        <h3 className="text-sm uppercase tracking-widest text-[#F8F9FA]">Layers</h3>
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setIsMenuOpen((prev) => !prev)}
@@ -375,7 +375,7 @@ export const LayersPanel: React.FC = () => {
                 >
                   {preview.label && <span>{preview.label}</span>}
                 </div>
-                <span className="text-xs uppercase tracking-widest text-slate-200">{label}</span>
+                <span className="text-xs uppercase tracking-widest text-[#F8F9FA]">{label}</span>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'up')}} aria-label="Move Up">

@@ -91,8 +91,8 @@ export const loadDailyPlannerTemplate = (canvas: fabric.Canvas, palette: string[
 export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]) => {
   const width = Math.round(5.5 * 300);
   const height = Math.round(8.5 * 300);
-  const ink = palette[0] || '#1f2933';
-  const accent = palette[6] || '#2f3650';
+  const ink = '#0f0f0f';
+  const accent = palette[6] || '#1d1b1b';
 
   canvas.discardActiveObject();
   canvas.clear();
@@ -100,95 +100,96 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
   canvas.setHeight(height);
   canvas.backgroundColor = '#FDFBF7';
 
-  const bannerHeight = 220;
-  const banner = new fabric.Rect({
+  const header = new fabric.IText('GAME TITLE', {
     id: uuidv4(),
     left: width / 2,
     top: 120,
     originX: 'center',
     originY: 'center',
-    width: width - 200,
-    height: bannerHeight,
-    fill: accent,
-    rx: 18,
-    ry: 18,
+    fontSize: 56,
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+    fill: ink,
+    charSpacing: 120,
+  });
+
+  const headerRule = new fabric.Rect({
+    id: uuidv4(),
+    left: width / 2,
+    top: 190,
+    originX: 'center',
+    originY: 'center',
+    width: width - 220,
+    height: 12,
+    fill: ink,
     strokeUniform: true,
   });
 
-  const title = new fabric.IText('RETRO MANUAL', {
-    id: uuidv4(),
-    left: width / 2,
-    top: 120,
-    originX: 'center',
-    originY: 'center',
-    fontSize: 54,
-    fontWeight: 'bold',
-    fontFamily: 'monospace',
-    fill: '#FDFBF7',
-    charSpacing: 140,
-  });
-
-  const bioBox = new fabric.Rect({
+  const portraitFrame = new fabric.Rect({
     id: uuidv4(),
     left: width / 2,
     top: 520,
     originX: 'center',
     originY: 'center',
-    width: width - 220,
+    width: 520,
     height: 520,
-    fill: 'rgba(15, 23, 42, 0.03)',
+    fill: 'rgba(0,0,0,0.02)',
     stroke: ink,
-    strokeWidth: 3,
-    strokeDashArray: [10, 6],
+    strokeWidth: 6,
+    strokeDashArray: [18, 10],
     strokeUniform: true,
-    rx: 10,
-    ry: 10,
+    rx: 12,
+    ry: 12,
   });
 
-  const bioTitle = new fabric.IText('CHARACTER BIO', {
+  const portraitLabel = new fabric.IText('PIXEL-ART PORTRAIT', {
     id: uuidv4(),
     left: width / 2,
-    top: 320,
+    top: 300,
+    originX: 'center',
+    originY: 'center',
+    fontSize: 22,
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+    fill: ink,
+    charSpacing: 80,
+  });
+
+  const controllerBox = new fabric.Rect({
+    id: uuidv4(),
+    left: width / 2,
+    top: 1100,
+    originX: 'center',
+    originY: 'center',
+    width: width - 220,
+    height: 360,
+    fill: 'transparent',
+    stroke: ink,
+    strokeWidth: 5,
+    strokeUniform: true,
+    rx: 16,
+    ry: 16,
+  });
+
+  const controllerTitle = new fabric.IText('CONTROLLER MAP', {
+    id: uuidv4(),
+    left: width / 2,
+    top: 960,
     originX: 'center',
     originY: 'center',
     fontSize: 26,
     fontWeight: 'bold',
     fontFamily: 'monospace',
     fill: ink,
-    charSpacing: 80,
-  });
-
-  const bioText = new fabric.IText('Name: ________  Class: ________', {
-    id: uuidv4(),
-    left: width / 2,
-    top: 460,
-    originX: 'center',
-    originY: 'center',
-    fontSize: 22,
-    fontFamily: 'monospace',
-    fill: ink,
-  });
-
-  const controlsTitle = new fabric.IText('CONTROLS', {
-    id: uuidv4(),
-    left: width / 2,
-    top: 980,
-    originX: 'center',
-    originY: 'center',
-    fontSize: 28,
-    fontWeight: 'bold',
-    fontFamily: 'monospace',
-    fill: ink,
-    charSpacing: 80,
+    charSpacing: 90,
   });
 
   const buttonLabels = ['A', 'B', 'X', 'Y'];
-  const buttonColors = [accent, ink, accent, ink];
   const buttonGroup: fabric.Object[] = [];
-  const buttonRadius = 48;
-  const startX = width / 2 - 220;
+  const buttonRadius = 46;
+  const startX = width / 2 - 200;
   const startY = 1120;
-  const gap = 140;
+  const gap = 130;
 
   buttonLabels.forEach((label, index) => {
     const x = startX + index * gap;
@@ -199,9 +200,9 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
       originX: 'center',
       originY: 'center',
       radius: buttonRadius,
-      fill: buttonColors[index],
+      fill: accent,
       stroke: ink,
-      strokeWidth: 3,
+      strokeWidth: 5,
       strokeUniform: true,
     });
     const letter = new fabric.IText(label, {
@@ -210,7 +211,7 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
       top: startY,
       originX: 'center',
       originY: 'center',
-      fontSize: 42,
+      fontSize: 40,
       fontWeight: 'bold',
       fontFamily: 'monospace',
       fill: '#FDFBF7',
@@ -218,27 +219,40 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
     buttonGroup.push(circle, letter);
   });
 
-  const footerNote = new fabric.IText('Press Start to Begin', {
+  const dpad = new fabric.Rect({
     id: uuidv4(),
-    left: width / 2,
-    top: height - 120,
+    left: width / 2 - 260,
+    top: 1220,
     originX: 'center',
     originY: 'center',
-    fontSize: 20,
-    fontFamily: 'monospace',
+    width: 160,
+    height: 40,
     fill: ink,
-    charSpacing: 60,
+    strokeUniform: true,
+  });
+
+  const dpadVertical = new fabric.Rect({
+    id: uuidv4(),
+    left: width / 2 - 260,
+    top: 1220,
+    originX: 'center',
+    originY: 'center',
+    width: 40,
+    height: 160,
+    fill: ink,
+    strokeUniform: true,
   });
 
   canvas.add(
-    banner,
-    title,
-    bioTitle,
-    bioBox,
-    bioText,
-    controlsTitle,
-    ...buttonGroup,
-    footerNote
+    header,
+    headerRule,
+    portraitLabel,
+    portraitFrame,
+    controllerTitle,
+    controllerBox,
+    dpad,
+    dpadVertical,
+    ...buttonGroup
   );
   canvas.requestRenderAll();
 };

@@ -40,7 +40,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     brushSize,
     canvasBackgroundColor,
     setVpt,
-    setCanvasOffset
+    setCanvasOffset,
+    snapEnabled
   } = useEditorStore();
   const uiVars = useUiThemeStore((state) => state.vars);
 
@@ -56,10 +57,15 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   } | null>(null);
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
+  const snapEnabledRef = useRef(snapEnabled);
 
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
+
+  useEffect(() => {
+    snapEnabledRef.current = snapEnabled;
+  }, [snapEnabled]);
 
   const resolveThemeValue = (theme: ApocapaletteTheme | null, path: string): string | null => {
     if (!theme) return null;
@@ -170,6 +176,18 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       handleCanvasUpdate();
     };
 
+    const handleObjectMoving = (event: any) => {
+      if (!snapEnabledRef.current) return;
+      const target = event?.target as fabric.Object | undefined;
+      if (!target || (target as any).isGuide) return;
+      const gridSize = 10;
+      const left = target.left ?? 0;
+      const top = target.top ?? 0;
+      const snappedLeft = Math.round(left / gridSize) * gridSize;
+      const snappedTop = Math.round(top / gridSize) * gridSize;
+      target.set({ left: snappedLeft, top: snappedTop });
+    };
+
     const handleObjectScaling = (event: any) => {
       const target = event.target as fabric.Object | undefined;
       if (!target || (target as any).isGuide) return;
@@ -241,6 +259,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     canvas.on('object:removed', handleObjectEvent);
     canvas.on('object:modified', handleObjectEvent);
     canvas.on('object:scaling', handleObjectScaling);
+    canvas.on('object:moving', handleObjectMoving);
     canvas.on('after:render', handleAfterRender);
 
     // Pan with spacebar
@@ -351,6 +370,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       window.removeEventListener('keyup', handleGlobalKeyUp);
       resizeObserver.unobserve(container);
       canvas.off('object:scaling', handleObjectScaling);
+      canvas.off('object:moving', handleObjectMoving);
       canvas.off('after:render', handleAfterRender);
 
       const disposeCanvas = () => {
@@ -417,6 +437,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       applyDrawingBrush(fabricCanvas, tool === 'erase' ? 'erase' : 'draw');
     }
   }, [fabricCanvas, activeTool, brushColor, brushSize]);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    (fabricCanvas as any).snapToGrid = snapEnabled;
+  }, [fabricCanvas, snapEnabled]);
 
   useEffect(() => {
     if (!fabricCanvas) return;

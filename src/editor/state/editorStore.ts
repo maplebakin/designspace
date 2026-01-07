@@ -122,6 +122,7 @@ interface EditorState {
   bleedPx: number;
   canvasBackgroundColor: string | null;
   canvasOffset: { x: number; y: number };
+  snapEnabled: boolean;
   assets: StickerData[];
   templates: Template[];
   userTemplates: Template[];
@@ -143,6 +144,7 @@ interface EditorState {
   setZoom: (zoom: number) => void;
   setVpt: (vpt: number[]) => void;
   setCanvasOffset: (offset: { x: number; y: number }) => void;
+  setSnapEnabled: (enabled: boolean) => void;
   resetViewCanvas: () => void;
   addAssetToLibrary: (asset: StickerData) => void;
   removeAssetFromLibrary: (id: string) => void;
@@ -198,6 +200,7 @@ export const useEditorStore = create<EditorState>()(
         bleedPx: 0,
         canvasBackgroundColor: null,
         canvasOffset: { x: 0, y: 0 },
+        snapEnabled: true,
         assets: [],
         templates: [],
         userTemplates: [],
@@ -249,6 +252,7 @@ export const useEditorStore = create<EditorState>()(
     setZoom: (zoom) => set({ zoom }),
     setVpt: (vpt) => set({ vpt }),
     setCanvasOffset: (offset) => set({ canvasOffset: offset }),
+    setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
     resetViewCanvas: () => {
         const { canvas } = get();
         if (canvas) {
@@ -656,6 +660,7 @@ export const useEditorStore = create<EditorState>()(
             activeTool: state.activeTool,
             brushSize: state.brushSize,
             brushColor: state.brushColor,
+            snapEnabled: state.snapEnabled,
         }),
     }
   )

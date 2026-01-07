@@ -17,6 +17,7 @@ import {
   Eraser,
   Hand,
   PaintBucket,
+  Magnet,
   Pilcrow,
   SlidersHorizontal,
   Square,
@@ -164,7 +165,7 @@ interface NavStripProps {
 }
 
 const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
-  <div className="flex flex-col items-center gap-4 py-4">
+  <div className="flex flex-col items-center gap-6 py-5">
     {NAV_ITEMS.map((item) => {
       const isActive = activeNav === item.id;
       return (
@@ -173,8 +174,8 @@ const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
           onClick={() => onSelect(item.id)}
           className={`group w-10 h-10 flex items-center justify-center rounded-2xl transition-all duration-300 ease-in-out ${
             isActive
-              ? 'bg-[color:var(--brand-primary)]/25 text-white shadow-[0_0_20px_var(--brand-primary)]'
-              : 'text-slate-200 hover:text-white hover:bg-white/10'
+              ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+              : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
           }`}
           aria-label={item.label}
           title={item.label}
@@ -199,32 +200,32 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   return (
     <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 p-3 shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]">
-      <h3 className="text-[10px] uppercase tracking-widest text-slate-200 mb-3">Shapes</h3>
+      <h3 className="text-[10px] uppercase tracking-widest text-[#F8F9FA] mb-3">Shapes</h3>
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => handleAddShape(objectFactories.addRectangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Square className={ICON_SMALL} />
           Rectangle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addCircle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Circle className={ICON_SMALL} />
           Circle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addTriangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Triangle className={ICON_SMALL} />
           Triangle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addStar)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Star className={ICON_SMALL} />
           Star
@@ -288,10 +289,10 @@ const TextPanel: React.FC = () => {
 
   return (
     <div className="p-5 space-y-3">
-      <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Text Rituals</h3>
+      <h3 className="text-[11px] uppercase tracking-widest text-[#F8F9FA]">Text Rituals</h3>
       <button
         onClick={() => addText({ text: 'Heading', fontSize: 80, fontWeight: 'bold', role: 'heading' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Heading1 className={ICON_SMALL} />
@@ -300,7 +301,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={() => addText({ text: 'Subheading', fontSize: 50, fontWeight: 'normal', role: 'subheading' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Heading2 className={ICON_SMALL} />
@@ -309,7 +310,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={() => addText({ text: 'Body text', fontSize: 24, fontWeight: 'normal', role: 'body' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Pilcrow className={ICON_SMALL} />
@@ -318,7 +319,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={addFixedTextbox}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <FileText className={ICON_SMALL} />
@@ -436,6 +437,8 @@ export const EditorShell: React.FC = () => {
     themeData,
     canvasBackgroundColor,
     setCanvasBackgroundColor,
+    snapEnabled,
+    setSnapEnabled,
   } = useEditorStore();
   const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -516,13 +519,13 @@ export const EditorShell: React.FC = () => {
           <FileDropdown />
         </div>
         <div className="flex-1 flex justify-center items-center gap-4">
-            <div className="flex items-center gap-3 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-3 py-2">
+            <div className="flex items-center gap-4 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-4 py-2">
                 <button
                     onClick={() => setActiveTool('select')}
                     className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
                         activeTool === 'select'
-                          ? 'bg-[color:var(--brand-primary)]/35 text-white shadow-[0_0_20px_rgba(161,51,255,0.65)]'
-                          : 'text-slate-200 hover:text-white hover:bg-white/10'
+                          ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                          : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
                     }`}
                     aria-label="Select tool"
                     title="Select"
@@ -533,8 +536,8 @@ export const EditorShell: React.FC = () => {
                     onClick={() => setActiveTool('erase')}
                     className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
                         activeTool === 'erase'
-                          ? 'bg-[color:var(--brand-primary)]/35 text-white shadow-[0_0_20px_rgba(161,51,255,0.65)]'
-                          : 'text-slate-200 hover:text-white hover:bg-white/10'
+                          ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                          : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
                     }`}
                     aria-label="Eraser tool"
                     title="Eraser"
@@ -545,16 +548,28 @@ export const EditorShell: React.FC = () => {
                     onClick={() => setActiveTool('pan')}
                     className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
                         activeTool === 'pan'
-                          ? 'bg-[color:var(--brand-primary)]/35 text-white shadow-[0_0_20px_rgba(161,51,255,0.65)]'
-                          : 'text-slate-200 hover:text-white hover:bg-white/10'
+                          ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                          : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
                     }`}
                     aria-label="Hand tool"
                     title="Hand"
                 >
                     <Hand className="w-4 h-4 stroke-[1.5]" />
                 </button>
+                <button
+                    onClick={() => setSnapEnabled(!snapEnabled)}
+                    className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
+                      snapEnabled
+                        ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                        : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
+                    }`}
+                    aria-label="Toggle snapping"
+                    title="Snap to grid"
+                >
+                    <Magnet className="w-4 h-4 stroke-[1.5]" />
+                </button>
             </div>
-            <div className="relative flex items-center gap-3 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-3 py-2">
+            <div className="relative flex items-center gap-4 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-4 py-2">
                 <button
                     onClick={() => {
                         setActiveTool('draw');
@@ -562,8 +577,8 @@ export const EditorShell: React.FC = () => {
                     }}
                     className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
                         activeTool === 'draw'
-                          ? 'bg-[color:var(--brand-primary)]/35 text-white shadow-[0_0_20px_rgba(161,51,255,0.65)]'
-                          : 'text-slate-200 hover:text-white hover:bg-white/10'
+                          ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                          : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
                     }`}
                     aria-label="Pencil tool"
                     title="Pencil"
@@ -572,7 +587,7 @@ export const EditorShell: React.FC = () => {
                 </button>
                 <button
                     onClick={() => setIsFillOpen((prev) => !prev)}
-                    className="rounded-full p-2 text-slate-200 transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
+                    className="rounded-full p-2 text-[#F8F9FA] transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
                     aria-label="Paint bucket"
                     title="Canvas fill"
                 >
@@ -631,11 +646,11 @@ export const EditorShell: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         <div className="relative flex h-full">
           <div className="relative flex h-full">
-            <div className="flex flex-col items-center gap-3 py-4 px-1 bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)]">
+            <div className="flex flex-col items-center gap-6 py-5 px-1 bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)]">
               <button
                 onClick={toggleShapes}
                 className={`group w-10 h-10 flex items-center justify-center rounded-2xl transition-all duration-300 ease-in-out ${
-                  isShapesOpen ? 'bg-[color:var(--brand-primary)]/25 text-white shadow-[0_0_20px_var(--brand-primary)]' : 'text-slate-200 hover:text-white hover:bg-white/10'
+                  isShapesOpen ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]' : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
                 }`}
                 aria-label="Shapes"
                 title="Shapes"
@@ -647,7 +662,7 @@ export const EditorShell: React.FC = () => {
               <div className="flex-1" />
               <button
                 onClick={() => setIsBrandModalOpen(true)}
-                className="group w-10 h-10 flex items-center justify-center rounded-2xl text-slate-200 transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
+                className="group w-10 h-10 flex items-center justify-center rounded-2xl text-[#F8F9FA] transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
                 aria-label="Brand Vault"
                 title="Brand Vault"
               >
@@ -663,7 +678,7 @@ export const EditorShell: React.FC = () => {
               <div className="absolute left-full top-20 z-30 ml-3 w-[280px]">
                 <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)] overflow-hidden">
                   <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
-                    <span className="text-[10px] uppercase tracking-widest text-slate-400">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
+                    <span className="text-[10px] uppercase tracking-widest text-[#F8F9FA]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
                   </div>
                   <div className="max-h-[75vh] overflow-y-auto">
                     {renderPanel()}

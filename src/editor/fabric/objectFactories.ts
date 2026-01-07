@@ -7,6 +7,7 @@ import { SAFE_MARGIN_PX } from '../utils/units';
 const DEFAULT_STROKE_COLOR = '#000000';
 const DEFAULT_STROKE_WIDTH = 2;
 const DEFAULT_PLACEHOLDER_TOKEN_ROLE = 'surfaces.surface-plain';
+const DEFAULT_SHAPE_FILL = '#1f2933';
 
 const getValueByPath = (obj: object, path: string): any => {
     return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
@@ -32,7 +33,7 @@ export const addRectangle = (canvas: fabric.Canvas) => {
   const rect = new fabric.Rect({
     width: 150,
     height: 100,
-    fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
+    fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
     stroke: DEFAULT_STROKE_COLOR,
     strokeWidth: DEFAULT_STROKE_WIDTH,
     strokeUniform: true,
@@ -55,7 +56,7 @@ export const addRectangle = (canvas: fabric.Canvas) => {
 export const addCircle = (canvas: fabric.Canvas) => {
   const circle = new fabric.Circle({
     radius: 75,
-    fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
+    fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
     stroke: DEFAULT_STROKE_COLOR,
     strokeWidth: DEFAULT_STROKE_WIDTH,
     strokeUniform: true,
@@ -77,7 +78,7 @@ export const addTriangle = (canvas: fabric.Canvas) => {
     const triangle = new fabric.Triangle({
         width: 150,
         height: 130,
-        fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
+        fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
         stroke: DEFAULT_STROKE_COLOR,
         strokeWidth: DEFAULT_STROKE_WIDTH,
         strokeUniform: true,
@@ -110,7 +111,7 @@ export const addStar = (canvas: fabric.Canvas) => {
     };
 
     const star = new fabric.Polygon(starPoints(80, 40), {
-        fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
+        fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
         stroke: DEFAULT_STROKE_COLOR,
         strokeWidth: DEFAULT_STROKE_WIDTH,
         strokeUniform: true,

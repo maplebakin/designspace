@@ -1,5 +1,6 @@
 
 import * as fabric from 'fabric';
+import { useEditorStore } from '../state/editorStore';
 
 const SNAP_THRESHOLD = 5;
 const GUIDE_COLOR = 'rgba(128, 0, 128, 0.8)'; // Purple
@@ -78,6 +79,12 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   const onObjectMoving = (e: any) => {
     const activeObject = e?.target as fabric.Object | undefined;
     if (!activeObject) return;
+
+    if (!useEditorStore.getState().snapEnabled) {
+      removeAlignLines();
+      lastSnapCoords = {};
+      return;
+    }
 
     if (isAltKeyDown) {
       removeAlignLines();
@@ -177,6 +184,11 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   const onMouseUpHandler = () => { // Named the anonymous function
     // This now correctly handles RAF cleanup within removeAlignLines
     removeAlignLines();
+
+    if (!useEditorStore.getState().snapEnabled) {
+      lastSnapCoords = {};
+      return;
+    }
 
     const activeObject = canvas.getActiveObject();
     if (activeObject && (lastSnapCoords.x !== undefined || lastSnapCoords.y !== undefined)) {
