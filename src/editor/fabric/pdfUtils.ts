@@ -1,10 +1,11 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
+import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 
-// Set up the worker source for pdfjs-dist
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Set up the worker source for pdfjs-dist (bundled for offline use)
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
 /**
  * Loads the first page of a PDF and sets it as the canvas background.

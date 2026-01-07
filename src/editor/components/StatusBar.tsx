@@ -1,6 +1,6 @@
 import React from 'react';
-import * as fabric from 'fabric';
-import { ZoomIn, ZoomOut, Expand, AlertTriangle } from 'lucide-react';
+import type * as fabric from 'fabric';
+import { Minus, Plus, Expand, AlertTriangle } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
 import { SAFE_MARGIN_PX, canvasDimensionsInInches, formatInches, safeMarginInches } from '../utils/units';
 
@@ -15,10 +15,20 @@ export const StatusBar: React.FC = () => {
   const handleZoom = (factor: number) => {
     if (canvas) {
       const newZoom = canvas.getZoom() * factor;
-      canvas.zoomToPoint(new fabric.Point(canvas.width / 2, canvas.height / 2), newZoom);
+      canvas.setZoom(newZoom);
+      canvas.requestRenderAll();
       useEditorStore.getState().setZoom(newZoom);
     }
   };
+
+  const zoomPresets = [0.25, 0.5, 1, 2];
+  const setZoomLevel = (level: number) => {
+    if (!canvas) return;
+    canvas.setZoom(level);
+    canvas.requestRenderAll();
+    useEditorStore.getState().setZoom(level);
+  };
+  const isZoomActive = (level: number) => Math.abs(zoom - level) < 0.01;
 
   const dimensionLabel = unitMode === 'px'
     ? `${Math.round(widthPx)} x ${Math.round(heightPx)} px`
@@ -30,12 +40,12 @@ export const StatusBar: React.FC = () => {
 
   const canvasWidth = widthPx;
   const canvasHeight = heightPx;
-  const isBackgroundCandidate = (obj: fabric.Object) => {
-    if (obj.get('isGuide')) return false;
+  const isBackgroundCandidate = (obj: fabric.FabricObject) => {
+    if ((obj as any).get?.('isGuide') || (obj as any).isGuide) return false;
     const bbox = obj.getBoundingRect();
     return bbox.width >= canvasWidth * 0.8 && bbox.height >= canvasHeight * 0.8;
   };
-  const coversBleed = (obj: fabric.Object) => {
+  const coversBleed = (obj: fabric.FabricObject) => {
     const bbox = obj.getBoundingRect();
     return (
       bbox.left <= bleedPx &&
@@ -51,7 +61,7 @@ export const StatusBar: React.FC = () => {
   const bleedWarning = unitMode === 'in' && canvas && canvasWidth > 0 && canvasHeight > 0 && !hasBleedCoverage;
 
   return (
-    <footer className="bg-white/5 backdrop-blur-md border-t border-[color:var(--border-subtle)] h-12 flex items-center justify-between px-4 gap-4 z-10">
+    <footer className="bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
       <div className="flex items-center gap-4 text-[11px] uppercase tracking-widest text-slate-300">
         <span>Canvas: {dimensionLabel}</span>
         <span>Safe: {safeLabel}</span>
@@ -64,34 +74,48 @@ export const StatusBar: React.FC = () => {
         <div className="flex items-center rounded-full overflow-hidden border border-[color:var(--border-subtle)]">
           <button
             onClick={() => setUnitMode('px')}
-            className={`px-3 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'px' ? 'bg-white/10 text-slate-100' : 'text-slate-400 hover:text-[color:var(--brand-primary)]'}`}
+            className={`px-4 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'px' ? 'bg-white/10 text-slate-100' : 'text-slate-400 hover:text-[color:var(--brand-primary)]'}`}
           >
-            Web (px)
+            PX
           </button>
           <button
             onClick={() => setUnitMode('in')}
-            className={`px-3 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'in' ? 'bg-white/10 text-slate-100' : 'text-slate-400 hover:text-[color:var(--brand-primary)]'}`}
+            className={`px-4 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'in' ? 'bg-white/10 text-slate-100' : 'text-slate-400 hover:text-[color:var(--brand-primary)]'}`}
           >
-            Print (in)
+            IN
           </button>
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2">
+        <div className="hidden md:flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/10 px-3 py-1 text-[10px] uppercase tracking-widest text-slate-300 shadow-[0_0_24px_rgba(0,0,0,0.25)]">
+          {zoomPresets.map((level) => (
+            <button
+              key={level}
+              onClick={() => setZoomLevel(level)}
+              className={`rounded-full px-2 py-1 transition-all duration-300 ease-in-out ${
+                isZoomActive(level) ? 'bg-white/15 text-slate-100' : 'text-slate-400 hover:text-[color:var(--brand-primary)]'
+              }`}
+              aria-label={`Zoom ${Math.round(level * 100)}%`}
+            >
+              {Math.round(level * 100)}%
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/10 px-2 py-1 shadow-[0_0_24px_rgba(0,0,0,0.25)]">
           <button
             onClick={() => handleZoom(0.8)}
-            className="p-2 rounded-full bg-white/10 shadow-[0_0_18px_var(--brand-accent)] transition-all duration-300 ease-in-out"
+            className="rounded-full p-2 text-slate-200 transition-all duration-300 ease-in-out hover:bg-white/10"
             aria-label="Zoom Out"
           >
-            <ZoomOut className="icon-muted w-4 h-4 stroke-[1.5]" />
+            <Minus className="icon-muted w-4 h-4 stroke-[1.5]" />
           </button>
-          <span className="text-sm font-medium w-16 text-center text-slate-200">{Math.round(zoom * 100)}%</span>
+          <span className="text-sm font-semibold w-16 text-center text-slate-100">{Math.round(zoom * 100)}%</span>
           <button
             onClick={() => handleZoom(1.25)}
-            className="p-2 rounded-full bg-white/10 shadow-[0_0_18px_var(--brand-accent)] transition-all duration-300 ease-in-out"
+            className="rounded-full p-2 text-slate-200 transition-all duration-300 ease-in-out hover:bg-white/10"
             aria-label="Zoom In"
           >
-            <ZoomIn className="icon-muted w-4 h-4 stroke-[1.5]" />
+            <Plus className="icon-muted w-4 h-4 stroke-[1.5]" />
           </button>
         </div>
         <button

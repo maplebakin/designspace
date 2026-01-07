@@ -1,5 +1,5 @@
 import React from 'react';
-import { resizeCanvas, addSafeMarginGuides, clearSafeMarginGuides } from '../fabric/canvasUtils';
+import { resizeCanvas } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { PRINT_DPI } from '../utils/units';
 
@@ -28,7 +28,11 @@ const digitalPresets: ProjectPreset[] = [
 const confirmClearMessage =
   'Selecting a new preset will clear your current design. Save first if needed before continuing.';
 
-export const ProjectPresets: React.FC = () => {
+type ProjectPresetsProps = {
+  onPresetApplied?: () => void;
+};
+
+export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied }) => {
   const { canvas, setLayers, setUnitMode, setCanvasBackgroundColor } = useEditorStore();
 
   const applyPreset = (preset: ProjectPreset) => {
@@ -39,7 +43,6 @@ export const ProjectPresets: React.FC = () => {
     }
 
     canvas.discardActiveObject();
-    clearSafeMarginGuides(canvas);
     canvas.clear();
 
     const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
@@ -51,11 +54,7 @@ export const ProjectPresets: React.FC = () => {
     resizeCanvas(widthPx, heightPx);
     setCanvasBackgroundColor('#ffffff');
 
-    if (preset.unit === 'in') {
-      addSafeMarginGuides(canvas);
-    } else {
-      clearSafeMarginGuides(canvas);
-    }
+    onPresetApplied?.();
   };
 
   const renderButton = (preset: ProjectPreset) => (

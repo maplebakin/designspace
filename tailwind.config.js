@@ -6,7 +6,15 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        'ui-bg': 'var(--ui-bg)',
+        'ui-panel': 'var(--ui-panel)',
+        'ui-accent': 'var(--ui-accent)',
+        'ui-text': 'var(--ui-text)',
+        'ui-border': 'var(--ui-border)',
+      },
+    },
   },
   plugins: [],
 }

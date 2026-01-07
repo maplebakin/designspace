@@ -34,7 +34,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, forma
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[#140808] rounded-lg shadow-2xl w-full max-w-sm border border-[color:var(--border-subtle)] backdrop-blur-md text-slate-100">
+      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-sm border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-slate-100">
         <header className="flex items-center justify-between p-4 border-b border-[color:var(--border-subtle)]">
           <h2 className="text-[11px] uppercase tracking-widest text-slate-200">Export as {format.toUpperCase()}</h2>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-white/10 transition-all duration-300 ease-in-out">

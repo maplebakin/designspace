@@ -1,9 +1,144 @@
 
 import React from 'react';
 import { useEditorStore, Template } from '../state/editorStore';
+import type { ApocapaletteTheme } from '../types/apocapalette';
+
+type TemplateThumbnailProps = {
+    name: string;
+    themeData: ApocapaletteTheme | null;
+};
+
+const resolveTokenValue = (obj: object | null, path: string): string | null => {
+    if (!obj) return null;
+    const getValueByPath = (target: object, keyPath: string): any =>
+        keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], target);
+
+    let value = getValueByPath(obj, path);
+    if (!value && !path.endsWith('.value')) {
+        value = getValueByPath(obj, `${path}.value`);
+    }
+    if (value && typeof value === 'object' && 'value' in value) {
+        return (value as { value: string }).value;
+    }
+    return typeof value === 'string' ? value : null;
+};
+
+const hashString = (value: string) => {
+    let hash = 0;
+    for (let i = 0; i < value.length; i += 1) {
+        hash = (hash << 5) - hash + value.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash);
+};
+
+const isExternalUrl = (value: string) => /^https?:\/\//i.test(value);
+
+const DynamicSvgThumbnail: React.FC<TemplateThumbnailProps> = ({ name, themeData }) => {
+    const label = name.toUpperCase();
+    const seed = React.useMemo(() => hashString(name), [name]);
+    const uid = React.useId().replace(/:/g, '');
+    const gradientId = `thumb-gradient-${uid}`;
+    const accentId = `thumb-accent-${uid}`;
+    const palette = React.useMemo(() => {
+        const surface = resolveTokenValue(themeData, 'surfaces.surface-plain') || 'var(--ui-panel)';
+        const border = resolveTokenValue(themeData, 'borders.border-subtle') || 'var(--ui-border)';
+        const primary = resolveTokenValue(themeData, 'brand.primary') || 'var(--ui-accent)';
+        const accent = resolveTokenValue(themeData, 'brand.accent') || primary;
+        const secondary = resolveTokenValue(themeData, 'brand.secondary') || 'var(--ui-text)';
+        const text = resolveTokenValue(themeData, 'typography.text-body') || 'var(--ui-text)';
+        return {
+            surface,
+            border,
+            primary,
+            accent,
+            secondary,
+            text,
+        };
+    }, [themeData]);
+    const shiftX = (seed % 18) - 9;
+    const shiftY = ((seed >> 4) % 14) - 7;
+    const barWidth = 64 + (seed % 40);
+    const circleRadius = 10 + (seed % 6);
+    const title = label.length > 18 ? `${label.slice(0, 18)}...` : label;
+
+    return (
+        <svg
+            viewBox="0 0 150 100"
+            role="img"
+            aria-label={`${name} thumbnail`}
+            className="w-full h-full"
+        >
+            <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor={palette.primary} stopOpacity="0.8" />
+                    <stop offset="100%" stopColor={palette.accent} stopOpacity="0.7" />
+                </linearGradient>
+                <radialGradient id={accentId} cx="0.5" cy="0.5" r="0.7">
+                    <stop offset="0%" stopColor={palette.accent} stopOpacity="0.5" />
+                    <stop offset="100%" stopColor={palette.surface} stopOpacity="0" />
+                </radialGradient>
+            </defs>
+            <rect
+                x="0.5"
+                y="0.5"
+                width="149"
+                height="99"
+                rx="10"
+                fill={palette.surface}
+                stroke={palette.border}
+            />
+            <rect
+                x="8"
+                y="8"
+                width="134"
+                height="84"
+                rx="10"
+                fill={`url(#${gradientId})`}
+                opacity="0.18"
+            />
+            <text
+                x="75"
+                y="88"
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize="9"
+                letterSpacing="2"
+                fill={palette.text}
+            >
+                {title}
+            </text>
+            <rect
+                x={12 + shiftX}
+                y="16"
+                width={barWidth}
+                height="8"
+                rx="4"
+                fill={palette.primary}
+                opacity="0.75"
+            />
+            <rect x="12" y="30" width="92" height="6" rx="3" fill={palette.secondary} opacity="0.35" />
+            <rect x="12" y="42" width="110" height="6" rx="3" fill={palette.secondary} opacity="0.25" />
+            <rect x="12" y="54" width="84" height="6" rx="3" fill={palette.secondary} opacity="0.2" />
+            <circle
+                cx={110 + shiftX}
+                cy={68 + shiftY}
+                r={circleRadius}
+                fill={`url(#${accentId})`}
+            />
+            <circle
+                cx={128 + shiftX}
+                cy={76 + shiftY}
+                r="5"
+                fill={palette.primary}
+                opacity="0.6"
+            />
+        </svg>
+    );
+};
 
 export const TemplateBrowser: React.FC = () => {
-    const { templates, userTemplates, loadTemplate, setToastMessage, saveCurrentAsTemplate } = useEditorStore();
+    const { templates, userTemplates, loadTemplate, setToastMessage, saveCurrentAsTemplate, themeData } = useEditorStore();
 
     // Placeholder templates (Witchy vibe)
     const predefinedTemplates: Template[] = [
@@ -218,42 +353,66 @@ export const TemplateBrowser: React.FC = () => {
                 <div className="px-4">
                     <h3 className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Your Templates</h3>
                     <div className="grid grid-cols-2 gap-2">
-                        {userTemplates.map((template) => (
+                        {userTemplates.map((template) => {
+                            const thumbnailSrc =
+                                template.thumbnail || (template as { thumbnailUrl?: string }).thumbnailUrl;
+                            const safeThumbnailSrc =
+                                thumbnailSrc && !isExternalUrl(thumbnailSrc) ? thumbnailSrc : null;
+
+                            return (
                             <button
                                 key={template.id}
                                 onClick={() => handleLoadTemplate(template)}
-                                className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
+                                className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
                             >
-                                <img
-                                    src={template.thumbnail || `https://via.placeholder.com/150x100/333333/FFFFFF?text=${encodeURIComponent(template.name)}`}
-                                    alt={template.name}
-                                    className="w-full h-20 object-cover rounded-md mb-2"
-                                />
+                                <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">
+                                    {safeThumbnailSrc ? (
+                                        <img
+                                            src={safeThumbnailSrc}
+                                            alt={template.name}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    ) : (
+                                        <DynamicSvgThumbnail name={template.name} themeData={themeData} />
+                                    )}
+                                </div>
                                 <span className="text-xs uppercase tracking-widest text-slate-300">{template.name}</span>
                             </button>
-                        ))}
+                        )})}
                     </div>
                 </div>
             )}
             <div className="px-4">
                 <h3 className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Community Templates</h3>
                 <div className="grid grid-cols-2 gap-2">
-                    {templates.map((template) => (
+                    {templates.map((template) => {
+                        const thumbnailSrc =
+                            template.thumbnail || (template as { thumbnailUrl?: string }).thumbnailUrl;
+                        const safeThumbnailSrc =
+                            thumbnailSrc && !isExternalUrl(thumbnailSrc) ? thumbnailSrc : null;
+
+                        return (
                         <button 
                             key={template.id}
                             onClick={() => handleLoadTemplate(template)}
-                            className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
+                            className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
                         >
-                            <img 
-                                src={`https://via.placeholder.com/150x100/333333/FFFFFF?text=${encodeURIComponent(template.name)}`}
-                                alt={template.name}
-                                className="w-full h-20 object-cover rounded-md mb-2"
-                            />
+                            <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">
+                                {safeThumbnailSrc ? (
+                                    <img 
+                                        src={safeThumbnailSrc}
+                                        alt={template.name}
+                                        className="w-full h-full object-cover"
+                                    />
+                                ) : (
+                                    <DynamicSvgThumbnail name={template.name} themeData={themeData} />
+                                )}
+                            </div>
                             <span className="text-xs uppercase tracking-widest text-slate-300">{template.name}</span>
                             {/* Optionally show theme info or description */}
                             {/* <p className="text-[10px] uppercase tracking-widest text-slate-500">{template.defaultThemeId}</p> */}
                         </button>
-                    ))}
+                    )})}
                 </div>
             </div>
             {/* Additional sections for saved templates, etc. */}

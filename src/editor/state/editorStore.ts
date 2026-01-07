@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
 import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,9 +8,12 @@ import {
 } from '../utils/indexedDb';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
 import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { useUiThemeStore } from './uiThemeStore';
+import type { ApocapaletteTheme } from '../types/apocapalette';
 
 // --- CONSTANTS ---
 const MAX_HISTORY_SIZE = 50;
+const AUTOSAVE_STORAGE_KEY = 'witchclick_current_design';
 
 export interface Template {
   id: string;
@@ -29,15 +33,13 @@ export interface Layer {
   colorLocked: boolean;
 }
 
-export interface ApocapaletteTheme {
-    meta: { schema: string; name: string; };
-    [key: string]: any;
-}
-
 export interface StickerData {
     id: string;
     url: string;
     tags: string[];
+    format?: 'svg' | 'png';
+    svg?: string;
+    label?: string;
 }
 
 export interface BrandCollection {
@@ -50,6 +52,15 @@ export interface BrandCollection {
         }
     }
 }
+
+export type EditorTool = 'select' | 'draw' | 'pan' | 'erase';
+
+export type ProjectFilePayload = {
+  projectName: string;
+  canvasData: any;
+  activeTheme: ApocapaletteTheme | null;
+  lastUpdated: string;
+};
 
 // --- UTILITY FUNCTIONS ---
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -72,6 +83,24 @@ const resolveThemeValue = (obj: object, path: string): string | null => {
     return typeof value === 'string' ? value : null;
 };
 
+const sanitizeFileName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return 'design-space';
+    const safe = trimmed
+        .replace(/\s+/g, '-')
+        .replace(/[^a-zA-Z0-9-_]/g, '')
+        .toLowerCase();
+    return safe || 'design-space';
+};
+
+const findDefaultTheme = (vault: BrandCollection[]) => {
+    const byName = vault.find((theme) =>
+        theme.name?.toLowerCase() === 'midnight'
+        || theme.themeData?.meta?.name?.toLowerCase() === 'midnight'
+    );
+    return byName || vault[0] || null;
+};
+
 // --- EDITOR STATE INTERFACE ---
 interface EditorState {
   canvas: fabric.Canvas | null;
@@ -91,9 +120,16 @@ interface EditorState {
   isPreviewMode: boolean;
   brandPalette: { [key: string]: string };
   bleedPx: number;
-  customStickers: StickerData[];
+  canvasBackgroundColor: string | null;
+  canvasOffset: { x: number; y: number };
+  assets: StickerData[];
   templates: Template[];
   userTemplates: Template[];
+  projectName: string;
+  isProjectPresetsOpen: boolean;
+  activeTool: EditorTool;
+  brushSize: number;
+  brushColor: string;
 
   setCanvas: (canvas: fabric.Canvas | null) => void;
   setSelectedObject: (object: fabric.Object | null) => void;
@@ -105,12 +141,22 @@ interface EditorState {
   setUnitMode: (mode: 'px' | 'in' | 'cm' | 'mm') => void;
   setCanvasBackgroundColor: (color: string) => void;
   setZoom: (zoom: number) => void;
+  setVpt: (vpt: number[]) => void;
+  setCanvasOffset: (offset: { x: number; y: number }) => void;
   resetViewCanvas: () => void;
-  addCustomSticker: (url: string) => void;
-  removeCustomSticker: (id: string) => void;
+  addAssetToLibrary: (asset: StickerData) => void;
+  removeAssetFromLibrary: (id: string) => void;
   setTemplates: (templates: Template[]) => void;
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
+  startNewProject: () => void;
+  downloadProjectFile: () => void;
+  loadProjectFile: (file: File) => Promise<void>;
+  setProjectPresetsOpen: (open: boolean) => void;
+  setProjectName: (name: string) => void;
+  setActiveTool: (tool: EditorTool) => void;
+  setBrushSize: (size: number) => void;
+  setBrushColor: (color: string) => void;
   
   // Theme Actions
   addThemeToVault: (jsonString: string) => void;
@@ -130,40 +176,47 @@ interface EditorState {
 }
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
-export const useEditorStore = create<EditorState>((set, get) => ({
-    canvas: null,
-    selectedObject: null,
-    layers: [],
-    selectedLayerId: null,
-    showGuides: true,
-    brandVault: [],
-    activeBrandCollectionId: null,
-    themeData: null,
-    toastMessage: null,
-    history: [],
-    historyIndex: -1,
-    unitMode: 'px',
-    zoom: 1,
-    vpt: [1, 0, 0, 1, 0, 0],
-    isPreviewMode: false,
-    brandPalette: {},
-    bleedPx: 0,
-    customStickers: [],
-    templates: [],
-    userTemplates: (() => {
-        if (typeof window === 'undefined') return [];
-        try {
-            const stored = localStorage.getItem('designspace_user_templates');
-            return stored ? (JSON.parse(stored) as Template[]) : [];
-        } catch {
-            return [];
-        }
-    })(),
+export const useEditorStore = create<EditorState>()(
+  persist(
+    (set, get) => ({
+        canvas: null,
+        selectedObject: null,
+        layers: [],
+        selectedLayerId: null,
+        showGuides: true,
+        brandVault: [],
+        activeBrandCollectionId: null,
+        themeData: null,
+        toastMessage: null,
+        history: [],
+        historyIndex: -1,
+        unitMode: 'px',
+        zoom: 1,
+        vpt: [1, 0, 0, 1, 0, 0],
+        isPreviewMode: false,
+        brandPalette: {},
+        bleedPx: 0,
+        canvasBackgroundColor: null,
+        canvasOffset: { x: 0, y: 0 },
+        assets: [],
+        templates: [],
+        userTemplates: [],
+        projectName: 'Untitled Project',
+        isProjectPresetsOpen: false,
+        activeTool: 'select',
+        brushSize: 8,
+        brushColor: '#111111',
 
     setCanvas: (canvas) => {
-        set({ canvas });
+        const currentBackground = get().canvasBackgroundColor;
+        const nextBackground =
+            currentBackground ?? (canvas?.backgroundColor ? String(canvas.backgroundColor) : null);
+        set({ canvas, canvasBackgroundColor: nextBackground });
         if (canvas) {
             get().setLayers(canvas.getObjects());
+            if (get().themeData) {
+                applyActiveThemeToCanvas();
+            }
         }
     },
     setSelectedObject: (object) => set({ selectedObject: object }),
@@ -191,32 +244,53 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             canvas.requestRenderAll();
             saveState();
         }
+        set({ canvasBackgroundColor: color });
     },
     setZoom: (zoom) => set({ zoom }),
+    setVpt: (vpt) => set({ vpt }),
+    setCanvasOffset: (offset) => set({ canvasOffset: offset }),
     resetViewCanvas: () => {
         const { canvas } = get();
         if (canvas) {
             const center = canvas.getCenter();
-            canvas.setViewportTransform([1, 0, 0, 1, center.left, center.top]);
+            const nextVpt = [1, 0, 0, 1, center.left, center.top] as fabric.TMat2D;
+            canvas.setViewportTransform(nextVpt);
             canvas.setZoom(1);
-            set({ zoom: 1 });
+            set({ zoom: 1, vpt: nextVpt });
         }
     },
-    addCustomSticker: (url) => {
-        const newSticker: StickerData = { id: uuidv4(), url, tags: [] };
-        set((state) => ({ customStickers: [...state.customStickers, newSticker] }));
+    addAssetToLibrary: (asset) => {
+        const normalized: StickerData = {
+            id: asset.id || uuidv4(),
+            url: asset.url,
+            tags: asset.tags ?? [],
+            format: asset.format,
+            svg: asset.svg,
+            label: asset.label,
+        };
+        set((state) => {
+            const alreadyExists = state.assets.some((item) => item.url === normalized.url);
+            const nextAssets = alreadyExists ? state.assets : [normalized, ...state.assets];
+            return { assets: nextAssets };
+        });
     },
-    removeCustomSticker: (id) => {
+    removeAssetFromLibrary: (id) => {
         set((state) => ({
-            customStickers: state.customStickers.filter((s) => s.id !== id),
+            assets: state.assets.filter((asset) => asset.id !== id),
         }));
     },
     setTemplates: (templates) => set({ templates }),
+    setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
+    setProjectName: (name) => set({ projectName: name }),
+    setActiveTool: (tool) => set({ activeTool: tool }),
+    setBrushSize: (size) => set({ brushSize: size }),
+    setBrushColor: (color) => set({ brushColor: color }),
     loadTemplate: (template) => {
         const { canvas, setLayers, brandVault, applyTheme, setToastMessage } = get();
         if (!canvas) return;
 
         canvas.clear();
+        set({ canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null });
         const themeToApply = template.defaultThemeId
             ? brandVault.find((brand) => brand.id === template.defaultThemeId)
             : null;
@@ -251,10 +325,117 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         };
         const nextTemplates = [newTemplate, ...userTemplates];
         set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
+    },
+
+    startNewProject: () => {
+        const { canvas, brandVault, setLayers } = get();
+        if (canvas) {
+            canvas.discardActiveObject();
+            canvas.clear();
+            setLayers([]);
+        }
+
+        const defaultTheme = findDefaultTheme(brandVault);
+        if (defaultTheme) {
+            set({ themeData: defaultTheme.themeData, activeBrandCollectionId: defaultTheme.id });
+            applyActiveThemeToCanvas();
+        } else {
+            set({ themeData: null, activeBrandCollectionId: null });
+        }
+
+        set({
+            history: [],
+            historyIndex: -1,
+            projectName: 'Untitled Project',
+            isProjectPresetsOpen: true,
+            canvasBackgroundColor: null,
+        });
+    },
+
+    downloadProjectFile: () => {
+        const { canvas, themeData, activeBrandCollectionId, brandVault, projectName, setToastMessage } = get();
+        if (!canvas) return;
+
+        const fallbackTheme = themeData
+            || brandVault.find((brand) => brand.id === activeBrandCollectionId)?.themeData
+            || null;
+
+        const payload: ProjectFilePayload = {
+            projectName: projectName || 'Untitled Project',
+            canvasData: canvas.toJSON(),
+            activeTheme: fallbackTheme,
+            lastUpdated: new Date().toISOString(),
+        };
+
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${sanitizeFileName(projectName)}.apocaproject.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        setToastMessage(`Saved project: ${payload.projectName}`);
+    },
+
+    loadProjectFile: async (file) => {
+        const { canvas, setLayers, setToastMessage } = get();
+        if (!canvas) return;
+
         try {
-            localStorage.setItem('designspace_user_templates', JSON.stringify(nextTemplates));
-        } catch {
-            // ignore storage failures
+            const text = await file.text();
+            const raw = JSON.parse(text) as Partial<ProjectFilePayload>;
+            const fallbackName = file.name
+                .replace(/\.apocaproject\.json$/i, '')
+                .replace(/\.json$/i, '');
+            const projectName =
+                typeof raw.projectName === 'string' && raw.projectName.trim().length > 0
+                    ? raw.projectName
+                    : (fallbackName || 'Untitled Project');
+            const activeTheme = raw.activeTheme && typeof raw.activeTheme === 'object'
+                ? (raw.activeTheme as ApocapaletteTheme)
+                : null;
+
+            let canvasData = raw.canvasData;
+            if (!canvasData) {
+                throw new Error('Missing canvas data');
+            }
+            if (typeof canvasData === 'string') {
+                canvasData = JSON.parse(canvasData);
+            }
+
+            canvas.discardActiveObject();
+            canvas.clear();
+            await canvas.loadFromJSON(canvasData, reviveCustomFabricProps);
+            canvas.requestRenderAll();
+
+            sanityCheckCanvas(canvas, activeTheme);
+            setLayers(canvas.getObjects());
+
+            set({
+                projectName,
+                history: [],
+                historyIndex: -1,
+                isProjectPresetsOpen: false,
+                canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+            });
+
+            if (activeTheme) {
+                set({ themeData: activeTheme, activeBrandCollectionId: null });
+                applyActiveThemeToCanvas();
+                const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
+                if (projectSyncEnabled) {
+                    applyThemeFromTokens(activeTheme);
+                }
+            } else {
+                set({ themeData: null, activeBrandCollectionId: null });
+            }
+
+            setToastMessage(`Project loaded: ${projectName}`);
+        } catch (error) {
+            setToastMessage('Failed to load project file.');
         }
     },
     
@@ -262,12 +443,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const { canvas, history, historyIndex } = get();
         if (!canvas) return;
         const json = canvas.toJSON();
+        const serialized = JSON.stringify(json);
         
         const newHistory = history.slice(0, historyIndex + 1);
-        newHistory.push(JSON.stringify(json));
+        newHistory.push(serialized);
         if (newHistory.length > MAX_HISTORY_SIZE) newHistory.shift();
         
         set({ history: newHistory, historyIndex: newHistory.length - 1 });
+        if (typeof window !== 'undefined') {
+            try {
+                localStorage.setItem(AUTOSAVE_STORAGE_KEY, serialized);
+            } catch {
+                // ignore storage failures
+            }
+        }
     }, 300),
 
     undo: () => {
@@ -298,7 +487,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     addThemeToVault: (jsonString: string) => {
         try {
             const json: ApocapaletteTheme = JSON.parse(jsonString);
-            if (json.meta?.schema !== 'generic-token-pack-v1') {
+            if (json.meta?.schema && json.meta.schema !== 'generic-token-pack-v1') {
                 set({ toastMessage: 'Invalid Schema' });
                 return;
             }
@@ -449,7 +638,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
         }
     },
-}));
+    }),
+    {
+        name: 'designspace-editor',
+        partialize: (state) => ({
+            themeData: state.themeData,
+            brandVault: state.brandVault,
+            activeBrandCollectionId: state.activeBrandCollectionId,
+            userTemplates: state.userTemplates,
+            assets: state.assets,
+            unitMode: state.unitMode,
+            showGuides: state.showGuides,
+            bleedPx: state.bleedPx,
+            isPreviewMode: state.isPreviewMode,
+            projectName: state.projectName,
+            canvasBackgroundColor: state.canvasBackgroundColor,
+            activeTool: state.activeTool,
+            brushSize: state.brushSize,
+            brushColor: state.brushColor,
+        }),
+    }
+  )
+);
 
 export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: ApocapaletteTheme | null) => {
     let changed = false;
@@ -457,16 +667,24 @@ export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: Apocapalette
 
     const walk = (obj: fabric.Object) => {
         const target = obj as any;
-        if (!target.id) {
+        if (!target.id || (typeof target.id === 'string' && target.id.trim().length === 0)) {
             target.id = uuidv4();
             report.missingIds += 1;
             changed = true;
         }
-        if (target.colorLocked === undefined) {
+        if (target.colorLocked == null) {
             target.colorLocked = false;
             changed = true;
         }
+        if (target.tokenRole === undefined) {
+            target.tokenRole = null;
+            changed = true;
+        }
         const tokenRole = target.tokenRole;
+        if (typeof tokenRole === 'string' && tokenRole.trim().length === 0) {
+            target.tokenRole = null;
+            changed = true;
+        }
         if (themeData && tokenRole != null) {
             if (typeof tokenRole !== 'string' || !getValueByPath(themeData, tokenRole)) {
                 target.tokenRole = null;

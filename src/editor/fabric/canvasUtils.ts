@@ -1,6 +1,7 @@
 
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { drawPersistentGuides } from './initFabricCanvas';
 import { SAFE_MARGIN_PX } from '../utils/units';
 
 let safeMarginGuides: fabric.Line[] = [];
@@ -182,6 +183,8 @@ export const resizeCanvas = (width: number, height: number) => {
   canvas.relativePan(new fabric.Point(panX, panY));
 
   canvas.requestRenderAll();
+  const { themeData, bleedPx } = useEditorStore.getState();
+  drawPersistentGuides(canvas, themeData, bleedPx);
   saveState();
 };
 

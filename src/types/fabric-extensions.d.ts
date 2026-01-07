@@ -1,4 +1,4 @@
-import type { FabricObject } from 'fabric';
+import type { FabricObject, filters } from 'fabric';
 
 declare module 'fabric' {
   interface FabricObject {
@@ -18,6 +18,8 @@ declare module 'fabric' {
     isBleedZone?: boolean;
     isTrimLine?: boolean;
   }
+
+  type Filter = filters.BaseFilter<string, Record<string, any>>;
 
   interface StaticCanvas {
     bringObjectToFront(object: FabricObject): boolean;

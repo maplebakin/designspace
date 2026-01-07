@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { ChevronDown, Check } from 'lucide-react';
@@ -23,24 +23,32 @@ const confirmClearMessage =
   'Changing the canvas size will clear your current design. Are you sure you want to proceed?';
 
 export const CanvasSettingsPopover: React.FC = () => {
-  const { canvas, setLayers, showGuides, toggleShowGuides } = useEditorStore();
+  const {
+    canvas,
+    setLayers,
+    showGuides,
+    toggleShowGuides,
+    canvasBackgroundColor,
+    setCanvasBackgroundColor,
+  } = useEditorStore();
   const [isOpen, setIsOpen] = useState(false);
   const [currentSize, setCurrentSize] = useState('');
 
-  useEffect(() => {
-    if (canvas) {
-        const updateSize = () => {
-            const w = canvas.getWidth();
-            const h = canvas.getHeight();
-            setCurrentSize(`${w} × ${h} px`);
-        };
-        updateSize();
-        canvas.on('object:modified', updateSize);
-        return () => {
-            canvas.off('object:modified', updateSize);
-        }
-    }
+  const updateSize = useCallback(() => {
+    if (!canvas) return;
+    const w = canvas.getWidth();
+    const h = canvas.getHeight();
+    setCurrentSize(`${Math.round(w)} × ${Math.round(h)} px`);
   }, [canvas]);
+
+  useEffect(() => {
+    if (!canvas) return;
+    updateSize();
+    canvas.on('object:modified', updateSize);
+    return () => {
+      canvas.off('object:modified', updateSize);
+    };
+  }, [canvas, updateSize]);
 
   const applyPreset = (preset: CanvasPreset) => {
     if (!canvas) return;
@@ -54,6 +62,7 @@ export const CanvasSettingsPopover: React.FC = () => {
 
     setLayers([]);
     resizeCanvas(preset.width, preset.height);
+    updateSize();
     
     setIsOpen(false);
   };
@@ -68,7 +77,7 @@ export const CanvasSettingsPopover: React.FC = () => {
         <ChevronDown className={`icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
-         <div className="absolute left-0 mt-2 w-72 bg-[#120707] rounded-lg shadow-xl z-20 border border-[color:var(--border-subtle)] backdrop-blur-md">
+         <div className="absolute left-0 mt-2 w-72 bg-[color:var(--ui-panel)] rounded-lg shadow-xl z-20 border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)]">
             <div className="p-4 space-y-4">
                 <h3 className="text-[11px] uppercase tracking-widest text-slate-400">Canvas Size</h3>
                 <div className="grid grid-cols-2 gap-2">
@@ -84,6 +93,19 @@ export const CanvasSettingsPopover: React.FC = () => {
                     ))}
                 </div>
                 <hr className="border-t border-white/10" />
+                <div className="space-y-2">
+                    <h4 className="text-[10px] uppercase tracking-widest text-slate-400">Background</h4>
+                    <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-300">Fill Color</span>
+                        <input
+                            type="color"
+                            value={canvasBackgroundColor || '#ffffff'}
+                            onChange={(e) => setCanvasBackgroundColor(e.target.value)}
+                            className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
+                            aria-label="Canvas background color"
+                        />
+                    </div>
+                </div>
                 <button
                     onClick={() => {
                         toggleShowGuides();

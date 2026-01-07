@@ -35,6 +35,7 @@ export const addRectangle = (canvas: fabric.Canvas) => {
     fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
     stroke: DEFAULT_STROKE_COLOR,
     strokeWidth: DEFAULT_STROKE_WIDTH,
+    strokeUniform: true,
     rx: 10, // Corner radius
     ry: 10, // Corner radius
     originX: 'center',
@@ -57,6 +58,7 @@ export const addCircle = (canvas: fabric.Canvas) => {
     fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
     stroke: DEFAULT_STROKE_COLOR,
     strokeWidth: DEFAULT_STROKE_WIDTH,
+    strokeUniform: true,
     originX: 'center',
     originY: 'center',
   });
@@ -78,6 +80,7 @@ export const addTriangle = (canvas: fabric.Canvas) => {
         fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
         stroke: DEFAULT_STROKE_COLOR,
         strokeWidth: DEFAULT_STROKE_WIDTH,
+        strokeUniform: true,
         originX: 'center',
         originY: 'center',
     });
@@ -110,6 +113,7 @@ export const addStar = (canvas: fabric.Canvas) => {
         fill: useEditorStore.getState().themeData?.brand?.primary?.value || '#A133FF',
         stroke: DEFAULT_STROKE_COLOR,
         strokeWidth: DEFAULT_STROKE_WIDTH,
+        strokeUniform: true,
         originX: 'center',
         originY: 'center',
     });
@@ -274,6 +278,7 @@ const createPlaceholderRect = (options: PlaceholderOptions = {}) => {
         fill: themedFill || 'rgba(148, 163, 184, 0.35)',
         stroke: 'rgba(148, 163, 184, 0.6)',
         strokeWidth: 1,
+        strokeUniform: true,
         rx: 12,
         ry: 12,
         originX: 'center',

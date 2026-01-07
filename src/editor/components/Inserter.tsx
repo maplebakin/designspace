@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { useEditorStore } from '../state/editorStore';
+import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
 import * as objectFactories from '../fabric/objectFactories';
 import * as frameFactories from '../fabric/frameFactories';
 import { loadPdfAsBackground } from '../fabric/pdfUtils';
@@ -7,6 +7,7 @@ import { StickerTab } from './StickerTab';
 import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, Hexagon, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
 import * as fabric from 'fabric';
 import { SAFE_MARGIN_PX } from '../utils/units';
+import { v4 as uuidv4 } from 'uuid';
 
 const INSERT_ICON = 'icon-muted w-4 h-4 stroke-[1.5]';
 
@@ -15,7 +16,7 @@ export const Inserter: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'design' | 'stickers' | 'templates'>('design');
 
     return (
-    <div className='flex flex-col h-full bg-[#1c0d0d]/80 backdrop-blur-md'>
+    <div className='flex flex-col h-full bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)]'>
             <div className="flex justify-center border-b border-[color:var(--border-subtle)]">
                 <TabButton
                     label="Design"
@@ -46,17 +47,19 @@ export const Inserter: React.FC = () => {
 }
 
 const DesignTab: React.FC = () => {
-    const { canvas, saveState } = useEditorStore();
+    const { canvas, saveState, themeData } = useEditorStore();
 
     const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
         if (canvas) {
             factory(canvas);
+            sanityCheckCanvas(canvas, themeData);
             saveState();
         }
     };
      const handleAddText = (options: any) => {
         if (canvas) {
             objectFactories.addIText(canvas, options);
+            sanityCheckCanvas(canvas, themeData);
             saveState();
         }
     };
@@ -96,24 +99,36 @@ const DesignTab: React.FC = () => {
 };
 
 const UploadsDropdown: React.FC = () => {
-    const { canvas, saveState } = useEditorStore();
+    const { canvas, saveState, addAssetToLibrary } = useEditorStore();
     const imageInputRef = useRef<HTMLInputElement>(null);
     const svgInputRef = useRef<HTMLInputElement>(null);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file && canvas) {
+        if (file) {
             const reader = new FileReader();
-                reader.onload = (f: ProgressEvent<FileReader>) => {
-                    const data = f.target?.result as string;
+            const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
+            reader.onload = (f: ProgressEvent<FileReader>) => {
+                const data = f.target?.result as string;
+                if (file.type === 'image/png') {
+                    addAssetToLibrary({
+                        id: uuidv4(),
+                        url: data,
+                        label: baseName,
+                        format: 'png',
+                        tags: [baseName.toLowerCase(), 'upload'],
+                    });
+                }
+                if (canvas) {
                     fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
                         canvas.add(img);
                         canvas.centerObject(img);
                         canvas.requestRenderAll();
                         saveState();
                     });
-                };
+                }
+            };
             reader.readAsDataURL(file);
         }
         if(imageInputRef.current) imageInputRef.current.value = '';
@@ -290,7 +305,7 @@ const LayoutsDropdown: React.FC = () => {
                 <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && (
-                <div className="mt-1 p-1 bg-[#120707] rounded-lg shadow-lg border border-[color:var(--border-subtle)] absolute w-full z-20 backdrop-blur-md">
+                <div className="mt-1 p-1 bg-[color:var(--ui-panel)] rounded-lg shadow-lg border border-[color:var(--ui-border)] absolute w-full z-20 backdrop-blur-[var(--ui-blur)]">
                     <ul className="space-y-1">
                         <li>
                             <button
@@ -406,7 +421,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
                 <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && (
-                <div className="mt-1 p-1 bg-[#120707] rounded-lg shadow-lg border border-[color:var(--border-subtle)] absolute w-full z-20 backdrop-blur-md">
+                <div className="mt-1 p-1 bg-[color:var(--ui-panel)] rounded-lg shadow-lg border border-[color:var(--ui-border)] absolute w-full z-20 backdrop-blur-[var(--ui-blur)]">
                     <ul className="space-y-1">
                         {items.map(item => (
                              <li key={item.label}>

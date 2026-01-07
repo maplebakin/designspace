@@ -227,6 +227,5 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
     canvas.off('object:modified', removeAlignLines);
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
-    canvas.dispose(); // Add canvas disposal
   };
 };

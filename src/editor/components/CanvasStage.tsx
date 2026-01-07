@@ -2,16 +2,29 @@
 import React, { useRef, useEffect } from 'react';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
+import { LayoutTemplate, Square, Upload } from 'lucide-react';
 import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
 import { initSmartGuides } from '../fabric/smartGuides';
-import { updateGuides } from '../fabric/canvasUtils';
-import { initFabricSerialization, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { ensureObjectId, initFabricSerialization, reviveCustomFabricProps, drawPersistentGuides } from '../fabric/initFabricCanvas';
+import { useUiThemeStore } from '../state/uiThemeStore';
+import type { ApocapaletteTheme } from '../types/apocapalette';
+import * as objectFactories from '../fabric/objectFactories';
 
 initFabricSerialization();
 
-export const CanvasStage: React.FC = () => {
+type CanvasNavKey = 'design' | 'blueprints' | 'stickers' | 'text' | 'uploads';
+type CanvasObjectEvent = { target?: fabric.Object };
+
+const AUTOSAVE_STORAGE_KEY = 'witchclick_current_design';
+
+type CanvasStageProps = {
+  onSelectNav?: (nav: CanvasNavKey) => void;
+};
+
+export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const { 
     canvas: fabricCanvas, 
     setCanvas, 
@@ -19,65 +32,223 @@ export const CanvasStage: React.FC = () => {
     setLayers, 
     saveState, 
     setSelectedLayerId, 
-    showGuides 
+    themeData,
+    bleedPx,
+    layers,
+    activeTool,
+    brushColor,
+    brushSize,
+    canvasBackgroundColor,
+    setVpt,
+    setCanvasOffset
   } = useEditorStore();
+  const uiVars = useUiThemeStore((state) => state.vars);
 
   const isSpacebarDownRef = useRef(false);
   const isPanningRef = useRef(false);
   const lastPosXRef = useRef(0);
   const lastPosYRef = useRef(0);
+  const isCancelledRef = useRef(false);
+  const pendingPromisesRef = useRef<Set<Promise<unknown>>>(new Set());
   const placeholderHighlightRef = useRef<{
     obj: fabric.Object;
     shadow: fabric.Shadow | null;
   } | null>(null);
+  const activeToolRef = useRef(activeTool);
+  const canvasOffsetRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    activeToolRef.current = activeTool;
+  }, [activeTool]);
+
+  const resolveThemeValue = (theme: ApocapaletteTheme | null, path: string): string | null => {
+    if (!theme) return null;
+    const getValueByPath = (obj: object, keyPath: string): any =>
+      keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
+    let value = getValueByPath(theme, path);
+    if (!value && !path.endsWith('.value')) {
+      value = getValueByPath(theme, `${path}.value`);
+    }
+    if (value && typeof value === 'object' && 'value' in value) {
+      return (value as { value: string }).value;
+    }
+    return typeof value === 'string' ? value : null;
+  };
+
+  const trackPromise = <T,>(promise: Promise<T>) => {
+    pendingPromisesRef.current.add(promise);
+    promise.finally(() => pendingPromisesRef.current.delete(promise));
+    return promise;
+  };
+
+  const waitForCanvasContext = async (canvas: fabric.Canvas) => {
+    const canvasAny = canvas as any;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const lowerReady = Boolean(canvas.lowerCanvasEl?.getContext?.('2d'));
+      const upperReady = Boolean(canvasAny.upperCanvasEl?.getContext?.('2d'));
+      if (lowerReady && upperReady) return true;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return false;
+  };
+
+  const syncViewportState = (canvas: fabric.Canvas) => {
+    const vpt = canvas.viewportTransform;
+    if (vpt) {
+      setVpt([...vpt]);
+    }
+  };
+
+  const syncCanvasOffset = () => {
+    if (!containerRef.current || !canvasRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const canvasRect = canvasRef.current.getBoundingClientRect();
+    const nextOffset = {
+      x: canvasRect.left - containerRect.left,
+      y: canvasRect.top - containerRect.top,
+    };
+    if (
+      Math.abs(nextOffset.x - canvasOffsetRef.current.x) < 0.5
+      && Math.abs(nextOffset.y - canvasOffsetRef.current.y) < 0.5
+    ) {
+      return;
+    }
+    canvasOffsetRef.current = nextOffset;
+    setCanvasOffset(nextOffset);
+  };
+
+  const applyDrawingBrush = (canvas: fabric.Canvas, tool: 'draw' | 'erase') => {
+    if (tool === 'erase') {
+      const fallbackBrush = new fabric.PencilBrush(canvas);
+      (fallbackBrush as any).globalCompositeOperation = 'destination-out';
+      fallbackBrush.color = '#000000';
+      fallbackBrush.width = brushSize;
+      canvas.freeDrawingBrush = fallbackBrush;
+      return;
+    }
+
+    const pencilBrush = new fabric.PencilBrush(canvas);
+    pencilBrush.color = brushColor;
+    pencilBrush.width = brushSize;
+    canvas.freeDrawingBrush = pencilBrush;
+  };
 
   useEffect(() => {
     if (!canvasRef.current || !containerRef.current) return;
 
+    isCancelledRef.current = false;
+    let isEffectCancelled = false;
     const container = containerRef.current;
     const { width, height } = container.getBoundingClientRect();
 
     const canvas = new fabric.Canvas(canvasRef.current, {
       width,
       height,
-      backgroundColor: '#f8fafc',
+      backgroundColor:
+        canvasBackgroundColor
+        || resolveThemeValue(themeData, 'surfaces.page-background')
+        || uiVars['--ui-panel']
+        || '#f8fafc',
       selection: true,
       controlsAboveOverlay: true,
       stopContextMenu: true,
     });
 
     setCanvas(canvas);
+    syncCanvasOffset();
+    syncViewportState(canvas);
 
     const handleCanvasUpdate = () => {
         setLayers(canvas.getObjects());
         saveState();
       };
 
-    const handleObjectEvent = () => {
+    const handleObjectEvent = (event?: CanvasObjectEvent) => {
+      if (event?.target && (event.target as any).isGuide) {
+        return;
+      }
       handleCanvasUpdate();
     };
 
-    const savedDesign = localStorage.getItem('witchclick_current_design');
-    if (savedDesign) {
-      canvas.loadFromJSON(JSON.parse(savedDesign), reviveCustomFabricProps).then(() => {
+    const handleObjectScaling = (event: any) => {
+      const target = event.target as fabric.Object | undefined;
+      if (!target || (target as any).isGuide) return;
+      if (target.type !== 'rect') return;
+      const rect = target as fabric.Rect;
+      const rx = rect.rx ?? 0;
+      const ry = rect.ry ?? 0;
+      if (!rx && !ry) return;
+
+      const scaleX = Math.abs(rect.scaleX ?? 1);
+      const scaleY = Math.abs(rect.scaleY ?? 1);
+      if (!scaleX || !scaleY) return;
+
+      const baseRx = (rect as any).__baseRx ?? rx * scaleX;
+      const baseRy = (rect as any).__baseRy ?? ry * scaleY;
+      (rect as any).__baseRx = baseRx;
+      (rect as any).__baseRy = baseRy;
+      rect.set({
+        rx: baseRx / scaleX,
+        ry: baseRy / scaleY,
+      });
+    };
+
+    const handleObjectAdded = (event: CanvasObjectEvent) => {
+      const target = event.target as fabric.Object | undefined;
+      if (!target) return;
+      if ((target as any).isGuide) return;
+      ensureObjectId(target, canvas);
+      handleCanvasUpdate();
+    };
+
+    const savedDesign = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+    const loadSavedDesign = async () => {
+      if (!savedDesign) {
+        drawPersistentGuides(canvas, useEditorStore.getState().themeData, useEditorStore.getState().bleedPx);
+        handleCanvasUpdate();
+        return;
+      }
+      try {
+        const ready = await waitForCanvasContext(canvas);
+        if (!ready || isEffectCancelled) return;
+        await trackPromise(canvas.loadFromJSON(JSON.parse(savedDesign), reviveCustomFabricProps));
+        if (isEffectCancelled) return;
         sanityCheckCanvas(canvas, useEditorStore.getState().themeData);
+        drawPersistentGuides(
+          canvas,
+          useEditorStore.getState().themeData,
+          useEditorStore.getState().bleedPx
+        );
         canvas.requestRenderAll();
         handleCanvasUpdate();
-      });
-    } else {
-      handleCanvasUpdate();
-    }
+      } catch (error) {
+        if (isEffectCancelled) return;
+        const message = error instanceof Error ? error.message.toLowerCase() : '';
+        if (message.includes('aborted')) return;
+      }
+    };
+
+    void loadSavedDesign();
 
     const cleanupSmartGuides = initSmartGuides(canvas);
 
-    canvas.on('object:added', handleObjectEvent);
+    const handleAfterRender = () => {
+      syncViewportState(canvas);
+      syncCanvasOffset();
+    };
+
+    canvas.on('object:added', handleObjectAdded);
     canvas.on('object:removed', handleObjectEvent);
     canvas.on('object:modified', handleObjectEvent);
+    canvas.on('object:scaling', handleObjectScaling);
+    canvas.on('after:render', handleAfterRender);
 
     // Pan with spacebar
     const onMouseDown = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
       const e = opt.e as MouseEvent;
-      if (isSpacebarDownRef.current && e.button === 0) {
+      const tool = activeToolRef.current;
+      const shouldPan = tool === 'pan' || (tool === 'select' && isSpacebarDownRef.current);
+      if (shouldPan && e.button === 0) {
         isPanningRef.current = true;
         canvas.setCursor('grab');
         lastPosXRef.current = e.clientX;
@@ -89,20 +260,23 @@ export const CanvasStage: React.FC = () => {
       if (isPanningRef.current) {
         canvas.setCursor('grabbing');
         const e = opt.e as MouseEvent;
-        const vpt = canvas.viewportTransform;
-        if (vpt) {
-          vpt[4] += e.clientX - lastPosXRef.current;
-          vpt[5] += e.clientY - lastPosYRef.current;
-          canvas.requestRenderAll();
-          lastPosXRef.current = e.clientX;
-          lastPosYRef.current = e.clientY;
-        }
+        const deltaX = e.clientX - lastPosXRef.current;
+        const deltaY = e.clientY - lastPosYRef.current;
+        canvas.relativePan(new fabric.Point(deltaX, deltaY));
+        syncViewportState(canvas);
+        lastPosXRef.current = e.clientX;
+        lastPosYRef.current = e.clientY;
       }
     };
 
     const onMouseUp = () => {
         isPanningRef.current = false;
-        canvas.setCursor(isSpacebarDownRef.current ? 'grab' : 'default');
+        const tool = activeToolRef.current;
+        if (tool === 'pan') {
+          canvas.setCursor('grab');
+        } else {
+          canvas.setCursor(isSpacebarDownRef.current ? 'grab' : 'default');
+        }
     };
 
     canvas.on('mouse:down', onMouseDown);
@@ -110,6 +284,7 @@ export const CanvasStage: React.FC = () => {
     canvas.on('mouse:up', onMouseUp);
 
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+        if (activeToolRef.current !== 'select') return;
         if (e.code === 'Space' && !isSpacebarDownRef.current) {
             e.preventDefault();
             isSpacebarDownRef.current = true;
@@ -120,6 +295,7 @@ export const CanvasStage: React.FC = () => {
     };
 
     const handleGlobalKeyUp = (e: KeyboardEvent) => {
+        if (activeToolRef.current !== 'select') return;
         if (e.code === 'Space' && isSpacebarDownRef.current) {
             isSpacebarDownRef.current = false;
             canvas.setCursor('default');
@@ -153,25 +329,114 @@ export const CanvasStage: React.FC = () => {
     const handleResize = () => {
       const { width, height } = container.getBoundingClientRect();
       canvas.setDimensions({ width, height });
+      drawPersistentGuides(canvas, useEditorStore.getState().themeData, useEditorStore.getState().bleedPx);
+      syncCanvasOffset();
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
     return () => {
+      isCancelledRef.current = true;
+      isEffectCancelled = true;
+      const pendingPromises = Array.from(pendingPromisesRef.current);
+      pendingPromises.forEach((promise) => {
+        promise.catch((error) => {
+          const message = error instanceof Error ? error.message.toLowerCase() : '';
+          if (message.includes('aborted')) return;
+        });
+      });
       cleanupSmartGuides();
       window.removeEventListener('keydown', handleGlobalKeyDown);
       window.removeEventListener('keyup', handleGlobalKeyUp);
       resizeObserver.unobserve(container);
-      canvas.dispose();
+      canvas.off('object:scaling', handleObjectScaling);
+      canvas.off('after:render', handleAfterRender);
+
+      const disposeCanvas = () => {
+        let disposeResult: Promise<unknown> | null = null;
+        try {
+          disposeResult = Promise.resolve(canvas.dispose());
+        } catch (error) {
+          const message = error instanceof Error ? error.message.toLowerCase() : '';
+          if (!message.includes('aborted')) {
+            return;
+          }
+        }
+        disposeResult?.catch((error) => {
+          const message = error instanceof Error ? error.message.toLowerCase() : '';
+          if (message.includes('aborted')) return;
+        });
+      };
+
+      if (pendingPromises.length > 0) {
+        Promise.allSettled(pendingPromises).finally(() => {
+          pendingPromisesRef.current.clear();
+          disposeCanvas();
+        });
+      } else {
+        disposeCanvas();
+      }
+
       setCanvas(null);
     };
   }, []);
 
   useEffect(() => {
     if (!fabricCanvas) return;
-    updateGuides(fabricCanvas, showGuides);
-  }, [fabricCanvas, showGuides]);
+    const paperColor =
+      canvasBackgroundColor
+      || resolveThemeValue(themeData, 'surfaces.page-background')
+      || uiVars['--ui-panel']
+      || '#f8fafc';
+    fabricCanvas.backgroundColor = paperColor;
+    drawPersistentGuides(fabricCanvas, themeData, bleedPx);
+    fabricCanvas.requestRenderAll();
+  }, [fabricCanvas, themeData, bleedPx, uiVars, canvasBackgroundColor]);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    const tool = activeTool;
+    const isDrawing = tool === 'draw' || tool === 'erase';
+    fabricCanvas.isDrawingMode = isDrawing;
+    fabricCanvas.selection = tool === 'select';
+    fabricCanvas.skipTargetFind = tool !== 'select';
+
+    if (tool === 'pan') {
+      fabricCanvas.defaultCursor = 'grab';
+      fabricCanvas.hoverCursor = 'grab';
+    } else if (tool === 'draw' || tool === 'erase') {
+      fabricCanvas.defaultCursor = 'crosshair';
+      fabricCanvas.hoverCursor = 'crosshair';
+    } else {
+      fabricCanvas.defaultCursor = 'default';
+      fabricCanvas.hoverCursor = 'move';
+    }
+
+    if (isDrawing) {
+      applyDrawingBrush(fabricCanvas, tool === 'erase' ? 'erase' : 'draw');
+    }
+  }, [fabricCanvas, activeTool, brushColor, brushSize]);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    const handleAutoSave = (event?: CanvasObjectEvent) => {
+      if (event?.target && (event.target as any).isGuide) return;
+      try {
+        localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(fabricCanvas.toJSON()));
+      } catch {
+        // ignore storage failures
+      }
+    };
+
+    fabricCanvas.on('object:added', handleAutoSave);
+    fabricCanvas.on('object:modified', handleAutoSave);
+
+    return () => {
+      fabricCanvas.off('object:added', handleAutoSave);
+      fabricCanvas.off('object:modified', handleAutoSave);
+    };
+  }, [fabricCanvas]);
 
   const clearPlaceholderHighlight = () => {
     const current = placeholderHighlightRef.current;
@@ -333,7 +598,9 @@ export const CanvasStage: React.FC = () => {
       obj.containsPoint(pointer) && obj.type === 'image'
     ) as fabric.Image;
     
-    fabric.Image.fromURL(imageUrl, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
+    trackPromise(fabric.Image.fromURL(imageUrl, { crossOrigin: 'anonymous' }))
+      .then((img: fabric.FabricImage) => {
+        if (isCancelledRef.current) return;
         if (placeholder) {
             replacePlaceholderWithImage(fabricCanvas, placeholder, img);
         } else if (targetObject) {
@@ -373,22 +640,105 @@ export const CanvasStage: React.FC = () => {
             });
             fabricCanvas.add(img);
         }
+        sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
         fabricCanvas.requestRenderAll();
         setLayers(fabricCanvas.getObjects());
         saveState();
-    });
+      })
+      .catch((error) => {
+        if (isCancelledRef.current) return;
+        const message = error instanceof Error ? error.message.toLowerCase() : '';
+        if (message.includes('aborted')) return;
+      });
+  };
+
+  const isCanvasEmpty = layers.length === 0;
+
+  const handleHearthUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && fabricCanvas) {
+      const reader = new FileReader();
+      reader.onload = (f: ProgressEvent<FileReader>) => {
+        const data = f.target?.result as string;
+        trackPromise(fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }))
+          .then((img: fabric.FabricImage) => {
+            if (isCancelledRef.current) return;
+            fabricCanvas.add(img);
+            fabricCanvas.centerObject(img);
+            sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
+            fabricCanvas.requestRenderAll();
+            saveState();
+          })
+          .catch((error) => {
+            if (isCancelledRef.current) return;
+            const message = error instanceof Error ? error.message.toLowerCase() : '';
+            if (message.includes('aborted')) return;
+          });
+      };
+      reader.readAsDataURL(file);
+    }
+    if (uploadInputRef.current) uploadInputRef.current.value = '';
+  };
+
+  const handleAddShape = () => {
+    if (!fabricCanvas) return;
+    objectFactories.addRectangle(fabricCanvas);
+    sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
+    saveState();
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onDragLeave={handleDragLeave}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      <canvas ref={canvasRef} />
+    <div className="workspace relative w-full h-full bg-[color:var(--ui-bg)] flex items-center justify-center">
+      <div
+        ref={containerRef}
+        className="w-full h-full flex items-center justify-center"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onDragLeave={handleDragLeave}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <canvas ref={canvasRef} className="bg-white shadow-[0_25px_70px_rgba(0,0,0,0.45)] rounded-[18px]" />
+      </div>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept="image/png, image/jpeg"
+        onChange={handleHearthUpload}
+        className="hidden"
+      />
+      {isCanvasEmpty && (
+        <div className="hearth absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto flex flex-col items-center gap-5 rounded-3xl border border-black/15 bg-white/90 px-10 py-8 text-center backdrop-blur-[var(--ui-blur)] shadow-[0_22px_60px_rgba(0,0,0,0.35)]">
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-[11px] uppercase tracking-widest text-[#1a1a1a]">Start Ritual</span>
+              <h2 className="text-xl font-semibold text-[#1a1a1a]">What shall we create today, Maddie?</h2>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <button
+                onClick={() => onSelectNav?.('blueprints')}
+                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+              >
+                <LayoutTemplate className="w-6 h-6 stroke-[1.5]" />
+                New Template
+              </button>
+              <button
+                onClick={() => uploadInputRef.current?.click()}
+                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+              >
+                <Upload className="w-6 h-6 stroke-[1.5]" />
+                Upload Image
+              </button>
+              <button
+                onClick={handleAddShape}
+                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+              >
+                <Square className="w-6 h-6 stroke-[1.5]" />
+                Add Shape
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
