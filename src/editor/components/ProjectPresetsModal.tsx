@@ -1,18 +1,25 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { ProjectPresets } from './ProjectPresets';
 
 export const ProjectPresetsModal: React.FC = () => {
-  const { isProjectPresetsOpen, setProjectPresetsOpen } = useEditorStore();
+  const { isProjectPresetsOpen, setProjectPresetsOpen } = useEditorStore(
+    (state) => ({
+      isProjectPresetsOpen: state.isProjectPresetsOpen,
+      setProjectPresetsOpen: state.setProjectPresetsOpen,
+    }),
+    shallow
+  );
 
   if (!isProjectPresetsOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-[color:var(--ui-text)]">
+      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-slate-100">
         <header className="flex items-center justify-between p-4 border-b border-[color:var(--ui-border)]">
-          <h2 className="text-[11px] uppercase tracking-widest text-slate-200">Project Presets</h2>
+          <h2 className="text-[11px] uppercase tracking-widest text-slate-100">Project Presets</h2>
           <button
             onClick={() => setProjectPresetsOpen(false)}
             className="p-2 rounded-full hover:bg-white/10 transition-all duration-300 ease-in-out"

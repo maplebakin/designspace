@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
+import { shallow } from 'zustand/shallow';
 import { sanityCheckCanvas, useEditorStore, Layer } from '../state/editorStore';
 import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand } from 'lucide-react';
 import * as fabric from 'fabric';
@@ -22,7 +23,25 @@ export const LayersPanel: React.FC = () => {
     setBrushSize,
     brushColor,
     setBrushColor,
-  } = useEditorStore();
+  } = useEditorStore(
+    (state) => ({
+      canvas: state.canvas,
+      layers: state.layers,
+      setLayers: state.setLayers,
+      selectedLayerId: state.selectedLayerId,
+      toggleMovementLock: state.toggleMovementLock,
+      toggleColorLock: state.toggleColorLock,
+      saveState: state.saveState,
+      themeData: state.themeData,
+      activeTool: state.activeTool,
+      setActiveTool: state.setActiveTool,
+      brushSize: state.brushSize,
+      setBrushSize: state.setBrushSize,
+      brushColor: state.brushColor,
+      setBrushColor: state.setBrushColor,
+    }),
+    shallow
+  );
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -158,7 +177,7 @@ export const LayersPanel: React.FC = () => {
     }
     if (object.type === 'i-text' || object.type === 'textbox') {
       return {
-        className: 'rounded-md bg-black/10 border border-black/20 text-[9px] text-slate-800 font-semibold flex items-center justify-center',
+        className: 'rounded-md bg-black/10 border border-black/20 text-[9px] text-[color:var(--ui-panel-text)] font-semibold flex items-center justify-center',
         label: 'T',
         color: '',
         stroke: 'rgba(0,0,0,0.2)',
@@ -166,7 +185,7 @@ export const LayersPanel: React.FC = () => {
     }
     if (object.type === 'image') {
       return {
-        className: 'rounded-md bg-black/15 border border-black/20 text-[9px] text-slate-200 flex items-center justify-center',
+        className: 'rounded-md bg-black/15 border border-black/20 text-[9px] text-[color:var(--ui-panel-text)] flex items-center justify-center',
         label: 'IMG',
         color: '',
         stroke: 'rgba(0,0,0,0.2)',
@@ -208,16 +227,16 @@ export const LayersPanel: React.FC = () => {
   };
 
   return (
-    <div className="p-4 bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border border-[color:var(--ui-border)] rounded-xl transition-all duration-300 ease-in-out">
+    <div className="p-4 bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] backdrop-blur-[var(--ui-blur)] border border-[color:var(--ui-border)] rounded-xl transition-all duration-300 ease-in-out">
       <div className="mb-4 space-y-3">
-        <h3 className="text-[11px] uppercase tracking-widest text-[#F8F9FA]">Tools</h3>
+        <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setActiveTool('select')}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
               activeTool === 'select'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-slate-100'
-                : 'border-white/10 bg-white/5 text-slate-200 hover:border-[color:var(--brand-primary)]'
+                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
+                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
             }`}
           >
             <MousePointer2 className="icon-muted h-4 w-4 stroke-[1.5]" />
@@ -227,8 +246,8 @@ export const LayersPanel: React.FC = () => {
             onClick={() => setActiveTool('draw')}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
               activeTool === 'draw'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-slate-100'
-                : 'border-white/10 bg-white/5 text-slate-200 hover:border-[color:var(--brand-primary)]'
+                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
+                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
             }`}
           >
             <Pencil className="icon-muted h-4 w-4 stroke-[1.5]" />
@@ -238,8 +257,8 @@ export const LayersPanel: React.FC = () => {
             onClick={() => setActiveTool('erase')}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
               activeTool === 'erase'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-slate-100'
-                : 'border-white/10 bg-white/5 text-slate-200 hover:border-[color:var(--brand-primary)]'
+                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
+                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
             }`}
           >
             <Eraser className="icon-muted h-4 w-4 stroke-[1.5]" />
@@ -249,8 +268,8 @@ export const LayersPanel: React.FC = () => {
             onClick={() => setActiveTool('pan')}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
               activeTool === 'pan'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-slate-100'
-                : 'border-white/10 bg-white/5 text-slate-200 hover:border-[color:var(--brand-primary)]'
+                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
+                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
             }`}
           >
             <Hand className="icon-muted h-4 w-4 stroke-[1.5]" />
@@ -260,8 +279,8 @@ export const LayersPanel: React.FC = () => {
         {(activeTool === 'draw' || activeTool === 'erase') && (
           <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-slate-400">Brush Size</span>
-              <span className="text-[10px] uppercase tracking-widest text-slate-300">{brushSize}px</span>
+              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Brush Size</span>
+              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{brushSize}px</span>
             </div>
             <input
               type="range"
@@ -272,7 +291,7 @@ export const LayersPanel: React.FC = () => {
               className="w-full accent-[color:var(--brand-primary)]"
             />
             <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-slate-400">Brush Color</span>
+              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Brush Color</span>
               <input
                 type="color"
                 value={brushColor}
@@ -285,7 +304,7 @@ export const LayersPanel: React.FC = () => {
         )}
       </div>
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm uppercase tracking-widest text-[#F8F9FA]">Layers</h3>
+        <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-panel-text)]">Layers</h3>
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setIsMenuOpen((prev) => !prev)}
@@ -351,7 +370,7 @@ export const LayersPanel: React.FC = () => {
         </div>
       </div>
       {layers.length === 0 ? (
-         <p className="text-sm text-slate-500">The canvas is empty.</p>
+         <p className="text-sm text-[color:var(--ui-panel-text)]">The canvas is empty.</p>
       ) : (
         <ul className="space-y-2">
           {[...layers].reverse().map((layer: Layer, index) => {
@@ -375,7 +394,7 @@ export const LayersPanel: React.FC = () => {
                 >
                   {preview.label && <span>{preview.label}</span>}
                 </div>
-                <span className="text-xs uppercase tracking-widest text-[#F8F9FA]">{label}</span>
+                <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{label}</span>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'up')}} aria-label="Move Up">

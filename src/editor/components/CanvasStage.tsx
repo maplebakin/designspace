@@ -1,11 +1,18 @@
 
 import React, { useRef, useEffect } from 'react';
+import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { LayoutTemplate, Square, Upload } from 'lucide-react';
-import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
+import { hydrateCanvasDataWithAssets, sanityCheckCanvas, useEditorStore } from '../state/editorStore';
 import { initSmartGuides } from '../fabric/smartGuides';
-import { ensureObjectId, initFabricSerialization, reviveCustomFabricProps, drawPersistentGuides } from '../fabric/initFabricCanvas';
+import {
+  clearPersistentGuides,
+  ensureObjectId,
+  initFabricSerialization,
+  reviveCustomFabricProps,
+  drawPersistentGuides,
+} from '../fabric/initFabricCanvas';
 import { useUiThemeStore } from '../state/uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import * as objectFactories from '../fabric/objectFactories';
@@ -40,9 +47,39 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     brushSize,
     canvasBackgroundColor,
     setVpt,
+    setZoom,
     setCanvasOffset,
-    snapEnabled
-  } = useEditorStore();
+    snapEnabled,
+    addImageAsset,
+    addLayer,
+    updateLayer,
+    removeLayer
+  } = useEditorStore(
+    (state) => ({
+      canvas: state.canvas,
+      setCanvas: state.setCanvas,
+      setSelectedObject: state.setSelectedObject,
+      setLayers: state.setLayers,
+      saveState: state.saveState,
+      setSelectedLayerId: state.setSelectedLayerId,
+      themeData: state.themeData,
+      bleedPx: state.bleedPx,
+      layers: state.layers,
+      activeTool: state.activeTool,
+      brushColor: state.brushColor,
+      brushSize: state.brushSize,
+      canvasBackgroundColor: state.canvasBackgroundColor,
+      setVpt: state.setVpt,
+      setZoom: state.setZoom,
+      setCanvasOffset: state.setCanvasOffset,
+      snapEnabled: state.snapEnabled,
+      addImageAsset: state.addImageAsset,
+      addLayer: state.addLayer,
+      updateLayer: state.updateLayer,
+      removeLayer: state.removeLayer,
+    }),
+    shallow
+  );
   const uiVars = useUiThemeStore((state) => state.vars);
 
   const isSpacebarDownRef = useRef(false);
@@ -55,6 +92,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     obj: fabric.Object;
     shadow: fabric.Shadow | null;
   } | null>(null);
+  const viewportRafRef = useRef<number | null>(null);
+  const canvasOffsetRafRef = useRef<number | null>(null);
+  const cleanupPromiseRef = useRef<Promise<void> | null>(null);
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
   const snapEnabledRef = useRef(snapEnabled);
@@ -99,28 +139,56 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   };
 
   const syncViewportState = (canvas: fabric.Canvas) => {
-    const vpt = canvas.viewportTransform;
-    if (vpt) {
-      setVpt([...vpt]);
-    }
+    if (viewportRafRef.current !== null) return;
+    viewportRafRef.current = requestAnimationFrame(() => {
+      viewportRafRef.current = null;
+      const vpt = canvas.viewportTransform;
+      if (vpt) {
+        setVpt([...vpt]);
+      }
+    });
   };
 
   const syncCanvasOffset = () => {
-    if (!containerRef.current || !canvasRef.current) return;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    const nextOffset = {
-      x: canvasRect.left - containerRect.left,
-      y: canvasRect.top - containerRect.top,
-    };
-    if (
-      Math.abs(nextOffset.x - canvasOffsetRef.current.x) < 0.5
-      && Math.abs(nextOffset.y - canvasOffsetRef.current.y) < 0.5
-    ) {
-      return;
-    }
-    canvasOffsetRef.current = nextOffset;
-    setCanvasOffset(nextOffset);
+    if (canvasOffsetRafRef.current !== null) return;
+    canvasOffsetRafRef.current = requestAnimationFrame(() => {
+      canvasOffsetRafRef.current = null;
+      if (!containerRef.current || !canvasRef.current) return;
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const canvasRect = canvasRef.current.getBoundingClientRect();
+      const nextOffset = {
+        x: canvasRect.left - containerRect.left,
+        y: canvasRect.top - containerRect.top,
+      };
+      if (
+        Math.abs(nextOffset.x - canvasOffsetRef.current.x) < 0.5
+        && Math.abs(nextOffset.y - canvasOffsetRef.current.y) < 0.5
+      ) {
+        return;
+      }
+      canvasOffsetRef.current = nextOffset;
+      setCanvasOffset(nextOffset);
+    });
+  };
+
+  const clampPan = (canvas: fabric.Canvas) => {
+    const vpt = canvas.viewportTransform;
+    if (!vpt) return;
+    const zoom = canvas.getZoom();
+    const viewWidth = canvas.getWidth();
+    const viewHeight = canvas.getHeight();
+    const halfWidth = (viewWidth * zoom) / 2;
+    const halfHeight = (viewHeight * zoom) / 2;
+    const minX = -halfWidth;
+    const maxX = viewWidth - halfWidth;
+    const minY = -halfHeight;
+    const maxY = viewHeight - halfHeight;
+    const nextX = Math.min(maxX, Math.max(minX, vpt[4]));
+    const nextY = Math.min(maxY, Math.max(minY, vpt[5]));
+    if (nextX === vpt[4] && nextY === vpt[5]) return;
+    vpt[4] = nextX;
+    vpt[5] = nextY;
+    canvas.setViewportTransform(vpt);
   };
 
   const applyDrawingBrush = (canvas: fabric.Canvas, tool: 'draw' | 'erase') => {
@@ -144,36 +212,97 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
 
     isCancelledRef.current = false;
     let isEffectCancelled = false;
-    const container = containerRef.current;
-    const { width, height } = container.getBoundingClientRect();
+    let cleanupRan = false;
+    let cleanupResources: (() => void) | null = null;
 
-    const canvas = new fabric.Canvas(canvasRef.current, {
-      width,
-      height,
-      backgroundColor:
-        canvasBackgroundColor
-        || resolveThemeValue(themeData, 'surfaces.page-background')
-        || uiVars['--ui-panel']
-        || '#f8fafc',
-      selection: true,
-      controlsAboveOverlay: true,
-      stopContextMenu: true,
-    });
+    const initCanvas = async () => {
+      if (cleanupPromiseRef.current) {
+        await cleanupPromiseRef.current;
+        cleanupPromiseRef.current = null;
+      }
+      if (!canvasRef.current || !containerRef.current || isEffectCancelled) return;
 
-    setCanvas(canvas);
-    syncCanvasOffset();
-    syncViewportState(canvas);
+      const container = containerRef.current;
+      const { width, height } = container.getBoundingClientRect();
 
-    const handleCanvasUpdate = () => {
-        setLayers(canvas.getObjects());
-        saveState();
+      const canvas = new fabric.Canvas(canvasRef.current, {
+        width,
+        height,
+        backgroundColor:
+          canvasBackgroundColor
+          || resolveThemeValue(themeData, 'surfaces.page-background')
+          || uiVars['--ui-panel']
+          || '#f8fafc',
+        selection: true,
+        controlsAboveOverlay: true,
+        stopContextMenu: true,
+      });
+
+      setCanvas(canvas);
+      syncCanvasOffset();
+      syncViewportState(canvas);
+
+    const formatLayerName = (obj: fabric.Object) => {
+      const name = (obj as any).name;
+      if (name) return name;
+      const type = obj.type || 'object';
+      return type.replace(/-/g, ' ').split(' ').map((part) =>
+        part.charAt(0).toUpperCase() + part.slice(1)
+      ).join(' ');
+    };
+
+    const getLayerFromObject = (obj: fabric.Object) => {
+      if ((obj as any).isGuide) return null;
+      const id = (obj as any).id as string | undefined;
+      if (!id) return null;
+      return {
+        id,
+        name: formatLayerName(obj),
+        type: obj.type || 'object',
+        visible: obj.visible ?? true,
+        movementLocked: !!obj.lockMovementX,
+        colorLocked: !!(obj as any).colorLocked,
       };
+    };
 
     const handleObjectEvent = (event?: CanvasObjectEvent) => {
-      if (event?.target && (event.target as any).isGuide) {
+      const target = event?.target as fabric.Object | undefined;
+      if (!target || (target as any).isGuide) {
         return;
       }
-      handleCanvasUpdate();
+      const update = getLayerFromObject(target);
+      if (update) {
+        updateLayer(update.id, {
+          name: update.name,
+          type: update.type,
+          visible: update.visible,
+          movementLocked: update.movementLocked,
+          colorLocked: update.colorLocked,
+        });
+      }
+      saveState();
+    };
+
+    const handleObjectRemoved = (event?: CanvasObjectEvent) => {
+      const target = event?.target as fabric.Object | undefined;
+      if (target && !(target as any).isGuide) {
+        const id = (target as any).id as string | undefined;
+        if (id) {
+          removeLayer(id);
+        }
+      }
+      if (target?.type === 'image') {
+        const id = (target as any).id as string | undefined;
+        if (id) {
+          const { imageAssets, removeImageAsset } = useEditorStore.getState();
+          const imageUrl = imageAssets[id];
+          if (imageUrl) {
+            URL.revokeObjectURL(imageUrl);
+            removeImageAsset(id);
+          }
+        }
+      }
+      saveState();
     };
 
     const handleObjectMoving = (event: any) => {
@@ -216,20 +345,29 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       if (!target) return;
       if ((target as any).isGuide) return;
       ensureObjectId(target, canvas);
-      handleCanvasUpdate();
+      const layer = getLayerFromObject(target);
+      if (layer) {
+        addLayer(layer);
+      }
+      saveState();
     };
 
     const savedDesign = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
     const loadSavedDesign = async () => {
       if (!savedDesign) {
         drawPersistentGuides(canvas, useEditorStore.getState().themeData, useEditorStore.getState().bleedPx);
-        handleCanvasUpdate();
+        setLayers(canvas.getObjects());
         return;
       }
       try {
         const ready = await waitForCanvasContext(canvas);
         if (!ready || isEffectCancelled) return;
-        await trackPromise(canvas.loadFromJSON(JSON.parse(savedDesign), reviveCustomFabricProps));
+        const parsedDesign = JSON.parse(savedDesign);
+        const hydratedDesign = hydrateCanvasDataWithAssets(
+          parsedDesign,
+          useEditorStore.getState().imageAssets
+        );
+        await trackPromise(canvas.loadFromJSON(hydratedDesign, reviveCustomFabricProps));
         if (isEffectCancelled) return;
         sanityCheckCanvas(canvas, useEditorStore.getState().themeData);
         drawPersistentGuides(
@@ -238,7 +376,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
           useEditorStore.getState().bleedPx
         );
         canvas.requestRenderAll();
-        handleCanvasUpdate();
+        setLayers(canvas.getObjects());
       } catch (error) {
         if (isEffectCancelled) return;
         const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -255,12 +393,28 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       syncCanvasOffset();
     };
 
+    const handleMouseWheel = (opt: fabric.TPointerEventInfo<WheelEvent>) => {
+      const evt = opt.e as WheelEvent;
+      let zoom = canvas.getZoom();
+      const zoomFactor = 0.999 ** evt.deltaY;
+      zoom *= zoomFactor;
+      const clampedZoom = Math.min(4, Math.max(0.25, zoom));
+      const pointer = canvas.getPointer(evt);
+      canvas.zoomToPoint(new fabric.Point(pointer.x, pointer.y), clampedZoom);
+      clampPan(canvas);
+      setZoom(clampedZoom);
+      syncViewportState(canvas);
+      evt.preventDefault();
+      evt.stopPropagation();
+    };
+
     canvas.on('object:added', handleObjectAdded);
-    canvas.on('object:removed', handleObjectEvent);
+    canvas.on('object:removed', handleObjectRemoved);
     canvas.on('object:modified', handleObjectEvent);
     canvas.on('object:scaling', handleObjectScaling);
     canvas.on('object:moving', handleObjectMoving);
     canvas.on('after:render', handleAfterRender);
+    canvas.on('mouse:wheel', handleMouseWheel);
 
     // Pan with spacebar
     const onMouseDown = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
@@ -282,6 +436,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         const deltaX = e.clientX - lastPosXRef.current;
         const deltaY = e.clientY - lastPosYRef.current;
         canvas.relativePan(new fabric.Point(deltaX, deltaY));
+        clampPan(canvas);
         syncViewportState(canvas);
         lastPosXRef.current = e.clientX;
         lastPosYRef.current = e.clientY;
@@ -355,9 +510,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
-    return () => {
-      isCancelledRef.current = true;
-      isEffectCancelled = true;
+    cleanupResources = () => {
       const pendingPromises = Array.from(pendingPromisesRef.current);
       pendingPromises.forEach((promise) => {
         promise.catch((error) => {
@@ -365,13 +518,33 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
           if (message.includes('aborted')) return;
         });
       });
+      clearPersistentGuides(canvas);
       cleanupSmartGuides();
       window.removeEventListener('keydown', handleGlobalKeyDown);
       window.removeEventListener('keyup', handleGlobalKeyUp);
       resizeObserver.unobserve(container);
+      resizeObserver.disconnect();
+      if (viewportRafRef.current !== null) {
+        cancelAnimationFrame(viewportRafRef.current);
+        viewportRafRef.current = null;
+      }
+      if (canvasOffsetRafRef.current !== null) {
+        cancelAnimationFrame(canvasOffsetRafRef.current);
+        canvasOffsetRafRef.current = null;
+      }
+      canvas.off('object:added', handleObjectAdded);
+      canvas.off('object:removed', handleObjectRemoved);
+      canvas.off('object:modified', handleObjectEvent);
       canvas.off('object:scaling', handleObjectScaling);
       canvas.off('object:moving', handleObjectMoving);
       canvas.off('after:render', handleAfterRender);
+      canvas.off('mouse:wheel', handleMouseWheel);
+      canvas.off('mouse:down', onMouseDown);
+      canvas.off('mouse:move', onMouseMove);
+      canvas.off('mouse:up', onMouseUp);
+      canvas.off('selection:created', handleSelection);
+      canvas.off('selection:updated', handleSelection);
+      canvas.off('selection:cleared', handleSelectionCleared);
 
       const disposeCanvas = () => {
         let disposeResult: Promise<unknown> | null = null;
@@ -389,18 +562,30 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         });
       };
 
-      if (pendingPromises.length > 0) {
-        Promise.allSettled(pendingPromises).finally(() => {
-          pendingPromisesRef.current.clear();
-          disposeCanvas();
-        });
-      } else {
+      const finalizeCleanup = async () => {
+        await Promise.allSettled(pendingPromises);
+        pendingPromisesRef.current.clear();
         disposeCanvas();
-      }
+      };
+
+      const cleanupPromise = finalizeCleanup();
+      cleanupPromiseRef.current = cleanupPromise.then(() => undefined);
+      void cleanupPromise;
 
       setCanvas(null);
     };
-  }, []);
+  };
+
+  void initCanvas();
+
+  return () => {
+    if (cleanupRan) return;
+    cleanupRan = true;
+    isCancelledRef.current = true;
+    isEffectCancelled = true;
+    cleanupResources?.();
+  };
+}, []);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -614,7 +799,46 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const imageUrl = e.dataTransfer.getData('text/plain');
     const isSticker = e.dataTransfer.getData('isSticker') === 'true';
 
-    if (!imageUrl || !fabricCanvas) return;
+    if (!fabricCanvas) return;
+
+    if (!imageUrl) {
+      const file = e.dataTransfer.files?.[0];
+      if (!file) {
+        clearPlaceholderHighlight();
+        return;
+      }
+      clearPlaceholderHighlight();
+      const pointer = fabricCanvas.getPointer(e.nativeEvent as MouseEvent);
+      const objectURL = URL.createObjectURL(file);
+      trackPromise(fabric.Image.fromURL(objectURL))
+        .then((img: fabric.FabricImage) => {
+          if (isCancelledRef.current) {
+            URL.revokeObjectURL(objectURL);
+            return;
+          }
+          const id = (img as any).id ?? uuidv4();
+          img.set({
+            id,
+            src: objectURL,
+            left: pointer.x,
+            top: pointer.y,
+            originX: 'center',
+            originY: 'center',
+          });
+          addImageAsset(id, objectURL);
+          fabricCanvas.add(img);
+          sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
+          fabricCanvas.requestRenderAll();
+          saveState();
+        })
+        .catch((error) => {
+          URL.revokeObjectURL(objectURL);
+          if (isCancelledRef.current) return;
+          const message = error instanceof Error ? error.message.toLowerCase() : '';
+          if (message.includes('aborted')) return;
+        });
+      return;
+    }
     clearPlaceholderHighlight();
 
     const pointer = fabricCanvas.getPointer(e.nativeEvent as MouseEvent);
@@ -667,7 +891,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         }
         sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
         fabricCanvas.requestRenderAll();
-        setLayers(fabricCanvas.getObjects());
         saveState();
       })
       .catch((error) => {
@@ -682,25 +905,28 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   const handleHearthUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && fabricCanvas) {
-      const reader = new FileReader();
-      reader.onload = (f: ProgressEvent<FileReader>) => {
-        const data = f.target?.result as string;
-        trackPromise(fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }))
-          .then((img: fabric.FabricImage) => {
-            if (isCancelledRef.current) return;
-            fabricCanvas.add(img);
-            fabricCanvas.centerObject(img);
-            sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
-            fabricCanvas.requestRenderAll();
-            saveState();
-          })
-          .catch((error) => {
-            if (isCancelledRef.current) return;
-            const message = error instanceof Error ? error.message.toLowerCase() : '';
-            if (message.includes('aborted')) return;
-          });
-      };
-      reader.readAsDataURL(file);
+      const objectURL = URL.createObjectURL(file);
+      trackPromise(fabric.Image.fromURL(objectURL))
+        .then((img: fabric.FabricImage) => {
+          if (isCancelledRef.current) {
+            URL.revokeObjectURL(objectURL);
+            return;
+          }
+          const id = (img as any).id ?? uuidv4();
+          img.set({ id, src: objectURL });
+          addImageAsset(id, objectURL);
+          fabricCanvas.add(img);
+          fabricCanvas.centerObject(img);
+          sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
+          fabricCanvas.requestRenderAll();
+          saveState();
+        })
+        .catch((error) => {
+          URL.revokeObjectURL(objectURL);
+          if (isCancelledRef.current) return;
+          const message = error instanceof Error ? error.message.toLowerCase() : '';
+          if (message.includes('aborted')) return;
+        });
     }
     if (uploadInputRef.current) uploadInputRef.current.value = '';
   };

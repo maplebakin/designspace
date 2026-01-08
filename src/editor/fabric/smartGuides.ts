@@ -60,20 +60,41 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
 
   const getAnchorPoints = (object: fabric.Object): SnappingAnchor[] => {
     const points: SnappingAnchor[] = [];
-    const center = object.getCenterPoint();
-    const bbox = object.getBoundingRect();
+    const coords = object.getCoords();
+    const xs = coords.map(point => point.x);
+    const ys = coords.map(point => point.y);
+    if (xs.length === 0 || ys.length === 0) {
+      return points;
+    }
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const centerX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+    const centerY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
 
     // Vertical lines (x-coordinates)
-    points.push({ point: { x: bbox.left, y: center.y }, type: 'left', orientation: 'vertical' });
-    points.push({ point: { x: center.x, y: center.y }, type: 'center', orientation: 'vertical' });
-    points.push({ point: { x: bbox.left + bbox.width, y: center.y }, type: 'right', orientation: 'vertical' });
+    points.push({ point: { x: minX, y: centerY }, type: 'left', orientation: 'vertical' });
+    points.push({ point: { x: centerX, y: centerY }, type: 'center', orientation: 'vertical' });
+    points.push({ point: { x: maxX, y: centerY }, type: 'right', orientation: 'vertical' });
 
     // Horizontal lines (y-coordinates)
-    points.push({ point: { x: center.x, y: bbox.top }, type: 'top', orientation: 'horizontal' });
-    points.push({ point: { x: center.x, y: center.y }, type: 'middle', orientation: 'horizontal' });
-    points.push({ point: { x: center.x, y: bbox.top + bbox.height }, type: 'bottom', orientation: 'horizontal' });
+    points.push({ point: { x: centerX, y: minY }, type: 'top', orientation: 'horizontal' });
+    points.push({ point: { x: centerX, y: centerY }, type: 'middle', orientation: 'horizontal' });
+    points.push({ point: { x: centerX, y: maxY }, type: 'bottom', orientation: 'horizontal' });
 
     return points;
+  };
+
+  const collectAnchors = (object: fabric.Object): SnappingAnchor[] => {
+    if (object.type === 'group') {
+      const groupObjects = (object as fabric.Group & { _objects?: fabric.Object[] })._objects || [];
+      return groupObjects.reduce<SnappingAnchor[]>(
+        (acc, child) => acc.concat(collectAnchors(child)),
+        []
+      );
+    }
+    return getAnchorPoints(object);
   };
 
   const onObjectMoving = (e: any) => {
@@ -105,11 +126,49 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
 
     const activeObjectAnchors = getAnchorPoints(activeObject);
     const canvasObjects = canvas.getObjects().filter(obj => obj !== activeObject && !obj.get('isGuide') && obj.evented);
+    const cellSize = 100;
+    const grid = new Map<string, fabric.Object[]>();
 
-    canvasObjects.forEach((obj: fabric.Object) => {
+    const addToGrid = (obj: fabric.Object) => {
+      const bbox = obj.getBoundingRect();
+      const minX = Math.floor(bbox.left / cellSize);
+      const maxX = Math.floor((bbox.left + bbox.width) / cellSize);
+      const minY = Math.floor(bbox.top / cellSize);
+      const maxY = Math.floor((bbox.top + bbox.height) / cellSize);
+      for (let x = minX; x <= maxX; x += 1) {
+        for (let y = minY; y <= maxY; y += 1) {
+          const key = `${x}:${y}`;
+          const bucket = grid.get(key);
+          if (bucket) {
+            bucket.push(obj);
+          } else {
+            grid.set(key, [obj]);
+          }
+        }
+      }
+    };
+
+    canvasObjects.forEach(addToGrid);
+
+    const activeBBox = activeObject.getBoundingRect();
+    const activeMinX = Math.floor(activeBBox.left / cellSize) - 1;
+    const activeMaxX = Math.floor((activeBBox.left + activeBBox.width) / cellSize) + 1;
+    const activeMinY = Math.floor(activeBBox.top / cellSize) - 1;
+    const activeMaxY = Math.floor((activeBBox.top + activeBBox.height) / cellSize) + 1;
+    const nearbyObjects = new Set<fabric.Object>();
+
+    for (let x = activeMinX; x <= activeMaxX; x += 1) {
+      for (let y = activeMinY; y <= activeMaxY; y += 1) {
+        const bucket = grid.get(`${x}:${y}`);
+        if (bucket) {
+          bucket.forEach(obj => nearbyObjects.add(obj));
+        }
+      }
+    }
+
+    nearbyObjects.forEach((obj: fabric.Object) => {
         // Performance: Bounding box check first
         const objBBox = obj.getBoundingRect();
-        const activeBBox = activeObject.getBoundingRect();
         // Expand bbox to include snap threshold for proximity check
         const expandedActiveBBox = {
             left: activeBBox.left - SNAP_THRESHOLD,
@@ -132,7 +191,7 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
             return;
         }
 
-      const objAnchors = getAnchorPoints(obj);
+      const objAnchors = collectAnchors(obj);
 
       activeObjectAnchors.forEach(activeAnchor => {
         objAnchors.forEach(staticAnchor => {

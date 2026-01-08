@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Search, Trash2, Upload } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { shallow } from 'zustand/shallow';
 import { useEditorStore, StickerData } from '../state/editorStore';
 
 const resolveTokenValue = (obj: object | null, path: string): string | null => {
@@ -31,7 +32,15 @@ const buildAssetFromFile = (file: File, dataUrl: string): StickerData => {
 };
 
 export const StickerTab: React.FC = () => {
-    const { assets, addAssetToLibrary, removeAssetFromLibrary, themeData } = useEditorStore();
+    const { assets, addAssetToLibrary, removeAssetFromLibrary, themeData } = useEditorStore(
+        (state) => ({
+            assets: state.assets,
+            addAssetToLibrary: state.addAssetToLibrary,
+            removeAssetFromLibrary: state.removeAssetFromLibrary,
+            themeData: state.themeData,
+        }),
+        shallow
+    );
     const [searchTerm, setSearchTerm] = useState('');
     const uploadInputRef = useRef<HTMLInputElement>(null);
 
@@ -43,7 +52,7 @@ export const StickerTab: React.FC = () => {
         return Boolean(matchesTags || matchesLabel);
     });
 
-    const glassSurface = resolveTokenValue(themeData, 'glass.glass-surface') || '#323135';
+    const panelSurface = 'var(--ui-panel-opaque)';
     const glassBlur = resolveTokenValue(themeData, 'glass.glass-blur') || '16px';
     const surfacePlain = resolveTokenValue(themeData, 'surfaces.surface-plain') || 'rgba(255, 255, 255, 0.08)';
 
@@ -68,23 +77,23 @@ export const StickerTab: React.FC = () => {
 
     return (
         <div
-            className="p-4 flex flex-col h-full"
-            style={{ backgroundColor: glassSurface, backdropFilter: `blur(${glassBlur})` }}
+            className="p-4 flex flex-col h-full text-[color:var(--ui-panel-text)]"
+            style={{ backgroundColor: panelSurface, backdropFilter: `blur(${glassBlur})` }}
         >
             <div className="relative mb-4">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 stroke-[1.5] text-slate-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 stroke-[1.5] text-[color:var(--ui-panel-text)] opacity-70" />
                 <input
                     type="text"
                     placeholder="Search assets..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 text-sm bg-white/10 border border-white/10 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+                    className="w-full pl-10 pr-4 py-2 text-sm bg-white/10 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] placeholder:text-[color:var(--ui-panel-text)] placeholder:opacity-60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
                 />
             </div>
 
             <div className="flex-1 overflow-y-auto">
                 {filteredAssets.length === 0 ? (
-                    <div className="rounded-2xl border border-[color:var(--ui-border)] p-6 text-center text-sm text-slate-200 shadow-[0_16px_30px_rgba(0,0,0,0.25)]" style={{ backgroundColor: glassSurface, backdropFilter: `blur(${glassBlur})` }}>
+                    <div className="rounded-2xl border border-[color:var(--ui-border)] p-6 text-center text-sm text-[color:var(--ui-panel-text)] shadow-[0_16px_30px_rgba(0,0,0,0.25)]" style={{ backgroundColor: panelSurface, backdropFilter: `blur(${glassBlur})` }}>
                         No items in your library yet. Upload transparent PNGs to begin your collection.
                     </div>
                 ) : (
@@ -126,7 +135,7 @@ export const StickerTab: React.FC = () => {
                 />
                 <button
                     onClick={() => uploadInputRef.current?.click()}
-                    className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-lg hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest"
+                    className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-panel-text)] rounded-lg hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest"
                 >
                     <Upload className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)] transition-all duration-300 ease-in-out" />
                     Add Asset

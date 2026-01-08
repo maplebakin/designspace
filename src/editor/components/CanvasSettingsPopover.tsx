@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { shallow } from 'zustand/shallow';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { ChevronDown, Check } from 'lucide-react';
@@ -30,7 +31,17 @@ export const CanvasSettingsPopover: React.FC = () => {
     toggleShowGuides,
     canvasBackgroundColor,
     setCanvasBackgroundColor,
-  } = useEditorStore();
+  } = useEditorStore(
+    (state) => ({
+      canvas: state.canvas,
+      setLayers: state.setLayers,
+      showGuides: state.showGuides,
+      toggleShowGuides: state.toggleShowGuides,
+      canvasBackgroundColor: state.canvasBackgroundColor,
+      setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+    }),
+    shallow
+  );
   const [isOpen, setIsOpen] = useState(false);
   const [currentSize, setCurrentSize] = useState('');
   const lastSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -85,7 +96,7 @@ export const CanvasSettingsPopover: React.FC = () => {
       {isOpen && (
          <div className="absolute left-0 mt-2 w-72 bg-[color:var(--ui-panel)] rounded-lg shadow-xl z-20 border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)]">
             <div className="p-4 space-y-4">
-                <h3 className="text-[11px] uppercase tracking-widest text-slate-400">Canvas Size</h3>
+                <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Canvas Size</h3>
                 <div className="grid grid-cols-2 gap-2">
                     {presets.map(p => (
                         <button 
@@ -93,16 +104,16 @@ export const CanvasSettingsPopover: React.FC = () => {
                             onClick={() => applyPreset(p)}
                             className="w-full text-left px-3 py-2 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
                         >
-                            <span className="text-xs uppercase tracking-widest text-slate-300">{p.name}</span>
-                            <p className="text-[10px] uppercase tracking-widest text-slate-500">{p.description}</p>
+                            <span className="text-xs uppercase tracking-widest text-slate-200">{p.name}</span>
+                            <p className="text-[10px] uppercase tracking-widest text-slate-300">{p.description}</p>
                         </button>
                     ))}
                 </div>
                 <hr className="border-t border-white/10" />
                 <div className="space-y-2">
-                    <h4 className="text-[10px] uppercase tracking-widest text-slate-400">Background</h4>
+                    <h4 className="text-[10px] uppercase tracking-widest text-slate-200">Background</h4>
                     <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-                        <span className="text-[10px] uppercase tracking-widest text-slate-300">Fill Color</span>
+                        <span className="text-[10px] uppercase tracking-widest text-slate-200">Fill Color</span>
                         <input
                             type="color"
                             value={canvasBackgroundColor || '#ffffff'}
@@ -116,7 +127,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                     onClick={() => {
                         toggleShowGuides();
                     }}
-                    className="w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-300 rounded-lg hover:bg-white/10"
+                    className="w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 rounded-lg hover:bg-white/10"
                 >
                     <span>Show Bleed/Safety Guides</span>
                     <div className={`w-5 h-5 flex items-center justify-center rounded-sm border-2 ${showGuides ? 'bg-[color:var(--brand-primary)] border-[color:var(--brand-primary)]' : 'border-slate-500'}`}>

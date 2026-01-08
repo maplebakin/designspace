@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { shallow } from 'zustand/shallow';
 
 import { useEditorStore } from '../state/editorStore';
 
@@ -35,7 +36,20 @@ export const ThemeSidebar: React.FC = () => {
 
         resetObjectToDefaultTheme
 
-    } = useEditorStore();
+    } = useEditorStore(
+        (state) => ({
+            brandVault: state.brandVault,
+            activeBrandCollectionId: state.activeBrandCollectionId,
+            applyTheme: state.applyTheme,
+            resetTheme: state.resetTheme,
+            selectedLayerId: state.selectedLayerId,
+            selectedObject: state.selectedObject,
+            themeData: state.themeData,
+            setObjectThemedFill: state.setObjectThemedFill,
+            resetObjectToDefaultTheme: state.resetObjectToDefaultTheme,
+        }),
+        shallow
+    );
 
 
 

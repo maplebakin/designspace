@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
 import { debounce } from 'lodash';
@@ -8,12 +8,12 @@ import {
 } from '../utils/indexedDb';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
 import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { toSerializableObject } from '../utils/serialization';
+import { historyService } from '../utils/historyService';
 import { useUiThemeStore } from './uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 
 // --- CONSTANTS ---
-const MAX_HISTORY_SIZE = 50;
-const AUTOSAVE_STORAGE_KEY = 'witchclick_current_design';
 
 export interface Template {
   id: string;
@@ -58,6 +58,7 @@ export type EditorTool = 'select' | 'draw' | 'pan' | 'erase';
 export type ProjectFilePayload = {
   projectName: string;
   canvasData: any;
+  assets?: Record<string, string>;
   activeTheme: ApocapaletteTheme | null;
   lastUpdated: string;
 };
@@ -68,6 +69,14 @@ const formatObjectType = (type: string | undefined) => {
   if (!type) return 'Object';
   return type.replace(/-/g, ' ').split(' ').map(capitalize).join(' ');
 };
+const buildLayerFromObject = (obj: fabric.Object): Layer => ({
+  id: (obj as any).id || '',
+  name: (obj as any).name || formatObjectType(obj.type),
+  type: obj.type || 'object',
+  visible: obj.visible ?? true,
+  movementLocked: !!obj.lockMovementX,
+  colorLocked: !!(obj as any).colorLocked,
+});
 const getValueByPath = (obj: object, path: string): any => {
     return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
 };
@@ -93,6 +102,99 @@ const sanitizeFileName = (name: string) => {
     return safe || 'design-space';
 };
 
+const isDataUrl = (value: string) => value.startsWith('data:');
+
+const createObjectUrlFromDataUrl = (dataUrl: string) => {
+    try {
+        const [meta, rawData] = dataUrl.split(',');
+        if (!rawData) return dataUrl;
+        const isBase64 = meta.includes(';base64');
+        const mime = meta.split(':')[1]?.split(';')[0] || 'application/octet-stream';
+        const decoded = isBase64 ? atob(rawData) : decodeURIComponent(rawData);
+        const bytes = new Uint8Array(decoded.length);
+        for (let i = 0; i < decoded.length; i += 1) {
+            bytes[i] = decoded.charCodeAt(i);
+        }
+        return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch {
+        return dataUrl;
+    }
+};
+
+const getCanvasObjects = (canvasData: any) => {
+    if (Array.isArray(canvasData)) {
+        return canvasData;
+    }
+    return canvasData?.objects;
+};
+
+const buildCanvasData = (canvasData: any, objects: any[]) => {
+    if (!canvasData || Array.isArray(canvasData)) {
+        return { objects };
+    }
+    return { ...canvasData, objects };
+};
+
+const prepareCanvasDataForPersistence = (
+    canvasData: any,
+    imageAssets: Record<string, string>
+) => {
+    const objects = getCanvasObjects(canvasData);
+    if (!Array.isArray(objects)) {
+        return { canvasData, imageAssets };
+    }
+    let nextAssets = imageAssets;
+    const nextObjects = objects.map((obj: any) => {
+        if (!obj || obj.type !== 'image') return obj;
+        const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : uuidv4();
+        const src = typeof obj.src === 'string' ? obj.src : '';
+        let assetUrl = nextAssets[id];
+        if (!assetUrl && src) {
+            if (src.startsWith('blob:')) {
+                nextAssets = { ...nextAssets, [id]: src };
+                assetUrl = src;
+            } else if (isDataUrl(src)) {
+                const objectUrl = createObjectUrlFromDataUrl(src);
+                nextAssets = { ...nextAssets, [id]: objectUrl };
+                assetUrl = objectUrl;
+            }
+        }
+        if (assetUrl) {
+            return { ...obj, id, src: id };
+        }
+        if (id !== obj.id) {
+            return { ...obj, id };
+        }
+        return obj;
+    });
+    return {
+        canvasData: buildCanvasData(canvasData, nextObjects),
+        imageAssets: nextAssets,
+    };
+};
+
+export const hydrateCanvasDataWithAssets = (
+    canvasData: any,
+    imageAssets: Record<string, string>
+) => {
+    const objects = getCanvasObjects(canvasData);
+    if (!Array.isArray(objects)) {
+        return canvasData;
+    }
+    return {
+        ...buildCanvasData(canvasData, objects),
+        objects: objects.map((obj: any) => {
+            if (!obj || obj.type !== 'image') return obj;
+            const id = typeof obj.id === 'string' ? obj.id : '';
+            const assetUrl = id ? imageAssets[id] : '';
+            if (assetUrl) {
+                return { ...obj, src: assetUrl };
+            }
+            return obj;
+        }),
+    };
+};
+
 const findDefaultTheme = (vault: BrandCollection[]) => {
     const byName = vault.find((theme) =>
         theme.name?.toLowerCase() === 'midnight'
@@ -112,7 +214,6 @@ interface EditorState {
   activeBrandCollectionId: string | null;
   themeData: ApocapaletteTheme | null;
   toastMessage: string | null;
-  history: string[];
   historyIndex: number;
   unitMode: 'px' | 'in' | 'cm' | 'mm';
   zoom: number;
@@ -126,6 +227,7 @@ interface EditorState {
   assets: StickerData[];
   templates: Template[];
   userTemplates: Template[];
+  imageAssets: Record<string, string>;
   projectName: string;
   isProjectPresetsOpen: boolean;
   activeTool: EditorTool;
@@ -135,9 +237,12 @@ interface EditorState {
   setCanvas: (canvas: fabric.Canvas | null) => void;
   setSelectedObject: (object: fabric.Object | null) => void;
   setLayers: (objects: fabric.Object[]) => void;
+  addLayer: (layer: Layer) => void;
+  updateLayer: (id: string, partial: Partial<Layer>) => void;
+  removeLayer: (id: string) => void;
   setSelectedLayerId: (id: string | null) => void;
   toggleShowGuides: () => void;
-  saveState: () => void;
+  saveState: (options?: { force?: boolean }) => void;
   setToastMessage: (message: string | null) => void;
   setUnitMode: (mode: 'px' | 'in' | 'cm' | 'mm') => void;
   setCanvasBackgroundColor: (color: string) => void;
@@ -149,6 +254,8 @@ interface EditorState {
   addAssetToLibrary: (asset: StickerData) => void;
   removeAssetFromLibrary: (id: string) => void;
   setTemplates: (templates: Template[]) => void;
+  addImageAsset: (id: string, url: string) => void;
+  removeImageAsset: (id: string) => void;
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
   startNewProject: () => void;
@@ -178,7 +285,7 @@ interface EditorState {
 }
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
-export const useEditorStore = create<EditorState>()(
+export const useEditorStore = createWithEqualityFn<EditorState>()(
   persist(
     (set, get) => ({
         canvas: null,
@@ -190,7 +297,6 @@ export const useEditorStore = create<EditorState>()(
         activeBrandCollectionId: null,
         themeData: null,
         toastMessage: null,
-        history: [],
         historyIndex: -1,
         unitMode: 'px',
         zoom: 1,
@@ -204,6 +310,7 @@ export const useEditorStore = create<EditorState>()(
         assets: [],
         templates: [],
         userTemplates: [],
+        imageAssets: {},
         projectName: 'Untitled Project',
         isProjectPresetsOpen: false,
         activeTool: 'select',
@@ -227,15 +334,36 @@ export const useEditorStore = create<EditorState>()(
     setLayers: (objects) => {
         const newLayers = objects
             .filter(obj => !(obj as any).isGuide)
-            .map((obj): Layer => ({
-                id: (obj as any).id || '',
-                name: (obj as any).name || formatObjectType(obj.type),
-                type: obj.type || 'object',
-                visible: obj.visible ?? true,
-                movementLocked: !!obj.lockMovementX,
-                colorLocked: !!(obj as any).colorLocked,
-            }));
+            .map((obj): Layer => buildLayerFromObject(obj));
         set({ layers: newLayers });
+    },
+    addLayer: (layer) => {
+        if (!layer?.id) return;
+        set((state) => {
+            const index = state.layers.findIndex((item) => item.id === layer.id);
+            if (index >= 0) {
+                const nextLayers = [...state.layers];
+                nextLayers[index] = { ...nextLayers[index], ...layer };
+                return { layers: nextLayers };
+            }
+            return { layers: [...state.layers, layer] };
+        });
+    },
+    updateLayer: (id, partial) => {
+        if (!id) return;
+        set((state) => {
+            const index = state.layers.findIndex((item) => item.id === id);
+            if (index < 0) return state;
+            const nextLayers = [...state.layers];
+            nextLayers[index] = { ...nextLayers[index], ...partial };
+            return { layers: nextLayers };
+        });
+    },
+    removeLayer: (id) => {
+        if (!id) return;
+        set((state) => ({
+            layers: state.layers.filter((layer) => layer.id !== id),
+        }));
     },
     toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
     setToastMessage: (message) => set({ toastMessage: message }),
@@ -284,6 +412,23 @@ export const useEditorStore = create<EditorState>()(
         }));
     },
     setTemplates: (templates) => set({ templates }),
+    addImageAsset: (id, url) => {
+        if (!id || !url) return;
+        set((state) => ({
+            imageAssets: {
+                ...state.imageAssets,
+                [id]: url,
+            },
+        }));
+    },
+    removeImageAsset: (id) => {
+        if (!id) return;
+        set((state) => {
+            if (!state.imageAssets[id]) return state;
+            const { [id]: _, ...rest } = state.imageAssets;
+            return { imageAssets: rest };
+        });
+    },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
@@ -318,7 +463,11 @@ export const useEditorStore = create<EditorState>()(
     saveCurrentAsTemplate: () => {
         const { canvas, activeBrandCollectionId, userTemplates } = get();
         if (!canvas) return;
-        const json = canvas.toJSON();
+        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const json = {
+            objects: serializedObjects,
+            background: canvas.backgroundColor || undefined,
+        };
         const thumbnail = canvas.toDataURL({ multiplier: 0.1 });
         const newTemplate: Template = {
             id: uuidv4(),
@@ -339,6 +488,7 @@ export const useEditorStore = create<EditorState>()(
             setLayers([]);
         }
 
+        historyService.reset();
         const defaultTheme = findDefaultTheme(brandVault);
         if (defaultTheme) {
             set({ themeData: defaultTheme.themeData, activeBrandCollectionId: defaultTheme.id });
@@ -348,8 +498,7 @@ export const useEditorStore = create<EditorState>()(
         }
 
         set({
-            history: [],
-            historyIndex: -1,
+            historyIndex: historyService.currentIndex,
             projectName: 'Untitled Project',
             isProjectPresetsOpen: true,
             canvasBackgroundColor: null,
@@ -357,16 +506,38 @@ export const useEditorStore = create<EditorState>()(
     },
 
     downloadProjectFile: () => {
-        const { canvas, themeData, activeBrandCollectionId, brandVault, projectName, setToastMessage } = get();
+        const {
+            canvas,
+            themeData,
+            activeBrandCollectionId,
+            brandVault,
+            projectName,
+            setToastMessage,
+            imageAssets
+        } = get();
         if (!canvas) return;
 
         const fallbackTheme = themeData
             || brandVault.find((brand) => brand.id === activeBrandCollectionId)?.themeData
             || null;
 
+        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const baseCanvasData = {
+            objects: serializedObjects,
+            background: canvas.backgroundColor || undefined,
+        };
+        const { canvasData, imageAssets: nextAssets } = prepareCanvasDataForPersistence(
+            baseCanvasData,
+            imageAssets
+        );
+        if (nextAssets !== imageAssets) {
+            set({ imageAssets: nextAssets });
+        }
+
         const payload: ProjectFilePayload = {
             projectName: projectName || 'Untitled Project',
-            canvasData: canvas.toJSON(),
+            canvasData,
+            assets: nextAssets,
             activeTheme: fallbackTheme,
             lastUpdated: new Date().toISOString(),
         };
@@ -409,21 +580,32 @@ export const useEditorStore = create<EditorState>()(
             if (typeof canvasData === 'string') {
                 canvasData = JSON.parse(canvasData);
             }
+            const fileAssets =
+                raw.assets && typeof raw.assets === 'object'
+                    ? (raw.assets as Record<string, string>)
+                    : {};
+            const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
+                prepareCanvasDataForPersistence(canvasData, fileAssets);
+            const hydratedCanvasData = hydrateCanvasDataWithAssets(
+                migratedCanvasData,
+                nextAssets
+            );
 
             canvas.discardActiveObject();
             canvas.clear();
-            await canvas.loadFromJSON(canvasData, reviveCustomFabricProps);
+            await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
             canvas.requestRenderAll();
 
             sanityCheckCanvas(canvas, activeTheme);
             setLayers(canvas.getObjects());
+            historyService.reset();
 
             set({
                 projectName,
-                history: [],
-                historyIndex: -1,
+                historyIndex: historyService.currentIndex,
                 isProjectPresetsOpen: false,
                 canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+                imageAssets: nextAssets,
             });
 
             if (activeTheme) {
@@ -443,48 +625,56 @@ export const useEditorStore = create<EditorState>()(
         }
     },
     
-    saveState: debounce(() => {
-        const { canvas, history, historyIndex } = get();
+    saveState: debounce((options?: { force?: boolean }) => {
+        const { canvas, imageAssets } = get();
         if (!canvas) return;
-        const json = canvas.toJSON();
-        const serialized = JSON.stringify(json);
-        
-        const newHistory = history.slice(0, historyIndex + 1);
-        newHistory.push(serialized);
-        if (newHistory.length > MAX_HISTORY_SIZE) newHistory.shift();
-        
-        set({ history: newHistory, historyIndex: newHistory.length - 1 });
-        if (typeof window !== 'undefined') {
-            try {
-                localStorage.setItem(AUTOSAVE_STORAGE_KEY, serialized);
-            } catch {
-                // ignore storage failures
-            }
+        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const baseCanvasData = {
+            objects: serializedObjects,
+            background: canvas.backgroundColor || undefined,
+        };
+        const { canvasData, imageAssets: nextAssets } = prepareCanvasDataForPersistence(
+            baseCanvasData,
+            imageAssets
+        );
+        const serialized = JSON.stringify(canvasData);
+        const updates: Partial<EditorState> = {};
+        if (nextAssets !== imageAssets) {
+            updates.imageAssets = nextAssets;
+        }
+        historyService.pushSnapshot(serialized, options);
+        updates.historyIndex = historyService.currentIndex;
+        if (Object.keys(updates).length > 0) {
+            set(updates);
         }
     }, 300),
 
     undo: () => {
-        const { history, historyIndex, canvas, setLayers } = get();
-        if (historyIndex > 0 && canvas) {
-            const prevState = JSON.parse(history[historyIndex - 1]);
-            canvas.loadFromJSON(prevState, () => {
-                canvas.requestRenderAll();
-                set({ historyIndex: historyIndex - 1, selectedObject: null });
-                setLayers(canvas.getObjects());
-            });
-        }
+        const { canvas, setLayers, imageAssets } = get();
+        if (!canvas) return;
+        const snapshot = historyService.undo();
+        if (!snapshot) return;
+        const prevState = JSON.parse(snapshot);
+        const hydratedState = hydrateCanvasDataWithAssets(prevState, imageAssets);
+        canvas.loadFromJSON(hydratedState, () => {
+            canvas.requestRenderAll();
+            set({ historyIndex: historyService.currentIndex, selectedObject: null });
+            setLayers(canvas.getObjects());
+        });
     },
 
     redo: () => {
-        const { history, historyIndex, canvas, setLayers } = get();
-        if (historyIndex < history.length - 1 && canvas) {
-            const nextState = JSON.parse(history[historyIndex + 1]);
-            canvas.loadFromJSON(nextState, () => {
-                canvas.requestRenderAll();
-                set({ historyIndex: historyIndex + 1, selectedObject: null });
-                setLayers(canvas.getObjects());
-            });
-        }
+        const { canvas, setLayers, imageAssets } = get();
+        if (!canvas) return;
+        const snapshot = historyService.redo();
+        if (!snapshot) return;
+        const nextState = JSON.parse(snapshot);
+        const hydratedState = hydrateCanvasDataWithAssets(nextState, imageAssets);
+        canvas.loadFromJSON(hydratedState, () => {
+            canvas.requestRenderAll();
+            set({ historyIndex: historyService.currentIndex, selectedObject: null });
+            setLayers(canvas.getObjects());
+        });
     },
 
     // --- THEME ACTIONS ---

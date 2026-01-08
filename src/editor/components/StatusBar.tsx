@@ -1,11 +1,22 @@
 import React from 'react';
 import type * as fabric from 'fabric';
 import { Minus, Plus, Expand, AlertTriangle } from 'lucide-react';
+import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { SAFE_MARGIN_PX, canvasDimensionsInInches, formatInches, safeMarginInches } from '../utils/units';
 
 export const StatusBar: React.FC = () => {
-  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas } = useEditorStore();
+  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas } = useEditorStore(
+    (state) => ({
+      zoom: state.zoom,
+      unitMode: state.unitMode,
+      setUnitMode: state.setUnitMode,
+      canvas: state.canvas,
+      bleedPx: state.bleedPx,
+      resetViewCanvas: state.resetViewCanvas,
+    }),
+    shallow
+  );
 
   const widthPx = canvas?.getWidth ? canvas.getWidth() : canvas?.width || 0;
   const heightPx = canvas?.getHeight ? canvas.getHeight() : canvas?.height || 0;

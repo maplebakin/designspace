@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { shallow } from 'zustand/shallow';
 import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
 import * as objectFactories from '../fabric/objectFactories';
 import * as frameFactories from '../fabric/frameFactories';
@@ -47,7 +48,14 @@ export const Inserter: React.FC = () => {
 }
 
 const DesignTab: React.FC = () => {
-    const { canvas, saveState, themeData } = useEditorStore();
+    const { canvas, saveState, themeData } = useEditorStore(
+        (state) => ({
+            canvas: state.canvas,
+            saveState: state.saveState,
+            themeData: state.themeData,
+        }),
+        shallow
+    );
 
     const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
         if (canvas) {
@@ -99,7 +107,14 @@ const DesignTab: React.FC = () => {
 };
 
 const UploadsDropdown: React.FC = () => {
-    const { canvas, saveState, addAssetToLibrary } = useEditorStore();
+    const { canvas, saveState, addAssetToLibrary } = useEditorStore(
+        (state) => ({
+            canvas: state.canvas,
+            saveState: state.saveState,
+            addAssetToLibrary: state.addAssetToLibrary,
+        }),
+        shallow
+    );
     const imageInputRef = useRef<HTMLInputElement>(null);
     const svgInputRef = useRef<HTMLInputElement>(null);
     const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -173,7 +188,15 @@ const UploadsDropdown: React.FC = () => {
 }
 
 const LayoutsDropdown: React.FC = () => {
-    const { canvas, saveState, themeData, bleedPx } = useEditorStore();
+    const { canvas, saveState, themeData, bleedPx } = useEditorStore(
+        (state) => ({
+            canvas: state.canvas,
+            saveState: state.saveState,
+            themeData: state.themeData,
+            bleedPx: state.bleedPx,
+        }),
+        shallow
+    );
     const [isOpen, setIsOpen] = useState(false);
     const [showCustomGrid, setShowCustomGrid] = useState(false);
     const [rows, setRows] = useState(2);

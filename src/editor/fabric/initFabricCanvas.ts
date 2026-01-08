@@ -3,40 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { SAFE_MARGIN_PX } from '../utils/units';
 
-export const FABRIC_SERIALIZATION_PROPS = ['id', 'tokenRole', 'colorLocked', 'isPlaceholder'];
-
-let serializationInitialized = false;
-
 export const initFabricSerialization = () => {
-  if (serializationInitialized) return;
-  serializationInitialized = true;
-
-  fabric.Object.ownDefaults.includeDefaultValues = false;
-
-  const proto = fabric.Object.prototype as fabric.Object & {
-    __customSerializationApplied?: boolean;
-    toObject: (propertiesToInclude?: string[]) => Record<string, unknown>;
-  };
-
-  if (proto.__customSerializationApplied) return;
-  proto.__customSerializationApplied = true;
-
-  const originalToObject = proto.toObject;
-  proto.toObject = function (propertiesToInclude?: string[]) {
-    const base = originalToObject.call(this, propertiesToInclude);
-    return {
-      ...base,
-      id: (this as any).id ?? null,
-      tokenRole: (this as any).tokenRole ?? null,
-      colorLocked: (this as any).colorLocked ?? false,
-      isPlaceholder: (this as any).isPlaceholder ?? false,
-    };
-  };
-
-  const existing = (fabric.Object as any).customProperties || [];
-  (fabric.Object as any).customProperties = Array.from(
-    new Set([...existing, ...FABRIC_SERIALIZATION_PROPS])
-  );
+  // Intentionally no-op: custom serialization handled via helpers.
 };
 
 type FabricReviver = NonNullable<Parameters<fabric.Canvas['loadFromJSON']>[1]>;
@@ -117,7 +85,7 @@ const withAlpha = (color: string, alpha: number) => {
   return color;
 };
 
-const clearPersistentGuides = (canvas: fabric.Canvas) => {
+export const clearPersistentGuides = (canvas: fabric.Canvas) => {
   persistentGuides.forEach((guide) => canvas.remove(guide));
   persistentGuides = [];
 };

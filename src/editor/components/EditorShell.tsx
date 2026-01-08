@@ -1,5 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
+import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
@@ -61,7 +62,14 @@ const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ReactElement }> =
 const FileDropdown: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const { startNewProject, downloadProjectFile, loadProjectFile } = useEditorStore();
+    const { startNewProject, downloadProjectFile, loadProjectFile } = useEditorStore(
+        (state) => ({
+            startNewProject: state.startNewProject,
+            downloadProjectFile: state.downloadProjectFile,
+            loadProjectFile: state.loadProjectFile,
+        }),
+        shallow
+    );
 
     const handleOpenFile = () => {
         fileInputRef.current?.click();
@@ -129,7 +137,7 @@ const FileDropdown: React.FC = () => {
 
 const ExportDropdown: React.FC<{ openModal: (format: 'jpeg' | 'png') => void }> = ({ openModal }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const { canvas } = useEditorStore();
+    const canvas = useEditorStore((state) => state.canvas);
 
     const handleDirectExport = async (handler: (canvas: fabric.Canvas) => Promise<void> | void) => {
         if (canvas) await handler(canvas);
@@ -174,8 +182,8 @@ const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
           onClick={() => onSelect(item.id)}
           className={`group w-10 h-10 flex items-center justify-center rounded-2xl transition-all duration-300 ease-in-out ${
             isActive
-              ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
-              : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
+              ? 'bg-white/20 text-[color:var(--ui-panel-text)] shadow-[0_0_22px_rgba(248,249,250,0.5)]'
+              : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] hover:bg-white/10'
           }`}
           aria-label={item.label}
           title={item.label}
@@ -188,9 +196,8 @@ const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
 );
 
 const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const { canvas, saveState, themeData } = useEditorStore();
-
   const handleAddShape = (factory: (canvas: fabric.Canvas) => void) => {
+    const { canvas, saveState, themeData } = useEditorStore.getState();
     if (!canvas) return;
     factory(canvas);
     sanityCheckCanvas(canvas, themeData);
@@ -199,33 +206,33 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   return (
-    <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 p-3 shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]">
-      <h3 className="text-[10px] uppercase tracking-widest text-[#F8F9FA] mb-3">Shapes</h3>
+    <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-3 text-[color:var(--ui-panel-text)] shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]">
+      <h3 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Shapes</h3>
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => handleAddShape(objectFactories.addRectangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Square className={ICON_SMALL} />
           Rectangle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addCircle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Circle className={ICON_SMALL} />
           Circle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addTriangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Triangle className={ICON_SMALL} />
           Triangle
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addStar)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Star className={ICON_SMALL} />
           Star
@@ -236,7 +243,7 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 };
 
 const CanvasQuickBar: React.FC<{ onSelectNav: (nav: NavId) => void }> = ({ onSelectNav }) => (
-  <div className="canvas-quickbar absolute left-1/2 top-12 z-30 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 px-2 py-1 backdrop-blur-[var(--ui-blur)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+  <div className="canvas-quickbar absolute left-1/2 top-12 z-30 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-2 py-1 backdrop-blur-[var(--ui-blur)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
     <button
       onClick={() => onSelectNav('design')}
       className="group rounded-full px-3 py-2 text-slate-200 transition-all duration-300 ease-in-out hover:bg-white/10"
@@ -273,7 +280,13 @@ const CanvasQuickBar: React.FC<{ onSelectNav: (nav: NavId) => void }> = ({ onSel
 );
 
 const TextPanel: React.FC = () => {
-  const { canvas, saveState } = useEditorStore();
+  const { canvas, saveState } = useEditorStore(
+    (state) => ({
+      canvas: state.canvas,
+      saveState: state.saveState,
+    }),
+    shallow
+  );
 
   const addText = (options: { text: string; fontSize: number; fontWeight?: string; role?: 'heading' | 'subheading' | 'body' }) => {
     if (!canvas) return;
@@ -288,11 +301,11 @@ const TextPanel: React.FC = () => {
   };
 
   return (
-    <div className="p-5 space-y-3">
-      <h3 className="text-[11px] uppercase tracking-widest text-[#F8F9FA]">Text Rituals</h3>
+    <div className="p-5 space-y-3 text-[color:var(--ui-panel-text)]">
+      <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Text Rituals</h3>
       <button
         onClick={() => addText({ text: 'Heading', fontSize: 80, fontWeight: 'bold', role: 'heading' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Heading1 className={ICON_SMALL} />
@@ -301,7 +314,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={() => addText({ text: 'Subheading', fontSize: 50, fontWeight: 'normal', role: 'subheading' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Heading2 className={ICON_SMALL} />
@@ -310,7 +323,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={() => addText({ text: 'Body text', fontSize: 24, fontWeight: 'normal', role: 'body' })}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <Pilcrow className={ICON_SMALL} />
@@ -319,7 +332,7 @@ const TextPanel: React.FC = () => {
       </button>
       <button
         onClick={addFixedTextbox}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[#F8F9FA] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <FileText className={ICON_SMALL} />
@@ -331,7 +344,14 @@ const TextPanel: React.FC = () => {
 };
 
 const UploadsPanel: React.FC = () => {
-  const { canvas, saveState, addAssetToLibrary } = useEditorStore();
+  const { canvas, saveState, addAssetToLibrary } = useEditorStore(
+    (state) => ({
+      canvas: state.canvas,
+      saveState: state.saveState,
+      addAssetToLibrary: state.addAssetToLibrary,
+    }),
+    shallow
+  );
   const imageInputRef = useRef<HTMLInputElement>(null);
   const svgInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -388,15 +408,15 @@ const UploadsPanel: React.FC = () => {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="p-4 space-y-3 text-[color:var(--ui-panel-text)]">
       <input type="file" accept="image/png, image/jpeg" ref={imageInputRef} onChange={handleImageFileChange} className="hidden" />
       <input type="file" accept=".svg" ref={svgInputRef} onChange={handleSvgFileChange} className="hidden" />
       <input type="file" accept=".pdf" ref={pdfInputRef} onChange={handlePdfFileChange} className="hidden" />
 
-      <h3 className="text-[11px] uppercase tracking-widest text-slate-400">Uploads</h3>
+      <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Uploads</h3>
       <button
         onClick={() => imageInputRef.current?.click()}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <FileImage className={ICON_SMALL} />
@@ -405,7 +425,7 @@ const UploadsPanel: React.FC = () => {
       </button>
       <button
         onClick={() => svgInputRef.current?.click()}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <FileUp className={ICON_SMALL} />
@@ -414,7 +434,7 @@ const UploadsPanel: React.FC = () => {
       </button>
       <button
         onClick={() => pdfInputRef.current?.click()}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-slate-200 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
       >
         <div className="flex items-center gap-3">
           <FileText className={ICON_SMALL} />
@@ -439,7 +459,23 @@ export const EditorShell: React.FC = () => {
     setCanvasBackgroundColor,
     snapEnabled,
     setSnapEnabled,
-  } = useEditorStore();
+  } = useEditorStore(
+    (state) => ({
+      toastMessage: state.toastMessage,
+      setToastMessage: state.setToastMessage,
+      canvas: state.canvas,
+      saveState: state.saveState,
+      activeTool: state.activeTool,
+      setActiveTool: state.setActiveTool,
+      setBrushColor: state.setBrushColor,
+      themeData: state.themeData,
+      canvasBackgroundColor: state.canvasBackgroundColor,
+      setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+      snapEnabled: state.snapEnabled,
+      setSnapEnabled: state.setSnapEnabled,
+    }),
+    shallow
+  );
   const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -596,7 +632,7 @@ export const EditorShell: React.FC = () => {
                 {isFillOpen && (
                     <div
                         ref={fillPopoverRef}
-                        className="absolute left-1/2 top-full z-30 mt-3 w-40 -translate-x-1/2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 p-3 shadow-[0_16px_30px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]"
+                        className="absolute left-1/2 top-full z-30 mt-3 w-40 -translate-x-1/2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-3 shadow-[0_16px_30px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]"
                     >
                         <div className="flex items-center justify-between">
                             <span className="text-[10px] uppercase tracking-widest text-slate-300">Canvas</span>
@@ -650,7 +686,7 @@ export const EditorShell: React.FC = () => {
               <button
                 onClick={toggleShapes}
                 className={`group w-10 h-10 flex items-center justify-center rounded-2xl transition-all duration-300 ease-in-out ${
-                  isShapesOpen ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]' : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
+                  isShapesOpen ? 'bg-white/20 text-[color:var(--ui-panel-text)] shadow-[0_0_22px_rgba(248,249,250,0.5)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] hover:bg-white/10'
                 }`}
                 aria-label="Shapes"
                 title="Shapes"
@@ -662,7 +698,7 @@ export const EditorShell: React.FC = () => {
               <div className="flex-1" />
               <button
                 onClick={() => setIsBrandModalOpen(true)}
-                className="group w-10 h-10 flex items-center justify-center rounded-2xl text-[#F8F9FA] transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
+                className="group w-10 h-10 flex items-center justify-center rounded-2xl text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:text-[color:var(--ui-panel-text)] hover:bg-white/10"
                 aria-label="Brand Vault"
                 title="Brand Vault"
               >
@@ -676,9 +712,9 @@ export const EditorShell: React.FC = () => {
             )}
             {activeNav && (
               <div className="absolute left-full top-20 z-30 ml-3 w-[280px]">
-                <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)] overflow-hidden">
+                <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)] overflow-hidden">
                   <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
-                    <span className="text-[10px] uppercase tracking-widest text-[#F8F9FA]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
+                    <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
                   </div>
                   <div className="max-h-[75vh] overflow-y-auto">
                     {renderPanel()}
@@ -705,7 +741,15 @@ export const EditorShell: React.FC = () => {
 };
 
 const PropertiesPanel: React.FC = () => {
-  const { selectedObject, canvas, saveState, setLayers } = useEditorStore();
+  const { selectedObject, canvas, saveState, setLayers } = useEditorStore(
+    (state) => ({
+      selectedObject: state.selectedObject,
+      canvas: state.canvas,
+      saveState: state.saveState,
+      setLayers: state.setLayers,
+    }),
+    shallow
+  );
 
   const isText = selectedObject?.type === 'i-text' || selectedObject?.type === 'textbox';
   const isRect = selectedObject?.type === 'rect';

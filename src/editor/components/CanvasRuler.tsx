@@ -1,4 +1,5 @@
 import React from 'react';
+import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { PRINT_DPI, formatInches } from '../utils/units';
 
@@ -13,7 +14,16 @@ const TICK_COLOR = 'var(--ui-ruler-tick)';
 const FACE_COLOR = 'var(--ui-ruler-face)';
 
 const RulerAxis: React.FC<RulerAxisProps> = ({ orientation }) => {
-  const { zoom, vpt, unitMode, canvasOffset, canvas } = useEditorStore();
+  const { zoom, vpt, unitMode, canvasOffset, canvas } = useEditorStore(
+    (state) => ({
+      zoom: state.zoom,
+      vpt: state.vpt,
+      unitMode: state.unitMode,
+      canvasOffset: state.canvasOffset,
+      canvas: state.canvas,
+    }),
+    shallow
+  );
   const ref = React.useRef<SVGSVGElement>(null);
   const [size, setSize] = React.useState({ width: 0, height: 0 });
 

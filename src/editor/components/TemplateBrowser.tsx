@@ -1,7 +1,10 @@
 
 import React from 'react';
+import { shallow } from 'zustand/shallow';
 import { useEditorStore, Template } from '../state/editorStore';
+import { resizeCanvas } from '../fabric/canvasUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
+import { PRINT_DPI } from '../utils/units';
 
 type TemplateThumbnailProps = {
     name: string;
@@ -137,8 +140,51 @@ const DynamicSvgThumbnail: React.FC<TemplateThumbnailProps> = ({ name, themeData
     );
 };
 
+type BlankPreset = {
+    name: string;
+    description: string;
+    unit: 'in' | 'px';
+    width: number;
+    height: number;
+    dpi: number;
+};
+
+const blankPresets: BlankPreset[] = [
+    { name: 'US Letter', description: '8.5" × 11" @ 300 DPI', unit: 'in', width: 8.5, height: 11, dpi: PRINT_DPI },
+    { name: 'A4', description: '8.27" × 11.69" @ 300 DPI', unit: 'in', width: 8.27, height: 11.69, dpi: PRINT_DPI },
+    { name: 'Ritual Card', description: '5" × 7" @ 300 DPI', unit: 'in', width: 5, height: 7, dpi: PRINT_DPI },
+    { name: 'Instagram Square', description: '1080 × 1080 px', unit: 'px', width: 1080, height: 1080, dpi: 96 },
+    { name: 'Instagram Story', description: '1080 × 1920 px', unit: 'px', width: 1080, height: 1920, dpi: 96 },
+    { name: 'Desktop Wallpaper', description: '1920 × 1080 px', unit: 'px', width: 1920, height: 1080, dpi: 96 },
+];
+
 export const TemplateBrowser: React.FC = () => {
-    const { templates, userTemplates, loadTemplate, setToastMessage, saveCurrentAsTemplate, themeData } = useEditorStore();
+    const {
+        templates,
+        userTemplates,
+        loadTemplate,
+        setToastMessage,
+        saveCurrentAsTemplate,
+        themeData,
+        canvas,
+        setLayers,
+        setUnitMode,
+        setCanvasBackgroundColor,
+    } = useEditorStore(
+        (state) => ({
+            templates: state.templates,
+            userTemplates: state.userTemplates,
+            loadTemplate: state.loadTemplate,
+            setToastMessage: state.setToastMessage,
+            saveCurrentAsTemplate: state.saveCurrentAsTemplate,
+            themeData: state.themeData,
+            canvas: state.canvas,
+            setLayers: state.setLayers,
+            setUnitMode: state.setUnitMode,
+            setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+        }),
+        shallow
+    );
 
     // Placeholder templates (Witchy vibe)
     const predefinedTemplates: Template[] = [
@@ -339,19 +385,63 @@ export const TemplateBrowser: React.FC = () => {
         }
     };
 
+    const handleBlankPreset = (preset: BlankPreset) => {
+        if (!canvas) return;
+        const hasContent = canvas.getObjects().some((obj) => !(obj as any).isGuide);
+        if (hasContent) {
+            const proceed = window.confirm(
+                'Starting a new blank canvas will clear your current design. Continue?'
+            );
+            if (!proceed) {
+                setToastMessage('Blank canvas cancelled.');
+                return;
+            }
+        }
+
+        canvas.discardActiveObject();
+        canvas.clear();
+        setLayers([]);
+        setUnitMode(preset.unit);
+
+        const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
+        const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
+        canvas.backgroundColor = '#ffffff';
+        canvas.requestRenderAll();
+        setCanvasBackgroundColor('#ffffff');
+        resizeCanvas(widthPx, heightPx);
+        setToastMessage(`Blank canvas: ${preset.name}`);
+    };
+
     return (
-        <div className="py-4 space-y-6">
+        <div className="py-4 space-y-6 text-[color:var(--ui-panel-text)]">
+            <div className="px-4">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+                    <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Blank Canvas</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                        {blankPresets.map((preset) => (
+                            <button
+                                key={`${preset.name}-${preset.width}-${preset.height}`}
+                                onClick={() => handleBlankPreset(preset)}
+                                className="w-full text-left px-3 py-2 rounded-xl border border-transparent bg-white/5 hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
+                            >
+                                <span className="block text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{preset.name}</span>
+                                <span className="block text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{preset.description}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
             <div className="px-4">
                 <button
                     onClick={() => saveCurrentAsTemplate()}
-                    className="w-full mb-4 text-left px-4 py-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest text-slate-200"
+                    className="w-full mb-4 text-left px-4 py-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]"
                 >
                     Save as Template
                 </button>
             </div>
             {userTemplates.length > 0 && (
                 <div className="px-4">
-                    <h3 className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Your Templates</h3>
+                    <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Your Templates</h3>
                     <div className="grid grid-cols-2 gap-2">
                         {userTemplates.map((template) => {
                             const thumbnailSrc =
@@ -376,14 +466,14 @@ export const TemplateBrowser: React.FC = () => {
                                         <DynamicSvgThumbnail name={template.name} themeData={themeData} />
                                     )}
                                 </div>
-                                <span className="text-xs uppercase tracking-widest text-slate-300">{template.name}</span>
+                                <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{template.name}</span>
                             </button>
                         )})}
                     </div>
                 </div>
             )}
             <div className="px-4">
-                <h3 className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Community Templates</h3>
+                <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Community Templates</h3>
                 <div className="grid grid-cols-2 gap-2">
                     {templates.map((template) => {
                         const thumbnailSrc =
@@ -408,7 +498,7 @@ export const TemplateBrowser: React.FC = () => {
                                     <DynamicSvgThumbnail name={template.name} themeData={themeData} />
                                 )}
                             </div>
-                            <span className="text-xs uppercase tracking-widest text-slate-300">{template.name}</span>
+                            <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{template.name}</span>
                             {/* Optionally show theme info or description */}
                             {/* <p className="text-[10px] uppercase tracking-widest text-slate-500">{template.defaultThemeId}</p> */}
                         </button>

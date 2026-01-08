@@ -3,6 +3,11 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --ui-panel-text: var(--ui-text);
+  --ui-panel-opaque: var(--ui-panel);
+}
+
 .icon-muted {
   color: var(--muted-icon);
   transition: color 300ms ease-in-out;
