@@ -1,18 +1,13 @@
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { LayoutTemplate, Square, Upload } from 'lucide-react';
-import { hydrateCanvasDataWithAssets, sanityCheckCanvas, useEditorStore } from '../state/editorStore';
+import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
 import { initSmartGuides } from '../fabric/smartGuides';
-import {
-  clearPersistentGuides,
-  ensureObjectId,
-  initFabricSerialization,
-  reviveCustomFabricProps,
-  drawPersistentGuides,
-} from '../fabric/initFabricCanvas';
+import { ensureObjectId, initFabricSerialization } from '../fabric/initFabricCanvas';
+import { updateGuides } from '../fabric/canvasUtils';
 import { useUiThemeStore } from '../state/uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import * as objectFactories from '../fabric/objectFactories';
@@ -22,7 +17,7 @@ initFabricSerialization();
 type CanvasNavKey = 'design' | 'blueprints' | 'stickers' | 'text' | 'uploads';
 type CanvasObjectEvent = { target?: fabric.Object };
 
-const AUTOSAVE_STORAGE_KEY = 'witchclick_current_design';
+
 
 type CanvasStageProps = {
   onSelectNav?: (nav: CanvasNavKey) => void;
@@ -36,12 +31,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     canvas: fabricCanvas, 
     setCanvas, 
     setSelectedObject, 
-    setLayers, 
     saveState, 
-    setSelectedLayerId, 
+    setLayers,
+    setSelectedLayerIds, 
     themeData,
     bleedPx,
     layers,
+    layersById,
     activeTool,
     brushColor,
     brushSize,
@@ -50,21 +46,25 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     setZoom,
     setCanvasOffset,
     snapEnabled,
+    gridEnabled,
     addImageAsset,
-    addLayer,
-    updateLayer,
-    removeLayer
+    showOnboarding,
+    setShowOnboarding,
+    setLayerSyncHandler,
+    showGuides,
+    markHistoryDirty,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       setCanvas: state.setCanvas,
       setSelectedObject: state.setSelectedObject,
-      setLayers: state.setLayers,
       saveState: state.saveState,
-      setSelectedLayerId: state.setSelectedLayerId,
+      setLayers: state.setLayers,
+      setSelectedLayerIds: state.setSelectedLayerIds,
       themeData: state.themeData,
       bleedPx: state.bleedPx,
       layers: state.layers,
+      layersById: state.layersById,
       activeTool: state.activeTool,
       brushColor: state.brushColor,
       brushSize: state.brushSize,
@@ -73,10 +73,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       setZoom: state.setZoom,
       setCanvasOffset: state.setCanvasOffset,
       snapEnabled: state.snapEnabled,
+      gridEnabled: state.gridEnabled,
       addImageAsset: state.addImageAsset,
-      addLayer: state.addLayer,
-      updateLayer: state.updateLayer,
-      removeLayer: state.removeLayer,
+      showOnboarding: state.showOnboarding,
+      setShowOnboarding: state.setShowOnboarding,
+      setLayerSyncHandler: state.setLayerSyncHandler,
+      showGuides: state.showGuides,
+      markHistoryDirty: state.markHistoryDirty,
     }),
     shallow
   );
@@ -94,10 +97,129 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   } | null>(null);
   const viewportRafRef = useRef<number | null>(null);
   const canvasOffsetRafRef = useRef<number | null>(null);
+  const layerSyncRafRef = useRef<number | null>(null);
   const cleanupPromiseRef = useRef<Promise<void> | null>(null);
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
   const snapEnabledRef = useRef(snapEnabled);
+  const rerenderAttemptsRef = useRef(0);
+  const viewportRecoveryAttemptsRef = useRef(0);
+  const [isOverlayDismissed, setIsOverlayDismissed] = useState(false);
+
+  const scheduleLayerSync = (targetCanvas?: fabric.Canvas | null) => {
+    const nextCanvas = targetCanvas ?? fabricCanvas;
+    if (!nextCanvas) return;
+    if (layerSyncRafRef.current !== null) return;
+    layerSyncRafRef.current = requestAnimationFrame(() => {
+      layerSyncRafRef.current = null;
+      setLayers(nextCanvas.getObjects());
+    });
+  };
+
+  const getViewportBounds = useCallback((canvas: fabric.Canvas) => {
+    const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+    const zoom = canvas.getZoom() || 1;
+    const viewWidth = canvas.getWidth() / zoom;
+    const viewHeight = canvas.getHeight() / zoom;
+    const left = -vpt[4] / zoom;
+    const top = -vpt[5] / zoom;
+    return {
+      left,
+      top,
+      right: left + viewWidth,
+      bottom: top + viewHeight,
+    };
+  }, []);
+
+  const getObjectsBounds = useCallback((objects: fabric.Object[]) => {
+    if (objects.length === 0) return null;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    objects.forEach((obj) => {
+      const rect = obj.getBoundingRect();
+      minX = Math.min(minX, rect.left);
+      minY = Math.min(minY, rect.top);
+      maxX = Math.max(maxX, rect.left + rect.width);
+      maxY = Math.max(maxY, rect.top + rect.height);
+    });
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+    return {
+      left: minX,
+      top: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+  }, []);
+
+  const focusObjectsInView = useCallback(
+    (canvas: fabric.Canvas, objects: fabric.Object[]) => {
+      const bounds = getObjectsBounds(objects);
+      if (!bounds) return;
+      const padding = 40;
+      const width = canvas.getWidth();
+      const height = canvas.getHeight();
+      if (!width || !height) return;
+      const zoomX = width / (bounds.width + padding * 2);
+      const zoomY = height / (bounds.height + padding * 2);
+      const nextZoom = Math.min(1, zoomX, zoomY);
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+      vpt[0] = nextZoom;
+      vpt[3] = nextZoom;
+      vpt[4] = width / 2 - centerX * nextZoom;
+      vpt[5] = height / 2 - centerY * nextZoom;
+      canvas.setViewportTransform(vpt);
+      canvas.requestRenderAll();
+      setZoom(nextZoom);
+      setVpt([...vpt]);
+    },
+    [getObjectsBounds, setVpt, setZoom]
+  );
+
+  const areObjectsInView = useCallback((canvas: fabric.Canvas, objects: fabric.Object[]) => {
+    if (objects.length === 0) return true;
+    const viewport = getViewportBounds(canvas);
+    return objects.some((obj) => {
+      const rect = obj.getBoundingRect();
+      return !(
+        rect.left + rect.width < viewport.left
+        || rect.left > viewport.right
+        || rect.top + rect.height < viewport.top
+        || rect.top > viewport.bottom
+      );
+    });
+  }, [getViewportBounds]);
+
+  const forceRerenderCanvas = useCallback(() => {
+    if (!fabricCanvas) return;
+    const orderedObjects = layers
+      .map((layer) => layersById[layer.id])
+      .filter((obj): obj is fabric.Object => !!obj);
+    const background = fabricCanvas.backgroundColor;
+    const backgroundImage = fabricCanvas.backgroundImage;
+    fabricCanvas.discardActiveObject();
+    fabricCanvas.clear();
+    if (background !== undefined) {
+      fabricCanvas.backgroundColor = background;
+    }
+    if (backgroundImage) {
+      fabricCanvas.backgroundImage = backgroundImage;
+    }
+    orderedObjects.forEach((obj) => {
+      fabricCanvas.add(obj);
+      obj.setCoords();
+    });
+    updateGuides(fabricCanvas, showGuides);
+    fabricCanvas.calcOffset();
+    fabricCanvas.requestRenderAll();
+    if (!areObjectsInView(fabricCanvas, orderedObjects)) {
+      focusObjectsInView(fabricCanvas, orderedObjects);
+    }
+    scheduleLayerSync(fabricCanvas);
+  }, [areObjectsInView, fabricCanvas, layers, layersById, showGuides, focusObjectsInView]);
 
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -106,6 +228,69 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   useEffect(() => {
     snapEnabledRef.current = snapEnabled;
   }, [snapEnabled]);
+
+  useEffect(() => {
+    setLayerSyncHandler(() => scheduleLayerSync(fabricCanvas));
+    return () => {
+      setLayerSyncHandler(null);
+    };
+  }, [fabricCanvas, setLayerSyncHandler]);
+
+  useEffect(() => {
+    const win = window as unknown as { __forceCanvasRerender?: () => void };
+    win.__forceCanvasRerender = forceRerenderCanvas;
+    return () => {
+      if (win.__forceCanvasRerender === forceRerenderCanvas) {
+        delete win.__forceCanvasRerender;
+      }
+    };
+  }, [forceRerenderCanvas]);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    const hasLayers = layers.length > 0;
+    if (!hasLayers) {
+      rerenderAttemptsRef.current = 0;
+      viewportRecoveryAttemptsRef.current = 0;
+      return;
+    }
+    const hasRenderableObjects = fabricCanvas
+      .getObjects()
+      .some((obj) => !(obj as any).isGuide);
+    if (!hasRenderableObjects) {
+      if (rerenderAttemptsRef.current < 2) {
+        rerenderAttemptsRef.current += 1;
+        forceRerenderCanvas();
+      }
+      return;
+    }
+    rerenderAttemptsRef.current = 0;
+  }, [fabricCanvas, layers, forceRerenderCanvas]);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    const objects = fabricCanvas
+      .getObjects()
+      .filter((obj) => !(obj as any).isGuide);
+    if (objects.length === 0) {
+      viewportRecoveryAttemptsRef.current = 0;
+      return;
+    }
+    if (!areObjectsInView(fabricCanvas, objects)) {
+      if (viewportRecoveryAttemptsRef.current < 2) {
+        viewportRecoveryAttemptsRef.current += 1;
+        focusObjectsInView(fabricCanvas, objects);
+      }
+      return;
+    }
+    viewportRecoveryAttemptsRef.current = 0;
+  }, [areObjectsInView, fabricCanvas, layers, focusObjectsInView]);
+
+  useEffect(() => {
+    if (layers.length > 0) {
+      setShowOnboarding(false);
+    }
+  }, [layers, setShowOnboarding]);
 
   const resolveThemeValue = (theme: ApocapaletteTheme | null, path: string): string | null => {
     if (!theme) return null;
@@ -127,16 +312,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     return promise;
   };
 
-  const waitForCanvasContext = async (canvas: fabric.Canvas) => {
-    const canvasAny = canvas as any;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const lowerReady = Boolean(canvas.lowerCanvasEl?.getContext?.('2d'));
-      const upperReady = Boolean(canvasAny.upperCanvasEl?.getContext?.('2d'));
-      if (lowerReady && upperReady) return true;
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    }
-    return false;
-  };
+  
 
   const syncViewportState = (canvas: fabric.Canvas) => {
     if (viewportRafRef.current !== null) return;
@@ -168,6 +344,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       }
       canvasOffsetRef.current = nextOffset;
       setCanvasOffset(nextOffset);
+      if (fabricCanvas) {
+        fabricCanvas.calcOffset();
+      }
     });
   };
 
@@ -237,59 +416,26 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         controlsAboveOverlay: true,
         stopContextMenu: true,
       });
+      canvas.calcOffset();
 
       setCanvas(canvas);
       syncCanvasOffset();
       syncViewportState(canvas);
-
-    const formatLayerName = (obj: fabric.Object) => {
-      const name = (obj as any).name;
-      if (name) return name;
-      const type = obj.type || 'object';
-      return type.replace(/-/g, ' ').split(' ').map((part) =>
-        part.charAt(0).toUpperCase() + part.slice(1)
-      ).join(' ');
-    };
-
-    const getLayerFromObject = (obj: fabric.Object) => {
-      if ((obj as any).isGuide) return null;
-      const id = (obj as any).id as string | undefined;
-      if (!id) return null;
-      return {
-        id,
-        name: formatLayerName(obj),
-        type: obj.type || 'object',
-        visible: obj.visible ?? true,
-        movementLocked: !!obj.lockMovementX,
-        colorLocked: !!(obj as any).colorLocked,
-      };
-    };
 
     const handleObjectEvent = (event?: CanvasObjectEvent) => {
       const target = event?.target as fabric.Object | undefined;
       if (!target || (target as any).isGuide) {
         return;
       }
-      const update = getLayerFromObject(target);
-      if (update) {
-        updateLayer(update.id, {
-          name: update.name,
-          type: update.type,
-          visible: update.visible,
-          movementLocked: update.movementLocked,
-          colorLocked: update.colorLocked,
-        });
-      }
-      saveState();
+      markHistoryDirty();
+      scheduleLayerSync(canvas);
     };
 
     const handleObjectRemoved = (event?: CanvasObjectEvent) => {
       const target = event?.target as fabric.Object | undefined;
       if (target && !(target as any).isGuide) {
-        const id = (target as any).id as string | undefined;
-        if (id) {
-          removeLayer(id);
-        }
+        markHistoryDirty();
+        scheduleLayerSync(canvas);
       }
       if (target?.type === 'image') {
         const id = (target as any).id as string | undefined;
@@ -302,20 +448,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
           }
         }
       }
-      saveState();
     };
 
-    const handleObjectMoving = (event: any) => {
-      if (!snapEnabledRef.current) return;
-      const target = event?.target as fabric.Object | undefined;
-      if (!target || (target as any).isGuide) return;
-      const gridSize = 10;
-      const left = target.left ?? 0;
-      const top = target.top ?? 0;
-      const snappedLeft = Math.round(left / gridSize) * gridSize;
-      const snappedTop = Math.round(top / gridSize) * gridSize;
-      target.set({ left: snappedLeft, top: snappedTop });
-    };
+
 
     const handleObjectScaling = (event: any) => {
       const target = event.target as fabric.Object | undefined;
@@ -345,48 +480,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       if (!target) return;
       if ((target as any).isGuide) return;
       ensureObjectId(target, canvas);
-      const layer = getLayerFromObject(target);
-      if (layer) {
-        addLayer(layer);
+      if (activeToolRef.current === 'draw' || activeToolRef.current === 'erase') {
+        markHistoryDirty();
       }
-      saveState();
+      scheduleLayerSync(canvas);
     };
 
-    const savedDesign = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
-    const loadSavedDesign = async () => {
-      if (!savedDesign) {
-        drawPersistentGuides(canvas, useEditorStore.getState().themeData, useEditorStore.getState().bleedPx);
-        setLayers(canvas.getObjects());
-        return;
-      }
-      try {
-        const ready = await waitForCanvasContext(canvas);
-        if (!ready || isEffectCancelled) return;
-        const parsedDesign = JSON.parse(savedDesign);
-        const hydratedDesign = hydrateCanvasDataWithAssets(
-          parsedDesign,
-          useEditorStore.getState().imageAssets
-        );
-        await trackPromise(canvas.loadFromJSON(hydratedDesign, reviveCustomFabricProps));
-        if (isEffectCancelled) return;
-        sanityCheckCanvas(canvas, useEditorStore.getState().themeData);
-        drawPersistentGuides(
-          canvas,
-          useEditorStore.getState().themeData,
-          useEditorStore.getState().bleedPx
-        );
-        canvas.requestRenderAll();
-        setLayers(canvas.getObjects());
-      } catch (error) {
-        if (isEffectCancelled) return;
-        const message = error instanceof Error ? error.message.toLowerCase() : '';
-        if (message.includes('aborted')) return;
-      }
-    };
+    updateGuides(canvas, useEditorStore.getState().showGuides);
+    scheduleLayerSync(canvas);
 
-    void loadSavedDesign();
-
-    const cleanupSmartGuides = initSmartGuides(canvas);
+    const cleanupSmartGuides = initSmartGuides(canvas, {
+      snapEnabled,
+      gridEnabled,
+    });
 
     const handleAfterRender = () => {
       syncViewportState(canvas);
@@ -412,7 +518,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     canvas.on('object:removed', handleObjectRemoved);
     canvas.on('object:modified', handleObjectEvent);
     canvas.on('object:scaling', handleObjectScaling);
-    canvas.on('object:moving', handleObjectMoving);
+
     canvas.on('after:render', handleAfterRender);
     canvas.on('mouse:wheel', handleMouseWheel);
 
@@ -484,16 +590,29 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const handleSelection = () => {
       const activeObject = canvas.getActiveObject();
       setSelectedObject(activeObject ?? null);
-      if (activeObject && activeObject.type !== 'activeSelection') {
-        setSelectedLayerId((activeObject as any).id);
+      if (!activeObject) {
+        setSelectedLayerIds([]);
+        return;
+      }
+      if (activeObject.type === 'activeSelection') {
+        const ids = (activeObject as fabric.ActiveSelection)
+          .getObjects()
+          .map((obj) => (obj as any).id)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+        setSelectedLayerIds(ids);
+        return;
+      }
+      const id = (activeObject as any).id;
+      if (typeof id === 'string' && id.trim().length > 0) {
+        setSelectedLayerIds([id]);
       } else {
-        setSelectedLayerId(null);
+        setSelectedLayerIds([]);
       }
     };
 
     const handleSelectionCleared = () => {
       setSelectedObject(null);
-      setSelectedLayerId(null);
+      setSelectedLayerIds([]);
     };
 
     canvas.on('selection:created', handleSelection);
@@ -503,7 +622,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const handleResize = () => {
       const { width, height } = container.getBoundingClientRect();
       canvas.setDimensions({ width, height });
-      drawPersistentGuides(canvas, useEditorStore.getState().themeData, useEditorStore.getState().bleedPx);
+      canvas.calcOffset();
+      updateGuides(canvas, useEditorStore.getState().showGuides);
       syncCanvasOffset();
     };
 
@@ -518,7 +638,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
           if (message.includes('aborted')) return;
         });
       });
-      clearPersistentGuides(canvas);
+      updateGuides(canvas, false);
       cleanupSmartGuides();
       window.removeEventListener('keydown', handleGlobalKeyDown);
       window.removeEventListener('keyup', handleGlobalKeyUp);
@@ -532,11 +652,15 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         cancelAnimationFrame(canvasOffsetRafRef.current);
         canvasOffsetRafRef.current = null;
       }
+      if (layerSyncRafRef.current !== null) {
+        cancelAnimationFrame(layerSyncRafRef.current);
+        layerSyncRafRef.current = null;
+      }
       canvas.off('object:added', handleObjectAdded);
       canvas.off('object:removed', handleObjectRemoved);
       canvas.off('object:modified', handleObjectEvent);
       canvas.off('object:scaling', handleObjectScaling);
-      canvas.off('object:moving', handleObjectMoving);
+
       canvas.off('after:render', handleAfterRender);
       canvas.off('mouse:wheel', handleMouseWheel);
       canvas.off('mouse:down', onMouseDown);
@@ -595,9 +719,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       || uiVars['--ui-panel']
       || '#f8fafc';
     fabricCanvas.backgroundColor = paperColor;
-    drawPersistentGuides(fabricCanvas, themeData, bleedPx);
+    updateGuides(fabricCanvas, showGuides);
     fabricCanvas.requestRenderAll();
-  }, [fabricCanvas, themeData, bleedPx, uiVars, canvasBackgroundColor]);
+  }, [fabricCanvas, themeData, bleedPx, uiVars, canvasBackgroundColor, showGuides]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -628,25 +752,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     (fabricCanvas as any).snapToGrid = snapEnabled;
   }, [fabricCanvas, snapEnabled]);
 
-  useEffect(() => {
-    if (!fabricCanvas) return;
-    const handleAutoSave = (event?: CanvasObjectEvent) => {
-      if (event?.target && (event.target as any).isGuide) return;
-      try {
-        localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(fabricCanvas.toJSON()));
-      } catch {
-        // ignore storage failures
-      }
-    };
-
-    fabricCanvas.on('object:added', handleAutoSave);
-    fabricCanvas.on('object:modified', handleAutoSave);
-
-    return () => {
-      fabricCanvas.off('object:added', handleAutoSave);
-      fabricCanvas.off('object:modified', handleAutoSave);
-    };
-  }, [fabricCanvas]);
+  
 
   const clearPlaceholderHighlight = () => {
     const current = placeholderHighlightRef.current;
@@ -796,6 +902,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    setShowOnboarding(false);
     const imageUrl = e.dataTransfer.getData('text/plain');
     const isSticker = e.dataTransfer.getData('isSticker') === 'true';
 
@@ -900,9 +1007,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       });
   };
 
-  const isCanvasEmpty = layers.length === 0;
-
   const handleHearthUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setShowOnboarding(false);
     const file = e.target.files?.[0];
     if (file && fabricCanvas) {
       const objectURL = URL.createObjectURL(file);
@@ -933,13 +1039,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
 
   const handleAddShape = () => {
     if (!fabricCanvas) return;
+    setShowOnboarding(false);
     objectFactories.addRectangle(fabricCanvas);
     sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
     saveState();
   };
 
+  const handleDismissOverlay = () => {
+    if (!isOverlayDismissed) {
+      setShowOnboarding(false);
+      setIsOverlayDismissed(true);
+    }
+  };
+
   return (
-    <div className="workspace relative w-full h-full bg-[color:var(--ui-bg)] flex items-center justify-center">
+    <div 
+      className="workspace relative w-full h-full bg-[color:var(--ui-bg)] flex items-center justify-center"
+      onClick={handleDismissOverlay}
+    >
       <div
         ref={containerRef}
         className="w-full h-full flex items-center justify-center"
@@ -948,7 +1065,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         onDragLeave={handleDragLeave}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <canvas ref={canvasRef} className="bg-white shadow-[0_25px_70px_rgba(0,0,0,0.45)] rounded-[18px]" />
+        <canvas id="design-canvas" ref={canvasRef} className="bg-white shadow-[0_25px_70px_rgba(0,0,0,0.45)] rounded-[18px]" />
       </div>
       <input
         ref={uploadInputRef}
@@ -957,7 +1074,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         onChange={handleHearthUpload}
         className="hidden"
       />
-      {isCanvasEmpty && (
+      {showOnboarding && !isOverlayDismissed && (
         <div className="hearth absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto flex flex-col items-center gap-5 rounded-3xl border border-black/15 bg-white/90 px-10 py-8 text-center backdrop-blur-[var(--ui-blur)] shadow-[0_22px_60px_rgba(0,0,0,0.35)]">
             <div className="flex flex-col items-center gap-2">
@@ -973,7 +1090,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
                 New Template
               </button>
               <button
-                onClick={() => uploadInputRef.current?.click()}
+                onClick={() => {
+                  uploadInputRef.current?.click();
+                }}
                 className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
               >
                 <Upload className="w-6 h-6 stroke-[1.5]" />

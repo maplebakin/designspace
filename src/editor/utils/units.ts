@@ -3,6 +3,8 @@ export const SAFE_MARGIN_PX = 24;
 
 export const pxToIn = (px: number, dpi: number = PRINT_DPI) => px / dpi;
 
+export const inToPx = (inches: number, dpi: number = PRINT_DPI) => inches * dpi;
+
 export const safeMarginInches = (dpi: number = PRINT_DPI) => pxToIn(SAFE_MARGIN_PX, dpi);
 
 export const canvasDimensionsInInches = (

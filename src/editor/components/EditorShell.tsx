@@ -19,6 +19,7 @@ import {
   Hand,
   PaintBucket,
   Magnet,
+  Grid,
   Pilcrow,
   SlidersHorizontal,
   Square,
@@ -45,6 +46,7 @@ import { loadPdfAsBackground } from '../fabric/pdfUtils';
 import { SettingsModal } from './SettingsModal';
 import { ProjectPresetsModal } from './ProjectPresetsModal';
 import { v4 as uuidv4 } from 'uuid';
+import { Popover } from './Popover';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
@@ -206,7 +208,7 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   return (
-    <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-3 text-[color:var(--ui-panel-text)] shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]">
+    <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-4 text-[color:var(--ui-panel-text)] shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)] min-w-[160px] w-fit z-50">
       <h3 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Shapes</h3>
       <div className="grid grid-cols-2 gap-2">
         <button
@@ -214,28 +216,28 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Square className={ICON_SMALL} />
-          Rectangle
+          <span className="shrink-0 whitespace-nowrap">Rectangle</span>
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addCircle)}
           className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Circle className={ICON_SMALL} />
-          Circle
+          <span className="shrink-0 whitespace-nowrap">Circle</span>
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addTriangle)}
           className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Triangle className={ICON_SMALL} />
-          Triangle
+          <span className="shrink-0 whitespace-nowrap">Triangle</span>
         </button>
         <button
           onClick={() => handleAddShape(objectFactories.addStar)}
           className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
         >
           <Star className={ICON_SMALL} />
-          Star
+          <span className="shrink-0 whitespace-nowrap">Star</span>
         </button>
       </div>
     </div>
@@ -358,30 +360,31 @@ const UploadsPanel: React.FC = () => {
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
+    if (file && canvas) { // Add canvas check here for early exit
+      const objectURL = URL.createObjectURL(file);
       const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
-      reader.onload = (f: ProgressEvent<FileReader>) => {
-        const data = f.target?.result as string;
-        if (file.type === 'image/png') {
-          addAssetToLibrary({
-            id: uuidv4(),
-            url: data,
-            label: baseName,
-            format: 'png',
-            tags: [baseName.toLowerCase(), 'upload'],
-          });
-        }
-        if (canvas) {
-          fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
-            canvas.add(img);
-            canvas.centerObject(img);
-            canvas.requestRenderAll();
-            saveState();
-          });
-        }
-      };
-      reader.readAsDataURL(file);
+      const format = file.type === 'image/png' ? 'png' : (file.type === 'image/jpeg' ? 'jpeg' : undefined);
+
+      // Add asset to library with blob URL
+      addAssetToLibrary({
+        id: uuidv4(),
+        url: objectURL, // Store blob URL
+        label: baseName,
+        format: format, // Use derived format
+        tags: [baseName.toLowerCase(), 'upload'],
+      });
+
+      // Load image onto canvas with blob URL
+      fabric.Image.fromURL(objectURL, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
+        canvas.add(img);
+        canvas.centerObject(img);
+        canvas.requestRenderAll();
+        saveState();
+        // The objectURL will be managed by imageAssets and revoked when the asset is removed.
+      }).catch((error) => {
+        console.error("Error loading image:", error);
+        URL.revokeObjectURL(objectURL); // Revoke if loading fails
+      });
     }
     if (imageInputRef.current) imageInputRef.current.value = '';
   };
@@ -451,6 +454,7 @@ export const EditorShell: React.FC = () => {
     setToastMessage,
     canvas,
     saveState,
+    consumeHistoryDirty,
     activeTool,
     setActiveTool,
     setBrushColor,
@@ -459,12 +463,15 @@ export const EditorShell: React.FC = () => {
     setCanvasBackgroundColor,
     snapEnabled,
     setSnapEnabled,
+    gridEnabled,
+    setGridEnabled,
   } = useEditorStore(
     (state) => ({
       toastMessage: state.toastMessage,
       setToastMessage: state.setToastMessage,
       canvas: state.canvas,
       saveState: state.saveState,
+      consumeHistoryDirty: state.consumeHistoryDirty,
       activeTool: state.activeTool,
       setActiveTool: state.setActiveTool,
       setBrushColor: state.setBrushColor,
@@ -473,6 +480,8 @@ export const EditorShell: React.FC = () => {
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
       snapEnabled: state.snapEnabled,
       setSnapEnabled: state.setSnapEnabled,
+      gridEnabled: state.gridEnabled,
+      setGridEnabled: state.setGridEnabled,
     }),
     shallow
   );
@@ -482,8 +491,7 @@ export const EditorShell: React.FC = () => {
   const [exportFormat, setExportFormat] = useState<'jpeg' | 'png'>('png');
   const [activeNav, setActiveNav] = useState<NavId | null>(null);
   const [isShapesOpen, setIsShapesOpen] = useState(false);
-  const [isFillOpen, setIsFillOpen] = useState(false);
-  const fillPopoverRef = useRef<HTMLDivElement>(null);
+  const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
 
   const openExportModal = (format: 'jpeg' | 'png') => {
       setExportFormat(format);
@@ -497,16 +505,21 @@ export const EditorShell: React.FC = () => {
   }, [toastMessage, setToastMessage]);
 
   useEffect(() => {
-    if (!isFillOpen) return;
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!fillPopoverRef.current || fillPopoverRef.current.contains(event.target as Node)) return;
-      setIsFillOpen(false);
+    if (activeTool !== 'draw' && activeTool !== 'pan' && activeTool !== 'select') {
+      setIsFillPopoverOpen(false);
+    }
+  }, [activeTool]);
+
+  useEffect(() => {
+    const handleMouseUp = () => {
+      if (!canvas) return;
+      if (consumeHistoryDirty()) {
+        saveState();
+      }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isFillOpen]);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [canvas, consumeHistoryDirty, saveState]);
 
   const handleSelectNav = (id: NavId) => {
     setIsShapesOpen(false);
@@ -604,6 +617,18 @@ export const EditorShell: React.FC = () => {
                 >
                     <Magnet className="w-4 h-4 stroke-[1.5]" />
                 </button>
+                <button
+                    onClick={() => setGridEnabled(!gridEnabled)}
+                    className={`rounded-full p-2 transition-all duration-300 ease-in-out ${
+                      gridEnabled
+                        ? 'bg-[#F8F9FA]/25 text-[#F8F9FA] shadow-[0_0_22px_rgba(248,249,250,0.7)]'
+                        : 'text-[#F8F9FA] hover:text-white hover:bg-white/10'
+                    }`}
+                    aria-label="Toggle grid"
+                    title="Toggle grid"
+                >
+                    <Grid className="w-4 h-4 stroke-[1.5]" />
+                </button>
             </div>
             <div className="relative flex items-center gap-4 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-4 py-2">
                 <button
@@ -621,17 +646,20 @@ export const EditorShell: React.FC = () => {
                 >
                     <Pencil className="w-4 h-4 stroke-[1.5]" />
                 </button>
-                <button
-                    onClick={() => setIsFillOpen((prev) => !prev)}
-                    className="rounded-full p-2 text-[#F8F9FA] transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
-                    aria-label="Paint bucket"
-                    title="Canvas fill"
+                <Popover
+                  isOpen={isFillPopoverOpen}
+                  onOpenChange={setIsFillPopoverOpen}
+                  ariaLabel="Paint bucket"
+                  trigger={
+                    <button
+                        className="rounded-full p-2 text-[#F8F9FA] transition-all duration-300 ease-in-out hover:text-white hover:bg-white/10"
+                        title="Canvas fill"
+                    >
+                        <PaintBucket className="w-4 h-4 stroke-[1.5]" />
+                    </button>
+                  }
                 >
-                    <PaintBucket className="w-4 h-4 stroke-[1.5]" />
-                </button>
-                {isFillOpen && (
                     <div
-                        ref={fillPopoverRef}
                         className="absolute left-1/2 top-full z-30 mt-3 w-40 -translate-x-1/2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-3 shadow-[0_16px_30px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]"
                     >
                         <div className="flex items-center justify-between">
@@ -641,14 +669,14 @@ export const EditorShell: React.FC = () => {
                                 value={canvasBackgroundColor || '#ffffff'}
                                 onChange={(e) => {
                                   setCanvasBackgroundColor(e.target.value);
-                                  setIsFillOpen(false);
+                                  setIsFillPopoverOpen(false);
                                 }}
                                 className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
                                 aria-label="Canvas background color"
                             />
                         </div>
                     </div>
-                )}
+                </Popover>
             </div>
             <button
                 onClick={() => {
@@ -706,7 +734,7 @@ export const EditorShell: React.FC = () => {
               </button>
             </div>
             {isShapesOpen && (
-              <div className="absolute left-full top-4 z-30 ml-3">
+              <div className="absolute left-full top-4 z-50 ml-3">
                 <ShapesPopover onClose={() => setIsShapesOpen(false)} />
               </div>
             )}
@@ -741,12 +769,12 @@ export const EditorShell: React.FC = () => {
 };
 
 const PropertiesPanel: React.FC = () => {
-  const { selectedObject, canvas, saveState, setLayers } = useEditorStore(
+  const { selectedObject, canvas, saveState, requestLayerSync } = useEditorStore(
     (state) => ({
       selectedObject: state.selectedObject,
       canvas: state.canvas,
       saveState: state.saveState,
-      setLayers: state.setLayers,
+      requestLayerSync: state.requestLayerSync,
     }),
     shallow
   );
@@ -768,7 +796,7 @@ const PropertiesPanel: React.FC = () => {
     selectedObject.set(updates);
     selectedObject.setCoords();
     canvas.requestRenderAll();
-    setLayers(canvas.getObjects());
+    requestLayerSync();
     saveState();
   };
 
@@ -780,7 +808,7 @@ const PropertiesPanel: React.FC = () => {
     (rect as any).__baseRy = value * (rect.scaleY ?? 1);
     rect.setCoords();
     canvas.requestRenderAll();
-    setLayers(canvas.getObjects());
+    requestLayerSync();
     saveState();
   };
 

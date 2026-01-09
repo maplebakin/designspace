@@ -29,7 +29,7 @@ const resolveThemeValue = (obj: object, path: string): string | null => {
  * SKIPS any objects that are locked.
  */
 export const applyActiveThemeToCanvas = () => {
-    const { canvas, themeData, saveState, setLayers } = useEditorStore.getState();
+    const { canvas, themeData, saveState, requestLayerSync } = useEditorStore.getState();
 
     if (!canvas || !themeData) {
         return;
@@ -72,7 +72,7 @@ export const applyActiveThemeToCanvas = () => {
     if (objectsChanged) {
         canvas.requestRenderAll();
         saveState();
-        setLayers(canvas.getObjects());
+        requestLayerSync();
     }
 };
 

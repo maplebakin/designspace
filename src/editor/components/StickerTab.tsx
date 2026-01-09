@@ -20,13 +20,14 @@ const resolveTokenValue = (obj: object | null, path: string): string | null => {
     return typeof value === 'string' ? value : null;
 };
 
-const buildAssetFromFile = (file: File, dataUrl: string): StickerData => {
+const buildAssetFromFile = (file: File, objectUrl: string): StickerData => {
     const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
+    const format = file.type === 'image/png' ? 'png' : undefined; // Assuming only PNG for stickers
     return {
         id: uuidv4(),
-        url: dataUrl,
+        url: objectUrl,
         label: baseName,
-        format: 'png',
+        format: format,
         tags: [baseName.toLowerCase(), 'upload'],
     };
 };
@@ -65,12 +66,11 @@ export const StickerTab: React.FC = () => {
         const file = e.target.files?.[0];
         if (!file || file.type !== 'image/png') return;
 
-        const reader = new FileReader();
-        reader.onload = () => {
-            const dataUrl = reader.result as string;
-            addAssetToLibrary(buildAssetFromFile(file, dataUrl));
-        };
-        reader.readAsDataURL(file);
+        const objectURL = URL.createObjectURL(file);
+        addAssetToLibrary(buildAssetFromFile(file, objectURL));
+        // No explicit revoke here; assume removeAssetFromLibrary will handle it.
+        // If the asset is never added to canvas or removed from library, this URL will leak.
+        // For now, follow the pattern established in other components.
 
         if (uploadInputRef.current) uploadInputRef.current.value = '';
     };

@@ -26,7 +26,7 @@ const confirmClearMessage =
 export const CanvasSettingsPopover: React.FC = () => {
   const {
     canvas,
-    setLayers,
+    requestLayerSync,
     showGuides,
     toggleShowGuides,
     canvasBackgroundColor,
@@ -34,7 +34,7 @@ export const CanvasSettingsPopover: React.FC = () => {
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      setLayers: state.setLayers,
+      requestLayerSync: state.requestLayerSync,
       showGuides: state.showGuides,
       toggleShowGuides: state.toggleShowGuides,
       canvasBackgroundColor: state.canvasBackgroundColor,
@@ -77,7 +77,7 @@ export const CanvasSettingsPopover: React.FC = () => {
     canvas.discardActiveObject();
     canvas.clear();
 
-    setLayers([]);
+    requestLayerSync();
     resizeCanvas(preset.width, preset.height);
     updateSize();
     

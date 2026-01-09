@@ -26,7 +26,7 @@ export const ThemeSidebar: React.FC = () => {
 
         resetTheme,
 
-        selectedLayerId,
+        selectedLayerIds,
 
         selectedObject,
 
@@ -42,7 +42,7 @@ export const ThemeSidebar: React.FC = () => {
             activeBrandCollectionId: state.activeBrandCollectionId,
             applyTheme: state.applyTheme,
             resetTheme: state.resetTheme,
-            selectedLayerId: state.selectedLayerId,
+            selectedLayerIds: state.selectedLayerIds,
             selectedObject: state.selectedObject,
             themeData: state.themeData,
             setObjectThemedFill: state.setObjectThemedFill,
@@ -105,7 +105,7 @@ export const ThemeSidebar: React.FC = () => {
 
         <div className="p-4 space-y-6">
 
-            {selectedLayerId && themeData && (
+            {selectedLayerIds.length > 0 && themeData && (
 
                  <div>
 

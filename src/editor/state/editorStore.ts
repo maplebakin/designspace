@@ -12,6 +12,15 @@ import { toSerializableObject } from '../utils/serialization';
 import { historyService } from '../utils/historyService';
 import { useUiThemeStore } from './uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
+import { recordDiff, ObjectDiff, SerializedObject } from '../utils/diffSaver';
+
+type HistorySnapshot = {
+  type: 'full';
+  data: any;
+} | {
+  type: 'diff';
+  data: ObjectDiff;
+};
 
 // --- CONSTANTS ---
 
@@ -21,6 +30,8 @@ export interface Template {
   canvasData: string; // Stored as stringified JSON
   defaultThemeId: string;
   thumbnail?: string;
+  canvasSize?: { width: number; height: number };
+  unitMode?: 'px' | 'in' | 'cm' | 'mm';
 }
 
 // --- INTERFACES ---
@@ -37,7 +48,7 @@ export interface StickerData {
     id: string;
     url: string;
     tags: string[];
-    format?: 'svg' | 'png';
+    format?: 'svg' | 'png' | 'jpeg';
     svg?: string;
     label?: string;
 }
@@ -61,6 +72,8 @@ export type ProjectFilePayload = {
   assets?: Record<string, string>;
   activeTheme: ApocapaletteTheme | null;
   lastUpdated: string;
+  canvasSize?: { width: number; height: number };
+  unitMode?: 'px' | 'in' | 'cm' | 'mm';
 };
 
 // --- UTILITY FUNCTIONS ---
@@ -208,7 +221,8 @@ interface EditorState {
   canvas: fabric.Canvas | null;
   selectedObject: fabric.Object | null;
   layers: Layer[];
-  selectedLayerId: string | null;
+  layersById: Record<string, fabric.Object>;
+  selectedLayerIds: string[];
   showGuides: boolean;
   brandVault: BrandCollection[];
   activeBrandCollectionId: string | null;
@@ -224,6 +238,7 @@ interface EditorState {
   canvasBackgroundColor: string | null;
   canvasOffset: { x: number; y: number };
   snapEnabled: boolean;
+  gridEnabled: boolean;
   assets: StickerData[];
   templates: Template[];
   userTemplates: Template[];
@@ -233,6 +248,10 @@ interface EditorState {
   activeTool: EditorTool;
   brushSize: number;
   brushColor: string;
+  showOnboarding: boolean;
+  lastHistorySnapshot: any | null;
+  layerSyncHandler: (() => void) | null;
+  historyDirty: boolean;
 
   setCanvas: (canvas: fabric.Canvas | null) => void;
   setSelectedObject: (object: fabric.Object | null) => void;
@@ -240,7 +259,11 @@ interface EditorState {
   addLayer: (layer: Layer) => void;
   updateLayer: (id: string, partial: Partial<Layer>) => void;
   removeLayer: (id: string) => void;
-  setSelectedLayerId: (id: string | null) => void;
+  setSelectedLayerIds: (ids: string[]) => void;
+  setLayerSyncHandler: (handler: (() => void) | null) => void;
+  requestLayerSync: () => void;
+  markHistoryDirty: () => void;
+  consumeHistoryDirty: () => boolean;
   toggleShowGuides: () => void;
   saveState: (options?: { force?: boolean }) => void;
   setToastMessage: (message: string | null) => void;
@@ -250,6 +273,8 @@ interface EditorState {
   setVpt: (vpt: number[]) => void;
   setCanvasOffset: (offset: { x: number; y: number }) => void;
   setSnapEnabled: (enabled: boolean) => void;
+  setGridEnabled: (enabled: boolean) => void;
+  setShowOnboarding: (show: boolean) => void;
   resetViewCanvas: () => void;
   addAssetToLibrary: (asset: StickerData) => void;
   removeAssetFromLibrary: (id: string) => void;
@@ -280,8 +305,8 @@ interface EditorState {
   resetObjectToDefaultTheme: () => void;
   
   // Other actions from original file
-  undo: () => void;
-  redo: () => void;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
 }
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
@@ -291,7 +316,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         canvas: null,
         selectedObject: null,
         layers: [],
-        selectedLayerId: null,
+        layersById: {},
+        selectedLayerIds: [],
         showGuides: true,
         brandVault: [],
         activeBrandCollectionId: null,
@@ -307,6 +333,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         canvasBackgroundColor: null,
         canvasOffset: { x: 0, y: 0 },
         snapEnabled: true,
+        gridEnabled: false,
         assets: [],
         templates: [],
         userTemplates: [],
@@ -316,6 +343,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         activeTool: 'select',
         brushSize: 8,
         brushColor: '#111111',
+        showOnboarding: true,
+        lastHistorySnapshot: null,
+        layerSyncHandler: null,
+        historyDirty: false,
 
     setCanvas: (canvas) => {
         const currentBackground = get().canvasBackgroundColor;
@@ -323,47 +354,47 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             currentBackground ?? (canvas?.backgroundColor ? String(canvas.backgroundColor) : null);
         set({ canvas, canvasBackgroundColor: nextBackground });
         if (canvas) {
-            get().setLayers(canvas.getObjects());
+            get().requestLayerSync();
             if (get().themeData) {
                 applyActiveThemeToCanvas();
             }
         }
     },
     setSelectedObject: (object) => set({ selectedObject: object }),
-    setSelectedLayerId: (id) => set({ selectedLayerId: id }),
+    setSelectedLayerIds: (ids) => set({ selectedLayerIds: ids }),
     setLayers: (objects) => {
-        const newLayers = objects
-            .filter(obj => !(obj as any).isGuide)
-            .map((obj): Layer => buildLayerFromObject(obj));
-        set({ layers: newLayers });
-    },
-    addLayer: (layer) => {
-        if (!layer?.id) return;
-        set((state) => {
-            const index = state.layers.findIndex((item) => item.id === layer.id);
-            if (index >= 0) {
-                const nextLayers = [...state.layers];
-                nextLayers[index] = { ...nextLayers[index], ...layer };
-                return { layers: nextLayers };
-            }
-            return { layers: [...state.layers, layer] };
+        const nextLayers: Layer[] = [];
+        const nextById: Record<string, fabric.Object> = {};
+        objects.forEach((obj) => {
+            if ((obj as any).isGuide) return;
+            const layer = buildLayerFromObject(obj);
+            if (!layer.id) return;
+            nextLayers.push(layer);
+            nextById[layer.id] = obj;
         });
+        set({ layers: nextLayers, layersById: nextById });
     },
-    updateLayer: (id, partial) => {
-        if (!id) return;
-        set((state) => {
-            const index = state.layers.findIndex((item) => item.id === id);
-            if (index < 0) return state;
-            const nextLayers = [...state.layers];
-            nextLayers[index] = { ...nextLayers[index], ...partial };
-            return { layers: nextLayers };
-        });
+    addLayer: (_layer) => {
+        get().requestLayerSync();
     },
-    removeLayer: (id) => {
-        if (!id) return;
-        set((state) => ({
-            layers: state.layers.filter((layer) => layer.id !== id),
-        }));
+    updateLayer: (_id, _partial) => {
+        get().requestLayerSync();
+    },
+    removeLayer: (_id) => {
+        get().requestLayerSync();
+    },
+    setLayerSyncHandler: (handler) => set({ layerSyncHandler: handler }),
+    requestLayerSync: () => {
+        const handler = get().layerSyncHandler;
+        if (handler) handler();
+    },
+    markHistoryDirty: () => {
+        set({ historyDirty: true });
+    },
+    consumeHistoryDirty: () => {
+        if (!get().historyDirty) return false;
+        set({ historyDirty: false });
+        return true;
     },
     toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
     setToastMessage: (message) => set({ toastMessage: message }),
@@ -381,15 +412,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setVpt: (vpt) => set({ vpt }),
     setCanvasOffset: (offset) => set({ canvasOffset: offset }),
     setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+    setGridEnabled: (enabled) => set({ gridEnabled: enabled }),
+    setShowOnboarding: (show) => set({ showOnboarding: show }),
     resetViewCanvas: () => {
         const { canvas } = get();
-        if (canvas) {
-            const center = canvas.getCenter();
-            const nextVpt = [1, 0, 0, 1, center.left, center.top] as fabric.TMat2D;
-            canvas.setViewportTransform(nextVpt);
-            canvas.setZoom(1);
-            set({ zoom: 1, vpt: nextVpt });
-        }
+        if (!canvas) return;
+        const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
+        canvas.setZoom(1);
+        canvas.setViewportTransform(nextVpt);
+        canvas.requestRenderAll();
+        set({ zoom: 1, vpt: [...nextVpt] });
     },
     addAssetToLibrary: (asset) => {
         const normalized: StickerData = {
@@ -435,19 +467,35 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setBrushSize: (size) => set({ brushSize: size }),
     setBrushColor: (color) => set({ brushColor: color }),
     loadTemplate: (template) => {
-        const { canvas, setLayers, brandVault, applyTheme, setToastMessage } = get();
+        const { canvas, requestLayerSync, brandVault, applyTheme, setToastMessage, resetViewCanvas } = get();
         if (!canvas) return;
 
         canvas.clear();
         set({ canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null });
+
+        const nextWidth = template.canvasSize?.width;
+        const nextHeight = template.canvasSize?.height;
+        if (
+            typeof nextWidth === 'number'
+            && Number.isFinite(nextWidth)
+            && typeof nextHeight === 'number'
+            && Number.isFinite(nextHeight)
+        ) {
+            canvas.setWidth(Math.max(1, Math.round(nextWidth)));
+            canvas.setHeight(Math.max(1, Math.round(nextHeight)));
+        }
+        if (template.unitMode) {
+            set({ unitMode: template.unitMode });
+        }
+
         const themeToApply = template.defaultThemeId
             ? brandVault.find((brand) => brand.id === template.defaultThemeId)
             : null;
 
         canvas.loadFromJSON(template.canvasData, reviveCustomFabricProps).then(() => {
-            canvas.requestRenderAll();
+            resetViewCanvas();
             sanityCheckCanvas(canvas, themeToApply?.themeData ?? get().themeData);
-            setLayers(canvas.getObjects());
+            requestLayerSync();
             setToastMessage(`Template loaded: ${template.name}`);
 
             if (template.defaultThemeId) {
@@ -461,7 +509,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         });
     },
     saveCurrentAsTemplate: () => {
-        const { canvas, activeBrandCollectionId, userTemplates } = get();
+        const { canvas, activeBrandCollectionId, userTemplates, unitMode } = get();
         if (!canvas) return;
         const serializedObjects = canvas.getObjects().map(toSerializableObject);
         const json = {
@@ -475,17 +523,22 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvasData: JSON.stringify(json),
             defaultThemeId: activeBrandCollectionId || '',
             thumbnail,
+            canvasSize: {
+                width: Math.round(canvas.getWidth()),
+                height: Math.round(canvas.getHeight()),
+            },
+            unitMode,
         };
         const nextTemplates = [newTemplate, ...userTemplates];
         set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
     },
 
     startNewProject: () => {
-        const { canvas, brandVault, setLayers } = get();
+        const { canvas, brandVault, requestLayerSync } = get();
         if (canvas) {
             canvas.discardActiveObject();
             canvas.clear();
-            setLayers([]);
+            requestLayerSync();
         }
 
         historyService.reset();
@@ -502,6 +555,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: 'Untitled Project',
             isProjectPresetsOpen: true,
             canvasBackgroundColor: null,
+            lastHistorySnapshot: null,
         });
     },
 
@@ -513,7 +567,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             brandVault,
             projectName,
             setToastMessage,
-            imageAssets
+            imageAssets,
+            unitMode,
         } = get();
         if (!canvas) return;
 
@@ -540,6 +595,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             assets: nextAssets,
             activeTheme: fallbackTheme,
             lastUpdated: new Date().toISOString(),
+            canvasSize: {
+                width: Math.round(canvas.getWidth()),
+                height: Math.round(canvas.getHeight()),
+            },
+            unitMode,
         };
 
         const json = JSON.stringify(payload, null, 2);
@@ -556,7 +616,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     loadProjectFile: async (file) => {
-        const { canvas, setLayers, setToastMessage } = get();
+        const { canvas, requestLayerSync, setToastMessage, resetViewCanvas } = get();
         if (!canvas) return;
 
         try {
@@ -572,6 +632,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const activeTheme = raw.activeTheme && typeof raw.activeTheme === 'object'
                 ? (raw.activeTheme as ApocapaletteTheme)
                 : null;
+            const rawUnitMode = raw.unitMode;
+            if (rawUnitMode === 'px' || rawUnitMode === 'in' || rawUnitMode === 'cm' || rawUnitMode === 'mm') {
+                set({ unitMode: rawUnitMode });
+            }
 
             let canvasData = raw.canvasData;
             if (!canvasData) {
@@ -593,11 +657,22 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             canvas.discardActiveObject();
             canvas.clear();
+            const nextSize = raw.canvasSize;
+            if (
+                nextSize
+                && typeof nextSize.width === 'number'
+                && Number.isFinite(nextSize.width)
+                && typeof nextSize.height === 'number'
+                && Number.isFinite(nextSize.height)
+            ) {
+                canvas.setWidth(Math.max(1, Math.round(nextSize.width)));
+                canvas.setHeight(Math.max(1, Math.round(nextSize.height)));
+            }
             await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
-            canvas.requestRenderAll();
+            resetViewCanvas();
 
             sanityCheckCanvas(canvas, activeTheme);
-            setLayers(canvas.getObjects());
+            requestLayerSync();
             historyService.reset();
 
             set({
@@ -626,55 +701,191 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     
     saveState: debounce((options?: { force?: boolean }) => {
-        const { canvas, imageAssets } = get();
+        const { canvas, imageAssets, lastHistorySnapshot } = get();
         if (!canvas) return;
-        const serializedObjects = canvas.getObjects().map(toSerializableObject);
-        const baseCanvasData = {
-            objects: serializedObjects,
-            background: canvas.backgroundColor || undefined,
-        };
-        const { canvasData, imageAssets: nextAssets } = prepareCanvasDataForPersistence(
-            baseCanvasData,
+        set({ historyDirty: false });
+
+        const currentObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
+        const background = canvas.backgroundColor || undefined;
+        let snapshot: HistorySnapshot;
+
+        if (!lastHistorySnapshot || historyService.length === 0) {
+            const canvasData = { objects: currentObjects, background };
+            snapshot = { type: 'full', data: canvasData };
+        } else {
+            const diff = recordDiff(lastHistorySnapshot.objects, currentObjects);
+            if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
+                return; // No changes, no need to save
+            }
+            snapshot = { type: 'diff', data: diff };
+        }
+
+        const { imageAssets: nextAssets } = prepareCanvasDataForPersistence(
+            { objects: currentObjects, background },
             imageAssets
         );
-        const serialized = JSON.stringify(canvasData);
-        const updates: Partial<EditorState> = {};
-        if (nextAssets !== imageAssets) {
-            updates.imageAssets = nextAssets;
-        }
-        historyService.pushSnapshot(serialized, options);
-        updates.historyIndex = historyService.currentIndex;
-        if (Object.keys(updates).length > 0) {
-            set(updates);
-        }
+
+        historyService.pushSnapshot(JSON.stringify(snapshot), options);
+        
+        set({ 
+            historyIndex: historyService.currentIndex,
+            lastHistorySnapshot: { objects: currentObjects, background },
+            imageAssets: nextAssets,
+        });
     }, 300),
 
-    undo: () => {
-        const { canvas, setLayers, imageAssets } = get();
-        if (!canvas) return;
-        const snapshot = historyService.undo();
-        if (!snapshot) return;
-        const prevState = JSON.parse(snapshot);
-        const hydratedState = hydrateCanvasDataWithAssets(prevState, imageAssets);
-        canvas.loadFromJSON(hydratedState, () => {
+    undo: async () => {
+        const { canvas, requestLayerSync, imageAssets } = get();
+        if (!canvas || !historyService.canUndo()) return;
+
+        const snapshotStr = historyService.undo();
+        if (!snapshotStr) return;
+        
+        let snapshot: HistorySnapshot;
+        try {
+            snapshot = JSON.parse(snapshotStr);
+            if (!snapshot.type) throw new Error('Legacy snapshot');
+        } catch (e) {
+            // Legacy snapshot
+            const prevState = JSON.parse(snapshotStr);
+            const hydratedState = hydrateCanvasDataWithAssets(prevState, imageAssets);
+            await new Promise<void>(resolve => {
+                canvas.loadFromJSON(hydratedState, () => {
+                    canvas.requestRenderAll();
+                    set({ 
+                        historyIndex: historyService.currentIndex, 
+                        selectedObject: null,
+                        lastHistorySnapshot: prevState,
+                    });
+                    requestLayerSync();
+                    resolve();
+                });
+            });
+            return;
+        }
+
+        if (snapshot.type === 'full') {
+            const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
+            await new Promise<void>(resolve => {
+                canvas.loadFromJSON(hydratedState, () => {
+                    canvas.requestRenderAll();
+                    set({ 
+                        historyIndex: historyService.currentIndex,
+                        selectedObject: null,
+                        lastHistorySnapshot: snapshot.data,
+                    });
+                    requestLayerSync();
+                    resolve();
+                });
+            });
+        } else if (snapshot.type === 'diff') {
+            const diff = snapshot.data;
+            
+            diff.added.forEach(objToAdd => {
+                const objToRemove = canvas.getObjects().find(o => (o as any).id === objToAdd.id);
+                if (objToRemove) canvas.remove(objToRemove);
+            });
+
+            const removedObjects = await fabric.util.enlivenObjects(diff.removed) as fabric.Object[];
+            removedObjects.forEach(obj => canvas.add(obj));
+
+            const changedObjects = await fabric.util.enlivenObjects(diff.changed.map(c => c.prev));
+            changedObjects.forEach(prevObj => {
+                const targetObj = canvas.getObjects().find(o => (o as any).id === (prevObj as any).id);
+                if (targetObj) {
+                    const oldProps = prevObj.toObject();
+                    delete oldProps.type;
+                    targetObj.set(oldProps);
+                }
+            });
+
+            const newObjects = canvas.getObjects().map(toSerializableObject);
+            const background = canvas.backgroundColor || undefined;
+            set({
+                historyIndex: historyService.currentIndex,
+                selectedObject: null,
+                lastHistorySnapshot: { objects: newObjects, background },
+            });
+            requestLayerSync();
             canvas.requestRenderAll();
-            set({ historyIndex: historyService.currentIndex, selectedObject: null });
-            setLayers(canvas.getObjects());
-        });
+        }
     },
 
-    redo: () => {
-        const { canvas, setLayers, imageAssets } = get();
-        if (!canvas) return;
-        const snapshot = historyService.redo();
-        if (!snapshot) return;
-        const nextState = JSON.parse(snapshot);
-        const hydratedState = hydrateCanvasDataWithAssets(nextState, imageAssets);
-        canvas.loadFromJSON(hydratedState, () => {
+    redo: async () => {
+        const { canvas, requestLayerSync, imageAssets } = get();
+        if (!canvas || !historyService.canRedo()) return;
+
+        const snapshotStr = historyService.redo();
+        if (!snapshotStr) return;
+
+        let snapshot: HistorySnapshot;
+        try {
+            snapshot = JSON.parse(snapshotStr);
+            if (!snapshot.type) throw new Error('Legacy snapshot');
+        } catch (e) {
+            // Legacy snapshot
+            const nextState = JSON.parse(snapshotStr);
+            const hydratedState = hydrateCanvasDataWithAssets(nextState, imageAssets);
+            await new Promise<void>(resolve => {
+                canvas.loadFromJSON(hydratedState, () => {
+                    canvas.requestRenderAll();
+                    set({ 
+                        historyIndex: historyService.currentIndex,
+                        selectedObject: null,
+                        lastHistorySnapshot: nextState,
+                    });
+                    requestLayerSync();
+                    resolve();
+                });
+            });
+            return;
+        }
+
+        if (snapshot.type === 'full') {
+            const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
+            await new Promise<void>(resolve => {
+                canvas.loadFromJSON(hydratedState, () => {
+                    canvas.requestRenderAll();
+                    set({
+                        historyIndex: historyService.currentIndex,
+                        selectedObject: null,
+                        lastHistorySnapshot: snapshot.data,
+                    });
+                    requestLayerSync();
+                    resolve();
+                });
+            });
+        } else if (snapshot.type === 'diff') {
+            const diff = snapshot.data;
+
+            const addedObjects = await fabric.util.enlivenObjects(diff.added) as fabric.Object[];
+            addedObjects.forEach(obj => canvas.add(obj));
+
+            diff.removed.forEach(objToRemove => {
+                const obj = canvas.getObjects().find(o => (o as any).id === objToRemove.id);
+                if (obj) canvas.remove(obj);
+            });
+
+            const changedObjects = await fabric.util.enlivenObjects(diff.changed.map(c => c.next));
+            changedObjects.forEach(nextObj => {
+                const targetObj = canvas.getObjects().find(o => (o as any).id === (nextObj as any).id);
+                if (targetObj) {
+                    const newProps = nextObj.toObject();
+                    delete newProps.type;
+                    targetObj.set(newProps);
+                }
+            });
+            
+            const newObjects = canvas.getObjects().map(toSerializableObject);
+            const background = canvas.backgroundColor || undefined;
+            set({
+                historyIndex: historyService.currentIndex,
+                selectedObject: null,
+                lastHistorySnapshot: { objects: newObjects, background },
+            });
+            requestLayerSync();
             canvas.requestRenderAll();
-            set({ historyIndex: historyService.currentIndex, selectedObject: null });
-            setLayers(canvas.getObjects());
-        });
+        }
     },
 
     // --- THEME ACTIONS ---
@@ -733,7 +944,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     toggleMovementLock: (layerId) => {
-        const { canvas, setLayers, saveState } = get();
+        const { canvas, requestLayerSync, saveState } = get();
         const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
         if (obj) {
             const isLocked = !obj.lockMovementX;
@@ -745,44 +956,46 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 lockScalingY: isLocked,
                 hasControls: !isLocked,
             });
-            setLayers(canvas!.getObjects());
+            requestLayerSync();
             saveState();
         }
     },
 
     toggleColorLock: (layerId) => {
-        const { canvas, setLayers, saveState } = get();
+        const { canvas, requestLayerSync, saveState } = get();
         const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
         if (obj) {
             (obj as any).colorLocked = !(obj as any).colorLocked;
-            setLayers(canvas!.getObjects());
+            requestLayerSync();
             saveState();
         }
     },
 
     setObjectFill: (fill) => {
-        const { canvas, selectedObject, saveState } = get();
+        const { canvas, selectedObject, saveState, requestLayerSync } = get();
         if (selectedObject && canvas) {
             selectedObject.set({ fill, tokenRole: null });
             canvas.requestRenderAll();
             saveState();
+            requestLayerSync();
         }
     },
 
     setObjectThemedFill: (tokenRole) => {
-        const { canvas, selectedObject, themeData, saveState } = get();
+        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
         if (selectedObject && canvas && themeData) {
             const colorValue = resolveThemeValue(themeData, tokenRole);
             if (colorValue) {
                 selectedObject.set({ fill: colorValue, tokenRole, colorLocked: false });
                 canvas.requestRenderAll();
                 saveState();
+                requestLayerSync();
             }
         }
     },
 
     applyTint: (tokenRole) => {
-        const { canvas, selectedObject, themeData, saveState } = get();
+        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
         const image = selectedObject as fabric.Image;
         if (image && image.type === 'image' && canvas && themeData) {
             const colorValue = resolveThemeValue(themeData, tokenRole);
@@ -798,11 +1011,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             image.applyFilters();
             canvas.requestRenderAll();
             saveState();
+            requestLayerSync();
         }
     },
 
     resetObjectToDefaultTheme: () => {
-        const { canvas, selectedObject, themeData, saveState, setLayers } = get();
+        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
         if (!selectedObject || !canvas || !themeData) return;
 
         let defaultTokenRole: string | null = null;
@@ -828,7 +1042,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 }
                 canvas.requestRenderAll();
                 saveState();
-                setLayers(canvas.getObjects());
+                requestLayerSync();
             }
         }
     },
@@ -851,6 +1065,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             brushSize: state.brushSize,
             brushColor: state.brushColor,
             snapEnabled: state.snapEnabled,
+            gridEnabled: state.gridEnabled,
         }),
     }
   )
@@ -896,7 +1111,7 @@ export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: Apocapalette
 
     if (changed) {
         canvas.requestRenderAll();
-        useEditorStore.getState().setLayers(canvas.getObjects());
+        useEditorStore.getState().requestLayerSync();
     }
 
     return report;

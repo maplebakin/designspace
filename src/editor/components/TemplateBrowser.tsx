@@ -167,7 +167,7 @@ export const TemplateBrowser: React.FC = () => {
         saveCurrentAsTemplate,
         themeData,
         canvas,
-        setLayers,
+        requestLayerSync,
         setUnitMode,
         setCanvasBackgroundColor,
     } = useEditorStore(
@@ -179,7 +179,7 @@ export const TemplateBrowser: React.FC = () => {
             saveCurrentAsTemplate: state.saveCurrentAsTemplate,
             themeData: state.themeData,
             canvas: state.canvas,
-            setLayers: state.setLayers,
+            requestLayerSync: state.requestLayerSync,
             setUnitMode: state.setUnitMode,
             setCanvasBackgroundColor: state.setCanvasBackgroundColor,
         }),
@@ -400,7 +400,7 @@ export const TemplateBrowser: React.FC = () => {
 
         canvas.discardActiveObject();
         canvas.clear();
-        setLayers([]);
+        requestLayerSync();
         setUnitMode(preset.unit);
 
         const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;

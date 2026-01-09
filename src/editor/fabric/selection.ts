@@ -1,6 +1,5 @@
 
 import * as fabric from 'fabric';
-import { useEditorStore } from '../state/editorStore';
 
 /**
  * Initializes logic to sync text object scaling with its font size.
@@ -23,8 +22,6 @@ export const initTextScalingSync = (canvas: fabric.Canvas) => {
         scaleY: 1,
       });
 
-      // Manually trigger saveState, as object:modified might be too late or not fine-grained enough
-      useEditorStore.getState().saveState();
     }
   };
 

@@ -11,8 +11,9 @@ export const LayersPanel: React.FC = () => {
   const {
     canvas,
     layers,
-    setLayers,
-    selectedLayerId,
+    layersById,
+    selectedLayerIds,
+    requestLayerSync,
     toggleMovementLock,
     toggleColorLock,
     saveState,
@@ -27,8 +28,9 @@ export const LayersPanel: React.FC = () => {
     (state) => ({
       canvas: state.canvas,
       layers: state.layers,
-      setLayers: state.setLayers,
-      selectedLayerId: state.selectedLayerId,
+      layersById: state.layersById,
+      selectedLayerIds: state.selectedLayerIds,
+      requestLayerSync: state.requestLayerSync,
       toggleMovementLock: state.toggleMovementLock,
       toggleColorLock: state.toggleColorLock,
       saveState: state.saveState,
@@ -48,7 +50,7 @@ export const LayersPanel: React.FC = () => {
 
   // Helper to find an object on canvas by its ID
   const findObjectById = (id: string): fabric.Object | null => {
-    return canvas?.getObjects().find(obj => (obj as any).id === id) || null;
+    return layersById[id] || null;
   };
 
   const handleSelectLayer = (id: string) => {
@@ -65,7 +67,8 @@ export const LayersPanel: React.FC = () => {
     if (canvas && object) {
       object.set('visible', !object.visible);
       canvas.requestRenderAll();
-      setLayers(canvas.getObjects()); // Refresh layers state
+      requestLayerSync();
+      saveState();
     }
   };
   
@@ -78,7 +81,8 @@ export const LayersPanel: React.FC = () => {
         canvas.sendObjectBackwards(object);
       }
       canvas.requestRenderAll();
-      setLayers(canvas.getObjects()); // Refresh layers to show new order
+      requestLayerSync();
+      saveState();
     }
   };
 
@@ -88,7 +92,8 @@ export const LayersPanel: React.FC = () => {
       canvas.remove(object);
       canvas.discardActiveObject();
       canvas.requestRenderAll();
-      setLayers(canvas.getObjects());
+      requestLayerSync();
+      saveState();
     }
   };
 
@@ -202,26 +207,25 @@ export const LayersPanel: React.FC = () => {
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !canvas) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      fabric.Image.fromURL(dataUrl, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
-        img.set({
-          id: uuidv4(),
-          tokenRole: 'brand.accent.value',
-          colorLocked: false,
-          originX: 'center',
-          originY: 'center',
-        });
-        canvas.add(img);
-        canvas.centerObject(img);
-        canvas.setActiveObject(img);
-        sanityCheckCanvas(canvas, themeData);
-        canvas.requestRenderAll();
-        saveState();
+    const objectURL = URL.createObjectURL(file);
+    fabric.Image.fromURL(objectURL, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
+      img.set({
+        id: uuidv4(),
+        tokenRole: 'brand.accent.value',
+        colorLocked: false,
+        originX: 'center',
+        originY: 'center',
       });
-    };
-    reader.readAsDataURL(file);
+      canvas.add(img);
+      canvas.centerObject(img);
+      canvas.setActiveObject(img);
+      sanityCheckCanvas(canvas, themeData);
+      canvas.requestRenderAll();
+      saveState();
+    }).catch((error) => {
+      console.error("Error loading image:", error);
+      URL.revokeObjectURL(objectURL); // Revoke if loading fails
+    });
     if (imageInputRef.current) imageInputRef.current.value = '';
     setIsMenuOpen(false);
   };
@@ -374,7 +378,7 @@ export const LayersPanel: React.FC = () => {
       ) : (
         <ul className="space-y-2">
           {[...layers].reverse().map((layer: Layer, index) => {
-            const isSelected = selectedLayerId === layer.id;
+            const isSelected = selectedLayerIds.includes(layer.id);
             const object = findObjectById(layer.id);
             const label = getLayerLabel(object, layer.name);
             const preview = getPreviewStyle(object);

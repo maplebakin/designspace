@@ -1,10 +1,11 @@
-
 import * as fabric from 'fabric';
-import { useEditorStore } from '../state/editorStore';
+import { inToPx } from '../utils/units';
 
 const SNAP_THRESHOLD = 5;
 const GUIDE_COLOR = 'rgba(128, 0, 128, 0.8)'; // Purple
 const GUIDE_STROKE_WIDTH = 1;
+const GRID_COLOR = 'rgba(128, 128, 128, 0.5)';
+const GRID_STROKE_WIDTH = 0.5;
 
 interface Point {
   x: number;
@@ -13,19 +14,20 @@ interface Point {
 
 interface SnappingAnchor {
   point: Point;
-  type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
-  orientation: 'vertical' | 'horizontal'; // To specify if it's a vertical or horizontal guide
+  type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'grid';
+  orientation: 'vertical' | 'horizontal';
 }
 
-/**
- * Initializes smart alignment guides on the Fabric.js canvas.
- * @param canvas The fabric.Canvas instance to attach the guides to.
- */
-export const initSmartGuides = (canvas: fabric.Canvas) => {
+interface SmartGuidesOptions {
+  snapEnabled: boolean;
+  gridEnabled: boolean;
+}
+
+export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptions) => {
   let aligningLines: fabric.Line[] = [];
-  let lastSnapCoords: { x?: number; y?: number } = {};
+  let lastSnapDelta: { x: number; y: number } = { x: 0, y: 0 };
   let currentRenderRAF: number | null = null;
-  let isAltKeyDown = false; // New state variable
+  let isAltKeyDown = false;
 
   const removeAlignLines = () => {
     aligningLines.forEach(line => canvas.remove(line));
@@ -37,7 +39,7 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   };
 
   const drawVerticalLine = (x: number) => {
-    const line = new fabric.Line([x, -canvas.height, x, canvas.height * 2], {
+    const line = new fabric.Line([x, -canvas.height * 2, x, canvas.height * 2], {
       stroke: GUIDE_COLOR,
       strokeWidth: GUIDE_STROKE_WIDTH,
       selectable: false,
@@ -48,7 +50,7 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   };
 
   const drawHorizontalLine = (y: number) => {
-    const line = new fabric.Line([-canvas.width, y, canvas.width * 2, y], {
+    const line = new fabric.Line([-canvas.width * 2, y, canvas.width * 2, y], {
       stroke: GUIDE_COLOR,
       strokeWidth: GUIDE_STROKE_WIDTH,
       selectable: false,
@@ -57,40 +59,77 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
     aligningLines.push(line);
     canvas.add(line);
   };
+  
+  const drawGrid = () => {
+    if (!options.gridEnabled) {
+      canvas.clearContext(canvas.contextTop);
+      canvas.requestRenderAll();
+      return;
+    }
+    
+    const halfInchPx = inToPx(0.5);
+    const width = canvas.getWidth();
+    const height = canvas.getHeight();
+    const ctx = canvas.contextTop;
+    
+    ctx.save();
+    const vpt = canvas.viewportTransform;
+    if (vpt) {
+        ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+    }
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.lineWidth = GRID_STROKE_WIDTH;
+
+    for (let x = 0; x < width; x += halfInchPx) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+    }
+    for (let y = 0; y < height; y += halfInchPx) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+    }
+    ctx.restore();
+  };
 
   const getAnchorPoints = (object: fabric.Object): SnappingAnchor[] => {
     const points: SnappingAnchor[] = [];
-    const coords = object.getCoords();
-    const xs = coords.map(point => point.x);
-    const ys = coords.map(point => point.y);
-    if (xs.length === 0 || ys.length === 0) {
-      return points;
-    }
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const centerX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
-    const centerY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+    object.setCoords(); // Ensure coords are up to date
+    
+    const aCoords = object.aCoords;
+    if (!aCoords) return points;
 
-    // Vertical lines (x-coordinates)
-    points.push({ point: { x: minX, y: centerY }, type: 'left', orientation: 'vertical' });
+    const { tl, tr, bl, br } = aCoords;
+    const centerX = (tl.x + tr.x) / 2;
+    const centerY = (tl.y + bl.y) / 2;
+
+    points.push({ point: { x: (tl.x + bl.x) / 2, y: centerY }, type: 'left', orientation: 'vertical' });
     points.push({ point: { x: centerX, y: centerY }, type: 'center', orientation: 'vertical' });
-    points.push({ point: { x: maxX, y: centerY }, type: 'right', orientation: 'vertical' });
+    points.push({ point: { x: (tr.x + br.x) / 2, y: centerY }, type: 'right', orientation: 'vertical' });
 
-    // Horizontal lines (y-coordinates)
-    points.push({ point: { x: centerX, y: minY }, type: 'top', orientation: 'horizontal' });
+    points.push({ point: { x: centerX, y: (tl.y + tr.y) / 2 }, type: 'top', orientation: 'horizontal' });
     points.push({ point: { x: centerX, y: centerY }, type: 'middle', orientation: 'horizontal' });
-    points.push({ point: { x: centerX, y: maxY }, type: 'bottom', orientation: 'horizontal' });
+    points.push({ point: { x: centerX, y: (bl.y + br.y) / 2 }, type: 'bottom', orientation: 'horizontal' });
 
     return points;
   };
 
   const collectAnchors = (object: fabric.Object): SnappingAnchor[] => {
     if (object.type === 'group') {
-      const groupObjects = (object as fabric.Group & { _objects?: fabric.Object[] })._objects || [];
+      const groupObjects = (object as fabric.Group)._objects || [];
       return groupObjects.reduce<SnappingAnchor[]>(
-        (acc, child) => acc.concat(collectAnchors(child)),
+        (acc, child) => {
+            const childAnchors = getAnchorPoints(child);
+            const groupMatrix = object.calcTransformMatrix();
+            const transformedAnchors = childAnchors.map(anchor => ({
+                ...anchor,
+                point: fabric.util.transformPoint(anchor.point, groupMatrix)
+            }));
+            return acc.concat(transformedAnchors);
+        },
         []
       );
     }
@@ -98,135 +137,78 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   };
 
   const onObjectMoving = (e: any) => {
-    const activeObject = e?.target as fabric.Object | undefined;
+    const activeObject = e.target as fabric.Object | undefined;
     if (!activeObject) return;
-
-    if (!useEditorStore.getState().snapEnabled) {
-      removeAlignLines();
-      lastSnapCoords = {};
+        if (!options.snapEnabled) {      removeAlignLines();
+      lastSnapDelta = { x: 0, y: 0 };
       return;
     }
 
     if (isAltKeyDown) {
       removeAlignLines();
       canvas.requestRenderAll();
-      lastSnapCoords = {}; // Ensure no snap is applied on mouse:up
+      lastSnapDelta = { x: 0, y: 0 };
       return;
     }
 
-    removeAlignLines(); // This also handles cancelling currentRenderRAF
-    lastSnapCoords = {}; // Reset potential snap coordinates for current move
+    removeAlignLines();
+    lastSnapDelta = { x: 0, y: 0 };
 
     let minDistanceX = SNAP_THRESHOLD + 1;
     let minDistanceY = SNAP_THRESHOLD + 1;
-    let snapX: number | undefined;
-    let snapY: number | undefined;
+    let deltaX = 0;
+    let deltaY = 0;
     let guideLineX: number | undefined;
     let guideLineY: number | undefined;
 
     const activeObjectAnchors = getAnchorPoints(activeObject);
     const canvasObjects = canvas.getObjects().filter(obj => obj !== activeObject && !obj.get('isGuide') && obj.evented);
-    const cellSize = 100;
-    const grid = new Map<string, fabric.Object[]>();
+    
+    let staticAnchors: SnappingAnchor[] = [];
 
-    const addToGrid = (obj: fabric.Object) => {
-      const bbox = obj.getBoundingRect();
-      const minX = Math.floor(bbox.left / cellSize);
-      const maxX = Math.floor((bbox.left + bbox.width) / cellSize);
-      const minY = Math.floor(bbox.top / cellSize);
-      const maxY = Math.floor((bbox.top + bbox.height) / cellSize);
-      for (let x = minX; x <= maxX; x += 1) {
-        for (let y = minY; y <= maxY; y += 1) {
-          const key = `${x}:${y}`;
-          const bucket = grid.get(key);
-          if (bucket) {
-            bucket.push(obj);
-          } else {
-            grid.set(key, [obj]);
-          }
+    if (options.gridEnabled) {
+        const halfInchPx = inToPx(0.5);
+        for (let x = 0; x < canvas.getWidth(); x += halfInchPx) {
+            staticAnchors.push({ point: { x, y: 0 }, type: 'grid', orientation: 'vertical' });
         }
-      }
-    };
-
-    canvasObjects.forEach(addToGrid);
-
-    const activeBBox = activeObject.getBoundingRect();
-    const activeMinX = Math.floor(activeBBox.left / cellSize) - 1;
-    const activeMaxX = Math.floor((activeBBox.left + activeBBox.width) / cellSize) + 1;
-    const activeMinY = Math.floor(activeBBox.top / cellSize) - 1;
-    const activeMaxY = Math.floor((activeBBox.top + activeBBox.height) / cellSize) + 1;
-    const nearbyObjects = new Set<fabric.Object>();
-
-    for (let x = activeMinX; x <= activeMaxX; x += 1) {
-      for (let y = activeMinY; y <= activeMaxY; y += 1) {
-        const bucket = grid.get(`${x}:${y}`);
-        if (bucket) {
-          bucket.forEach(obj => nearbyObjects.add(obj));
+        for (let y = 0; y < canvas.getHeight(); y += halfInchPx) {
+            staticAnchors.push({ point: { x: 0, y }, type: 'grid', orientation: 'horizontal' });
         }
-      }
     }
+    
+    canvasObjects.forEach(obj => {
+        staticAnchors = staticAnchors.concat(collectAnchors(obj));
+    });
 
-    nearbyObjects.forEach((obj: fabric.Object) => {
-        // Performance: Bounding box check first
-        const objBBox = obj.getBoundingRect();
-        // Expand bbox to include snap threshold for proximity check
-        const expandedActiveBBox = {
-            left: activeBBox.left - SNAP_THRESHOLD,
-            top: activeBBox.top - SNAP_THRESHOLD,
-            right: activeBBox.left + activeBBox.width + SNAP_THRESHOLD,
-            bottom: activeBBox.top + activeBBox.height + SNAP_THRESHOLD,
-        };
-        const expandedObjBBox = {
-            left: objBBox.left - SNAP_THRESHOLD,
-            top: objBBox.top - SNAP_THRESHOLD,
-            right: objBBox.left + objBBox.width + SNAP_THRESHOLD,
-            bottom: objBBox.top + objBBox.height + SNAP_THRESHOLD,
-        };
+    activeObjectAnchors.forEach(activeAnchor => {
+      staticAnchors.forEach(staticAnchor => {
+          if (activeAnchor.orientation === 'vertical' && staticAnchor.orientation === 'vertical') {
+              const distance = Math.abs(activeAnchor.point.x - staticAnchor.point.x);
+              if (distance < SNAP_THRESHOLD && distance < minDistanceX) {
+                  minDistanceX = distance;
+                  deltaX = staticAnchor.point.x - activeAnchor.point.x;
+                  guideLineX = staticAnchor.point.x;
+              }
+          }
 
-        // If bounding boxes don't overlap within expanded threshold, skip detailed check
-        if (expandedActiveBBox.left > expandedObjBBox.right ||
-            expandedActiveBBox.right < expandedObjBBox.left ||
-            expandedActiveBBox.top > expandedObjBBox.bottom ||
-            expandedActiveBBox.bottom < expandedObjBBox.top) {
-            return;
-        }
-
-      const objAnchors = collectAnchors(obj);
-
-      activeObjectAnchors.forEach(activeAnchor => {
-        objAnchors.forEach(staticAnchor => {
-            // Check for vertical alignment (x-coordinates)
-            if (activeAnchor.orientation === 'vertical' && staticAnchor.orientation === 'vertical') {
-                const distance = Math.abs(activeAnchor.point.x - staticAnchor.point.x);
-                if (distance < SNAP_THRESHOLD && distance < minDistanceX) {
-                    minDistanceX = distance;
-                    // Calculate where active object's left should be to align activeAnchor.x with staticAnchor.x
-                    snapX = activeObject.left + (staticAnchor.point.x - activeAnchor.point.x);
-                    guideLineX = staticAnchor.point.x;
-                }
-            }
-
-            // Check for horizontal alignment (y-coordinates)
-            if (activeAnchor.orientation === 'horizontal' && staticAnchor.orientation === 'horizontal') {
-                const distance = Math.abs(activeAnchor.point.y - staticAnchor.point.y);
-                if (distance < SNAP_THRESHOLD && distance < minDistanceY) {
-                    minDistanceY = distance;
-                    // Calculate where active object's top should be to align activeAnchor.y with staticAnchor.y
-                    snapY = activeObject.top + (staticAnchor.point.y - activeAnchor.point.y);
-                    guideLineY = staticAnchor.point.y;
-                }
-            }
-        });
+          if (activeAnchor.orientation === 'horizontal' && staticAnchor.orientation === 'horizontal') {
+              const distance = Math.abs(activeAnchor.point.y - staticAnchor.point.y);
+              if (distance < SNAP_THRESHOLD && distance < minDistanceY) {
+                  minDistanceY = distance;
+                  deltaY = staticAnchor.point.y - activeAnchor.point.y;
+                  guideLineY = staticAnchor.point.y;
+              }
+          }
       });
     });
 
-    if (snapX !== undefined) {
-        lastSnapCoords.x = snapX;
-        drawVerticalLine(guideLineX as number);
+    if (deltaX !== 0) {
+        lastSnapDelta.x = deltaX;
+        if(minDistanceX > 0) drawVerticalLine(guideLineX as number);
     }
-    if (snapY !== undefined) {
-        lastSnapCoords.y = snapY;
-        drawHorizontalLine(guideLineY as number);
+    if (deltaY !== 0) {
+        lastSnapDelta.y = deltaY;
+        if(minDistanceY > 0) drawHorizontalLine(guideLineY as number);
     }
 
     if (aligningLines.length > 0) {
@@ -240,46 +222,36 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
     }
   };
 
-  const onMouseUpHandler = () => { // Named the anonymous function
-    // This now correctly handles RAF cleanup within removeAlignLines
+  const onMouseUpHandler = () => {
     removeAlignLines();
 
-    if (!useEditorStore.getState().snapEnabled) {
-      lastSnapCoords = {};
+    if (!options.snapEnabled) {
+      lastSnapDelta = { x: 0, y: 0 };
       return;
     }
 
     const activeObject = canvas.getActiveObject();
-    if (activeObject && (lastSnapCoords.x !== undefined || lastSnapCoords.y !== undefined)) {
-      const snapOptions: {
-        left ? : number;
-        top ? : number
-      } = {};
-
-      if (lastSnapCoords.x !== undefined) {
-        snapOptions.left = lastSnapCoords.x;
-      }
-      if (lastSnapCoords.y !== undefined) {
-        snapOptions.top = lastSnapCoords.y;
-      }
-
-      activeObject.set(snapOptions);
-      activeObject.setCoords(); // Update object's bounding box
-      canvas.requestRenderAll(); // Use requestRenderAll consistently
+    if (activeObject && (lastSnapDelta.x !== 0 || lastSnapDelta.y !== 0)) {
+        activeObject.set({
+            left: activeObject.left + lastSnapDelta.x,
+            top: activeObject.top + lastSnapDelta.y,
+        });
+        activeObject.setCoords();
+        canvas.requestRenderAll();
     }
-    lastSnapCoords = {}; // Clear snap coordinates after drop
+    lastSnapDelta = { x: 0, y: 0 };
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.altKey) {
       isAltKeyDown = true;
-      removeAlignLines(); // Clear guides immediately if Alt is pressed during drag
+      removeAlignLines();
       canvas.requestRenderAll();
     }
   };
 
   const handleKeyUp = (e: KeyboardEvent) => {
-    if (!e.altKey) { // Only set to false if alt key is released
+    if (!e.altKey) {
       isAltKeyDown = false;
     }
   };
@@ -288,14 +260,22 @@ export const initSmartGuides = (canvas: fabric.Canvas) => {
   window.addEventListener('keyup', handleKeyUp);
 
   canvas.on('object:moving', onObjectMoving);
-  canvas.on('mouse:up', onMouseUpHandler); // Use the named handler
-  canvas.on('object:modified', removeAlignLines); // Use the centralized cleanup function
+  canvas.on('mouse:up', onMouseUpHandler);
+  canvas.on('object:modified', removeAlignLines);
+  
+  const afterRenderHandler = () => {
+    drawGrid();
+  };
+  
+  if (options.gridEnabled) {
+    canvas.on('after:render', afterRenderHandler);
+  }
 
-  // Return a cleanup function
   return () => {
     canvas.off('object:moving', onObjectMoving);
     canvas.off('mouse:up', onMouseUpHandler);
     canvas.off('object:modified', removeAlignLines);
+    canvas.off('after:render', afterRenderHandler);
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
   };

@@ -1,7 +1,6 @@
 
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
-import { drawPersistentGuides } from './initFabricCanvas';
 import { SAFE_MARGIN_PX } from '../utils/units';
 
 let safeMarginGuides: fabric.Line[] = [];
@@ -166,14 +165,27 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
 };
 
 export const resizeCanvas = (width: number, height: number) => {
-  const { canvas, saveState } = useEditorStore.getState();
+  const { canvas, saveState, setZoom, setVpt } = useEditorStore.getState();
   if (!canvas) return;
 
+  const hasObjects = canvas.getObjects().some((obj) => !(obj as any).isGuide);
   const currentCenter = canvas.getCenter();
 
   // Set new dimensions
   canvas.setWidth(width);
   canvas.setHeight(height);
+
+  if (!hasObjects) {
+    const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
+    canvas.setZoom(1);
+    canvas.setViewportTransform(nextVpt);
+    canvas.requestRenderAll();
+    setZoom(1);
+    setVpt([...nextVpt]);
+    updateGuides(canvas, useEditorStore.getState().showGuides);
+    saveState();
+    return;
+  }
 
   // Pan the viewport to re-center the content
   const newCenter = canvas.getCenter();
@@ -183,8 +195,7 @@ export const resizeCanvas = (width: number, height: number) => {
   canvas.relativePan(new fabric.Point(panX, panY));
 
   canvas.requestRenderAll();
-  const { themeData, bleedPx } = useEditorStore.getState();
-  drawPersistentGuides(canvas, themeData, bleedPx);
+  updateGuides(canvas, useEditorStore.getState().showGuides);
   saveState();
 };
 

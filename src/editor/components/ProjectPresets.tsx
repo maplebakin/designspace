@@ -34,10 +34,10 @@ type ProjectPresetsProps = {
 };
 
 export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied }) => {
-  const { canvas, setLayers, setUnitMode, setCanvasBackgroundColor } = useEditorStore(
+  const { canvas, requestLayerSync, setUnitMode, setCanvasBackgroundColor } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      setLayers: state.setLayers,
+      requestLayerSync: state.requestLayerSync,
       setUnitMode: state.setUnitMode,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
     }),
@@ -58,7 +58,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
 
     setUnitMode(preset.unit);
-    setLayers([]);
+    requestLayerSync();
 
     resizeCanvas(widthPx, heightPx);
     setCanvasBackgroundColor('#ffffff');

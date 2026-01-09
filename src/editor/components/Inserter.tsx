@@ -121,30 +121,28 @@ const UploadsDropdown: React.FC = () => {
 
     const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
+        if (file && canvas) {
+            const objectURL = URL.createObjectURL(file);
             const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
-            reader.onload = (f: ProgressEvent<FileReader>) => {
-                const data = f.target?.result as string;
-                if (file.type === 'image/png') {
-                    addAssetToLibrary({
-                        id: uuidv4(),
-                        url: data,
-                        label: baseName,
-                        format: 'png',
-                        tags: [baseName.toLowerCase(), 'upload'],
-                    });
-                }
-                if (canvas) {
-                    fabric.Image.fromURL(data as string, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
-                        canvas.add(img);
-                        canvas.centerObject(img);
-                        canvas.requestRenderAll();
-                        saveState();
-                    });
-                }
-            };
-            reader.readAsDataURL(file);
+            const format = file.type === 'image/png' ? 'png' : (file.type === 'image/jpeg' ? 'jpeg' : undefined);
+
+            addAssetToLibrary({
+                id: uuidv4(),
+                url: objectURL,
+                label: baseName,
+                format: format,
+                tags: [baseName.toLowerCase(), 'upload'],
+            });
+
+            fabric.Image.fromURL(objectURL, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
+                canvas.add(img);
+                canvas.centerObject(img);
+                canvas.requestRenderAll();
+                saveState();
+            }).catch((error) => {
+                console.error("Error loading image:", error);
+                URL.revokeObjectURL(objectURL);
+            });
         }
         if(imageInputRef.current) imageInputRef.current.value = '';
     };
