@@ -1,163 +1,243 @@
-
 import * as fabric from 'fabric';
-import { PDFDocument } from 'pdf-lib';
-import { useEditorStore } from '../state/editorStore';
-import { PRINT_DPI } from '../utils/units';
+import { jsPDF } from 'jspdf';
 
-// Helper function to trigger a browser download
-const triggerDownload = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-};
-
-// Helper function to toggle visibility of guide objects
-const toggleGuideVisibility = (canvas: fabric.Canvas, visible: boolean) => {
-  canvas.getObjects().forEach(obj => {
-    if ((obj as any).excludeFromExport) { // Check for the custom property
-      obj.set({ visible });
-    }
-  });
-  canvas.renderAll(); // Re-render after changing visibility
+const getClonedViewportTransform = (canvas: fabric.Canvas): fabric.TMat2D => {
+  const fallback: fabric.TMat2D = [1, 0, 0, 1, 0, 0];
+  return canvas.viewportTransform
+    ? ([...canvas.viewportTransform] as fabric.TMat2D)
+    : fallback;
 };
 
 /**
- * Generates a high-resolution PNG from the canvas content and triggers a download.
- * @param canvas - The fabric.Canvas instance.
+ * Downloads the canvas as an SVG file
  */
-export const downloadPng = (canvas: fabric.Canvas) => {
-  canvas.discardActiveObject();
-  toggleGuideVisibility(canvas, false); // Hide guides
-
-  const dataURL = canvas.toDataURL({
-    format: 'png',
-    multiplier: 2, // for high-resolution
-  });
+export const downloadSvg = (canvas: fabric.Canvas, fileName: string = 'design') => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
   
-  const blob = dataURLToBlob(dataURL);
-  triggerDownload(blob, 'design.png');
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
 
-  toggleGuideVisibility(canvas, true); // Show guides again
-};
-
-// Utility to convert data URL to Blob
-function dataURLToBlob(dataURL: string) {
-    const arr = dataURL.split(',');
-    const mime = arr[0].match(/:(.*?);/)?.[1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while(n--){
-        u8arr[n] = bstr.charCodeAt(n);
+  // Generate SVG
+  const svgString = canvas.toSVG({
+    suppressPreamble: false,
+    viewBox: {
+      x: 0,
+      y: 0,
+      width: canvas.getWidth(),
+      height: canvas.getHeight(),
     }
-    return new Blob([u8arr], {type:mime});
-}
+  });
 
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
 
-/**
- * Generates a JPG from the canvas content with a specified quality and triggers a download.
- * @param canvas - The fabric.Canvas instance.
- * @param quality - The quality of the JPG image (0-1).
- */
-export const downloadJpg = (canvas: fabric.Canvas, quality: number) => {
-    canvas.discardActiveObject();
-    toggleGuideVisibility(canvas, false); // Hide guides
+  // Clean up the SVG string (remove internal IDs and metadata)
+  const cleanedSvgString = cleanSvgString(svgString);
 
-    const dataURL = canvas.toDataURL({
-        format: 'jpeg',
-        quality: quality,
-        multiplier: 2,
-    });
-
-    const blob = dataURLToBlob(dataURL);
-    triggerDownload(blob, 'design.jpg');
-
-    toggleGuideVisibility(canvas, true); // Show guides again
-}
-
-/**
- * Generates an SVG from the canvas content and triggers a download.
- * @param canvas - The fabric.Canvas instance.
- */
-export const downloadSvg = (canvas: fabric.Canvas) => {
-    toggleGuideVisibility(canvas, false); // Hide guides
-
-    const svg = canvas.toSVG();
-    const blob = new Blob([svg], { type: 'image/svg+xml' });
-    triggerDownload(blob, 'design.svg');
-
-    toggleGuideVisibility(canvas, true); // Show guides again
+  // Create and download the file
+  const blob = new Blob([cleanedSvgString], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${fileName}.svg`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 /**
- * Generates a print-ready PDF from the canvas content, including bleed and trim boxes.
- * @param canvas The fabric.Canvas instance.
+ * Downloads the canvas as a PNG file
  */
-export const downloadPdf = async (canvas: fabric.Canvas) => {
-    canvas.discardActiveObject();
-    toggleGuideVisibility(canvas, false); // Hide guides
+export const downloadPng = (canvas: fabric.Canvas, fileName: string = 'design', scale: number = 1) => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
+  
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
 
-    const bleedPx = useEditorStore.getState().bleedPx;
-    const pxToPoints = (px: number) => (px / PRINT_DPI) * 72;
+  // Generate PNG with specified scale
+  const dataUrl = canvas.toDataURL({
+    format: 'png',
+    multiplier: scale,
+    quality: 1,
+  });
 
-    const canvasWidth = canvas.getWidth();
-    const canvasHeight = canvas.getHeight();
-    
-    // Create a new PDF document
-    const pdfDoc = await PDFDocument.create();
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
 
-    // The full page size including bleed, in points
-    const pageW_pt = pxToPoints(canvasWidth);
-    const pageH_pt = pxToPoints(canvasHeight);
-    const page = pdfDoc.addPage([pageW_pt, pageH_pt]);
+  // Create and download the file
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `${fileName}.png`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
 
-    // Embed the canvas image
-    const imgData = canvas.toDataURL({
-        format: 'png',
-        multiplier: 1, // Canvas presets are already sized at 300 DPI
-    });
-    const pngImage = await pdfDoc.embedPng(imgData);
-    
-    // Draw the image to fill the entire page (including bleed area)
-    page.drawImage(pngImage, {
-        x: 0,
-        y: 0,
-        width: pageW_pt,
-        height: pageH_pt,
-    });
+/**
+ * Downloads the canvas as a JPEG file
+ */
+export const downloadJpeg = (
+  canvas: fabric.Canvas,
+  fileName: string = 'design',
+  scale: number = 1,
+  quality: number = 0.92
+) => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
 
-    const bleed_pt = pxToPoints(bleedPx);
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
 
-    // Define the PDF boxes
-    // BleedBox: The full size of the page content, including bleed.
-    page.setBleedBox(0, 0, pageW_pt, pageH_pt);
+  // Generate JPEG with specified scale
+  const dataUrl = canvas.toDataURL({
+    format: 'jpeg',
+    multiplier: scale,
+    quality,
+  });
 
-    // TrimBox: The final dimensions of the page after it has been trimmed.
-    page.setTrimBox(
-        bleed_pt, // x starts after the left bleed
-        bleed_pt, // y starts after the bottom bleed
-        pageW_pt - bleed_pt * 2, // width excludes left + right bleed
-        pageH_pt - bleed_pt * 2  // height excludes top + bottom bleed
-    );
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
 
-    // ArtBox: The area of the page that contains the actual artwork. 
-    // Often the same as the TrimBox for printables.
-    page.setArtBox(
-        bleed_pt,
-        bleed_pt,
-        pageW_pt - bleed_pt * 2,
-        pageH_pt - bleed_pt * 2
-    );
+  // Create and download the file
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `${fileName}.jpeg`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
 
-    // Save the PDF and trigger download
-    const pdfBytes = await pdfDoc.save();
-    const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
-    triggerDownload(blob, 'design-print-ready.pdf');
+/**
+ * Downloads the canvas as a PDF file
+ */
+export const downloadPdf = (canvas: fabric.Canvas, fileName: string = 'design') => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
 
-    toggleGuideVisibility(canvas, true); // Show guides again
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
+
+  const width = canvas.getWidth();
+  const height = canvas.getHeight();
+  const dataUrl = canvas.toDataURL({
+    format: 'png',
+    multiplier: 1,
+    quality: 1,
+  });
+
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
+
+  const pdf = new jsPDF({
+    orientation: width >= height ? 'landscape' : 'portrait',
+    unit: 'pt',
+    format: [width, height],
+  });
+
+  pdf.addImage(dataUrl, 'PNG', 0, 0, width, height);
+  pdf.save(`${fileName}.pdf`);
+};
+
+/**
+ * Cleans up the SVG string by removing internal IDs and metadata
+ */
+const cleanSvgString = (svgString: string): string => {
+  // Remove internal Fabric.js IDs and metadata
+  let cleaned = svgString
+    // Remove data-fabric attributes
+    .replace(/data-fabric-\w+="[^"]*"/g, '')
+    // Remove internal IDs
+    .replace(/id="[^"]*"/g, '')
+    // Remove empty attributes
+    .replace(/\s*=\s*""/g, '')
+    // Remove extra whitespace
+    .replace(/\s+/g, ' ')
+    // Remove empty groups
+    .replace(/<g>\s*<\/g>/g, '');
+
+  return cleaned.trim();
+};
+
+/**
+ * Exports canvas to SVG string
+ */
+export const exportToSvgString = (canvas: fabric.Canvas): string => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
+  
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
+
+  // Generate SVG
+  const svgString = canvas.toSVG({
+    suppressPreamble: false,
+    viewBox: {
+      x: 0,
+      y: 0,
+      width: canvas.getWidth(),
+      height: canvas.getHeight(),
+    }
+  });
+
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
+
+  // Clean up the SVG string
+  return cleanSvgString(svgString);
+};
+
+/**
+ * Exports canvas to PNG data URL
+ */
+export const exportToPngDataUrl = (canvas: fabric.Canvas, scale: number = 1): string => {
+  // Temporarily reset zoom to 100% for export
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
+  
+  // Reset viewport transform to 100% scale
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.renderAll();
+
+  // Generate PNG with specified scale
+  const dataUrl = canvas.toDataURL({
+    format: 'png',
+    multiplier: scale,
+    quality: 1,
+  });
+
+  // Restore original zoom
+  canvas.setZoom(originalZoom);
+  canvas.setViewportTransform(originalVpt);
+  canvas.renderAll();
+
+  return dataUrl;
 };

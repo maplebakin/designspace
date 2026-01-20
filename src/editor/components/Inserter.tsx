@@ -1,14 +1,16 @@
 import React, { useState, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
-import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
+import { useEditorStore } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 import * as objectFactories from '../fabric/objectFactories';
-import * as frameFactories from '../fabric/frameFactories';
+import { MaskFrame } from './MaskFrame';
 import { loadPdfAsBackground } from '../fabric/pdfUtils';
 import { StickerTab } from './StickerTab';
-import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, Hexagon, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
+import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
 import * as fabric from 'fabric';
 import { SAFE_MARGIN_PX } from '../utils/units';
-import { v4 as uuidv4 } from 'uuid';
+import { resolveThemeValue } from '../utils/themeResolver';
+import { loadImageFromFile, loadSvgFromFile, extractFileMetadata } from '../services/assetLoader';
 
 const INSERT_ICON = 'icon-muted w-4 h-4 stroke-[1.5]';
 
@@ -48,11 +50,9 @@ export const Inserter: React.FC = () => {
 }
 
 const DesignTab: React.FC = () => {
-    const { canvas, saveState, themeData } = useEditorStore(
+    const { canvas } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
-            saveState: state.saveState,
-            themeData: state.themeData,
         }),
         shallow
     );
@@ -60,15 +60,15 @@ const DesignTab: React.FC = () => {
     const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
         if (canvas) {
             factory(canvas);
-            sanityCheckCanvas(canvas, themeData);
-            saveState();
+        } else {
+            console.error('[Inserter] Cannot add item - canvas is null!');
         }
     };
-     const handleAddText = (options: any) => {
+    const handleAddText = (options: any) => {
         if (canvas) {
             objectFactories.addIText(canvas, options);
-            sanityCheckCanvas(canvas, themeData);
-            saveState();
+        } else {
+            console.error('[Inserter] Cannot add text - canvas is null!');
         }
     };
 
@@ -83,14 +83,7 @@ const DesignTab: React.FC = () => {
                     { label: 'Star', icon: <Star className={INSERT_ICON} />, onClick: () => handleAddItem(objectFactories.addStar) },
                 ]}
             />
-            <Dropdown
-                label="Frames"
-                items={[
-                    { label: 'Circle', icon: <Circle className={INSERT_ICON} />, onClick: () => handleAddItem(frameFactories.addCircleFrame) },
-                    { label: 'Star', icon: <Star className={INSERT_ICON} />, onClick: () => handleAddItem(frameFactories.addStarFrame) },
-                    { label: 'Hexagon', icon: <Hexagon className={INSERT_ICON} />, onClick: () => handleAddItem(frameFactories.addHexagonFrame) },
-                ]}
-            />
+            <MaskFrame />
             <Dropdown
                 label="Text"
                 items={[
@@ -107,10 +100,9 @@ const DesignTab: React.FC = () => {
 };
 
 const UploadsDropdown: React.FC = () => {
-    const { canvas, saveState, addAssetToLibrary } = useEditorStore(
+    const { canvas, addAssetToLibrary } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
-            saveState: state.saveState,
             addAssetToLibrary: state.addAssetToLibrary,
         }),
         shallow
@@ -119,46 +111,62 @@ const UploadsDropdown: React.FC = () => {
     const svgInputRef = useRef<HTMLInputElement>(null);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
-    const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file && canvas) {
-            const objectURL = URL.createObjectURL(file);
-            const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
-            const format = file.type === 'image/png' ? 'png' : (file.type === 'image/jpeg' ? 'jpeg' : undefined);
-
-            addAssetToLibrary({
-                id: uuidv4(),
-                url: objectURL,
-                label: baseName,
-                format: format,
-                tags: [baseName.toLowerCase(), 'upload'],
-            });
-
-            fabric.Image.fromURL(objectURL, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
-                canvas.add(img);
-                canvas.centerObject(img);
-                canvas.requestRenderAll();
-                saveState();
-            }).catch((error) => {
-                console.error("Error loading image:", error);
-                URL.revokeObjectURL(objectURL);
-            });
+        if (!file || !canvas) {
+            if (imageInputRef.current) imageInputRef.current.value = '';
+            return;
         }
-        if(imageInputRef.current) imageInputRef.current.value = '';
+
+        // Load image using asset loader service
+        const result = await loadImageFromFile(file);
+
+        if (!result.success) {
+            console.error('Failed to load image:', result.errorMessage);
+            if (imageInputRef.current) imageInputRef.current.value = '';
+            return;
+        }
+
+        // Extract metadata and add to library
+        const metadata = extractFileMetadata(file);
+        addAssetToLibrary({
+            id: result.id,
+            url: result.blobUrl!,
+            label: metadata.baseName,
+            format: metadata.format,
+            tags: metadata.tags,
+        });
+
+        // Add to canvas
+        canvas.add(result.asset);
+        canvas.centerObject(result.asset);
+        canvas.setActiveObject(result.asset);
+        canvas.requestRenderAll();
+
+        if (imageInputRef.current) imageInputRef.current.value = '';
     };
 
-    const handleSvgFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleSvgFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file && canvas) {
-            const reader = new FileReader();
-                reader.onload = (f: ProgressEvent<FileReader>) => {
-                    const svgString = f.target?.result as string;
-                    objectFactories.addSvgFromUrl(canvas, svgString);
-                };
-            reader.readAsText(file);
+        if (!file || !canvas) {
+            if (svgInputRef.current) svgInputRef.current.value = '';
+            return;
         }
-        if(svgInputRef.current) svgInputRef.current.value = '';
-    }
+
+        // Load SVG using asset loader service
+        const result = await loadSvgFromFile(file);
+
+        if (!result.success) {
+            console.error('Failed to load SVG:', result.errorMessage);
+            if (svgInputRef.current) svgInputRef.current.value = '';
+            return;
+        }
+
+        // Add SVG to canvas
+        objectFactories.addSvgFromUrl(canvas, result.asset);
+
+        if (svgInputRef.current) svgInputRef.current.value = '';
+    };
 
     const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -186,13 +194,15 @@ const UploadsDropdown: React.FC = () => {
 }
 
 const LayoutsDropdown: React.FC = () => {
-    const { canvas, saveState, themeData, bleedPx } = useEditorStore(
+    const { canvas, bleedPx } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
-            saveState: state.saveState,
-            themeData: state.themeData,
             bleedPx: state.bleedPx,
         }),
+        shallow
+    );
+    const { themeData } = useThemeStore(
+        (state) => ({ themeData: state.themeData }),
         shallow
     );
     const [isOpen, setIsOpen] = useState(false);
@@ -200,20 +210,6 @@ const LayoutsDropdown: React.FC = () => {
     const [rows, setRows] = useState(2);
     const [cols, setCols] = useState(2);
     const gutter = 20;
-
-    const resolveThemeValue = (obj: object | null, path: string): string | null => {
-        if (!obj) return null;
-        const getValueByPath = (target: object, keyPath: string): any =>
-            keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], target);
-        let value = getValueByPath(obj, path);
-        if (!value && !path.endsWith('.value')) {
-            value = getValueByPath(obj, `${path}.value`);
-        }
-        if (value && typeof value === 'object' && 'value' in value) {
-            return (value as { value: string }).value;
-        }
-        return typeof value === 'string' ? value : null;
-    };
 
     const toRgba = (color: string, alpha: number) => {
         if (color.startsWith('#')) {
@@ -284,7 +280,6 @@ const LayoutsDropdown: React.FC = () => {
     const handleGenerateGrid = (gridRows: number, gridCols: number) => {
         if (!canvas) return;
         objectFactories.generateGrid(canvas, gridRows, gridCols);
-        saveState();
         setIsOpen(false);
         setShowCustomGrid(false);
         clearGhostGrid();
@@ -355,7 +350,6 @@ const LayoutsDropdown: React.FC = () => {
                                 onClick={() => {
                                     if (!canvas) return;
                                     objectFactories.addHerbProfileLayout(canvas);
-                                    saveState();
                                     setIsOpen(false);
                                     setShowCustomGrid(false);
                                 }}

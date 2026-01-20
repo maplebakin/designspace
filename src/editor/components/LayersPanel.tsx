@@ -1,11 +1,13 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { sanityCheckCanvas, useEditorStore, Layer } from '../state/editorStore';
-import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand } from 'lucide-react';
+import { useThemeStore } from '../state/useThemeStore';
+import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand, Search } from 'lucide-react';
 import * as fabric from 'fabric';
-import { v4 as uuidv4 } from 'uuid';
 import * as objectFactories from '../fabric/objectFactories';
+import { loadImageFromFile } from '../services/assetLoader';
+import { Tooltip } from './Tooltip';
 
 export const LayersPanel: React.FC = () => {
   const {
@@ -14,15 +16,14 @@ export const LayersPanel: React.FC = () => {
     layersById,
     selectedLayerIds,
     requestLayerSync,
+    syncCanvasToStore,
     toggleMovementLock,
     toggleColorLock,
     saveState,
-    themeData,
     activeTool,
     setActiveTool,
     brushSize,
     setBrushSize,
-    brushColor,
     setBrushColor,
   } = useEditorStore(
     (state) => ({
@@ -31,22 +32,45 @@ export const LayersPanel: React.FC = () => {
       layersById: state.layersById,
       selectedLayerIds: state.selectedLayerIds,
       requestLayerSync: state.requestLayerSync,
+      syncCanvasToStore: state.syncCanvasToStore,
       toggleMovementLock: state.toggleMovementLock,
       toggleColorLock: state.toggleColorLock,
       saveState: state.saveState,
-      themeData: state.themeData,
       activeTool: state.activeTool,
       setActiveTool: state.setActiveTool,
       brushSize: state.brushSize,
       setBrushSize: state.setBrushSize,
-      brushColor: state.brushColor,
       setBrushColor: state.setBrushColor,
     }),
     shallow
   );
+  const { themeData, brushColor } = useThemeStore(
+    (state) => ({
+      themeData: state.themeData,
+      brushColor: state.brushColor,
+    }),
+    shallow
+  );
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [dragOverLayerId, setDragOverLayerId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const orderedLayers = useMemo(() => [...layers].reverse(), [layers]);
+
+  // Filter layers based on search query
+  const filteredLayers = useMemo(() => {
+    if (!searchQuery) return orderedLayers;
+    const query = searchQuery.toLowerCase();
+    return orderedLayers.filter(layer => {
+      const object = findObjectById(layer.id);
+      const label = getLayerLabel(object, layer.name).toLowerCase();
+      const type = layer.type.toLowerCase();
+      return label.includes(query) || type.includes(query);
+    });
+  }, [orderedLayers, searchQuery]);
 
   // Helper to find an object on canvas by its ID
   const findObjectById = (id: string): fabric.Object | null => {
@@ -86,6 +110,71 @@ export const LayersPanel: React.FC = () => {
     }
   };
 
+  const applyLayerOrder = (nextOrder: Layer[]) => {
+    if (!canvas) return;
+    const orderedObjects = nextOrder
+      .map((layer) => layersById[layer.id])
+      .filter((obj): obj is fabric.Object => !!obj);
+    if (orderedObjects.length === 0) return;
+
+    const allObjects = canvas.getObjects();
+    const nonGuideCount = allObjects.filter((obj) => !(obj as any).isGuide).length;
+    if (orderedObjects.length !== nonGuideCount) return;
+    let reorderIndex = 0;
+    const nextObjects = allObjects.map((obj) => {
+      if ((obj as any).isGuide) return obj;
+      const nextObject = orderedObjects[reorderIndex];
+      reorderIndex += 1;
+      return nextObject || obj;
+    });
+
+    nextObjects.forEach((obj, index) => {
+      canvas.moveObjectTo(obj, index);
+    });
+
+    canvas.requestRenderAll();
+    syncCanvasToStore(canvas);
+    requestLayerSync();
+    saveState();
+  };
+
+  const handleReorder = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    const sourceIndex = orderedLayers.findIndex((layer) => layer.id === sourceId);
+    const targetIndex = orderedLayers.findIndex((layer) => layer.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const nextOrder = [...orderedLayers];
+    const [moved] = nextOrder.splice(sourceIndex, 1);
+    nextOrder.splice(targetIndex, 0, moved);
+    applyLayerOrder(nextOrder);
+  };
+
+  const handleDragStart = (layerId: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', layerId);
+    setDraggedLayerId(layerId);
+  };
+
+  const handleDragOver = (layerId: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDragOverLayerId(layerId);
+  };
+
+  const handleDrop = (layerId: string) => (event: React.DragEvent<HTMLLIElement>) => {
+    event.preventDefault();
+    const sourceId = draggedLayerId || event.dataTransfer.getData('text/plain');
+    if (!sourceId) return;
+    handleReorder(sourceId, layerId);
+    setDraggedLayerId(null);
+    setDragOverLayerId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedLayerId(null);
+    setDragOverLayerId(null);
+  };
+
   const handleDelete = (id: string) => {
     const object = findObjectById(id);
     if (canvas && object) {
@@ -121,16 +210,12 @@ export const LayersPanel: React.FC = () => {
   const handleAddShape = (factory: (canvas: fabric.Canvas) => void) => {
     if (!canvas) return;
     factory(canvas);
-    sanityCheckCanvas(canvas, themeData);
-    saveState();
     setIsMenuOpen(false);
   };
 
   const handleAddText = () => {
     if (!canvas) return;
     objectFactories.addIText(canvas, { text: 'New Text', fontSize: 32, role: 'body' });
-    sanityCheckCanvas(canvas, themeData);
-    saveState();
     setIsMenuOpen(false);
   };
 
@@ -204,28 +289,38 @@ export const LayersPanel: React.FC = () => {
     };
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !canvas) return;
-    const objectURL = URL.createObjectURL(file);
-    fabric.Image.fromURL(objectURL, { crossOrigin: 'anonymous' }).then((img: fabric.FabricImage) => {
-      img.set({
-        id: uuidv4(),
-        tokenRole: 'brand.accent.value',
-        colorLocked: false,
-        originX: 'center',
-        originY: 'center',
-      });
-      canvas.add(img);
-      canvas.centerObject(img);
-      canvas.setActiveObject(img);
-      sanityCheckCanvas(canvas, themeData);
-      canvas.requestRenderAll();
-      saveState();
-    }).catch((error) => {
-      console.error("Error loading image:", error);
-      URL.revokeObjectURL(objectURL); // Revoke if loading fails
+    if (!file || !canvas) {
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      setIsMenuOpen(false);
+      return;
+    }
+
+    const result = await loadImageFromFile(file);
+
+    if (!result.success) {
+      console.error('Failed to load image:', result.errorMessage);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      setIsMenuOpen(false);
+      return;
+    }
+
+    result.asset.set({
+      id: result.id,
+      tokenRole: 'brand.accent.value',
+      colorLocked: false,
+      originX: 'center',
+      originY: 'center',
     });
+
+    canvas.add(result.asset);
+    canvas.centerObject(result.asset);
+    canvas.setActiveObject(result.asset);
+    sanityCheckCanvas(canvas, themeData);
+    canvas.requestRenderAll();
+    saveState();
+
     if (imageInputRef.current) imageInputRef.current.value = '';
     setIsMenuOpen(false);
   };
@@ -233,7 +328,19 @@ export const LayersPanel: React.FC = () => {
   return (
     <div className="p-4 bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] backdrop-blur-[var(--ui-blur)] border border-[color:var(--ui-border)] rounded-xl transition-all duration-300 ease-in-out">
       <div className="mb-4 space-y-3">
-        <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search layers..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+            />
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setActiveTool('select')}
@@ -377,51 +484,104 @@ export const LayersPanel: React.FC = () => {
          <p className="text-sm text-[color:var(--ui-panel-text)]">The canvas is empty.</p>
       ) : (
         <ul className="space-y-2">
-          {[...layers].reverse().map((layer: Layer, index) => {
-            const isSelected = selectedLayerIds.includes(layer.id);
-            const object = findObjectById(layer.id);
-            const label = getLayerLabel(object, layer.name);
-            const preview = getPreviewStyle(object);
-            return (
-            <li
-              key={layer.id || `layer-${index}`}
-              onClick={() => handleSelectLayer(layer.id)}
-              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all duration-300 ease-in-out ${isSelected ? 'bg-white/15 ring-1 ring-[color:var(--brand-primary)]/40' : 'bg-white/5 hover:bg-white/10'}`}
-            >
-              <div className="flex items-center gap-2">
-                <div
-                  className={`h-6 w-6 flex items-center justify-center border ${preview.className}`}
-                  style={{
-                    backgroundColor: preview.color || undefined,
-                    borderColor: preview.stroke || undefined,
-                  }}
-                >
-                  {preview.label && <span>{preview.label}</span>}
-                </div>
-                <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{label}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'up')}} aria-label="Move Up">
-                    <ChevronUp className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out" />
-                </button>
-                 <button onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'down')}} aria-label="Move Down">
-                    <ChevronDown className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out" />
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); handleToggleVisibility(layer.id)}} aria-label="Toggle Visibility">
-                  {layer.visible ? <Eye className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out"/> : <EyeOff className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out"/>}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id)}} aria-label="Toggle Movement Lock">
-                    {layer.movementLocked ? <Lock className="icon-muted w-4 h-4 stroke-[1.5] text-rose-400"/> : <Unlock className="icon-muted w-4 h-4 stroke-[1.5]"/>}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); handleToggleColorLock(layer.id)}} aria-label="Toggle Color Lock">
-                    <Droplet className={`w-4 h-4 stroke-[1.5] transition-colors ${layer.colorLocked ? 'text-rose-400 fill-rose-400/20' : 'icon-muted'}`} />
-                </button>
-                 <button onClick={(e) => { e.stopPropagation(); handleDelete(layer.id)}} aria-label="Delete Object">
-                    <Trash2 className="icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out hover:text-rose-400"/>
-                </button>
-              </div>
+          {filteredLayers.length === 0 ? (
+            <li className="p-2 text-center text-xs text-slate-400">
+              No layers match your search
             </li>
-          )})}
+          ) : (
+            <>
+              {filteredLayers.map((layer: Layer, index) => {
+                const isSelected = selectedLayerIds.includes(layer.id);
+                const object = findObjectById(layer.id);
+                const label = getLayerLabel(object, layer.name);
+                const preview = getPreviewStyle(object);
+                const isDragging = draggedLayerId === layer.id;
+                const isDragOver = dragOverLayerId === layer.id && draggedLayerId !== layer.id;
+
+                return (
+                  <li
+                    key={layer.id || `layer-${index}`}
+                    draggable
+                    onClick={() => handleSelectLayer(layer.id)}
+                    onDragStart={handleDragStart(layer.id)}
+                    onDragOver={handleDragOver(layer.id)}
+                    onDrop={handleDrop(layer.id)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all duration-300 ease-in-out ${isSelected ? 'bg-white/15 ring-1 ring-[color:var(--brand-primary)]/40' : 'bg-white/5 hover:bg-white/10'} ${isDragging ? 'opacity-60' : ''} ${isDragOver ? 'ring-1 ring-[color:var(--brand-primary)]' : ''}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className={`h-6 w-6 flex items-center justify-center border ${preview.className}`}
+                        style={{
+                          backgroundColor: preview.color || undefined,
+                          borderColor: preview.stroke || undefined,
+                        }}
+                      >
+                        {preview.label && <span>{preview.label}</span>}
+                      </div>
+                      <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{label}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Tooltip content="Move Up" side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'up'); }}
+                          className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
+                        >
+                          <ChevronUp className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />
+                        </button>
+                      </Tooltip>
+                      <Tooltip content="Move Down" side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'down'); }}
+                          className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
+                        >
+                          <ChevronDown className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />
+                        </button>
+                      </Tooltip>
+                      <Tooltip content={layer.visible ? 'Hide' : 'Show'} side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleVisibility(layer.id); }}
+                          className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
+                        >
+                          {layer.visible
+                            ? <Eye className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />
+                            : <EyeOff className="icon-muted w-3.5 h-3.5 stroke-[1.5] opacity-50" />
+                          }
+                        </button>
+                      </Tooltip>
+                      <Tooltip content={layer.movementLocked ? 'Unlock Position' : 'Lock Position'} side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id); }}
+                          className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
+                        >
+                          {layer.movementLocked
+                            ? <Lock className="w-3.5 h-3.5 stroke-[1.5] text-rose-400" />
+                            : <Unlock className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />
+                          }
+                        </button>
+                      </Tooltip>
+                      <Tooltip content={layer.colorLocked ? 'Unlock Color' : 'Lock Color'} side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleColorLock(layer.id); }}
+                          className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
+                        >
+                          <Droplet className={`w-3.5 h-3.5 stroke-[1.5] transition-colors ${layer.colorLocked ? 'text-rose-400 fill-rose-400/20' : 'icon-muted'}`} />
+                        </button>
+                      </Tooltip>
+                      <Tooltip content="Delete" side="top">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(layer.id); }}
+                          className="p-1 rounded hover:bg-rose-500/20 active:scale-90 transition-all duration-150"
+                        >
+                          <Trash2 className="icon-muted w-3.5 h-3.5 stroke-[1.5] hover:text-rose-400" />
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </li>
+                );
+              })}
+            </>
+          )}
         </ul>
       )}
     </div>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { PRINT_DPI, formatInches } from '../utils/units';
+import { formatInches, fromCanvasUnits, toCanvasUnits, unitScale } from '../utils/units';
 
 type RulerOrientation = 'horizontal' | 'vertical';
 
@@ -34,16 +34,15 @@ const RulerAxis: React.FC<RulerAxisProps> = ({ orientation }) => {
   }, []);
 
   const isHorizontal = orientation === 'horizontal';
-  const offsetX = canvasOffset?.x ?? 0;
-  const offsetY = canvasOffset?.y ?? 0;
+  const scale = unitScale[unitMode] || 1;
+  const offsetX = (canvasOffset?.x ?? 0) / scale;
+  const offsetY = (canvasOffset?.y ?? 0) / scale;
   const transform = `translate(${isHorizontal ? vpt[4] : 0}, ${isHorizontal ? 0 : vpt[5]}) scale(${zoom})`;
 
-  const baseSpacing = unitMode === 'in' ? PRINT_DPI : 100;
-  let majorTickSpacing = baseSpacing;
-  if (zoom > 2) majorTickSpacing = unitMode === 'in' ? PRINT_DPI / 2 : 50;
-  if (zoom > 4) majorTickSpacing = unitMode === 'in' ? PRINT_DPI / 5 : 20;
-  if (zoom < 0.5) majorTickSpacing = unitMode === 'in' ? PRINT_DPI * 2 : 200;
-
+  const baseUnits = unitMode === 'px' ? 100 : 1;
+  const zoomFactor =
+    zoom > 4 ? 0.2 : zoom > 2 ? 0.5 : zoom < 0.5 ? 2 : 1;
+  const majorTickSpacing = toCanvasUnits(baseUnits * zoomFactor, unitMode) as number;
   const minorTickSpacing = majorTickSpacing / 5;
 
   const ticks = [];
@@ -53,9 +52,9 @@ const RulerAxis: React.FC<RulerAxisProps> = ({ orientation }) => {
     ? canvasWidth / zoom + Math.abs(vpt[4] / zoom)
     : canvasHeight / zoom + Math.abs(vpt[5] / zoom);
 
-  for (let i = 0; i < maxDim; i += minorTickSpacing) {
-    const isMajor = i % majorTickSpacing === 0;
-    if (i === 0) continue;
+    for (let i = 0; i < maxDim; i += minorTickSpacing) {
+      const isMajor = i % majorTickSpacing === 0;
+      if (i === 0) continue;
 
     if (isHorizontal) {
       ticks.push(
@@ -70,7 +69,9 @@ const RulerAxis: React.FC<RulerAxisProps> = ({ orientation }) => {
           />
           {isMajor && (
             <text x={i + 2} y={RULER_SIZE - 12} fontSize={10} fill={TICK_COLOR}>
-              {unitMode === 'in' ? formatInches(i / PRINT_DPI) : i}
+              {unitMode === 'in'
+                ? formatInches((fromCanvasUnits(i, unitMode) as number))
+                : Math.round(fromCanvasUnits(i, unitMode) as number)}
             </text>
           )}
         </g>
@@ -94,7 +95,9 @@ const RulerAxis: React.FC<RulerAxisProps> = ({ orientation }) => {
               writingMode="vertical-rl"
               fill={TICK_COLOR}
             >
-              {unitMode === 'in' ? formatInches(i / PRINT_DPI) : i}
+              {unitMode === 'in'
+                ? formatInches((fromCanvasUnits(i, unitMode) as number))
+                : Math.round(fromCanvasUnits(i, unitMode) as number)}
             </text>
           )}
         </g>

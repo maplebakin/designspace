@@ -16,6 +16,89 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
   if (target.tokenRole === undefined) target.tokenRole = serialized?.tokenRole ?? null;
   if (target.colorLocked === undefined) target.colorLocked = serialized?.colorLocked ?? false;
   if (target.isPlaceholder === undefined) target.isPlaceholder = serialized?.isPlaceholder ?? false;
+  if (target.isFrame === undefined) target.isFrame = serialized?.isFrame ?? false;
+  if (target.frameType === undefined) target.frameType = serialized?.frameType ?? undefined;
+
+  // Handle text-specific properties
+  if (instance.type === 'i-text' || instance.type === 'textbox') {
+    if (serialized.charSpacing !== undefined) target.charSpacing = serialized.charSpacing;
+    if (serialized.stroke !== undefined) target.stroke = serialized.stroke;
+    if (serialized.strokeWidth !== undefined) target.strokeWidth = serialized.strokeWidth;
+
+    // Handle shadow restoration
+    if (serialized.shadow) {
+      if (typeof serialized.shadow === 'string') {
+        target.shadow = serialized.shadow;
+      } else if (typeof serialized.shadow === 'object') {
+        target.shadow = new fabric.Shadow({
+          color: serialized.shadow.color || '#000000',
+          blur: serialized.shadow.blur || 0,
+          offsetX: serialized.shadow.offsetX || 0,
+          offsetY: serialized.shadow.offsetY || 0,
+        });
+      }
+    }
+  }
+
+  // Handle image-specific properties and filters
+  if (instance.type === 'image') {
+    if (serialized.filters && Array.isArray(serialized.filters) && serialized.filters.length > 0) {
+      // Create filter instances from serialized data
+      const filters = [];
+      for (const filterData of serialized.filters) {
+        if (filterData.type === 'Brightness') {
+          filters.push(new fabric.filters.Brightness(filterData));
+        } else if (filterData.type === 'Contrast') {
+          filters.push(new fabric.filters.Contrast(filterData));
+        } else if (filterData.type === 'Saturation') {
+          filters.push(new fabric.filters.Saturation(filterData));
+        } else if (filterData.type === 'Grayscale') {
+          filters.push(new fabric.filters.Grayscale(filterData));
+        } else {
+          // For other filter types, try to recreate them if possible
+          console.warn(`Unknown filter type: ${filterData.type}`);
+        }
+      }
+      target.filters = filters;
+      (instance as fabric.FabricImage).applyFilters();
+    } else if (serialized.adjustments) {
+      // If no filters are present but adjustments exist, apply them
+      const filters = [];
+
+      if (serialized.adjustments.brightness !== undefined && serialized.adjustments.brightness !== 0) {
+        filters.push(new fabric.filters.Brightness({ brightness: serialized.adjustments.brightness }));
+      }
+
+      if (serialized.adjustments.contrast !== undefined && serialized.adjustments.contrast !== 0) {
+        filters.push(new fabric.filters.Contrast({ contrast: serialized.adjustments.contrast }));
+      }
+
+      if (serialized.adjustments.saturation !== undefined && serialized.adjustments.saturation !== 0) {
+        filters.push(new fabric.filters.Saturation({ saturation: serialized.adjustments.saturation }));
+      }
+
+      if (filters.length > 0) {
+        target.filters = filters;
+        (instance as fabric.FabricImage).applyFilters();
+      }
+    }
+
+    // Set the adjustments property on the fabric object for easy access
+    if (serialized.adjustments) {
+      target.adjustments = {
+        brightness: serialized.adjustments.brightness || 0,
+        contrast: serialized.adjustments.contrast || 0,
+        saturation: serialized.adjustments.saturation || 0,
+      };
+    } else {
+      // Default adjustments
+      target.adjustments = {
+        brightness: 0,
+        contrast: 0,
+        saturation: 0,
+      };
+    }
+  }
 };
 
 export const ensureObjectId = (
@@ -149,4 +232,48 @@ export const drawPersistentGuides = (
   }
 
   canvas.requestRenderAll();
+};
+
+/**
+ * Hydrates canvas data with assets from base64 strings.
+ * This converts base64 asset data back to blob URLs for use in the canvas.
+ */
+export const hydrateCanvasDataWithAssets = async (
+  canvasData: any,
+  assets: Record<string, string> = {}
+): Promise<any> => {
+  if (!canvasData || !canvasData.objects) {
+    return canvasData;
+  }
+
+  // Create a mapping from asset IDs to blob URLs
+  const assetBlobUrls: Record<string, string> = {};
+
+  for (const [assetId, base64Data] of Object.entries(assets)) {
+    try {
+      // Convert base64 to blob
+      const response = await fetch(base64Data);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      assetBlobUrls[assetId] = blobUrl;
+    } catch (error) {
+      console.warn(`Failed to hydrate asset ${assetId}:`, error);
+    }
+  }
+
+  // Update image objects with the new blob URLs
+  const hydratedObjects = canvasData.objects.map((obj: any) => {
+    if (obj.type === 'image' && obj.id && assetBlobUrls[obj.id]) {
+      return {
+        ...obj,
+        src: assetBlobUrls[obj.id],
+      };
+    }
+    return obj;
+  });
+
+  return {
+    ...canvasData,
+    objects: hydratedObjects,
+  };
 };

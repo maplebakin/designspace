@@ -3,19 +3,23 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
-import { LayoutTemplate, Square, Upload } from 'lucide-react';
-import { sanityCheckCanvas, useEditorStore } from '../state/editorStore';
-import { initSmartGuides } from '../fabric/smartGuides';
-import { ensureObjectId, initFabricSerialization } from '../fabric/initFabricCanvas';
-import { updateGuides } from '../fabric/canvasUtils';
-import { useUiThemeStore } from '../state/uiThemeStore';
-import type { ApocapaletteTheme } from '../types/apocapalette';
+import { Square, Upload } from 'lucide-react';
+import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
+import { initFabricSerialization } from '../fabric/initFabricCanvas';
+import { resizeCanvas, updateGuides } from '../fabric/canvasUtils';
 import * as objectFactories from '../fabric/objectFactories';
+import { useCanvasLifecycle } from '../hooks/useCanvasLifecycle';
+import { resolveThemeValue } from '../utils/themeResolver';
+import { dirtyObjects, registerAllCanvasEventHandlers } from '../services/canvasEventService';
+import { loadImageFromFile, safeLoadImage } from '../services/assetLoader';
+import { ContextMenu, useContextMenu } from './ContextMenu';
+import { useCanvasStore } from '../state/useCanvasStore';
+import { guideRegistry } from '../fabric/guideRegistry';
 
 initFabricSerialization();
 
-type CanvasNavKey = 'design' | 'blueprints' | 'stickers' | 'text' | 'uploads';
-type CanvasObjectEvent = { target?: fabric.Object };
+type CanvasNavKey = 'insert' | 'layers';
 
 
 
@@ -27,21 +31,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const { 
-    canvas: fabricCanvas, 
-    setCanvas, 
-    setSelectedObject, 
-    saveState, 
-    setLayers,
-    setSelectedLayerIds, 
-    themeData,
+
+  // Context menu integration
+  const { contextMenu, showContextMenu, hideContextMenu } = useContextMenu();
+  const {
+    canvas: fabricCanvas,
+    setSelectedObjectId,
+    syncCanvasToStore,
+    setSelectedLayerIds,
     bleedPx,
     layers,
     layersById,
     activeTool,
-    brushColor,
     brushSize,
-    canvasBackgroundColor,
     setVpt,
     setZoom,
     setCanvasOffset,
@@ -53,22 +55,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     setLayerSyncHandler,
     showGuides,
     markHistoryDirty,
+    unitScale,
+    setDirtyObjectsRef,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      setCanvas: state.setCanvas,
-      setSelectedObject: state.setSelectedObject,
-      saveState: state.saveState,
-      setLayers: state.setLayers,
+      setSelectedObjectId: state.setSelectedObjectId,
+      syncCanvasToStore: state.syncCanvasToStore,
       setSelectedLayerIds: state.setSelectedLayerIds,
-      themeData: state.themeData,
       bleedPx: state.bleedPx,
       layers: state.layers,
       layersById: state.layersById,
       activeTool: state.activeTool,
-      brushColor: state.brushColor,
       brushSize: state.brushSize,
-      canvasBackgroundColor: state.canvasBackgroundColor,
       setVpt: state.setVpt,
       setZoom: state.setZoom,
       setCanvasOffset: state.setCanvasOffset,
@@ -80,41 +79,147 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       setLayerSyncHandler: state.setLayerSyncHandler,
       showGuides: state.showGuides,
       markHistoryDirty: state.markHistoryDirty,
+      unitScale: state.unitScale,
+      setDirtyObjectsRef: state.setDirtyObjectsRef,
     }),
     shallow
   );
-  const uiVars = useUiThemeStore((state) => state.vars);
+  const { themeData, brushColor, canvasBackgroundColor } = useThemeStore(
+    (state) => ({
+      themeData: state.themeData,
+      brushColor: state.brushColor,
+      canvasBackgroundColor: state.canvasBackgroundColor,
+    }),
+    shallow
+  );
 
   const isSpacebarDownRef = useRef(false);
   const isPanningRef = useRef(false);
   const lastPosXRef = useRef(0);
   const lastPosYRef = useRef(0);
-  const isCancelledRef = useRef(false);
   const pendingPromisesRef = useRef<Set<Promise<unknown>>>(new Set());
   const placeholderHighlightRef = useRef<{
     obj: fabric.Object;
     shadow: fabric.Shadow | null;
   } | null>(null);
+
+  const frameHighlightRef = useRef<{
+    obj: fabric.Object;
+    originalFill: string | fabric.Pattern | fabric.Gradient<'linear'> | fabric.Gradient<'radial'> | null;
+    originalOpacity: number;
+  } | null>(null);
+  const updateRafRef = useRef<number | null>(null);
+  const updateScheduledRef = useRef(false);
   const viewportRafRef = useRef<number | null>(null);
-  const canvasOffsetRafRef = useRef<number | null>(null);
-  const layerSyncRafRef = useRef<number | null>(null);
-  const cleanupPromiseRef = useRef<Promise<void> | null>(null);
+  const viewportScheduledRef = useRef(false);
+  const persistCountRef = useRef(0); // PHASE 2.3: Counter-based persistence
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
   const snapEnabledRef = useRef(snapEnabled);
-  const rerenderAttemptsRef = useRef(0);
   const viewportRecoveryAttemptsRef = useRef(0);
+  const didForceRerenderRef = useRef(false);
   const [isOverlayDismissed, setIsOverlayDismissed] = useState(false);
 
-  const scheduleLayerSync = (targetCanvas?: fabric.Canvas | null) => {
+  // PHASE 3.3: Circuit breaker for infinite re-render loop prevention
+  const MAX_FORCE_RERENDER_ATTEMPTS = 3;
+  const forceRerenderAttemptsRef = useRef(0);
+  const forceRerenderBackoffRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  // Use the canvas lifecycle hook for atomic initialization and cleanup
+  const { initializeCanvas, disposeCanvas } = useCanvasLifecycle(canvasRef, containerRef);
+
+  useEffect(() => {
+    if (!fabricCanvas) return;
+    const pendingSize = useCanvasStore.getState().consumePendingSize();
+    if (!pendingSize) return;
+    resizeCanvas(pendingSize.width, pendingSize.height);
+  }, [fabricCanvas]);
+
+  const updateViewportState = useCallback((nextCanvas: fabric.Canvas) => {
+    const vpt = nextCanvas.viewportTransform;
+    if (vpt) {
+      setVpt([...vpt]);
+    }
+    if (containerRef.current && canvasRef.current) {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const canvasRect = canvasRef.current.getBoundingClientRect();
+      const nextOffset = {
+        x: canvasRect.left - containerRect.left,
+        y: canvasRect.top - containerRect.top,
+      };
+      if (
+        Math.abs(nextOffset.x - canvasOffsetRef.current.x) >= 0.5
+        || Math.abs(nextOffset.y - canvasOffsetRef.current.y) >= 0.5
+      ) {
+        canvasOffsetRef.current = nextOffset;
+        const scaledOffset = {
+          x: nextOffset.x * unitScale,
+          y: nextOffset.y * unitScale,
+        };
+        setCanvasOffset(scaledOffset);
+        nextCanvas.calcOffset();
+      }
+    }
+  }, [setCanvasOffset, setVpt, unitScale]);
+
+  const scheduleUpdate = useCallback((
+    targetCanvas?: fabric.Canvas | null,
+    options?: { persist?: boolean; activate?: boolean }
+  ) => {
     const nextCanvas = targetCanvas ?? fabricCanvas;
     if (!nextCanvas) return;
-    if (layerSyncRafRef.current !== null) return;
-    layerSyncRafRef.current = requestAnimationFrame(() => {
-      layerSyncRafRef.current = null;
-      setLayers(nextCanvas.getObjects());
+    const shouldPersist = !!options?.persist;
+
+    // PHASE 2.3: Counter-based persistence - increment instead of setting boolean
+    if (shouldPersist) {
+      if (persistCountRef.current === 0) {
+        useEditorStore.getState().startBatch();
+      }
+      persistCountRef.current += 1;
+    }
+
+    if (updateScheduledRef.current) return;
+    updateScheduledRef.current = true;
+    updateRafRef.current = requestAnimationFrame(() => {
+      updateScheduledRef.current = false;
+      updateRafRef.current = null;
+      syncCanvasToStore(nextCanvas);
+      updateViewportState(nextCanvas);
+      nextCanvas.requestRenderAll();
+
+      // PHASE 2.3: Counter-based persistence - reset counter and persist if > 0
+      if (persistCountRef.current > 0) {
+        persistCountRef.current = 0;
+        useEditorStore.getState().endBatch();
+      }
     });
-  };
+  }, [fabricCanvas, syncCanvasToStore, updateViewportState]);
+
+  const addObjectToCanvas = useCallback((
+    canvas: fabric.Canvas,
+    obj: fabric.Object,
+    options?: { persist?: boolean; activate?: boolean }
+  ) => {
+    canvas.add(obj);
+    if (options?.activate ?? true) {
+      canvas.setActiveObject(obj);
+    }
+    scheduleUpdate(canvas, options);
+  }, [scheduleUpdate]);
+
+  const scheduleViewportUpdate = useCallback((targetCanvas?: fabric.Canvas | null) => {
+    const nextCanvas = targetCanvas ?? fabricCanvas;
+    if (!nextCanvas) return;
+
+    if (viewportScheduledRef.current) return;
+    viewportScheduledRef.current = true;
+    viewportRafRef.current = requestAnimationFrame(() => {
+      viewportScheduledRef.current = false;
+      viewportRafRef.current = null;
+      updateViewportState(nextCanvas);
+    });
+  }, [fabricCanvas, updateViewportState]);
 
   const getViewportBounds = useCallback((canvas: fabric.Canvas) => {
     const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
@@ -209,7 +314,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       fabricCanvas.backgroundImage = backgroundImage;
     }
     orderedObjects.forEach((obj) => {
-      fabricCanvas.add(obj);
+      addObjectToCanvas(fabricCanvas, obj, { activate: false });
       obj.setCoords();
     });
     updateGuides(fabricCanvas, showGuides);
@@ -218,8 +323,22 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     if (!areObjectsInView(fabricCanvas, orderedObjects)) {
       focusObjectsInView(fabricCanvas, orderedObjects);
     }
-    scheduleLayerSync(fabricCanvas);
+    scheduleUpdate(fabricCanvas);
   }, [areObjectsInView, fabricCanvas, layers, layersById, showGuides, focusObjectsInView]);
+
+  // PHASE 3.1: Use guideRegistry for bulletproof guide filtering
+  const isCanvasInSync = useCallback(() => {
+    if (!fabricCanvas) return true;
+    const canvasIds = new Set(
+      guideRegistry.filterNonGuides(fabricCanvas.getObjects())
+        .map((obj) => (obj as any).id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    );
+    const storeIds = Object.keys(layersById).filter((id) => id);
+    if (storeIds.length === 0) return true;
+    if (canvasIds.size === 0) return false;
+    return storeIds.every((id) => canvasIds.has(id));
+  }, [fabricCanvas, layersById]);
 
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -228,13 +347,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   useEffect(() => {
     snapEnabledRef.current = snapEnabled;
   }, [snapEnabled]);
-
-  useEffect(() => {
-    setLayerSyncHandler(() => scheduleLayerSync(fabricCanvas));
-    return () => {
-      setLayerSyncHandler(null);
-    };
-  }, [fabricCanvas, setLayerSyncHandler]);
 
   useEffect(() => {
     const win = window as unknown as { __forceCanvasRerender?: () => void };
@@ -246,45 +358,111 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     };
   }, [forceRerenderCanvas]);
 
+  // PHASE 3.3: Canvas sync check with circuit breaker
   useEffect(() => {
     if (!fabricCanvas) return;
-    const hasLayers = layers.length > 0;
+    const hasLayers = Object.keys(layersById).length > 0;
     if (!hasLayers) {
-      rerenderAttemptsRef.current = 0;
       viewportRecoveryAttemptsRef.current = 0;
+      didForceRerenderRef.current = false;
+      forceRerenderAttemptsRef.current = 0; // Reset circuit breaker
+      setSyncError(null);
       return;
     }
-    const hasRenderableObjects = fabricCanvas
-      .getObjects()
-      .some((obj) => !(obj as any).isGuide);
-    if (!hasRenderableObjects) {
-      if (rerenderAttemptsRef.current < 2) {
-        rerenderAttemptsRef.current += 1;
-        forceRerenderCanvas();
-      }
-      return;
-    }
-    rerenderAttemptsRef.current = 0;
-  }, [fabricCanvas, layers, forceRerenderCanvas]);
 
+    if (!isCanvasInSync()) {
+      // Circuit breaker: prevent infinite loops
+      forceRerenderAttemptsRef.current += 1;
+
+      if (forceRerenderAttemptsRef.current > MAX_FORCE_RERENDER_ATTEMPTS) {
+        console.error('[CIRCUIT BREAKER] Canvas sync failed after', MAX_FORCE_RERENDER_ATTEMPTS, 'attempts. Manual intervention required.');
+        setSyncError('Canvas synchronization failed. Please save your work and reload the page.');
+        return;
+      }
+
+      if (didForceRerenderRef.current) return;
+      didForceRerenderRef.current = true;
+
+      // Exponential backoff: 0ms, 100ms, 500ms
+      const backoffDelay = forceRerenderAttemptsRef.current === 1
+        ? 0
+        : 100 * Math.pow(5, forceRerenderAttemptsRef.current - 2);
+
+      // Clear any pending backoff timeout
+      if (forceRerenderBackoffRef.current) {
+        clearTimeout(forceRerenderBackoffRef.current);
+      }
+
+      forceRerenderBackoffRef.current = setTimeout(() => {
+        forceRerenderBackoffRef.current = null;
+        forceRerenderCanvas();
+      }, backoffDelay);
+
+      return;
+    }
+
+    // Success - reset circuit breaker counter
+    forceRerenderAttemptsRef.current = 0;
+    didForceRerenderRef.current = false;
+    setSyncError(null);
+  }, [fabricCanvas, forceRerenderCanvas, isCanvasInSync, layersById]);
+
+  // Cleanup backoff timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (forceRerenderBackoffRef.current) {
+        clearTimeout(forceRerenderBackoffRef.current);
+        forceRerenderBackoffRef.current = null;
+      }
+    };
+  }, []);
+
+  // PHASE 3.4: Improved viewport recovery with smarter off-screen detection
+  // Only auto-focus if ALL objects are COMPLETELY off-screen
+  // Don't fight with the user if they intentionally panned away
   useEffect(() => {
     if (!fabricCanvas) return;
-    const objects = fabricCanvas
-      .getObjects()
-      .filter((obj) => !(obj as any).isGuide);
+    const objects = guideRegistry.filterNonGuides(fabricCanvas.getObjects());
     if (objects.length === 0) {
       viewportRecoveryAttemptsRef.current = 0;
       return;
     }
-    if (!areObjectsInView(fabricCanvas, objects)) {
-      if (viewportRecoveryAttemptsRef.current < 2) {
-        viewportRecoveryAttemptsRef.current += 1;
-        focusObjectsInView(fabricCanvas, objects);
-      }
+
+    // Check if ANY objects are at least partially visible
+    const hasAnyVisibleObject = areObjectsInView(fabricCanvas, objects);
+
+    if (hasAnyVisibleObject) {
+      // At least one object is visible - no recovery needed
+      viewportRecoveryAttemptsRef.current = 0;
       return;
     }
-    viewportRecoveryAttemptsRef.current = 0;
-  }, [areObjectsInView, fabricCanvas, layers, focusObjectsInView]);
+
+    // All objects are off-screen - check if COMPLETELY off-screen
+    const viewport = getViewportBounds(fabricCanvas);
+    const objectBounds = getObjectsBounds(objects);
+
+    if (!objectBounds) {
+      viewportRecoveryAttemptsRef.current = 0;
+      return;
+    }
+
+    // Calculate if objects are COMPLETELY off-screen (no overlap at all)
+    const completelyOffScreen = (
+      objectBounds.left + objectBounds.width < viewport.left ||
+      objectBounds.left > viewport.right ||
+      objectBounds.top + objectBounds.height < viewport.top ||
+      objectBounds.top > viewport.bottom
+    );
+
+    if (completelyOffScreen && viewportRecoveryAttemptsRef.current < 2) {
+      viewportRecoveryAttemptsRef.current += 1;
+      // Only auto-focus on first mount or after canvas changes
+      // Don't repeatedly try if user has panned away
+      if (viewportRecoveryAttemptsRef.current === 1) {
+        focusObjectsInView(fabricCanvas, objects);
+      }
+    }
+  }, [areObjectsInView, fabricCanvas, layers, focusObjectsInView, getViewportBounds, getObjectsBounds]);
 
   useEffect(() => {
     if (layers.length > 0) {
@@ -292,82 +470,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     }
   }, [layers, setShowOnboarding]);
 
-  const resolveThemeValue = (theme: ApocapaletteTheme | null, path: string): string | null => {
-    if (!theme) return null;
-    const getValueByPath = (obj: object, keyPath: string): any =>
-      keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
-    let value = getValueByPath(theme, path);
-    if (!value && !path.endsWith('.value')) {
-      value = getValueByPath(theme, `${path}.value`);
-    }
-    if (value && typeof value === 'object' && 'value' in value) {
-      return (value as { value: string }).value;
-    }
-    return typeof value === 'string' ? value : null;
-  };
-
-  const trackPromise = <T,>(promise: Promise<T>) => {
+  const trackPromise = <T,>(promise: Promise<T>, abortSignal?: AbortSignal) => {
     pendingPromisesRef.current.add(promise);
     promise.finally(() => pendingPromisesRef.current.delete(promise));
+
+    // If aborted, return a rejected promise immediately
+    if (abortSignal?.aborted) {
+      return Promise.reject(new Error('Operation aborted'));
+    }
+
     return promise;
-  };
-
-  
-
-  const syncViewportState = (canvas: fabric.Canvas) => {
-    if (viewportRafRef.current !== null) return;
-    viewportRafRef.current = requestAnimationFrame(() => {
-      viewportRafRef.current = null;
-      const vpt = canvas.viewportTransform;
-      if (vpt) {
-        setVpt([...vpt]);
-      }
-    });
-  };
-
-  const syncCanvasOffset = () => {
-    if (canvasOffsetRafRef.current !== null) return;
-    canvasOffsetRafRef.current = requestAnimationFrame(() => {
-      canvasOffsetRafRef.current = null;
-      if (!containerRef.current || !canvasRef.current) return;
-      const containerRect = containerRef.current.getBoundingClientRect();
-      const canvasRect = canvasRef.current.getBoundingClientRect();
-      const nextOffset = {
-        x: canvasRect.left - containerRect.left,
-        y: canvasRect.top - containerRect.top,
-      };
-      if (
-        Math.abs(nextOffset.x - canvasOffsetRef.current.x) < 0.5
-        && Math.abs(nextOffset.y - canvasOffsetRef.current.y) < 0.5
-      ) {
-        return;
-      }
-      canvasOffsetRef.current = nextOffset;
-      setCanvasOffset(nextOffset);
-      if (fabricCanvas) {
-        fabricCanvas.calcOffset();
-      }
-    });
-  };
-
-  const clampPan = (canvas: fabric.Canvas) => {
-    const vpt = canvas.viewportTransform;
-    if (!vpt) return;
-    const zoom = canvas.getZoom();
-    const viewWidth = canvas.getWidth();
-    const viewHeight = canvas.getHeight();
-    const halfWidth = (viewWidth * zoom) / 2;
-    const halfHeight = (viewHeight * zoom) / 2;
-    const minX = -halfWidth;
-    const maxX = viewWidth - halfWidth;
-    const minY = -halfHeight;
-    const maxY = viewHeight - halfHeight;
-    const nextX = Math.min(maxX, Math.max(minX, vpt[4]));
-    const nextY = Math.min(maxY, Math.max(minY, vpt[5]));
-    if (nextX === vpt[4] && nextY === vpt[5]) return;
-    vpt[4] = nextX;
-    vpt[5] = nextY;
-    canvas.setViewportTransform(vpt);
   };
 
   const applyDrawingBrush = (canvas: fabric.Canvas, tool: 'draw' | 'erase') => {
@@ -386,251 +498,50 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     canvas.freeDrawingBrush = pencilBrush;
   };
 
-  useEffect(() => {
-    if (!canvasRef.current || !containerRef.current) return;
+  // Setup function that registers all canvas event handlers using the canvas event service
+  // This is passed to the lifecycle hook for atomic initialization
+  const setupCanvasHandlers = useCallback((canvas: fabric.Canvas, abortSignal: AbortSignal) => {
+    if (!containerRef.current) return null;
+    const container = containerRef.current;
 
-    isCancelledRef.current = false;
-    let isEffectCancelled = false;
-    let cleanupRan = false;
-    let cleanupResources: (() => void) | null = null;
+    // Check for early abort
+    if (abortSignal.aborted) return null;
 
-    const initCanvas = async () => {
-      if (cleanupPromiseRef.current) {
-        await cleanupPromiseRef.current;
-        cleanupPromiseRef.current = null;
-      }
-      if (!canvasRef.current || !containerRef.current || isEffectCancelled) return;
+    // Register layer sync handler BEFORE setting canvas in store
+    setLayerSyncHandler(() => scheduleUpdate(canvas));
+    scheduleUpdate(canvas);
+    dirtyObjects.clear();
+    setDirtyObjectsRef(dirtyObjects);
 
-      const container = containerRef.current;
-      const { width, height } = container.getBoundingClientRect();
-
-      const canvas = new fabric.Canvas(canvasRef.current, {
-        width,
-        height,
-        backgroundColor:
-          canvasBackgroundColor
-          || resolveThemeValue(themeData, 'surfaces.page-background')
-          || uiVars['--ui-panel']
-          || '#f8fafc',
-        selection: true,
-        controlsAboveOverlay: true,
-        stopContextMenu: true,
-      });
-      canvas.calcOffset();
-
-      setCanvas(canvas);
-      syncCanvasOffset();
-      syncViewportState(canvas);
-
-    const handleObjectEvent = (event?: CanvasObjectEvent) => {
-      const target = event?.target as fabric.Object | undefined;
-      if (!target || (target as any).isGuide) {
-        return;
-      }
-      markHistoryDirty();
-      scheduleLayerSync(canvas);
-    };
-
-    const handleObjectRemoved = (event?: CanvasObjectEvent) => {
-      const target = event?.target as fabric.Object | undefined;
-      if (target && !(target as any).isGuide) {
-        markHistoryDirty();
-        scheduleLayerSync(canvas);
-      }
-      if (target?.type === 'image') {
-        const id = (target as any).id as string | undefined;
-        if (id) {
-          const { imageAssets, removeImageAsset } = useEditorStore.getState();
-          const imageUrl = imageAssets[id];
-          if (imageUrl) {
-            URL.revokeObjectURL(imageUrl);
-            removeImageAsset(id);
-          }
-        }
-      }
-    };
-
-
-
-    const handleObjectScaling = (event: any) => {
-      const target = event.target as fabric.Object | undefined;
-      if (!target || (target as any).isGuide) return;
-      if (target.type !== 'rect') return;
-      const rect = target as fabric.Rect;
-      const rx = rect.rx ?? 0;
-      const ry = rect.ry ?? 0;
-      if (!rx && !ry) return;
-
-      const scaleX = Math.abs(rect.scaleX ?? 1);
-      const scaleY = Math.abs(rect.scaleY ?? 1);
-      if (!scaleX || !scaleY) return;
-
-      const baseRx = (rect as any).__baseRx ?? rx * scaleX;
-      const baseRy = (rect as any).__baseRy ?? ry * scaleY;
-      (rect as any).__baseRx = baseRx;
-      (rect as any).__baseRy = baseRy;
-      rect.set({
-        rx: baseRx / scaleX,
-        ry: baseRy / scaleY,
-      });
-    };
-
-    const handleObjectAdded = (event: CanvasObjectEvent) => {
-      const target = event.target as fabric.Object | undefined;
-      if (!target) return;
-      if ((target as any).isGuide) return;
-      ensureObjectId(target, canvas);
-      if (activeToolRef.current === 'draw' || activeToolRef.current === 'erase') {
-        markHistoryDirty();
-      }
-      scheduleLayerSync(canvas);
-    };
-
-    updateGuides(canvas, useEditorStore.getState().showGuides);
-    scheduleLayerSync(canvas);
-
-    const cleanupSmartGuides = initSmartGuides(canvas, {
-      snapEnabled,
-      gridEnabled,
+    // Register all canvas event handlers using the service
+    const eventRegistry = registerAllCanvasEventHandlers({
+      canvas,
+      container,
+      abortSignal,
+      callbacks: {
+        onUpdate: scheduleUpdate,
+        onHistoryDirty: markHistoryDirty,
+        onSelectedObjectId: setSelectedObjectId,
+        onSelectedLayerIds: setSelectedLayerIds,
+        onZoom: setZoom,
+        onViewportChange: scheduleViewportUpdate,
+      },
+      refs: {
+        activeTool: activeToolRef,
+        isSpacebarDown: isSpacebarDownRef,
+        isPanning: isPanningRef,
+        lastPosX: lastPosXRef,
+        lastPosY: lastPosYRef,
+      },
+      config: {
+        snapEnabled,
+        gridEnabled,
+      },
     });
 
-    const handleAfterRender = () => {
-      syncViewportState(canvas);
-      syncCanvasOffset();
-    };
-
-    const handleMouseWheel = (opt: fabric.TPointerEventInfo<WheelEvent>) => {
-      const evt = opt.e as WheelEvent;
-      let zoom = canvas.getZoom();
-      const zoomFactor = 0.999 ** evt.deltaY;
-      zoom *= zoomFactor;
-      const clampedZoom = Math.min(4, Math.max(0.25, zoom));
-      const pointer = canvas.getPointer(evt);
-      canvas.zoomToPoint(new fabric.Point(pointer.x, pointer.y), clampedZoom);
-      clampPan(canvas);
-      setZoom(clampedZoom);
-      syncViewportState(canvas);
-      evt.preventDefault();
-      evt.stopPropagation();
-    };
-
-    canvas.on('object:added', handleObjectAdded);
-    canvas.on('object:removed', handleObjectRemoved);
-    canvas.on('object:modified', handleObjectEvent);
-    canvas.on('object:scaling', handleObjectScaling);
-
-    canvas.on('after:render', handleAfterRender);
-    canvas.on('mouse:wheel', handleMouseWheel);
-
-    // Pan with spacebar
-    const onMouseDown = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
-      const e = opt.e as MouseEvent;
-      const tool = activeToolRef.current;
-      const shouldPan = tool === 'pan' || (tool === 'select' && isSpacebarDownRef.current);
-      if (shouldPan && e.button === 0) {
-        isPanningRef.current = true;
-        canvas.setCursor('grab');
-        lastPosXRef.current = e.clientX;
-        lastPosYRef.current = e.clientY;
-      }
-    };
-
-    const onMouseMove = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
-      if (isPanningRef.current) {
-        canvas.setCursor('grabbing');
-        const e = opt.e as MouseEvent;
-        const deltaX = e.clientX - lastPosXRef.current;
-        const deltaY = e.clientY - lastPosYRef.current;
-        canvas.relativePan(new fabric.Point(deltaX, deltaY));
-        clampPan(canvas);
-        syncViewportState(canvas);
-        lastPosXRef.current = e.clientX;
-        lastPosYRef.current = e.clientY;
-      }
-    };
-
-    const onMouseUp = () => {
-        isPanningRef.current = false;
-        const tool = activeToolRef.current;
-        if (tool === 'pan') {
-          canvas.setCursor('grab');
-        } else {
-          canvas.setCursor(isSpacebarDownRef.current ? 'grab' : 'default');
-        }
-    };
-
-    canvas.on('mouse:down', onMouseDown);
-    canvas.on('mouse:move', onMouseMove);
-    canvas.on('mouse:up', onMouseUp);
-
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-        if (activeToolRef.current !== 'select') return;
-        if (e.code === 'Space' && !isSpacebarDownRef.current) {
-            e.preventDefault();
-            isSpacebarDownRef.current = true;
-            canvas.setCursor('grab');
-            canvas.selection = false;
-            canvas.requestRenderAll();
-        }
-    };
-
-    const handleGlobalKeyUp = (e: KeyboardEvent) => {
-        if (activeToolRef.current !== 'select') return;
-        if (e.code === 'Space' && isSpacebarDownRef.current) {
-            isSpacebarDownRef.current = false;
-            canvas.setCursor('default');
-            canvas.selection = true;
-            canvas.requestRenderAll();
-        }
-    };
-    
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    window.addEventListener('keyup', handleGlobalKeyUp);
-
-    const handleSelection = () => {
-      const activeObject = canvas.getActiveObject();
-      setSelectedObject(activeObject ?? null);
-      if (!activeObject) {
-        setSelectedLayerIds([]);
-        return;
-      }
-      if (activeObject.type === 'activeSelection') {
-        const ids = (activeObject as fabric.ActiveSelection)
-          .getObjects()
-          .map((obj) => (obj as any).id)
-          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
-        setSelectedLayerIds(ids);
-        return;
-      }
-      const id = (activeObject as any).id;
-      if (typeof id === 'string' && id.trim().length > 0) {
-        setSelectedLayerIds([id]);
-      } else {
-        setSelectedLayerIds([]);
-      }
-    };
-
-    const handleSelectionCleared = () => {
-      setSelectedObject(null);
-      setSelectedLayerIds([]);
-    };
-
-    canvas.on('selection:created', handleSelection);
-    canvas.on('selection:updated', handleSelection);
-    canvas.on('selection:cleared', handleSelectionCleared);
-
-    const handleResize = () => {
-      const { width, height } = container.getBoundingClientRect();
-      canvas.setDimensions({ width, height });
-      canvas.calcOffset();
-      updateGuides(canvas, useEditorStore.getState().showGuides);
-      syncCanvasOffset();
-    };
-
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(container);
-
-    cleanupResources = () => {
+    // Return cleanup function that will be called by the lifecycle hook
+    return () => {
+      // Clean up pending promises
       const pendingPromises = Array.from(pendingPromisesRef.current);
       pendingPromises.forEach((promise) => {
         promise.catch((error) => {
@@ -638,90 +549,80 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
           if (message.includes('aborted')) return;
         });
       });
+
+      // Clean up guides and clear the guide registry
       updateGuides(canvas, false);
-      cleanupSmartGuides();
-      window.removeEventListener('keydown', handleGlobalKeyDown);
-      window.removeEventListener('keyup', handleGlobalKeyUp);
-      resizeObserver.unobserve(container);
-      resizeObserver.disconnect();
+      guideRegistry.clear(); // PHASE 3.1: Clear guide registry on dispose
+
+      // Clean up animation frame
+      if (updateRafRef.current !== null) {
+        cancelAnimationFrame(updateRafRef.current);
+        updateRafRef.current = null;
+        updateScheduledRef.current = false;
+
+        // PHASE 2.3: Counter-based persistence cleanup
+        if (persistCountRef.current > 0) {
+          persistCountRef.current = 0;
+          useEditorStore.getState().endBatch();
+        }
+      }
       if (viewportRafRef.current !== null) {
         cancelAnimationFrame(viewportRafRef.current);
         viewportRafRef.current = null;
+        viewportScheduledRef.current = false;
       }
-      if (canvasOffsetRafRef.current !== null) {
-        cancelAnimationFrame(canvasOffsetRafRef.current);
-        canvasOffsetRafRef.current = null;
-      }
-      if (layerSyncRafRef.current !== null) {
-        cancelAnimationFrame(layerSyncRafRef.current);
-        layerSyncRafRef.current = null;
-      }
-      canvas.off('object:added', handleObjectAdded);
-      canvas.off('object:removed', handleObjectRemoved);
-      canvas.off('object:modified', handleObjectEvent);
-      canvas.off('object:scaling', handleObjectScaling);
 
-      canvas.off('after:render', handleAfterRender);
-      canvas.off('mouse:wheel', handleMouseWheel);
-      canvas.off('mouse:down', onMouseDown);
-      canvas.off('mouse:move', onMouseMove);
-      canvas.off('mouse:up', onMouseUp);
-      canvas.off('selection:created', handleSelection);
-      canvas.off('selection:updated', handleSelection);
-      canvas.off('selection:cleared', handleSelectionCleared);
-
-      const disposeCanvas = () => {
-        let disposeResult: Promise<unknown> | null = null;
-        try {
-          disposeResult = Promise.resolve(canvas.dispose());
-        } catch (error) {
-          const message = error instanceof Error ? error.message.toLowerCase() : '';
-          if (!message.includes('aborted')) {
-            return;
-          }
-        }
-        disposeResult?.catch((error) => {
-          const message = error instanceof Error ? error.message.toLowerCase() : '';
-          if (message.includes('aborted')) return;
-        });
-      };
-
-      const finalizeCleanup = async () => {
-        await Promise.allSettled(pendingPromises);
-        pendingPromisesRef.current.clear();
-        disposeCanvas();
-      };
-
-      const cleanupPromise = finalizeCleanup();
-      cleanupPromiseRef.current = cleanupPromise.then(() => undefined);
-      void cleanupPromise;
-
-      setCanvas(null);
+      // Clean up all event handlers using the registry
+      eventRegistry.cleanupAll();
+      setDirtyObjectsRef(null);
     };
-  };
+  }, [
+    scheduleUpdate,
+    setLayerSyncHandler,
+    markHistoryDirty,
+    setSelectedObjectId,
+    setSelectedLayerIds,
+    setZoom,
+    snapEnabled,
+    gridEnabled,
+    setDirtyObjectsRef,
+  ]);
 
-  void initCanvas();
+  // Main initialization effect using the lifecycle hook
+  // IMPORTANT: This should only run ONCE on mount, not when setupCanvasHandlers changes
+  useEffect(() => {
+    let canvasInstance: fabric.Canvas | null = null;
+    let cleanupHandlers: (() => void) | null = null;
+    let abortController: AbortController | null = null;
 
-  return () => {
-    if (cleanupRan) return;
-    cleanupRan = true;
-    isCancelledRef.current = true;
-    isEffectCancelled = true;
-    cleanupResources?.();
-  };
-}, []);
+    const init = async () => {
+      const result = await initializeCanvas(setupCanvasHandlers);
+      if (result) {
+        canvasInstance = result.canvas;
+        cleanupHandlers = result.cleanup;
+        abortController = result.abortController;
+      }
+    };
+
+    void init();
+
+    return () => {
+      if (canvasInstance) {
+        void disposeCanvas(canvasInstance, cleanupHandlers, abortController);
+      }
+    };
+  }, [initializeCanvas, disposeCanvas]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
     const paperColor =
       canvasBackgroundColor
       || resolveThemeValue(themeData, 'surfaces.page-background')
-      || uiVars['--ui-panel']
-      || '#f8fafc';
+      || DEFAULT_CANVAS_BACKGROUND; // Use the defined default background
     fabricCanvas.backgroundColor = paperColor;
     updateGuides(fabricCanvas, showGuides);
     fabricCanvas.requestRenderAll();
-  }, [fabricCanvas, themeData, bleedPx, uiVars, canvasBackgroundColor, showGuides]);
+  }, [fabricCanvas, themeData, bleedPx, canvasBackgroundColor, showGuides]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -738,7 +639,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       fabricCanvas.defaultCursor = 'crosshair';
       fabricCanvas.hoverCursor = 'crosshair';
     } else {
-      fabricCanvas.defaultCursor = 'default';
+      fabricCanvas.defaultCursor = 'crosshair';
       fabricCanvas.hoverCursor = 'move';
     }
 
@@ -751,8 +652,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     if (!fabricCanvas) return;
     (fabricCanvas as any).snapToGrid = snapEnabled;
   }, [fabricCanvas, snapEnabled]);
-
-  
 
   const clearPlaceholderHighlight = () => {
     const current = placeholderHighlightRef.current;
@@ -785,6 +684,39 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     fabricCanvas.requestRenderAll();
   };
 
+  const clearFrameHighlight = () => {
+    const current = frameHighlightRef.current;
+    if (!current || !fabricCanvas) return;
+    current.obj.set({
+      fill: current.originalFill,
+      opacity: current.originalOpacity,
+    });
+    frameHighlightRef.current = null;
+    fabricCanvas.requestRenderAll();
+  };
+
+  const setFrameHighlight = (frame: fabric.Object | null) => {
+    if (!fabricCanvas) return;
+    if (frameHighlightRef.current?.obj === frame) return;
+    clearFrameHighlight();
+    if (!frame) return;
+
+    const originalFill = frame.fill;
+    const originalOpacity = frame.opacity ?? 1;
+
+    // Apply highlight effect - change fill to a brighter version or add glow
+    frame.set({
+      fill: 'rgba(128, 0, 128, 0.5)', // Purple semi-transparent fill
+      opacity: 0.8,
+    });
+
+    frameHighlightRef.current = { obj: frame, originalFill, originalOpacity };
+    if (frame.group) {
+      (frame.group as any).dirty = true;
+    }
+    fabricCanvas.requestRenderAll();
+  };
+
   const findPlaceholderAtPointer = (pointer: fabric.Point) => {
     if (!fabricCanvas) return null;
     const objects = fabricCanvas.getObjects().slice().reverse();
@@ -810,10 +742,136 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     return null;
   };
 
+  const findFrameAtPointer = (pointer: fabric.Point) => {
+    if (!fabricCanvas) return null;
+    const objects = fabricCanvas.getObjects().slice().reverse();
+
+    const findInObject = (obj: fabric.Object): fabric.Object | null => {
+      if ((obj as any).isFrame && obj.containsPoint(pointer)) {
+        return obj;
+      }
+      if (obj.type === 'group' || obj.type === 'activeSelection') {
+        const children = (obj as fabric.Group).getObjects().slice().reverse();
+        for (const child of children) {
+          const found = findInObject(child);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    for (const obj of objects) {
+      const found = findInObject(obj);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const resolveFrameType = (placeholder: fabric.Object) => {
+    const rawType = (placeholder as any).frameType;
+    if (rawType === 'circle' || rawType === 'star' || rawType === 'hexagon' || rawType === 'badge') {
+      return rawType;
+    }
+    if (placeholder.type === 'circle') return 'circle';
+    if (placeholder.type === 'polygon') {
+      const points = (placeholder as fabric.Polygon).points ?? [];
+      if (points.length === 6) return 'hexagon';
+      if (points.length === 10) return 'star';
+      if (points.length >= 12) return 'badge';
+    }
+    return null;
+  };
+
+  const buildRegularPolygonPoints = (sides: number, radius: number) => {
+    const points = [];
+    const step = (Math.PI * 2) / sides;
+    const startAngle = -Math.PI / 2;
+    for (let i = 0; i < sides; i += 1) {
+      const angle = startAngle + step * i;
+      points.push({
+        x: radius * Math.cos(angle),
+        y: radius * Math.sin(angle),
+      });
+    }
+    return points;
+  };
+
+  const buildStarPoints = (points: number, outerRadius: number, innerRadius: number) => {
+    const result = [];
+    const totalPoints = points * 2;
+    const step = (Math.PI * 2) / totalPoints;
+    const startAngle = -Math.PI / 2;
+    for (let i = 0; i < totalPoints; i += 1) {
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      const angle = startAngle + step * i;
+      result.push({
+        x: radius * Math.cos(angle),
+        y: radius * Math.sin(angle),
+      });
+    }
+    return result;
+  };
+
+  const createFrameClipPath = (
+    frameType: ReturnType<typeof resolveFrameType>,
+    clipWidth: number,
+    clipHeight: number,
+    angle: number
+  ) => {
+    const radius = Math.min(clipWidth, clipHeight) / 2;
+    if (frameType === 'circle') {
+      return new fabric.Circle({
+        radius,
+        left: 0,
+        top: 0,
+        originX: 'center',
+        originY: 'center',
+        angle,
+      });
+    }
+    if (frameType === 'hexagon') {
+      return new fabric.Polygon(buildRegularPolygonPoints(6, radius), {
+        left: 0,
+        top: 0,
+        originX: 'center',
+        originY: 'center',
+        angle,
+      });
+    }
+    if (frameType === 'star') {
+      return new fabric.Polygon(buildStarPoints(5, radius, radius * 0.5), {
+        left: 0,
+        top: 0,
+        originX: 'center',
+        originY: 'center',
+        angle,
+      });
+    }
+    if (frameType === 'badge') {
+      return new fabric.Polygon(buildStarPoints(12, radius, radius * 0.82), {
+        left: 0,
+        top: 0,
+        originX: 'center',
+        originY: 'center',
+        angle,
+      });
+    }
+    return new fabric.Rect({
+      width: clipWidth,
+      height: clipHeight,
+      left: 0,
+      top: 0,
+      originX: 'center',
+      originY: 'center',
+      angle,
+    });
+  };
+
   const replacePlaceholderWithImage = (
     canvas: fabric.Canvas,
     placeholder: fabric.Object,
-    img: fabric.FabricImage
+    img: fabric.FabricImage,
+    options?: { persist?: boolean }
   ) => {
     const center = placeholder.getCenterPoint();
     const angle = placeholder.angle || 0;
@@ -823,10 +881,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const group = placeholder.group as fabric.Group | undefined;
     const groupScaleX = group?.scaleX ?? 1;
     const groupScaleY = group?.scaleY ?? 1;
-    const scale = Math.max(
-      boxWidth / ((img.width || 1) * groupScaleX),
-      boxHeight / ((img.height || 1) * groupScaleY)
-    );
+
+    // Calculate aspect fill (cover) scaling - ensure image fills the entire frame
+    const imgWidth = img.width || 1;
+    const imgHeight = img.height || 1;
+
+    // Calculate scale to cover the entire frame (aspect fill)
+    const scaleX = boxWidth / imgWidth;
+    const scaleY = boxHeight / imgHeight;
+    const scale = Math.max(scaleX, scaleY); // Use max to ensure coverage
+
     const clipWidth = boxWidth / (scale * groupScaleX);
     const clipHeight = boxHeight / (scale * groupScaleY);
 
@@ -852,15 +916,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       colorLocked: (placeholder as any).colorLocked ?? false,
     });
 
-    img.clipPath = new fabric.Rect({
-      width: clipWidth,
-      height: clipHeight,
-      left: 0,
-      top: 0,
-      originX: 'center',
-      originY: 'center',
-      angle,
-    });
+    const frameType = resolveFrameType(placeholder);
+    img.clipPath = createFrameClipPath(frameType, clipWidth, clipHeight, angle);
 
     if (group) {
       const groupAny = group as any;
@@ -876,11 +933,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     } else {
       const placeholderIndex = canvas.getObjects().indexOf(placeholder);
       canvas.remove(placeholder);
-      canvas.add(img);
+      addObjectToCanvas(canvas, img, options);
       if (placeholderIndex >= 0) {
         canvas.moveObjectTo(img, placeholderIndex);
       }
     }
+    scheduleUpdate(canvas, options);
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -889,15 +947,31 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const imageUrl = e.dataTransfer.getData('text/plain');
     if (!imageUrl) {
       clearPlaceholderHighlight();
+      clearFrameHighlight();
       return;
     }
     const pointer = fabricCanvas.getPointer(e.nativeEvent as MouseEvent);
     const placeholder = findPlaceholderAtPointer(pointer);
-    setPlaceholderHighlight(placeholder);
+
+    // Check if the dragged item is hovering over a frame
+    const frameAtPointer = findFrameAtPointer(pointer);
+
+    if (frameAtPointer) {
+      // Highlight the frame
+      setFrameHighlight(frameAtPointer);
+      // Clear placeholder highlight since we're highlighting a frame instead
+      clearPlaceholderHighlight();
+    } else {
+      // Highlight placeholder as before
+      setPlaceholderHighlight(placeholder);
+      // Clear frame highlight if no frame is detected
+      clearFrameHighlight();
+    }
   };
 
   const handleDragLeave = () => {
     clearPlaceholderHighlight();
+    clearFrameHighlight();
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -912,53 +986,63 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       const file = e.dataTransfer.files?.[0];
       if (!file) {
         clearPlaceholderHighlight();
+        clearFrameHighlight();
         return;
       }
       clearPlaceholderHighlight();
+      clearFrameHighlight();
       const pointer = fabricCanvas.getPointer(e.nativeEvent as MouseEvent);
-      const objectURL = URL.createObjectURL(file);
-      trackPromise(fabric.Image.fromURL(objectURL))
-        .then((img: fabric.FabricImage) => {
-          if (isCancelledRef.current) {
-            URL.revokeObjectURL(objectURL);
+
+      trackPromise(loadImageFromFile(file))
+        .then((result) => {
+          if (!result.success) {
+            console.error('Failed to load dropped image:', result.errorMessage);
             return;
           }
-          const id = (img as any).id ?? uuidv4();
-          img.set({
+
+          const id = result.id;
+          result.asset.set({
             id,
-            src: objectURL,
+            src: result.blobUrl,
             left: pointer.x,
             top: pointer.y,
             originX: 'center',
             originY: 'center',
           });
-          addImageAsset(id, objectURL);
-          fabricCanvas.add(img);
-          sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
-          fabricCanvas.requestRenderAll();
-          saveState();
+          addImageAsset(id, result.blobUrl!);
+          addObjectToCanvas(fabricCanvas, result.asset, { persist: true });
         })
         .catch((error) => {
-          URL.revokeObjectURL(objectURL);
-          if (isCancelledRef.current) return;
           const message = error instanceof Error ? error.message.toLowerCase() : '';
-          if (message.includes('aborted')) return;
+          if (!message.includes('aborted')) {
+            console.error('Error loading dropped image:', error);
+          }
         });
       return;
     }
     clearPlaceholderHighlight();
+    clearFrameHighlight();
 
     const pointer = fabricCanvas.getPointer(e.nativeEvent as MouseEvent);
     const placeholder = findPlaceholderAtPointer(pointer);
     const targetObject = fabricCanvas.getObjects().find(obj =>
       obj.containsPoint(pointer) && obj.type === 'image'
     ) as fabric.Image;
-    
-    trackPromise(fabric.Image.fromURL(imageUrl, { crossOrigin: 'anonymous' }))
-      .then((img: fabric.FabricImage) => {
-        if (isCancelledRef.current) return;
+
+    trackPromise(safeLoadImage(imageUrl, { crossOrigin: 'anonymous' }))
+      .then((result) => {
+        if (!result.success) {
+          const message = result.errorMessage.toLowerCase();
+          if (!message.includes('aborted')) {
+            console.error('Failed to load image:', result.errorMessage);
+          }
+          return;
+        }
+
+        const img = result.asset;
+
         if (placeholder) {
-            replacePlaceholderWithImage(fabricCanvas, placeholder, img);
+            replacePlaceholderWithImage(fabricCanvas, placeholder, img, { persist: true });
         } else if (targetObject) {
             // Inherit settings from the target object
             img.set({
@@ -979,7 +1063,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
             });
             img.applyFilters();
             fabricCanvas.remove(targetObject);
-            fabricCanvas.add(img);
+            addObjectToCanvas(fabricCanvas, img, { persist: true });
         } else {
             const maxWidth = isSticker ? 150 : 200;
             if (img.width! > maxWidth) {
@@ -994,46 +1078,38 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
                 originX: 'center',
                 originY: 'center',
             });
-            fabricCanvas.add(img);
+            addObjectToCanvas(fabricCanvas, img, { persist: true });
         }
-        sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
-        fabricCanvas.requestRenderAll();
-        saveState();
+        scheduleUpdate(fabricCanvas, { persist: true });
       })
       .catch((error) => {
-        if (isCancelledRef.current) return;
         const message = error instanceof Error ? error.message.toLowerCase() : '';
         if (message.includes('aborted')) return;
+        console.error('Error loading image:', error);
       });
   };
 
-  const handleHearthUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleHearthUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setShowOnboarding(false);
     const file = e.target.files?.[0];
+
     if (file && fabricCanvas) {
-      const objectURL = URL.createObjectURL(file);
-      trackPromise(fabric.Image.fromURL(objectURL))
-        .then((img: fabric.FabricImage) => {
-          if (isCancelledRef.current) {
-            URL.revokeObjectURL(objectURL);
-            return;
-          }
-          const id = (img as any).id ?? uuidv4();
-          img.set({ id, src: objectURL });
-          addImageAsset(id, objectURL);
-          fabricCanvas.add(img);
-          fabricCanvas.centerObject(img);
-          sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
-          fabricCanvas.requestRenderAll();
-          saveState();
-        })
-        .catch((error) => {
-          URL.revokeObjectURL(objectURL);
-          if (isCancelledRef.current) return;
-          const message = error instanceof Error ? error.message.toLowerCase() : '';
-          if (message.includes('aborted')) return;
-        });
+      const result = await loadImageFromFile(file);
+
+      if (!result.success) {
+        console.error('Failed to load image:', result.errorMessage);
+        if (uploadInputRef.current) uploadInputRef.current.value = '';
+        return;
+      }
+
+      const id = result.id;
+      result.asset.set({ id, src: result.blobUrl });
+      addImageAsset(id, result.blobUrl!);
+      addObjectToCanvas(fabricCanvas, result.asset, { persist: true });
+      fabricCanvas.centerObject(result.asset);
+      scheduleUpdate(fabricCanvas, { persist: true });
     }
+
     if (uploadInputRef.current) uploadInputRef.current.value = '';
   };
 
@@ -1041,8 +1117,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     if (!fabricCanvas) return;
     setShowOnboarding(false);
     objectFactories.addRectangle(fabricCanvas);
-    sanityCheckCanvas(fabricCanvas, useEditorStore.getState().themeData);
-    saveState();
+    scheduleUpdate(fabricCanvas, { persist: true });
   };
 
   const handleDismissOverlay = () => {
@@ -1054,7 +1129,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
 
   return (
     <div 
-      className="workspace relative w-full h-full bg-[color:var(--ui-bg)] flex items-center justify-center"
+      className="workspace relative w-full h-full flex items-center justify-center"
       onClick={handleDismissOverlay}
     >
       <div
@@ -1063,9 +1138,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onDragLeave={handleDragLeave}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={showContextMenu}
       >
-        <canvas id="design-canvas" ref={canvasRef} className="bg-white shadow-[0_25px_70px_rgba(0,0,0,0.45)] rounded-[18px]" />
+        <canvas id="design-canvas" ref={canvasRef} className="rounded-[18px]" />
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={hideContextMenu}
+          />
+        )}
       </div>
       <input
         ref={uploadInputRef}
@@ -1083,11 +1165,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <button
-                onClick={() => onSelectNav?.('blueprints')}
+                onClick={() => onSelectNav?.('insert')}
                 className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
               >
-                <LayoutTemplate className="w-6 h-6 stroke-[1.5]" />
-                New Template
+                <Square className="w-6 h-6 stroke-[1.5]" />
+                Insert Elements
               </button>
               <button
                 onClick={() => {
@@ -1104,6 +1186,46 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
               >
                 <Square className="w-6 h-6 stroke-[1.5]" />
                 Add Shape
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* PHASE 3.3: Circuit breaker error notification */}
+      {syncError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
+          <div className="flex flex-col items-center gap-4 rounded-2xl border border-red-500/30 bg-white px-8 py-6 text-center shadow-xl max-w-md">
+            <div className="flex items-center gap-2 text-red-600">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h3 className="text-lg font-semibold">Canvas Synchronization Error</h3>
+            </div>
+            <p className="text-sm text-gray-600">{syncError}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  // Attempt to download project file for safety
+                  useEditorStore.getState().downloadProjectFile();
+                }}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+              >
+                Download Project
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 rounded-lg bg-gray-200 text-gray-800 text-sm font-medium hover:bg-gray-300 transition-colors"
+              >
+                Reload Page
+              </button>
+              <button
+                onClick={() => {
+                  setSyncError(null);
+                  forceRerenderAttemptsRef.current = 0;
+                }}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Dismiss
               </button>
             </div>
           </div>

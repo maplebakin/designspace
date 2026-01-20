@@ -9,13 +9,18 @@ const FRAME_DEFAULTS = {
   strokeWidth: 2,
 };
 
-const applyFrameProps = (shape: fabric.FabricObject) => {
+type FrameType = 'circle' | 'star' | 'hexagon' | 'badge';
+
+const applyFrameProps = (shape: fabric.FabricObject, frameType: FrameType) => {
   shape.set({
     isFrame: true,
+    isPlaceholder: true,
+    colorLocked: false,
     patternSourceUrl: null,
     patternZoom: 1,
     patternOffsetX: 0,
     patternOffsetY: 0,
+    frameType,
   });
 };
 
@@ -31,10 +36,36 @@ export const addCircleFrame = (canvas: fabric.Canvas) => {
     radius: 100,
   });
   (circle as any).id = uuidv4();
-  applyFrameProps(circle);
+  applyFrameProps(circle, 'circle');
   canvas.add(circle);
   canvas.centerObject(circle);
   canvas.requestRenderAll();
+};
+
+/**
+ * Adds a circle frame as a placeholder for image masking.
+ * @param canvas The fabric.Canvas instance.
+ */
+export const addCircleFramePlaceholder = (canvas: fabric.Canvas) => {
+  const circle = new fabric.Circle({
+    fill: 'rgba(148, 163, 184, 0.35)', // Same as placeholder color
+    stroke: 'rgba(148, 163, 184, 0.6)',
+    strokeWidth: 1,
+    strokeUniform: true,
+    radius: 100,
+    originX: 'center',
+    originY: 'center',
+    hasControls: true,
+    lockMovementX: false,
+    lockMovementY: false,
+  });
+  (circle as any).id = uuidv4();
+  applyFrameProps(circle, 'circle');
+  circle.set({ tokenRole: 'surfaces.surface-plain' });
+  canvas.add(circle);
+  canvas.centerObject(circle);
+  canvas.requestRenderAll();
+  return circle;
 };
 
 
@@ -60,10 +91,47 @@ export const addHexagonFrame = (canvas: fabric.Canvas) => {
         strokeUniform: true,
     });
     (hexagon as any).id = uuidv4();
-    applyFrameProps(hexagon);
+    applyFrameProps(hexagon, 'hexagon');
     canvas.add(hexagon);
     canvas.centerObject(hexagon);
     canvas.requestRenderAll();
+};
+
+/**
+ * Adds a hexagon frame as a placeholder for image masking.
+ * @param canvas The fabric.Canvas instance.
+ */
+export const addHexagonFramePlaceholder = (canvas: fabric.Canvas) => {
+    const hexagonPoints = (size: number) => {
+        const points = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = (i * 60 * Math.PI) / 180;
+            points.push({
+                x: size * Math.cos(angle),
+                y: size * Math.sin(angle),
+            });
+        }
+        return points;
+    };
+
+    const hexagon = new fabric.Polygon(hexagonPoints(100), {
+        fill: 'rgba(148, 163, 184, 0.35)', // Same as placeholder color
+        stroke: 'rgba(148, 163, 184, 0.6)',
+        strokeWidth: 1,
+        strokeUniform: true,
+        originX: 'center',
+        originY: 'center',
+        hasControls: true,
+        lockMovementX: false,
+        lockMovementY: false,
+    });
+    (hexagon as any).id = uuidv4();
+    applyFrameProps(hexagon, 'hexagon');
+    hexagon.set({ tokenRole: 'surfaces.surface-plain' });
+    canvas.add(hexagon);
+    canvas.centerObject(hexagon);
+    canvas.requestRenderAll();
+    return hexagon;
 };
 
 
@@ -90,8 +158,74 @@ export const addStarFrame = (canvas: fabric.Canvas) => {
         strokeUniform: true,
     });
     (star as any).id = uuidv4();
-    applyFrameProps(star);
+    applyFrameProps(star, 'star');
     canvas.add(star);
     canvas.centerObject(star);
+    canvas.requestRenderAll();
+};
+
+/**
+ * Adds a star frame as a placeholder for image masking.
+ * @param canvas The fabric.Canvas instance.
+ */
+export const addStarFramePlaceholder = (canvas: fabric.Canvas) => {
+    const starPoints = (outerRadius: number, innerRadius: number) => {
+        const points = [];
+        for (let i = 0; i < 10; i++) {
+            const radius = i % 2 === 0 ? outerRadius : innerRadius;
+            const angle = (i * 36 * Math.PI) / 180;
+            points.push({
+                x: radius * Math.sin(angle),
+                y: -radius * Math.cos(angle),
+            });
+        }
+        return points;
+    };
+
+    const star = new fabric.Polygon(starPoints(100, 50), {
+        fill: 'rgba(148, 163, 184, 0.35)', // Same as placeholder color
+        stroke: 'rgba(148, 163, 184, 0.6)',
+        strokeWidth: 1,
+        strokeUniform: true,
+        originX: 'center',
+        originY: 'center',
+        hasControls: true,
+        lockMovementX: false,
+        lockMovementY: false,
+    });
+    (star as any).id = uuidv4();
+    applyFrameProps(star, 'star');
+    star.set({ tokenRole: 'surfaces.surface-plain' });
+    canvas.add(star);
+    canvas.centerObject(star);
+    canvas.requestRenderAll();
+    return star;
+};
+
+export const addBadgeFrame = (canvas: fabric.Canvas) => {
+    const badgePoints = (outerRadius: number, innerRadius: number, lobes = 12) => {
+        const points = [];
+        const totalPoints = lobes * 2;
+        const step = (Math.PI * 2) / totalPoints;
+        const startAngle = -Math.PI / 2;
+        for (let i = 0; i < totalPoints; i += 1) {
+            const radius = i % 2 === 0 ? outerRadius : innerRadius;
+            const angle = startAngle + step * i;
+            points.push({
+                x: radius * Math.cos(angle),
+                y: radius * Math.sin(angle),
+            });
+        }
+        return points;
+    };
+
+    const badge = new fabric.Polygon(badgePoints(100, 82), {
+        ...FRAME_DEFAULTS,
+        strokeUniform: true,
+    });
+    (badge as any).id = uuidv4();
+    applyFrameProps(badge, 'badge');
+    canvas.add(badge);
+    canvas.centerObject(badge);
     canvas.requestRenderAll();
 };

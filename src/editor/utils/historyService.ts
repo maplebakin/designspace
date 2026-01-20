@@ -19,17 +19,21 @@ export const historyService = {
   pushSnapshot(snapshot: string, options: PushOptions = {}) {
     const now = Date.now();
     if (!options.force && now - lastSnapshotAt < SNAPSHOT_THROTTLE_MS) {
-      return false;
+      return { pushed: false, dropped: [] as string[] };
     }
     lastSnapshotAt = now;
+    const dropped: string[] = snapshots.slice(currentIndex + 1);
     const trimmed = snapshots.slice(0, currentIndex + 1);
     trimmed.push(snapshot);
     if (trimmed.length > MAX_HISTORY_SIZE) {
-      trimmed.shift();
+      while (trimmed.length > MAX_HISTORY_SIZE) {
+        const removed = trimmed.shift();
+        if (removed) dropped.push(removed);
+      }
     }
     snapshots = trimmed;
     currentIndex = snapshots.length - 1;
-    return true;
+    return { pushed: true, dropped };
   },
   reset() {
     snapshots = [];

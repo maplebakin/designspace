@@ -1,13 +1,80 @@
 
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 import { v4 as uuidv4 } from 'uuid';
-import { SAFE_MARGIN_PX } from '../utils/units';
+import { SAFE_MARGIN_PX, toCanvasUnits } from '../utils/units';
 
 const DEFAULT_STROKE_COLOR = '#000000';
 const DEFAULT_STROKE_WIDTH = 2;
 const DEFAULT_PLACEHOLDER_TOKEN_ROLE = 'surfaces.surface-plain';
 const DEFAULT_SHAPE_FILL = '#1f2933';
+const DEFAULT_RECTANGLE_SIZE_WIDTH = 2;
+const DEFAULT_RECTANGLE_SIZE_HEIGHT = 3;
+const DEFAULT_TEXTBOX_WIDTH = 3;
+const DEFAULT_TEXTBOX_HEIGHT = 1.5;
+const DEFAULT_PX_RECTANGLE_WIDTH = 200;
+const DEFAULT_PX_RECTANGLE_HEIGHT = 150;
+const DEFAULT_PX_CIRCLE_RADIUS = 80;
+const DEFAULT_PX_TRIANGLE_WIDTH = 180;
+const DEFAULT_PX_TRIANGLE_HEIGHT = 140;
+const DEFAULT_PX_STAR_OUTER_RADIUS = 70;
+const DEFAULT_PX_STAR_INNER_RADIUS = 32;
+const DEFAULT_PX_ITEXT_WIDTH = 320;
+const DEFAULT_PX_ITEXT_HEIGHT = 60;
+const DEFAULT_PX_TEXTBOX_WIDTH = 320;
+const DEFAULT_PX_TEXTBOX_HEIGHT = 120;
+const DEFAULT_PX_PLACEHOLDER_WIDTH = 240;
+const DEFAULT_PX_PLACEHOLDER_HEIGHT = 180;
+const DEFAULT_PX_SVG_WIDTH = 220;
+
+const convertLength = (value: number) =>
+  toCanvasUnits(value, useEditorStore.getState().unitMode) as number;
+const getDefaultLength = (unitValue: number, pxValue: number) => {
+  const unitMode = useEditorStore.getState().unitMode;
+  const baseValue = unitMode === 'px' ? pxValue : unitValue;
+  return toCanvasUnits(baseValue, unitMode) as number;
+};
+const getCanvasCenterPoint = (canvas: fabric.Canvas) => {
+  const vpt = canvas.viewportTransform;
+  if (!vpt) {
+    return { x: canvas.getWidth() / 2, y: canvas.getHeight() / 2 };
+  }
+  const screenCenter = new fabric.Point(canvas.getWidth() / 2, canvas.getHeight() / 2);
+  const inverted = fabric.util.invertTransform(vpt);
+  const worldCenter = fabric.util.transformPoint(screenCenter, inverted);
+  return { x: worldCenter.x, y: worldCenter.y };
+};
+
+interface InsertOptions {
+    center?: boolean;
+    activate?: boolean;
+    enterEditing?: boolean;
+}
+
+const insertFabricObject = (
+  canvas: fabric.Canvas,
+  createObject: () => fabric.Object,
+  options: InsertOptions = {}
+) => {
+  const obj = createObject();
+  if (options.center !== false) {
+    const center = getCanvasCenterPoint(canvas);
+    obj.set({ left: center.x, top: center.y });
+    obj.setCoords();
+  }
+  canvas.add(obj);
+  const shouldActivate = options.activate ?? true;
+  if (shouldActivate) {
+    canvas.setActiveObject(obj);
+  }
+  if (options.enterEditing && typeof (obj as any).enterEditing === 'function') {
+    (obj as any).enterEditing();
+  }
+
+  canvas.requestRenderAll();
+  return obj;
+};
 
 const getValueByPath = (obj: object, path: string): any => {
     return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
@@ -29,101 +96,100 @@ const resolveTokenValue = (themeData: object | null, tokenRole: string) => {
  * Adds a styled rectangle with rounded corners to the center of the canvas.
  * @param canvas - The fabric.Canvas instance.
  */
-export const addRectangle = (canvas: fabric.Canvas) => {
-  const rect = new fabric.Rect({
-    width: 150,
-    height: 100,
-    fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
-    stroke: DEFAULT_STROKE_COLOR,
-    strokeWidth: DEFAULT_STROKE_WIDTH,
-    strokeUniform: true,
-    rx: 10, // Corner radius
-    ry: 10, // Corner radius
-    originX: 'center',
-    originY: 'center',
+export const addRectangle = (canvas: fabric.Canvas) =>
+  insertFabricObject(canvas, () => {
+    const width = getDefaultLength(DEFAULT_RECTANGLE_SIZE_WIDTH, DEFAULT_PX_RECTANGLE_WIDTH);
+    const height = getDefaultLength(DEFAULT_RECTANGLE_SIZE_HEIGHT, DEFAULT_PX_RECTANGLE_HEIGHT);
+    const rect = new fabric.Rect({
+      width,
+      height,
+      fill: useThemeStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
+      stroke: DEFAULT_STROKE_COLOR,
+      strokeWidth: DEFAULT_STROKE_WIDTH,
+      strokeUniform: true,
+      rx: 10,
+      ry: 10,
+      originX: 'center',
+      originY: 'center',
+    });
+    (rect as any).id = uuidv4();
+    (rect as any).tokenRole = 'brand.primary.value';
+    return rect;
   });
-  (rect as any).id = uuidv4();
-  (rect as any).tokenRole = 'brand.primary.value';
-  canvas.add(rect);
-  canvas.centerObject(rect);
-  canvas.requestRenderAll();
-};
 
 /**
  * Adds a styled circle to the center of the canvas.
  * @param canvas - The fabric.Canvas instance.
  */
-export const addCircle = (canvas: fabric.Canvas) => {
-  const circle = new fabric.Circle({
-    radius: 75,
-    fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
-    stroke: DEFAULT_STROKE_COLOR,
-    strokeWidth: DEFAULT_STROKE_WIDTH,
-    strokeUniform: true,
-    originX: 'center',
-    originY: 'center',
+const DEFAULT_CIRCLE_RADIUS = 1.5;
+
+export const addCircle = (canvas: fabric.Canvas) =>
+  insertFabricObject(canvas, () => {
+    const radius = getDefaultLength(DEFAULT_CIRCLE_RADIUS, DEFAULT_PX_CIRCLE_RADIUS);
+    const circle = new fabric.Circle({
+      radius,
+      fill: useThemeStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
+      stroke: DEFAULT_STROKE_COLOR,
+      strokeWidth: DEFAULT_STROKE_WIDTH,
+      strokeUniform: true,
+      originX: 'center',
+      originY: 'center',
+    });
+    (circle as any).id = uuidv4();
+    (circle as any).tokenRole = 'brand.primary.value';
+    return circle;
   });
-  (circle as any).id = uuidv4();
-  (circle as any).tokenRole = 'brand.primary.value';
-  canvas.add(circle);
-  canvas.centerObject(circle);
-  canvas.requestRenderAll();
-};
 
 /**
  * Adds a styled triangle to the center of the canvas.
  * @param canvas The fabric.Canvas instance.
  */
-export const addTriangle = (canvas: fabric.Canvas) => {
-    const triangle = new fabric.Triangle({
-        width: 150,
-        height: 130,
-        fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
-        stroke: DEFAULT_STROKE_COLOR,
-        strokeWidth: DEFAULT_STROKE_WIDTH,
-        strokeUniform: true,
-        originX: 'center',
-        originY: 'center',
+export const addTriangle = (canvas: fabric.Canvas) =>
+    insertFabricObject(canvas, () => {
+        const triangle = new fabric.Triangle({
+            width: getDefaultLength(2.5, DEFAULT_PX_TRIANGLE_WIDTH),
+            height: getDefaultLength(2, DEFAULT_PX_TRIANGLE_HEIGHT),
+            fill: useThemeStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
+            stroke: DEFAULT_STROKE_COLOR,
+            strokeWidth: DEFAULT_STROKE_WIDTH,
+            strokeUniform: true,
+            originX: 'center',
+            originY: 'center',
+        });
+        (triangle as any).id = uuidv4();
+        (triangle as any).tokenRole = 'brand.primary.value';
+        return triangle;
     });
-    (triangle as any).id = uuidv4();
-    (triangle as any).tokenRole = 'brand.primary.value';
-    canvas.add(triangle);
-    canvas.centerObject(triangle);
-    canvas.requestRenderAll();
-}
 
-/**
- * Adds a 5-pointed star to the center of the canvas.
- * @param canvas The fabric.Canvas instance.
- */
-export const addStar = (canvas: fabric.Canvas) => {
-    const starPoints = (outerRadius: number, innerRadius: number) => {
-        const points = [];
-        for (let i = 0; i < 10; i++) {
-            const radius = i % 2 === 0 ? outerRadius : innerRadius;
-            const angle = (i * 36 * Math.PI) / 180;
-            points.push({
-                x: radius * Math.sin(angle),
-                y: -radius * Math.cos(angle),
-            });
-        }
-        return points;
-    };
+export const addStar = (canvas: fabric.Canvas) =>
+    insertFabricObject(canvas, () => {
+        const outerRadius = getDefaultLength(1.7, DEFAULT_PX_STAR_OUTER_RADIUS);
+        const innerRadius = getDefaultLength(0.8, DEFAULT_PX_STAR_INNER_RADIUS);
+        const starPoints = (outer: number, inner: number) => {
+            const points = [];
+            for (let i = 0; i < 10; i++) {
+                const radius = i % 2 === 0 ? outer : inner;
+                const angle = (i * 36 * Math.PI) / 180;
+                points.push({
+                    x: radius * Math.sin(angle),
+                    y: -radius * Math.cos(angle),
+                });
+            }
+            return points;
+        };
 
-    const star = new fabric.Polygon(starPoints(80, 40), {
-        fill: useEditorStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
-        stroke: DEFAULT_STROKE_COLOR,
-        strokeWidth: DEFAULT_STROKE_WIDTH,
-        strokeUniform: true,
-        originX: 'center',
-        originY: 'center',
+        const star = new fabric.Polygon(starPoints(outerRadius, innerRadius), {
+            fill: useThemeStore.getState().themeData?.brand?.primary?.value || DEFAULT_SHAPE_FILL,
+            stroke: DEFAULT_STROKE_COLOR,
+            strokeWidth: DEFAULT_STROKE_WIDTH,
+            strokeUniform: true,
+            originX: 'center',
+            originY: 'center',
+        });
+        (star as any).id = uuidv4();
+        (star as any).tokenRole = 'brand.primary.value';
+        return star;
     });
-    (star as any).id = uuidv4();
-    (star as any).tokenRole = 'brand.primary.value';
-    canvas.add(star);
-    canvas.centerObject(star);
-    canvas.requestRenderAll();
-};
 
 
 interface ITextOptions {
@@ -134,7 +200,7 @@ interface ITextOptions {
 }
 
 const getThemeFontFamily = (role?: ITextOptions['role']) => {
-    const { themeData } = useEditorStore.getState();
+    const { themeData } = useThemeStore.getState();
     if (role === 'heading' || role === 'subheading') {
         return themeData?.typography.heading.fontFamily || 'serif';
     }
@@ -142,7 +208,7 @@ const getThemeFontFamily = (role?: ITextOptions['role']) => {
 };
 
 const getThemeTextColor = (role?: ITextOptions['role']) => {
-    const { themeData } = useEditorStore.getState();
+    const { themeData } = useThemeStore.getState();
     if (role === 'heading' || role === 'subheading') {
         return themeData?.typography.heading.value || '#000000';
     }
@@ -156,22 +222,22 @@ const getThemeTextColor = (role?: ITextOptions['role']) => {
 export const addIText = (canvas: fabric.Canvas, options: ITextOptions) => {
   const role = options.role || 'body';
   const tokenRole = role === 'heading' || role === 'subheading' ? 'typography.heading.value' : 'typography.body.value';
-  
-  const text = new fabric.IText(options.text, {
-    fontSize: options.fontSize,
-    fontWeight: options.fontWeight || 'normal',
-    fill: getThemeTextColor(role),
-    originX: 'center',
-    originY: 'center',
-    fontFamily: getThemeFontFamily(role),
-  });
-  (text as any).id = uuidv4();
-  (text as any).tokenRole = tokenRole;
-  canvas.add(text);
-  canvas.centerObject(text);
-  canvas.setActiveObject(text);
-  text.enterEditing();
-  canvas.requestRenderAll();
+
+  return insertFabricObject(canvas, () => {
+    const text = new fabric.IText(options.text, {
+      fontSize: options.fontSize,
+      fontWeight: options.fontWeight || 'normal',
+      width: getDefaultLength(3.5, DEFAULT_PX_ITEXT_WIDTH),
+      height: getDefaultLength(1, DEFAULT_PX_ITEXT_HEIGHT),
+      fill: getThemeTextColor(role),
+      originX: 'center',
+      originY: 'center',
+      fontFamily: getThemeFontFamily(role),
+    });
+    (text as any).id = uuidv4();
+    (text as any).tokenRole = tokenRole;
+    return text;
+  }, { activate: true, enterEditing: true });
 };
 
 
@@ -215,7 +281,6 @@ const adjustFontSizeToFit = (textbox: fabric.Textbox, canvas: fabric.Canvas) => 
     
     textbox.setCoords(); // Update controls
     canvas.requestRenderAll();
-    useEditorStore.getState().saveState(); // Save state after adjustment
 };
 
 /**
@@ -223,39 +288,35 @@ const adjustFontSizeToFit = (textbox: fabric.Textbox, canvas: fabric.Canvas) => 
  * @param canvas The fabric.Canvas instance.
  */
 export const addFixedTextbox = (canvas: fabric.Canvas) => {
-    const defaultWidth = 300;
-    const defaultHeight = 150;
     const defaultFontSize = 30;
 
-    const textbox = new fabric.Textbox('Type here...', {
-        width: defaultWidth,
-        height: defaultHeight,
-        fontSize: defaultFontSize,
-        originalFontSize: defaultFontSize, // Custom property to store original size
-        fill: getThemeTextColor('body'),
-        textAlign: 'center',
-        originX: 'center',
-        originY: 'center',
-        fontFamily: getThemeFontFamily('body'),
-        lockScalingX: true,
-        lockScalingY: true,
-        lockRotation: true,
-        hasControls: false,
-        hasBorders: true,
-    });
-    (textbox as any).id = uuidv4();
-    (textbox as any).tokenRole = 'typography.body.value';
+    insertFabricObject(canvas, () => {
+        const textbox = new fabric.Textbox('Type here...', {
+            width: getDefaultLength(DEFAULT_TEXTBOX_WIDTH, DEFAULT_PX_TEXTBOX_WIDTH),
+            height: getDefaultLength(DEFAULT_TEXTBOX_HEIGHT, DEFAULT_PX_TEXTBOX_HEIGHT),
+            fontSize: defaultFontSize,
+            originalFontSize: defaultFontSize, // Custom property to store original size
+            fill: getThemeTextColor('body'),
+            textAlign: 'center',
+            originX: 'center',
+            originY: 'center',
+            fontFamily: getThemeFontFamily('body'),
+            lockScalingX: true,
+            lockScalingY: true,
+            lockRotation: true,
+            hasControls: false,
+            hasBorders: true,
+        });
+        (textbox as any).id = uuidv4();
+        (textbox as any).tokenRole = 'typography.body.value';
 
-    canvas.add(textbox);
-    canvas.centerObject(textbox);
-    canvas.setActiveObject(textbox);
-    textbox.enterEditing();
-    canvas.requestRenderAll();
+        // Attach listener for text changes
+        textbox.on('changed', () => {
+            adjustFontSizeToFit(textbox, canvas);
+        });
 
-    // Attach listener for text changes
-    textbox.on('changed', () => {
-        adjustFontSizeToFit(textbox, canvas);
-    });
+        return textbox;
+    }, { activate: true, enterEditing: true });
 };
 
 interface PlaceholderOptions {
@@ -266,9 +327,13 @@ interface PlaceholderOptions {
 }
 
 const createPlaceholderRect = (options: PlaceholderOptions = {}) => {
-    const { themeData } = useEditorStore.getState();
-    const width = options.width ?? 200;
-    const height = options.height ?? 200;
+    const { themeData } = useThemeStore.getState();
+    const width = options.width == null
+        ? getDefaultLength(2, DEFAULT_PX_PLACEHOLDER_WIDTH)
+        : convertLength(options.width);
+    const height = options.height == null
+        ? getDefaultLength(2, DEFAULT_PX_PLACEHOLDER_HEIGHT)
+        : convertLength(options.height);
     const tokenRole = options.tokenRole ?? DEFAULT_PLACEHOLDER_TOKEN_ROLE;
     const themedFill = resolveTokenValue(themeData, tokenRole);
     const lockMovement = options.lockMovement ?? false;
@@ -297,10 +362,7 @@ const createPlaceholderRect = (options: PlaceholderOptions = {}) => {
 };
 
 export const addPlaceholder = (canvas: fabric.Canvas, options: PlaceholderOptions = {}) => {
-    const placeholder = createPlaceholderRect(options);
-    canvas.add(placeholder);
-    canvas.centerObject(placeholder);
-    canvas.requestRenderAll();
+    return insertFabricObject(canvas, () => createPlaceholderRect(options));
 };
 
 interface GridOptions {
@@ -311,7 +373,8 @@ interface GridOptions {
 export const generateGrid = (canvas: fabric.Canvas, rows: number, cols: number, options: GridOptions = {}) => {
     if (rows <= 0 || cols <= 0) return;
     const { bleedPx } = useEditorStore.getState();
-    const gutter = options.gutter ?? 20;
+    const gutterUnits = options.gutter ?? 0.2;
+    const gutter = convertLength(gutterUnits);
     const tokenRole = options.tokenRole ?? DEFAULT_PLACEHOLDER_TOKEN_ROLE;
 
     const safeInset = bleedPx + SAFE_MARGIN_PX;
@@ -344,10 +407,7 @@ export const generateGrid = (canvas: fabric.Canvas, rows: number, cols: number, 
         subTargetCheck: true,
     });
     (group as any).id = uuidv4();
-    canvas.add(group);
-    canvas.setActiveObject(group);
-    canvas.requestRenderAll();
-    useEditorStore.getState().saveState();
+    insertFabricObject(canvas, () => group, { center: false, activate: true });
 };
 
 export const addTriptychLayout = (canvas: fabric.Canvas) => {
@@ -360,7 +420,7 @@ export const addWeeklyTrackerLayout = (canvas: fabric.Canvas) => {
 
 export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
     const { bleedPx } = useEditorStore.getState();
-    const gutter = 20;
+    const gutter = convertLength(0.2);
     const safeInset = bleedPx + SAFE_MARGIN_PX;
     const safeWidth = canvas.getWidth() - safeInset * 2;
     const safeHeight = canvas.getHeight() - safeInset * 2;
@@ -403,10 +463,7 @@ export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
         subTargetCheck: true,
     });
     (group as any).id = uuidv4();
-    canvas.add(group);
-    canvas.setActiveObject(group);
-    canvas.requestRenderAll();
-    useEditorStore.getState().saveState();
+    insertFabricObject(canvas, () => group, { center: false, activate: true });
 };
 
 /**
@@ -415,7 +472,7 @@ export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
  * @param url The URL of the SVG file.
  */
 export const addSvgFromUrl = async (canvas: fabric.Canvas, url: string) => {
-    const { themeData } = useEditorStore.getState();
+    const { themeData } = useThemeStore.getState();
     const accentColor = themeData?.brand?.accent?.value || '#A133FF';
 
     fabric.loadSVGFromURL(url, (objects, options) => {
@@ -434,10 +491,7 @@ export const addSvgFromUrl = async (canvas: fabric.Canvas, url: string) => {
         });
         (group as any).id = uuidv4();
 
-        canvas.add(group);
-        group.scaleToWidth(150);
-        canvas.centerObject(group);
-        canvas.requestRenderAll();
-        useEditorStore.getState().saveState();
+        group.scaleToWidth(getDefaultLength(2, DEFAULT_PX_SVG_WIDTH));
+        insertFabricObject(canvas, () => group, { activate: true });
     });
 };

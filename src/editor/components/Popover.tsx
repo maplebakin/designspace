@@ -68,17 +68,19 @@ export const Popover: React.FC<PopoverProps> = ({
     };
   }, [handleClickOutside]);
 
-  const triggerWithProps = React.cloneElement(trigger, {
-    ref: triggerRef,
-    onClick: handleToggle,
-    'aria-expanded': isOpen,
-    'aria-controls': 'popover-content',
-    'aria-label': ariaLabel,
-  });
+  const triggerWithProps = React.isValidElement(trigger)
+    ? React.cloneElement(trigger as React.ReactElement<any>, {
+        'aria-expanded': isOpen,
+        'aria-controls': 'popover-content',
+        'aria-label': ariaLabel,
+      })
+    : trigger;
 
   return (
     <>
-      {triggerWithProps}
+      <span ref={triggerRef} className="inline-flex" onClickCapture={handleToggle}>
+        {triggerWithProps}
+      </span>
       {isOpen &&
         createPortal(
           <div

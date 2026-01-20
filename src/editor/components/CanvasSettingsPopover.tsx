@@ -1,9 +1,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
-import { resizeCanvas } from '../fabric/canvasUtils';
-import { useEditorStore } from '../state/editorStore';
-import { ChevronDown, Check } from 'lucide-react';
+import { resizeCanvas, rotateCanvas } from '../fabric/canvasUtils';
+import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
+import { ChevronDown, Check, RotateCw } from 'lucide-react';
+import { PopoverSurface } from './PopoverSurface';
 
 type CanvasPreset = {
   name: string;
@@ -29,7 +31,6 @@ export const CanvasSettingsPopover: React.FC = () => {
     requestLayerSync,
     showGuides,
     toggleShowGuides,
-    canvasBackgroundColor,
     setCanvasBackgroundColor,
   } = useEditorStore(
     (state) => ({
@@ -37,9 +38,12 @@ export const CanvasSettingsPopover: React.FC = () => {
       requestLayerSync: state.requestLayerSync,
       showGuides: state.showGuides,
       toggleShowGuides: state.toggleShowGuides,
-      canvasBackgroundColor: state.canvasBackgroundColor,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
     }),
+    shallow
+  );
+  const { canvasBackgroundColor } = useThemeStore(
+    (state) => ({ canvasBackgroundColor: state.canvasBackgroundColor }),
     shallow
   );
   const [isOpen, setIsOpen] = useState(false);
@@ -94,12 +98,25 @@ export const CanvasSettingsPopover: React.FC = () => {
         <ChevronDown className={`icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
-         <div className="absolute left-0 mt-2 w-72 bg-[color:var(--ui-panel)] rounded-lg shadow-xl z-20 border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)]">
-            <div className="p-4 space-y-4">
-                <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Canvas Size</h3>
+         <PopoverSurface className="absolute left-0 mt-2 w-72 z-20">
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Canvas Size</h3>
+                    <button
+                        onClick={() => {
+                            rotateCanvas();
+                            updateSize();
+                        }}
+                        className="flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] hover:text-slate-100 transition-all duration-200"
+                        title="Rotate canvas (swap width/height)"
+                    >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        Rotate
+                    </button>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                     {presets.map(p => (
-                        <button 
+                        <button
                             key={p.name}
                             onClick={() => applyPreset(p)}
                             className="w-full text-left px-3 py-2 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
@@ -116,7 +133,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                         <span className="text-[10px] uppercase tracking-widest text-slate-200">Fill Color</span>
                         <input
                             type="color"
-                            value={canvasBackgroundColor || '#ffffff'}
+                            value={canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
                             onChange={(e) => setCanvasBackgroundColor(e.target.value)}
                             className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
                             aria-label="Canvas background color"
@@ -135,7 +152,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                     </div>
                 </button>
             </div>
-        </div>
+        </PopoverSurface>
     )}
     </div>
   );

@@ -2,15 +2,19 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 import { loadDailyPlannerTemplate, loadRetroManualTemplate } from '../fabric/blueprintFactories';
 import { LayoutTemplate } from 'lucide-react';
 
 export const SidebarBlueprints: React.FC = () => {
-  const { canvas, brandPalette } = useEditorStore(
+  const { canvas } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      brandPalette: state.brandPalette,
     }),
+    shallow
+  );
+  const { brandPalette } = useThemeStore(
+    (state) => ({ brandPalette: state.brandPalette }),
     shallow
   );
 

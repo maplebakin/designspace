@@ -70,9 +70,13 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     <button
       key={`${preset.name}-${preset.width}-${preset.height}`}
       onClick={() => applyPreset(preset)}
-      className="w-full text-left px-3 py-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 ease-in-out flex flex-col gap-1"
+      className={`w-full text-left px-3 py-3 rounded-2xl border transition-all duration-300 ease-in-out flex flex-col gap-1 ${
+        preset.name === 'US Letter'
+          ? 'bg-[color:var(--brand-primary)]/20 border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--brand-primary)]/30'
+          : 'bg-white/5 border-white/10 hover:bg-white/10'
+      }`}
     >
-      <span className="text-xs uppercase tracking-widest text-slate-200">{preset.name}</span>
+      <span className={`text-xs uppercase tracking-widest ${preset.name === 'US Letter' ? 'text-[color:var(--brand-primary)]' : 'text-slate-200'}`}>{preset.name}</span>
       <span className="text-[10px] uppercase tracking-widest text-slate-300">{preset.description}</span>
     </button>
   );

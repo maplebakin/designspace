@@ -1,45 +1,22 @@
 import React, { useRef, useState } from 'react';
 import { Search, Trash2, Upload } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore, StickerData } from '../state/editorStore';
-
-const resolveTokenValue = (obj: object | null, path: string): string | null => {
-    if (!obj) return null;
-    const getValueByPath = (target: object, keyPath: string): any =>
-        keyPath.split('.').reduce((acc, part) => acc && (acc as any)[part], target);
-
-    let value = getValueByPath(obj, path);
-    if (!value && !path.endsWith('.value')) {
-        value = getValueByPath(obj, `${path}.value`);
-    }
-    if (value && typeof value === 'object' && 'value' in value) {
-        value = (value as { value: string }).value;
-    }
-    if (typeof value === 'number') return `${value}px`;
-    return typeof value === 'string' ? value : null;
-};
-
-const buildAssetFromFile = (file: File, objectUrl: string): StickerData => {
-    const baseName = file.name.split('.').slice(0, -1).join('.') || file.name;
-    const format = file.type === 'image/png' ? 'png' : undefined; // Assuming only PNG for stickers
-    return {
-        id: uuidv4(),
-        url: objectUrl,
-        label: baseName,
-        format: format,
-        tags: [baseName.toLowerCase(), 'upload'],
-    };
-};
+import { useThemeStore } from '../state/useThemeStore';
+import { resolveThemeValueWithPx } from '../utils/themeResolver';
+import { loadStickerFromFile, extractFileMetadata } from '../services/assetLoader';
 
 export const StickerTab: React.FC = () => {
-    const { assets, addAssetToLibrary, removeAssetFromLibrary, themeData } = useEditorStore(
+    const { assets, addAssetToLibrary, removeAssetFromLibrary } = useEditorStore(
         (state) => ({
             assets: state.assets,
             addAssetToLibrary: state.addAssetToLibrary,
             removeAssetFromLibrary: state.removeAssetFromLibrary,
-            themeData: state.themeData,
         }),
+        shallow
+    );
+    const { themeData } = useThemeStore(
+        (state) => ({ themeData: state.themeData }),
         shallow
     );
     const [searchTerm, setSearchTerm] = useState('');
@@ -54,23 +31,40 @@ export const StickerTab: React.FC = () => {
     });
 
     const panelSurface = 'var(--ui-panel-opaque)';
-    const glassBlur = resolveTokenValue(themeData, 'glass.glass-blur') || '16px';
-    const surfacePlain = resolveTokenValue(themeData, 'surfaces.surface-plain') || 'rgba(255, 255, 255, 0.08)';
+    const glassBlur = resolveThemeValueWithPx(themeData, 'glass.glass-blur') || '16px';
+    const surfacePlain = resolveThemeValueWithPx(themeData, 'surfaces.surface-plain') || 'rgba(255, 255, 255, 0.08)';
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, stickerUrl: string) => {
         e.dataTransfer.setData('text/plain', stickerUrl);
         e.dataTransfer.setData('isSticker', 'true');
     };
 
-    const handleUploadSticker = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleUploadSticker = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (!file || file.type !== 'image/png') return;
+        if (!file) {
+            if (uploadInputRef.current) uploadInputRef.current.value = '';
+            return;
+        }
 
-        const objectURL = URL.createObjectURL(file);
-        addAssetToLibrary(buildAssetFromFile(file, objectURL));
-        // No explicit revoke here; assume removeAssetFromLibrary will handle it.
-        // If the asset is never added to canvas or removed from library, this URL will leak.
-        // For now, follow the pattern established in other components.
+        // Load sticker using asset loader service (validates PNG format)
+        const result = await loadStickerFromFile(file);
+
+        if (!result.success) {
+            console.error('Failed to load sticker:', result.errorMessage);
+            if (uploadInputRef.current) uploadInputRef.current.value = '';
+            return;
+        }
+
+        // Extract metadata and add to library
+        const metadata = extractFileMetadata(file);
+        const stickerData: StickerData = {
+            id: result.id,
+            url: result.blobUrl!,
+            label: metadata.baseName,
+            format: metadata.format,
+            tags: metadata.tags,
+        };
+        addAssetToLibrary(stickerData);
 
         if (uploadInputRef.current) uploadInputRef.current.value = '';
     };

@@ -1,6 +1,6 @@
 
 import { IDBPDatabase, openDB } from 'idb';
-import { BrandCollection } from '../state/editorStore';
+import type { BrandCollection } from '../state/useThemeStore';
 
 const DB_NAME = 'witchclick_assets_db';
 const DB_VERSION = 3;

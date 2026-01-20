@@ -2,6 +2,7 @@
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { SAFE_MARGIN_PX } from '../utils/units';
+import { guideRegistry } from './guideRegistry';
 
 let safeMarginGuides: fabric.Line[] = [];
 let bleedGuides: fabric.Object[] = []; // Changed to fabric.Object[]
@@ -14,6 +15,7 @@ const TRIM_LINE_COLOR = 'rgba(255, 255, 255, 0.6)'; // Crisp white for trim line
 export const clearSafeMarginGuides = (canvas: fabric.Canvas) => {
   if (!canvas) return;
   safeMarginGuides.forEach((guide) => {
+    guideRegistry.unregister(guide); // PHASE 3.1: Unregister from guide registry
     canvas.remove(guide);
   });
   safeMarginGuides = [];
@@ -46,7 +48,7 @@ export const addSafeMarginGuides = (canvas: fabric.Canvas) => {
   const right = new fabric.Line([width - margin, margin, width - margin, height - margin], guideOptions);
 
   const guides = [top, bottom, left, right].map((line) => {
-    line.set('isGuide', true);
+    guideRegistry.register(line, 'safe-margin'); // PHASE 3.1: Register with guide registry
     canvas.add(line);
     const sendToBack = (canvas as any).sendToBack;
     if (typeof sendToBack === 'function') {
@@ -62,6 +64,7 @@ export const addSafeMarginGuides = (canvas: fabric.Canvas) => {
 export const clearBleedGuides = (canvas: fabric.Canvas) => {
   if (!canvas) return;
   bleedGuides.forEach((guide) => {
+    guideRegistry.unregister(guide); // PHASE 3.1: Unregister from guide registry
     canvas.remove(guide);
   });
   bleedGuides = [];
@@ -91,6 +94,7 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
     excludeFromExport: true,
     isBleedZone: true, // Custom property for identification
   });
+  guideRegistry.register(bleedZoneRect, 'bleed-zone'); // PHASE 3.1: Register with guide registry
   bleedGuides.push(bleedZoneRect);
   canvas.add(bleedZoneRect);
   const sendToBack = (canvas as any).sendToBack;
@@ -114,7 +118,7 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
 
   const createTrimLine = (points: [number, number, number, number]) => {
     const line = new fabric.Line(points, trimLineOptions);
-    line.set('isGuide', true); // Also mark as guide for general exclusion
+    guideRegistry.register(line, 'trim'); // PHASE 3.1: Register with guide registry
     canvas.add(line);
     const bringToFront = (canvas as any).bringToFront;
     if (typeof bringToFront === 'function') {
@@ -146,7 +150,7 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
 
   const createBleedLine = (points: [number, number, number, number]) => {
     const line = new fabric.Line(points, bleedLineOptions);
-    line.set('isGuide', true);
+    guideRegistry.register(line, 'bleed'); // PHASE 3.1: Register with guide registry
     canvas.add(line);
     const bringToFront = (canvas as any).bringToFront;
     if (typeof bringToFront === 'function') {
@@ -193,6 +197,52 @@ export const resizeCanvas = (width: number, height: number) => {
   const panY = newCenter.top - currentCenter.top;
 
   canvas.relativePan(new fabric.Point(panX, panY));
+
+  canvas.requestRenderAll();
+  updateGuides(canvas, useEditorStore.getState().showGuides);
+  saveState();
+};
+
+/**
+ * Rotate the canvas by swapping width and height (portrait <-> landscape)
+ */
+export const rotateCanvas = () => {
+  const { canvas, saveState, setZoom, setVpt } = useEditorStore.getState();
+  if (!canvas) return;
+
+  const currentWidth = canvas.getWidth();
+  const currentHeight = canvas.getHeight();
+
+  // Swap dimensions
+  const newWidth = currentHeight;
+  const newHeight = currentWidth;
+
+  // Get all objects (excluding guides)
+  const objects = canvas.getObjects().filter((obj) => !(obj as any).isGuide);
+
+  // Set new dimensions
+  canvas.setWidth(newWidth);
+  canvas.setHeight(newHeight);
+
+  // Reposition objects to maintain relative position
+  // Calculate the center offset
+  const centerOffsetX = (newWidth - currentWidth) / 2;
+  const centerOffsetY = (newHeight - currentHeight) / 2;
+
+  objects.forEach((obj) => {
+    obj.set({
+      left: (obj.left ?? 0) + centerOffsetX,
+      top: (obj.top ?? 0) + centerOffsetY,
+    });
+    obj.setCoords();
+  });
+
+  // Reset viewport
+  const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
+  canvas.setZoom(1);
+  canvas.setViewportTransform(nextVpt);
+  setZoom(1);
+  setVpt([...nextVpt]);
 
   canvas.requestRenderAll();
   updateGuides(canvas, useEditorStore.getState().showGuides);

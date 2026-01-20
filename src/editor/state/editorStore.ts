@@ -1,28 +1,50 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
-import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
-import { 
-    saveBrandVaultToDb
-} from '../utils/indexedDb';
-import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
-import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { ensureObjectId, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import {
+    alignLeft,
+    alignCenter,
+    alignRight,
+    alignTop,
+    alignMiddle,
+    alignBottom,
+    distributeHorizontally,
+    distributeVertically,
+} from '../fabric/alignment';
+import { groupObjects, ungroupObjects } from '../fabric/grouping';
+import { resizeCanvas } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
-import { historyService } from '../utils/historyService';
 import { useUiThemeStore } from './uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
-import { recordDiff, ObjectDiff, SerializedObject } from '../utils/diffSaver';
+import { applyAssetRefCounts, hydrateCanvasDataWithAssets, prepareCanvasDataForPersistence } from './useHistoryStore';
+import { useHistoryStore } from './useHistoryStore';
+import { unitScale as unitScaleMap, UnitMode } from '../utils/units';
+import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
+import {
+    useThemeStore,
+    applyThemeToCanvas,
+    applyThemedFillToObject,
+    applyThemeTintToImage,
+    resetObjectToDefaultTheme as resetObjectTheme,
+    resetAllThemeLinks,
+} from './useThemeStore';
 
-type HistorySnapshot = {
-  type: 'full';
-  data: any;
-} | {
-  type: 'diff';
-  data: ObjectDiff;
-};
+// Re-export BrandCollection for backward compatibility
+export type { BrandCollection } from './useThemeStore';
+
 
 // --- CONSTANTS ---
+
+// Default canvas size: US Letter at 300 DPI (8.5" × 11")
+export const DEFAULT_CANVAS_SIZE = {
+  width: 2550,   // 8.5" at 300 DPI = 2550px
+  height: 3300,  // 11" at 300 DPI = 3300px
+};
+
+// Default canvas background color (cream)
+export const DEFAULT_CANVAS_BACKGROUND = '#FAF8F5';
 
 export interface Template {
   id: string;
@@ -31,7 +53,7 @@ export interface Template {
   defaultThemeId: string;
   thumbnail?: string;
   canvasSize?: { width: number; height: number };
-  unitMode?: 'px' | 'in' | 'cm' | 'mm';
+  unitMode?: UnitMode;
 }
 
 // --- INTERFACES ---
@@ -53,18 +75,89 @@ export interface StickerData {
     label?: string;
 }
 
-export interface BrandCollection {
-    id: string;
-    name: string;
-    themeData: ApocapaletteTheme;
-    swatches: {
-        [key: string]: {
-            [key: string]: string;
-        }
-    }
-}
+// BrandCollection is now defined in useThemeStore.ts and re-exported above
 
 export type EditorTool = 'select' | 'draw' | 'pan' | 'erase';
+
+export type CanvasReadyState = 'uninitialized' | 'initializing' | 'ready' | 'disposing' | 'disposed';
+
+/**
+ * PHASE 2.1: Serialized representation of a Fabric.js object.
+ * This is the PRIMARY source of truth for canvas objects.
+ * Fabric.js canvas acts as a RENDER DELEGATE.
+ */
+export interface SerializedFabricObject {
+  // Fabric.js base properties
+  type: string;
+  version?: string;
+  originX?: string;
+  originY?: string;
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  fill?: string | object;
+  stroke?: string;
+  strokeWidth?: number;
+  strokeDashArray?: number[];
+  strokeLineCap?: string;
+  strokeDashOffset?: number;
+  strokeLineJoin?: string;
+  strokeUniform?: boolean;
+  strokeMiterLimit?: number;
+  scaleX?: number;
+  scaleY?: number;
+  angle?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  opacity?: number;
+  shadow?: object | string | null;
+  visible?: boolean;
+  backgroundColor?: string;
+  fillRule?: string;
+  paintFirst?: string;
+  globalCompositeOperation?: string;
+  skewX?: number;
+  skewY?: number;
+
+  // Custom properties
+  id: string | null;
+  tokenRole?: string | null;
+  colorLocked?: boolean;
+  isPlaceholder?: boolean;
+  isGuide?: boolean;
+  isFrame?: boolean;
+  frameType?: 'circle' | 'star' | 'hexagon' | 'badge';
+
+  // Type-specific properties (partial - extend as needed)
+  text?: string; // for text objects
+  fontSize?: number;
+  fontFamily?: string;
+  fontWeight?: string | number;
+  fontStyle?: string;
+  textAlign?: string;
+  charSpacing?: number; // for text letter spacing
+  radius?: number; // for circles
+  rx?: number; // for rectangles
+  ry?: number;
+  points?: Array<{ x: number; y: number }>; // for polygons
+  src?: string; // for images
+  crossOrigin?: string;
+  filters?: any[];
+
+  // Image adjustment properties
+  adjustments?: {
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+  };
+
+  // Group/ActiveSelection
+  objects?: SerializedFabricObject[];
+
+  // Any other properties
+  [key: string]: any;
+}
 
 export type ProjectFilePayload = {
   projectName: string;
@@ -73,7 +166,7 @@ export type ProjectFilePayload = {
   activeTheme: ApocapaletteTheme | null;
   lastUpdated: string;
   canvasSize?: { width: number; height: number };
-  unitMode?: 'px' | 'in' | 'cm' | 'mm';
+  unitMode?: UnitMode;
 };
 
 // --- UTILITY FUNCTIONS ---
@@ -82,27 +175,16 @@ const formatObjectType = (type: string | undefined) => {
   if (!type) return 'Object';
   return type.replace(/-/g, ' ').split(' ').map(capitalize).join(' ');
 };
-const buildLayerFromObject = (obj: fabric.Object): Layer => ({
-  id: (obj as any).id || '',
+const buildLayerFromSerializedObject = (obj: SerializedFabricObject): Layer => ({
+  id: obj.id || '',
   name: (obj as any).name || formatObjectType(obj.type),
   type: obj.type || 'object',
   visible: obj.visible ?? true,
   movementLocked: !!obj.lockMovementX,
-  colorLocked: !!(obj as any).colorLocked,
+  colorLocked: !!obj.colorLocked,
 });
 const getValueByPath = (obj: object, path: string): any => {
     return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
-};
-
-const resolveThemeValue = (obj: object, path: string): string | null => {
-    let value = getValueByPath(obj, path);
-    if (!value && !path.endsWith('.value')) {
-        value = getValueByPath(obj, `${path}.value`);
-    }
-    if (value && typeof value === 'object' && 'value' in value) {
-        return (value as { value: string }).value;
-    }
-    return typeof value === 'string' ? value : null;
 };
 
 const sanitizeFileName = (name: string) => {
@@ -117,125 +199,261 @@ const sanitizeFileName = (name: string) => {
 
 const isDataUrl = (value: string) => value.startsWith('data:');
 
-const createObjectUrlFromDataUrl = (dataUrl: string) => {
+const readBlobAsDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === 'string') {
+            resolve(result);
+        } else {
+            reject(new Error('Failed to read blob as data URL.'));
+        }
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read blob.'));
+    reader.readAsDataURL(blob);
+});
+
+const fetchAsDataUrl = async (src: string) => {
+    if (typeof fetch !== 'function') {
+        throw new Error('Fetch is not available.');
+    }
+    const response = await fetch(src);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+    }
+    const blob = await response.blob();
+    return readBlobAsDataUrl(blob);
+};
+
+const getImageSource = (image: fabric.Image) => {
+    const anyImage = image as any;
+    if (typeof anyImage.getSrc === 'function') {
+        const src = anyImage.getSrc();
+        return typeof src === 'string' ? src : '';
+    }
+    const src = anyImage.src || anyImage._src;
+    return typeof src === 'string' ? src : '';
+};
+
+const getImageElement = (image: fabric.Image) => {
+    const anyImage = image as any;
+    if (typeof anyImage.getElement === 'function') {
+        return anyImage.getElement();
+    }
+    return anyImage._element || null;
+};
+
+const loadImageElementWithCors = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`Failed to load image for export: ${src}`));
+    img.src = src;
+});
+
+const getElementSize = (element: HTMLImageElement | HTMLCanvasElement) => {
+    if (element instanceof HTMLCanvasElement) {
+        return { width: element.width, height: element.height };
+    }
+    return {
+        width: element.naturalWidth || element.width,
+        height: element.naturalHeight || element.height,
+    };
+};
+
+const elementToDataUrl = async (element: HTMLImageElement | HTMLCanvasElement) => {
+    if (typeof document === 'undefined') return null;
+    const { width, height } = getElementSize(element);
+    if (!width || !height) return null;
+
+    if (typeof OffscreenCanvas !== 'undefined') {
+        try {
+            const offscreen = new OffscreenCanvas(width, height);
+            const ctx = offscreen.getContext('2d');
+            if (!ctx) return null;
+            ctx.drawImage(element as CanvasImageSource, 0, 0);
+            const blob = await offscreen.convertToBlob({ type: 'image/png' });
+            return readBlobAsDataUrl(blob);
+        } catch {
+            // Fall back to DOM canvas below.
+        }
+    }
+
     try {
-        const [meta, rawData] = dataUrl.split(',');
-        if (!rawData) return dataUrl;
-        const isBase64 = meta.includes(';base64');
-        const mime = meta.split(':')[1]?.split(';')[0] || 'application/octet-stream';
-        const decoded = isBase64 ? atob(rawData) : decodeURIComponent(rawData);
-        const bytes = new Uint8Array(decoded.length);
-        for (let i = 0; i < decoded.length; i += 1) {
-            bytes[i] = decoded.charCodeAt(i);
-        }
-        return URL.createObjectURL(new Blob([bytes], { type: mime }));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(element as CanvasImageSource, 0, 0);
+        return canvas.toDataURL('image/png');
     } catch {
-        return dataUrl;
+        return null;
     }
 };
 
-const getCanvasObjects = (canvasData: any) => {
-    if (Array.isArray(canvasData)) {
-        return canvasData;
-    }
-    return canvasData?.objects;
-};
+const resolveImageDataUrl = async (image: fabric.Image) => {
+    const src = getImageSource(image);
+    if (src && isDataUrl(src)) return src;
 
-const buildCanvasData = (canvasData: any, objects: any[]) => {
-    if (!canvasData || Array.isArray(canvasData)) {
-        return { objects };
+    const element = getImageElement(image);
+    if (element) {
+        const elementDataUrl = await elementToDataUrl(element as HTMLImageElement | HTMLCanvasElement);
+        if (elementDataUrl) return elementDataUrl;
     }
-    return { ...canvasData, objects };
-};
 
-const prepareCanvasDataForPersistence = (
-    canvasData: any,
-    imageAssets: Record<string, string>
-) => {
-    const objects = getCanvasObjects(canvasData);
-    if (!Array.isArray(objects)) {
-        return { canvasData, imageAssets };
-    }
-    let nextAssets = imageAssets;
-    const nextObjects = objects.map((obj: any) => {
-        if (!obj || obj.type !== 'image') return obj;
-        const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : uuidv4();
-        const src = typeof obj.src === 'string' ? obj.src : '';
-        let assetUrl = nextAssets[id];
-        if (!assetUrl && src) {
-            if (src.startsWith('blob:')) {
-                nextAssets = { ...nextAssets, [id]: src };
-                assetUrl = src;
-            } else if (isDataUrl(src)) {
-                const objectUrl = createObjectUrlFromDataUrl(src);
-                nextAssets = { ...nextAssets, [id]: objectUrl };
-                assetUrl = objectUrl;
-            }
+    if (src) {
+        try {
+            const corsElement = await loadImageElementWithCors(src);
+            const corsDataUrl = await elementToDataUrl(corsElement);
+            if (corsDataUrl) return corsDataUrl;
+        } catch {
+            // Ignore and fall through to fetch.
         }
-        if (assetUrl) {
+        return fetchAsDataUrl(src);
+    }
+
+    return null;
+};
+
+const collectImageObjects = (objects: fabric.Object[]) => {
+    const images: fabric.Image[] = [];
+    const walk = (obj: fabric.Object) => {
+        if (obj.type === 'group' || obj.type === 'activeSelection') {
+            (obj as fabric.Group).getObjects().forEach(walk);
+            return;
+        }
+        if (obj.type === 'image') {
+            images.push(obj as fabric.Image);
+        }
+    };
+    objects.forEach(walk);
+    return images;
+};
+
+const replaceImageSources = (objects: any[], assets: Record<string, string>): any[] => objects.map((obj) => {
+    if (!obj) return obj;
+    if (obj.type === 'image') {
+        const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : '';
+        if (id && assets[id]) {
             return { ...obj, id, src: id };
         }
-        if (id !== obj.id) {
-            return { ...obj, id };
-        }
         return obj;
-    });
-    return {
-        canvasData: buildCanvasData(canvasData, nextObjects),
-        imageAssets: nextAssets,
-    };
-};
-
-export const hydrateCanvasDataWithAssets = (
-    canvasData: any,
-    imageAssets: Record<string, string>
-) => {
-    const objects = getCanvasObjects(canvasData);
-    if (!Array.isArray(objects)) {
-        return canvasData;
     }
-    return {
-        ...buildCanvasData(canvasData, objects),
-        objects: objects.map((obj: any) => {
-            if (!obj || obj.type !== 'image') return obj;
-            const id = typeof obj.id === 'string' ? obj.id : '';
-            const assetUrl = id ? imageAssets[id] : '';
-            if (assetUrl) {
-                return { ...obj, src: assetUrl };
+    if (Array.isArray(obj.objects)) {
+        return { ...obj, objects: replaceImageSources(obj.objects, assets) };
+    }
+    return obj;
+});
+
+const buildExportCanvasData = async (canvas: fabric.Canvas) => {
+    const imageObjects = collectImageObjects(canvas.getObjects());
+    imageObjects.forEach((image) => ensureObjectId(image, canvas));
+
+    const assets: Record<string, string> = {};
+    const failedIds: string[] = [];
+    for (const image of imageObjects) {
+        const id = (image as any).id as string | undefined;
+        if (!id) {
+            failedIds.push('unknown');
+            continue;
+        }
+        try {
+            const dataUrl = await resolveImageDataUrl(image);
+            if (!dataUrl) {
+                throw new Error(`Image ${id} did not return a data URL.`);
             }
-            return obj;
-        }),
+            assets[id] = dataUrl;
+        } catch (error) {
+            failedIds.push(id);
+        }
+    }
+
+    if (failedIds.length > 0) {
+        const preview = failedIds.slice(0, 3).join(', ');
+        const suffix = failedIds.length > 3 ? ` (+${failedIds.length - 3} more)` : '';
+        throw new Error(
+            `Export failed: ${failedIds.length} image(s) could not be encoded. ` +
+            `Ensure external assets allow CORS or replace them before exporting. ` +
+            `Failed IDs: ${preview}${suffix}`
+        );
+    }
+
+    const serializedObjects = canvas.getObjects().map(toSerializableObject);
+    const objectsWithAssets = replaceImageSources(serializedObjects, assets);
+    return {
+        canvasData: {
+            objects: objectsWithAssets,
+            background: canvas.backgroundColor || undefined,
+        },
+        assets,
     };
 };
 
-const findDefaultTheme = (vault: BrandCollection[]) => {
-    const byName = vault.find((theme) =>
-        theme.name?.toLowerCase() === 'midnight'
-        || theme.themeData?.meta?.name?.toLowerCase() === 'midnight'
-    );
-    return byName || vault[0] || null;
+const buildLayerStateFromObjects = (
+    objects: fabric.Object[],
+    canvas?: fabric.Canvas | null
+) => {
+    const nextLayers: Layer[] = [];
+    const nextById: Record<string, fabric.Object> = {};
+    const nextCanvasObjects: SerializedFabricObject[] = [];
+
+    objects.forEach((obj) => {
+        if ((obj as any).isGuide) return;
+        ensureObjectId(obj, canvas ?? undefined);
+        const serialized = toSerializableObject(obj) as SerializedFabricObject;
+        nextCanvasObjects.push(serialized);
+        const layer = buildLayerFromSerializedObject(serialized);
+        if (!layer.id) return;
+        nextLayers.push(layer);
+        nextById[layer.id] = obj;
+    });
+
+    return {
+        layers: nextLayers,
+        layersById: nextById,
+        canvasObjects: nextCanvasObjects,
+    };
+};
+
+// findDefaultTheme moved to useThemeStore.ts
+
+const resolveSelectedObject = (
+    canvas: fabric.Canvas | null,
+    selectedObjectId: string | null
+) => {
+    if (!canvas) return null;
+    if (selectedObjectId) {
+        const byId = canvas.getObjects().find((obj) => (obj as any).id === selectedObjectId);
+        if (byId) return byId;
+    }
+    return canvas.getActiveObject() ?? null;
 };
 
 // --- EDITOR STATE INTERFACE ---
 interface EditorState {
   canvas: fabric.Canvas | null;
-  selectedObject: fabric.Object | null;
+  canvasReadyState: CanvasReadyState;
+
+  // PHASE 2.1: PRIMARY source of truth for canvas objects
+  // Fabric.js canvas is now a RENDER DELEGATE
+  canvasObjects: SerializedFabricObject[];
+
+  selectedObjectId: string | null;
   layers: Layer[];
   layersById: Record<string, fabric.Object>;
   selectedLayerIds: string[];
   showGuides: boolean;
-  brandVault: BrandCollection[];
-  activeBrandCollectionId: string | null;
-  themeData: ApocapaletteTheme | null;
+  dirtyObjectsRef: Set<string> | null;
+
   toastMessage: string | null;
-  historyIndex: number;
-  unitMode: 'px' | 'in' | 'cm' | 'mm';
+  unitMode: UnitMode;
+  unitScale: number;
+  unitZoom: number;
   zoom: number;
   vpt: number[];
   isPreviewMode: boolean;
-  brandPalette: { [key: string]: string };
   bleedPx: number;
-  canvasBackgroundColor: string | null;
   canvasOffset: { x: number; y: number };
   snapEnabled: boolean;
   gridEnabled: boolean;
@@ -243,31 +461,61 @@ interface EditorState {
   templates: Template[];
   userTemplates: Template[];
   imageAssets: Record<string, string>;
+  assetRefCount: Map<string, number>;
   projectName: string;
   isProjectPresetsOpen: boolean;
   activeTool: EditorTool;
   brushSize: number;
-  brushColor: string;
   showOnboarding: boolean;
-  lastHistorySnapshot: any | null;
   layerSyncHandler: (() => void) | null;
-  historyDirty: boolean;
+  hasLayerSyncHandler: boolean;
+  batchDepth: number;
+  batchNeedsSync: boolean;
+  batchNeedsSave: boolean;
+  autoSaveStatus: 'idle' | 'saving' | 'saved';
+  autoSaveTimer: ReturnType<typeof setTimeout> | null;
+
+  // PHASE 2.2: Sync Lock Mechanism
+  syncLock: {
+    isLocked: boolean;
+    reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch' | null;
+    queuedSync: boolean;
+  };
 
   setCanvas: (canvas: fabric.Canvas | null) => void;
-  setSelectedObject: (object: fabric.Object | null) => void;
+  setCanvasReadyState: (state: CanvasReadyState) => void;
+  setSelectedObjectId: (id: string | null) => void;
   setLayers: (objects: fabric.Object[]) => void;
+  syncCanvasToStore: (canvasOverride?: fabric.Canvas | null) => void;
+  removeSelectedObject: () => void;
+  alignSelectedObjects: (direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => void;
+  distributeSelectedObjects: (direction: 'horizontal' | 'vertical') => void;
+  groupSelectedObjects: () => void;
+  ungroupSelectedObjects: () => void;
   addLayer: (layer: Layer) => void;
   updateLayer: (id: string, partial: Partial<Layer>) => void;
   removeLayer: (id: string) => void;
   setSelectedLayerIds: (ids: string[]) => void;
+  setDirtyObjectsRef: (dirtyObjects: Set<string> | null) => void;
   setLayerSyncHandler: (handler: (() => void) | null) => void;
-  requestLayerSync: () => void;
+  requestLayerSync: (options?: { force?: boolean }) => void;
+
+  // PHASE 2.1: Canvas objects management (Primary source of truth)
+  setCanvasObjects: (objects: SerializedFabricObject[]) => void;
+
+  // PHASE 2.2: Sync Lock Management
+  acquireSyncLock: (reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch') => void;
+  releaseSyncLock: () => void;
+
+  startBatch: () => void;
+  endBatch: () => void;
   markHistoryDirty: () => void;
   consumeHistoryDirty: () => boolean;
   toggleShowGuides: () => void;
   saveState: (options?: { force?: boolean }) => void;
+  triggerAutoSave: () => void;
   setToastMessage: (message: string | null) => void;
-  setUnitMode: (mode: 'px' | 'in' | 'cm' | 'mm') => void;
+  setUnitMode: (mode: UnitMode) => void;
   setCanvasBackgroundColor: (color: string) => void;
   setZoom: (zoom: number) => void;
   setVpt: (vpt: number[]) => void;
@@ -281,10 +529,12 @@ interface EditorState {
   setTemplates: (templates: Template[]) => void;
   addImageAsset: (id: string, url: string) => void;
   removeImageAsset: (id: string) => void;
+  incrementAssetRef: (id: string) => void;
+  decrementAssetRef: (id: string) => void;
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
   startNewProject: () => void;
-  downloadProjectFile: () => void;
+  downloadProjectFile: () => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectName: (name: string) => void;
@@ -303,76 +553,220 @@ interface EditorState {
   setObjectThemedFill: (tokenRole: string) => void;
   applyTint: (tokenRole: string) => void;
   resetObjectToDefaultTheme: () => void;
-  
-  // Other actions from original file
+
+  // Text Effects Actions
+  setTextShadow: (shadowParams: { color?: string; blur?: number; offsetX?: number; offsetY?: number }) => void;
+  setTextStroke: (strokeParams: { color?: string; width?: number }) => void;
+  setTextCharSpacing: (spacing: number) => void;
+
+  // Image Adjustment Actions
+  setImageBrightness: (value: number) => void;
+  setImageContrast: (value: number) => void;
+  setImageSaturation: (value: number) => void;
+  setImageAdjustments: (adjustments: { brightness?: number; contrast?: number; saturation?: number }) => void;
+  resetImageAdjustments: () => void;
+
+  // Export Actions
+  exportCanvas: (options: { format: 'png' | 'jpeg' | 'svg'; quality?: number; multiplier: number; clipToCanvas: boolean }) => Promise<void>;
+
+  // Project Persistence Actions
+  saveProject: (name: string) => Promise<void>;
+  loadProject: (projectId: string) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
+  duplicateProject: (projectId: string, newName: string) => Promise<void>;
+  getAllProjects: () => Promise<any[]>;
+  updateCurrentProject: () => Promise<void>;
+  setAutoSaveStatus: (status: 'idle' | 'saving' | 'saved') => void;
+
+  // History Actions
+  takeSnapshot: () => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  clearHistory: () => void;
+
+  // UI State
+  showHelpModal: boolean;
+  setShowHelpModal: (show: boolean) => void;
+  showExportModal: boolean;
+  setShowExportModal: (show: boolean) => void;
 }
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
 export const useEditorStore = createWithEqualityFn<EditorState>()(
   persist(
-    (set, get) => ({
-        canvas: null,
-        selectedObject: null,
+    (set, get) => {
+        useHistoryStore.getState().setContext({
+            getCanvas: () => get().canvas,
+            getImageAssets: () => get().imageAssets,
+            setImageAssets: (imageAssets) => set({ imageAssets }),
+            getAssetRefCount: () => get().assetRefCount,
+            setAssetRefCount: (assetRefCount) => set({ assetRefCount }),
+            getDirtyObjectsRef: () => get().dirtyObjectsRef,
+            requestLayerSync: () => get().requestLayerSync(),
+            setSelectedObjectId: (id) => set({ selectedObjectId: id }),
+            acquireSyncLock: (reason) => get().acquireSyncLock(reason),
+            releaseSyncLock: () => get().releaseSyncLock(),
+        });
+
+        return ({
+            canvas: null,
+        canvasReadyState: 'uninitialized',
+        canvasObjects: [], // PHASE 2.1: Primary source of truth
+        selectedObjectId: null,
         layers: [],
         layersById: {},
         selectedLayerIds: [],
         showGuides: true,
-        brandVault: [],
-        activeBrandCollectionId: null,
-        themeData: null,
+        dirtyObjectsRef: null,
+
         toastMessage: null,
-        historyIndex: -1,
-        unitMode: 'px',
+        unitMode: 'in', // Default to inches for print-focused design
+        unitScale: unitScaleMap['in'],
+        unitZoom: 1,
         zoom: 1,
         vpt: [1, 0, 0, 1, 0, 0],
         isPreviewMode: false,
-        brandPalette: {},
         bleedPx: 0,
-        canvasBackgroundColor: null,
         canvasOffset: { x: 0, y: 0 },
         snapEnabled: true,
-        gridEnabled: false,
+        gridEnabled: true,
         assets: [],
         templates: [],
         userTemplates: [],
         imageAssets: {},
+        assetRefCount: new Map(),
         projectName: 'Untitled Project',
         isProjectPresetsOpen: false,
         activeTool: 'select',
         brushSize: 8,
-        brushColor: '#111111',
         showOnboarding: true,
-        lastHistorySnapshot: null,
         layerSyncHandler: null,
-        historyDirty: false,
+        hasLayerSyncHandler: false,
+        batchDepth: 0,
+        batchNeedsSync: false,
+        batchNeedsSave: false,
+        autoSaveStatus: 'idle',
+        autoSaveTimer: null,
+        showHelpModal: false,
+        showExportModal: false,
+        syncLock: {
+            isLocked: false,
+            reason: null,
+            queuedSync: false,
+        },
 
     setCanvas: (canvas) => {
-        const currentBackground = get().canvasBackgroundColor;
+        const currentBackground = useThemeStore.getState().canvasBackgroundColor;
         const nextBackground =
             currentBackground ?? (canvas?.backgroundColor ? String(canvas.backgroundColor) : null);
-        set({ canvas, canvasBackgroundColor: nextBackground });
-        if (canvas) {
+        useThemeStore.getState().setCanvasBackgroundColor(nextBackground);
+        set({ canvas });
+        if (!canvas) return;
+
+        // Only apply theme if canvas is ready (not during initialization)
+        const { canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+        const themeData = useThemeStore.getState().themeData;
+        if (canvasReadyState === 'ready' && themeData) {
+            applyThemeToCanvas(canvas, themeData, {
+                saveState,
+                requestLayerSync,
+                acquireSyncLock,
+                releaseSyncLock,
+            });
+        }
+
+        if (!get().hasLayerSyncHandler) {
+            return;
+        }
+
+        // Only sync if canvas is ready
+        if (canvasReadyState === 'ready') {
             get().requestLayerSync();
-            if (get().themeData) {
-                applyActiveThemeToCanvas();
-            }
         }
     },
-    setSelectedObject: (object) => set({ selectedObject: object }),
+    setCanvasReadyState: (state) => set({ canvasReadyState: state }),
+    setSelectedObjectId: (id) => set({ selectedObjectId: id }),
     setSelectedLayerIds: (ids) => set({ selectedLayerIds: ids }),
+    setDirtyObjectsRef: (dirtyObjects) => set({ dirtyObjectsRef: dirtyObjects }),
     setLayers: (objects) => {
-        const nextLayers: Layer[] = [];
-        const nextById: Record<string, fabric.Object> = {};
-        objects.forEach((obj) => {
-            if ((obj as any).isGuide) return;
-            const layer = buildLayerFromObject(obj);
-            if (!layer.id) return;
-            nextLayers.push(layer);
-            nextById[layer.id] = obj;
-        });
-        set({ layers: nextLayers, layersById: nextById });
+        const nextState = buildLayerStateFromObjects(objects, get().canvas);
+        set(nextState);
+    },
+    syncCanvasToStore: (canvasOverride) => {
+        const targetCanvas = canvasOverride ?? get().canvas;
+        if (!targetCanvas) return;
+        const objects = targetCanvas.getObjects();
+        const nextState = buildLayerStateFromObjects(objects, targetCanvas);
+        set(nextState);
+    },
+    removeSelectedObject: () => {
+        const { canvas, setSelectedObjectId, setSelectedLayerIds, requestLayerSync, saveState } = get();
+        if (!canvas) return;
+        const activeObject = canvas.getActiveObject();
+        if (!activeObject) return;
+
+        if (activeObject.type === 'activeSelection') {
+            const selection = activeObject as fabric.ActiveSelection;
+            selection.getObjects().forEach((obj) => canvas.remove(obj));
+        } else {
+            canvas.remove(activeObject);
+        }
+
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+        setSelectedObjectId(null);
+        setSelectedLayerIds([]);
+        requestLayerSync();
+        saveState();
+    },
+    alignSelectedObjects: (direction) => {
+        const { canvas, startBatch, endBatch } = get();
+        if (!canvas) return;
+        startBatch();
+        switch (direction) {
+            case 'left':
+                alignLeft(canvas);
+                break;
+            case 'center':
+                alignCenter(canvas);
+                break;
+            case 'right':
+                alignRight(canvas);
+                break;
+            case 'top':
+                alignTop(canvas);
+                break;
+            case 'middle':
+                alignMiddle(canvas);
+                break;
+            case 'bottom':
+                alignBottom(canvas);
+                break;
+            default:
+                break;
+        }
+        endBatch();
+    },
+    distributeSelectedObjects: (direction) => {
+        const { canvas } = get();
+        if (!canvas) return;
+        if (direction === 'horizontal') {
+            distributeHorizontally(canvas);
+        } else {
+            distributeVertically(canvas);
+        }
+    },
+    groupSelectedObjects: () => {
+        const { canvas, syncCanvasToStore } = get();
+        if (!canvas) return;
+        groupObjects(canvas);
+        syncCanvasToStore(canvas);
+    },
+    ungroupSelectedObjects: () => {
+        const { canvas, syncCanvasToStore } = get();
+        if (!canvas) return;
+        ungroupObjects(canvas);
+        syncCanvasToStore(canvas);
     },
     addLayer: (_layer) => {
         get().requestLayerSync();
@@ -383,22 +777,93 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     removeLayer: (_id) => {
         get().requestLayerSync();
     },
-    setLayerSyncHandler: (handler) => set({ layerSyncHandler: handler }),
-    requestLayerSync: () => {
-        const handler = get().layerSyncHandler;
-        if (handler) handler();
+    setLayerSyncHandler: (handler) => {
+        set({ layerSyncHandler: handler, hasLayerSyncHandler: !!handler });
+        if (handler && get().canvas) {
+            get().requestLayerSync();
+        }
     },
+    startBatch: () => {
+        set((state) => ({ batchDepth: state.batchDepth + 1 }));
+    },
+    endBatch: () => {
+        const { batchDepth, batchNeedsSync, batchNeedsSave } = get();
+        const nextDepth = Math.max(0, batchDepth - 1);
+        set({ batchDepth: nextDepth });
+        if (nextDepth === 0) {
+            if (batchNeedsSync) {
+                set({ batchNeedsSync: false });
+                get().requestLayerSync({ force: true });
+            }
+            if (batchNeedsSave) {
+                set({ batchNeedsSave: false });
+                get().saveState({ force: true });
+            }
+        }
+    },
+    requestLayerSync: (options) => {
+        // PHASE 2.2: Check sync lock first
+        const { syncLock, batchDepth, layerSyncHandler } = get();
+        if (syncLock.isLocked && !options?.force) {
+            set({ syncLock: { ...syncLock, queuedSync: true } });
+            return;
+        }
+
+        if (batchDepth > 0 && !options?.force) {
+            set({ batchNeedsSync: true });
+            return;
+        }
+        if (layerSyncHandler) layerSyncHandler();
+    },
+
+    // PHASE 2.2: Sync Lock Management Actions
+    acquireSyncLock: (reason) => {
+        const { syncLock } = get();
+        if (syncLock.isLocked) {
+            console.warn(`[Phase 2.2] Sync lock already held by "${syncLock.reason}", cannot acquire for "${reason}"`);
+            return;
+        }
+        set({ syncLock: { isLocked: true, reason, queuedSync: false } });
+    },
+
+    releaseSyncLock: () => {
+        const { syncLock } = get();
+        if (!syncLock.isLocked) {
+            console.warn('[Phase 2.2] Attempted to release sync lock, but lock is not held');
+            return;
+        }
+
+        const hadQueuedSync = syncLock.queuedSync;
+        set({ syncLock: { isLocked: false, reason: null, queuedSync: false } });
+
+        // If sync was queued while locked, execute it now
+        if (hadQueuedSync) {
+            get().requestLayerSync({ force: true });
+        }
+    },
+
+    setCanvasObjects: (objects) => {
+        set({ canvasObjects: objects });
+    },
+
     markHistoryDirty: () => {
-        set({ historyDirty: true });
+        useHistoryStore.getState().markHistoryDirty();
     },
     consumeHistoryDirty: () => {
-        if (!get().historyDirty) return false;
-        set({ historyDirty: false });
-        return true;
+        return useHistoryStore.getState().consumeHistoryDirty();
     },
     toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
     setToastMessage: (message) => set({ toastMessage: message }),
-    setUnitMode: (mode) => set({ unitMode: mode }),
+    setUnitMode: (mode) => {
+        set((state) => {
+            const nextScale = unitScaleMap[mode];
+            return {
+                unitMode: mode,
+                unitScale: nextScale,
+                unitZoom: state.zoom * nextScale,
+            };
+        });
+    },
     setCanvasBackgroundColor: (color) => {
         const { canvas, saveState } = get();
         if (canvas) {
@@ -406,13 +871,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvas.requestRenderAll();
             saveState();
         }
-        set({ canvasBackgroundColor: color });
+        // Delegate to theme store (single source of truth)
+        useThemeStore.getState().setCanvasBackgroundColor(color);
     },
-    setZoom: (zoom) => set({ zoom }),
+    setZoom: (zoom) => set((state) => ({ zoom, unitZoom: zoom * state.unitScale })),
     setVpt: (vpt) => set({ vpt }),
     setCanvasOffset: (offset) => set({ canvasOffset: offset }),
     setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
-    setGridEnabled: (enabled) => set({ gridEnabled: enabled }),
+    setGridEnabled: (enabled) => {
+        set({ gridEnabled: enabled });
+        const { canvas } = get();
+        if (canvas) {
+            canvas.requestRenderAll();
+        }
+    },
     setShowOnboarding: (show) => set({ showOnboarding: show }),
     resetViewCanvas: () => {
         const { canvas } = get();
@@ -461,17 +933,64 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return { imageAssets: rest };
         });
     },
+    incrementAssetRef: (id) => {
+        if (!id) return;
+        set((state) => {
+            const counts = new Map<string, number>([[id, 1]]);
+            const { nextRefCount, nextAssets } = applyAssetRefCounts(
+                state.assetRefCount,
+                state.imageAssets,
+                counts,
+                1
+            );
+            return {
+                assetRefCount: nextRefCount,
+                imageAssets: nextAssets,
+            };
+        });
+    },
+    decrementAssetRef: (id) => {
+        if (!id) return;
+        set((state) => {
+            const counts = new Map<string, number>([[id, 1]]);
+            const { nextRefCount, nextAssets } = applyAssetRefCounts(
+                state.assetRefCount,
+                state.imageAssets,
+                counts,
+                -1
+            );
+            return {
+                assetRefCount: nextRefCount,
+                imageAssets: nextAssets,
+            };
+        });
+    },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
-    setBrushColor: (color) => set({ brushColor: color }),
+    setBrushColor: (color) => useThemeStore.getState().setBrushColor(color),
     loadTemplate: (template) => {
-        const { canvas, requestLayerSync, brandVault, applyTheme, setToastMessage, resetViewCanvas } = get();
+        const {
+            canvas,
+            requestLayerSync,
+            applyTheme,
+            setToastMessage,
+            resetViewCanvas,
+            setLayers,
+            setSelectedLayerIds,
+            setSelectedObjectId,
+        } = get();
         if (!canvas) return;
+        const { brandVault, themeData } = useThemeStore.getState();
 
+        setLayers([]);
+        setSelectedLayerIds([]);
+        setSelectedObjectId(null);
         canvas.clear();
-        set({ canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null });
+        useThemeStore.getState().setCanvasBackgroundColor(
+            canvas.backgroundColor ? String(canvas.backgroundColor) : null
+        );
 
         const nextWidth = template.canvasSize?.width;
         const nextHeight = template.canvasSize?.height;
@@ -485,7 +1004,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvas.setHeight(Math.max(1, Math.round(nextHeight)));
         }
         if (template.unitMode) {
-            set({ unitMode: template.unitMode });
+            get().setUnitMode(template.unitMode);
         }
 
         const themeToApply = template.defaultThemeId
@@ -494,7 +1013,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         canvas.loadFromJSON(template.canvasData, reviveCustomFabricProps).then(() => {
             resetViewCanvas();
-            sanityCheckCanvas(canvas, themeToApply?.themeData ?? get().themeData);
+            sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
             requestLayerSync();
             setToastMessage(`Template loaded: ${template.name}`);
 
@@ -509,7 +1028,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         });
     },
     saveCurrentAsTemplate: () => {
-        const { canvas, activeBrandCollectionId, userTemplates, unitMode } = get();
+        const { canvas, userTemplates, unitMode } = get();
+        const { activeBrandCollectionId } = useThemeStore.getState();
         if (!canvas) return;
         const serializedObjects = canvas.getObjects().map(toSerializableObject);
         const json = {
@@ -534,65 +1054,74 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     startNewProject: () => {
-        const { canvas, brandVault, requestLayerSync } = get();
+        const {
+            canvas,
+            requestLayerSync,
+            setLayers,
+            setSelectedLayerIds,
+            setSelectedObjectId,
+            setUnitMode,
+        } = get();
         if (canvas) {
             canvas.discardActiveObject();
+            setLayers([]);
+            setSelectedLayerIds([]);
+            setSelectedObjectId(null);
             canvas.clear();
+
+            // Set default canvas size to US Letter (8.5" × 11" at 300 DPI)
+            resizeCanvas(DEFAULT_CANVAS_SIZE.width, DEFAULT_CANVAS_SIZE.height);
+
+            // Set unit mode to inches for print projects
+            setUnitMode('in');
+
             requestLayerSync();
         }
 
-        historyService.reset();
-        const defaultTheme = findDefaultTheme(brandVault);
-        if (defaultTheme) {
-            set({ themeData: defaultTheme.themeData, activeBrandCollectionId: defaultTheme.id });
-            applyActiveThemeToCanvas();
-        } else {
-            set({ themeData: null, activeBrandCollectionId: null });
-        }
+        useHistoryStore.getState().resetHistory();
+
+        // Initialize default theme from theme store
+        useThemeStore.getState().initializeDefaultTheme();
+        applyActiveThemeToCanvas();
+
+        // Reset canvas background in theme store
+        useThemeStore.getState().setCanvasBackgroundColor(null);
 
         set({
-            historyIndex: historyService.currentIndex,
             projectName: 'Untitled Project',
-            isProjectPresetsOpen: true,
-            canvasBackgroundColor: null,
-            lastHistorySnapshot: null,
+            isProjectPresetsOpen: false, // Don't show presets by default anymore
         });
     },
 
-    downloadProjectFile: () => {
+    downloadProjectFile: async () => {
         const {
             canvas,
-            themeData,
-            activeBrandCollectionId,
-            brandVault,
             projectName,
             setToastMessage,
-            imageAssets,
             unitMode,
         } = get();
         if (!canvas) return;
+        const { themeData, activeBrandCollectionId, brandVault } = useThemeStore.getState();
 
         const fallbackTheme = themeData
             || brandVault.find((brand) => brand.id === activeBrandCollectionId)?.themeData
             || null;
 
-        const serializedObjects = canvas.getObjects().map(toSerializableObject);
-        const baseCanvasData = {
-            objects: serializedObjects,
-            background: canvas.backgroundColor || undefined,
-        };
-        const { canvasData, imageAssets: nextAssets } = prepareCanvasDataForPersistence(
-            baseCanvasData,
-            imageAssets
-        );
-        if (nextAssets !== imageAssets) {
-            set({ imageAssets: nextAssets });
+        let exportData: { canvasData: any; assets: Record<string, string> };
+        try {
+            exportData = await buildExportCanvasData(canvas);
+        } catch (error) {
+            const message = error instanceof Error && error.message
+                ? error.message
+                : 'Failed to prepare project for export.';
+            setToastMessage(message);
+            return;
         }
 
         const payload: ProjectFilePayload = {
             projectName: projectName || 'Untitled Project',
-            canvasData,
-            assets: nextAssets,
+            canvasData: exportData.canvasData,
+            assets: exportData.assets,
             activeTheme: fallbackTheme,
             lastUpdated: new Date().toISOString(),
             canvasSize: {
@@ -616,7 +1145,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     loadProjectFile: async (file) => {
-        const { canvas, requestLayerSync, setToastMessage, resetViewCanvas } = get();
+        const {
+            canvas,
+            requestLayerSync,
+            setToastMessage,
+            resetViewCanvas,
+            setLayers,
+            setSelectedLayerIds,
+            setSelectedObjectId,
+        } = get();
         if (!canvas) return;
 
         try {
@@ -634,7 +1171,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 : null;
             const rawUnitMode = raw.unitMode;
             if (rawUnitMode === 'px' || rawUnitMode === 'in' || rawUnitMode === 'cm' || rawUnitMode === 'mm') {
-                set({ unitMode: rawUnitMode });
+                get().setUnitMode(rawUnitMode);
             }
 
             let canvasData = raw.canvasData;
@@ -656,6 +1193,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             );
 
             canvas.discardActiveObject();
+            setLayers([]);
+            setSelectedLayerIds([]);
+            setSelectedObjectId(null);
             canvas.clear();
             const nextSize = raw.canvasSize;
             if (
@@ -673,25 +1213,28 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             sanityCheckCanvas(canvas, activeTheme);
             requestLayerSync();
-            historyService.reset();
+            useHistoryStore.getState().resetHistory();
 
             set({
                 projectName,
-                historyIndex: historyService.currentIndex,
                 isProjectPresetsOpen: false,
-                canvasBackgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
                 imageAssets: nextAssets,
             });
+            useThemeStore.getState().setCanvasBackgroundColor(
+                canvas.backgroundColor ? String(canvas.backgroundColor) : null
+            );
 
             if (activeTheme) {
-                set({ themeData: activeTheme, activeBrandCollectionId: null });
+                useThemeStore.getState().setThemeData(activeTheme);
+                useThemeStore.getState().setActiveBrandCollectionId(null);
                 applyActiveThemeToCanvas();
                 const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
                 if (projectSyncEnabled) {
                     applyThemeFromTokens(activeTheme);
                 }
             } else {
-                set({ themeData: null, activeBrandCollectionId: null });
+                useThemeStore.getState().setThemeData(null);
+                useThemeStore.getState().setActiveBrandCollectionId(null);
             }
 
             setToastMessage(`Project loaded: ${projectName}`);
@@ -700,246 +1243,94 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
     
-    saveState: debounce((options?: { force?: boolean }) => {
-        const { canvas, imageAssets, lastHistorySnapshot } = get();
-        if (!canvas) return;
-        set({ historyDirty: false });
-
-        const currentObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
-        const background = canvas.backgroundColor || undefined;
-        let snapshot: HistorySnapshot;
-
-        if (!lastHistorySnapshot || historyService.length === 0) {
-            const canvasData = { objects: currentObjects, background };
-            snapshot = { type: 'full', data: canvasData };
-        } else {
-            const diff = recordDiff(lastHistorySnapshot.objects, currentObjects);
-            if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
-                return; // No changes, no need to save
-            }
-            snapshot = { type: 'diff', data: diff };
-        }
-
-        const { imageAssets: nextAssets } = prepareCanvasDataForPersistence(
-            { objects: currentObjects, background },
-            imageAssets
-        );
-
-        historyService.pushSnapshot(JSON.stringify(snapshot), options);
-        
-        set({ 
-            historyIndex: historyService.currentIndex,
-            lastHistorySnapshot: { objects: currentObjects, background },
-            imageAssets: nextAssets,
-        });
-    }, 300),
-
-    undo: async () => {
-        const { canvas, requestLayerSync, imageAssets } = get();
-        if (!canvas || !historyService.canUndo()) return;
-
-        const snapshotStr = historyService.undo();
-        if (!snapshotStr) return;
-        
-        let snapshot: HistorySnapshot;
-        try {
-            snapshot = JSON.parse(snapshotStr);
-            if (!snapshot.type) throw new Error('Legacy snapshot');
-        } catch (e) {
-            // Legacy snapshot
-            const prevState = JSON.parse(snapshotStr);
-            const hydratedState = hydrateCanvasDataWithAssets(prevState, imageAssets);
-            await new Promise<void>(resolve => {
-                canvas.loadFromJSON(hydratedState, () => {
-                    canvas.requestRenderAll();
-                    set({ 
-                        historyIndex: historyService.currentIndex, 
-                        selectedObject: null,
-                        lastHistorySnapshot: prevState,
-                    });
-                    requestLayerSync();
-                    resolve();
-                });
-            });
+    saveState: (options?: { force?: boolean }) => {
+        if (get().batchDepth > 0 && !options?.force) {
+            set({ batchNeedsSave: true });
             return;
         }
+        useHistoryStore.getState().saveState(options);
 
-        if (snapshot.type === 'full') {
-            const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
-            await new Promise<void>(resolve => {
-                canvas.loadFromJSON(hydratedState, () => {
-                    canvas.requestRenderAll();
-                    set({ 
-                        historyIndex: historyService.currentIndex,
-                        selectedObject: null,
-                        lastHistorySnapshot: snapshot.data,
-                    });
-                    requestLayerSync();
-                    resolve();
-                });
-            });
-        } else if (snapshot.type === 'diff') {
-            const diff = snapshot.data;
-            
-            diff.added.forEach(objToAdd => {
-                const objToRemove = canvas.getObjects().find(o => (o as any).id === objToAdd.id);
-                if (objToRemove) canvas.remove(objToRemove);
-            });
-
-            const removedObjects = await fabric.util.enlivenObjects(diff.removed) as fabric.Object[];
-            removedObjects.forEach(obj => canvas.add(obj));
-
-            const changedObjects = await fabric.util.enlivenObjects(diff.changed.map(c => c.prev));
-            changedObjects.forEach(prevObj => {
-                const targetObj = canvas.getObjects().find(o => (o as any).id === (prevObj as any).id);
-                if (targetObj) {
-                    const oldProps = prevObj.toObject();
-                    delete oldProps.type;
-                    targetObj.set(oldProps);
-                }
-            });
-
-            const newObjects = canvas.getObjects().map(toSerializableObject);
-            const background = canvas.backgroundColor || undefined;
-            set({
-                historyIndex: historyService.currentIndex,
-                selectedObject: null,
-                lastHistorySnapshot: { objects: newObjects, background },
-            });
-            requestLayerSync();
-            canvas.requestRenderAll();
+        // Only trigger auto-save for named projects to avoid unnecessary state updates
+        const projectName = get().projectName;
+        if (projectName && projectName !== 'Untitled Project') {
+            get().triggerAutoSave();
         }
+    },
+
+    takeSnapshot: () => {
+        useHistoryStore.getState().takeSnapshot();
+    },
+
+    clearHistory: () => {
+        useHistoryStore.getState().clearHistory();
+    },
+
+    undo: async () => {
+        await useHistoryStore.getState().undo();
     },
 
     redo: async () => {
-        const { canvas, requestLayerSync, imageAssets } = get();
-        if (!canvas || !historyService.canRedo()) return;
-
-        const snapshotStr = historyService.redo();
-        if (!snapshotStr) return;
-
-        let snapshot: HistorySnapshot;
-        try {
-            snapshot = JSON.parse(snapshotStr);
-            if (!snapshot.type) throw new Error('Legacy snapshot');
-        } catch (e) {
-            // Legacy snapshot
-            const nextState = JSON.parse(snapshotStr);
-            const hydratedState = hydrateCanvasDataWithAssets(nextState, imageAssets);
-            await new Promise<void>(resolve => {
-                canvas.loadFromJSON(hydratedState, () => {
-                    canvas.requestRenderAll();
-                    set({ 
-                        historyIndex: historyService.currentIndex,
-                        selectedObject: null,
-                        lastHistorySnapshot: nextState,
-                    });
-                    requestLayerSync();
-                    resolve();
-                });
-            });
-            return;
-        }
-
-        if (snapshot.type === 'full') {
-            const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
-            await new Promise<void>(resolve => {
-                canvas.loadFromJSON(hydratedState, () => {
-                    canvas.requestRenderAll();
-                    set({
-                        historyIndex: historyService.currentIndex,
-                        selectedObject: null,
-                        lastHistorySnapshot: snapshot.data,
-                    });
-                    requestLayerSync();
-                    resolve();
-                });
-            });
-        } else if (snapshot.type === 'diff') {
-            const diff = snapshot.data;
-
-            const addedObjects = await fabric.util.enlivenObjects(diff.added) as fabric.Object[];
-            addedObjects.forEach(obj => canvas.add(obj));
-
-            diff.removed.forEach(objToRemove => {
-                const obj = canvas.getObjects().find(o => (o as any).id === objToRemove.id);
-                if (obj) canvas.remove(obj);
-            });
-
-            const changedObjects = await fabric.util.enlivenObjects(diff.changed.map(c => c.next));
-            changedObjects.forEach(nextObj => {
-                const targetObj = canvas.getObjects().find(o => (o as any).id === (nextObj as any).id);
-                if (targetObj) {
-                    const newProps = nextObj.toObject();
-                    delete newProps.type;
-                    targetObj.set(newProps);
-                }
-            });
-            
-            const newObjects = canvas.getObjects().map(toSerializableObject);
-            const background = canvas.backgroundColor || undefined;
-            set({
-                historyIndex: historyService.currentIndex,
-                selectedObject: null,
-                lastHistorySnapshot: { objects: newObjects, background },
-            });
-            requestLayerSync();
-            canvas.requestRenderAll();
-        }
+        await useHistoryStore.getState().redo();
     },
 
-    // --- THEME ACTIONS ---
+    // --- THEME ACTIONS (Delegated to theme store) ---
     addThemeToVault: (jsonString: string) => {
-        try {
-            const json: ApocapaletteTheme = JSON.parse(jsonString);
-            if (json.meta?.schema && json.meta.schema !== 'generic-token-pack-v1') {
-                set({ toastMessage: 'Invalid Schema' });
-                return;
+        const result = useThemeStore.getState().addThemeToVault(jsonString);
+        if (result.success && result.collection) {
+            set({ toastMessage: `Theme Imported: ${result.collection.name}` });
+            // Apply theme to canvas
+            const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+            const themeData = useThemeStore.getState().themeData;
+            if (canvas && canvasReadyState === 'ready' && themeData) {
+                applyThemeToCanvas(canvas, themeData, {
+                    saveState,
+                    requestLayerSync,
+                    acquireSyncLock,
+                    releaseSyncLock,
+                });
             }
-            const newCollection: BrandCollection = {
-                id: uuidv4(),
-                name: json.meta.name || 'Untitled Theme',
-                themeData: json,
-                swatches: {
-                    'Brand': {
-                        'Primary': json.brand?.primary?.value || '#000000',
-                        'Secondary': json.brand?.secondary?.value || '#888888',
-                        'Accent': json.brand?.accent?.value || '#ff00ff',
-                    }
-                }
-            };
-            const newVault = [...get().brandVault, newCollection];
-            set({ brandVault: newVault, activeBrandCollectionId: newCollection.id });
-            saveBrandVaultToDb(newVault);
-            get().applyTheme(json);
-            set({ toastMessage: `Theme Imported: ${newCollection.name}` });
-        } catch (e) {
-            set({ toastMessage: 'Invalid Theme File' });
+        } else {
+            set({ toastMessage: result.error || 'Invalid Theme File' });
         }
     },
 
     setActiveBrandCollectionId: (id) => {
-        const { brandVault, applyTheme } = get();
-        const selectedTheme = brandVault.find(brand => brand.id === id);
-        if (selectedTheme) {
-            applyTheme(selectedTheme.themeData);
-            set({ activeBrandCollectionId: id, toastMessage: `Theme Changed: ${selectedTheme.name}` });
+        const themeData = useThemeStore.getState().selectThemeFromVault(id);
+        if (themeData) {
+            const brandVault = useThemeStore.getState().brandVault;
+            const selectedTheme = brandVault.find(brand => brand.id === id);
+            set({ toastMessage: `Theme Changed: ${selectedTheme?.name || 'Theme'}` });
+            // Apply theme to canvas
+            const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+            if (canvas && canvasReadyState === 'ready') {
+                applyThemeToCanvas(canvas, themeData, {
+                    saveState,
+                    requestLayerSync,
+                    acquireSyncLock,
+                    releaseSyncLock,
+                });
+            }
         }
     },
-    
+
     applyTheme: (theme) => {
-        set({ themeData: theme });
-        setTimeout(() => applyActiveThemeToCanvas(), 50);
+        useThemeStore.getState().setThemeData(theme);
+        // Apply theme to canvas if ready
+        const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+        if (canvas && canvasReadyState === 'ready') {
+            applyThemeToCanvas(canvas, theme, {
+                saveState,
+                requestLayerSync,
+                acquireSyncLock,
+                releaseSyncLock,
+            });
+        }
     },
 
     resetTheme: () => {
         const { canvas, saveState } = get();
         if (!canvas) return;
-        canvas.getObjects().forEach(obj => {
-            (obj as any).tokenRole = null;
-        });
-        canvas.requestRenderAll();
-        saveState();
+        resetAllThemeLinks(canvas, { saveState });
         set({ toastMessage: 'Theme links reset' });
     },
 
@@ -972,7 +1363,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     setObjectFill: (fill) => {
-        const { canvas, selectedObject, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             selectedObject.set({ fill, tokenRole: null });
             canvas.requestRenderAll();
@@ -982,90 +1374,534 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     setObjectThemedFill: (tokenRole) => {
-        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const themeData = useThemeStore.getState().themeData;
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas && themeData) {
-            const colorValue = resolveThemeValue(themeData, tokenRole);
-            if (colorValue) {
-                selectedObject.set({ fill: colorValue, tokenRole, colorLocked: false });
-                canvas.requestRenderAll();
-                saveState();
-                requestLayerSync();
-            }
+            applyThemedFillToObject(selectedObject, canvas, tokenRole, themeData, {
+                saveState,
+                requestLayerSync,
+            });
         }
     },
 
     applyTint: (tokenRole) => {
-        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const themeData = useThemeStore.getState().themeData;
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         const image = selectedObject as fabric.Image;
         if (image && image.type === 'image' && canvas && themeData) {
-            const colorValue = resolveThemeValue(themeData, tokenRole);
-            if (!colorValue) return;
+            applyThemeTintToImage(image, canvas, tokenRole, themeData, {
+                saveState,
+                requestLayerSync,
+            });
+        }
+    },
 
-            image.filters = image.filters?.filter(f => f.type !== 'BlendColor');
-            image.filters?.push(new fabric.filters.BlendColor({
-                color: colorValue,
-                mode: 'tint',
-                alpha: 0.5
-            }));
-            
-            image.applyFilters();
-            canvas.requestRenderAll();
+    resetObjectToDefaultTheme: () => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const themeData = useThemeStore.getState().themeData;
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        if (!selectedObject || !canvas || !themeData) return;
+
+        resetObjectTheme(selectedObject, canvas, themeData, {
+            saveState,
+            requestLayerSync,
+        });
+    },
+
+    // Text Effects Actions
+    setTextShadow: (shadowParams) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
+            const currentShadow = selectedObject.shadow as fabric.Shadow | null;
+            const newShadow = new fabric.Shadow({
+                color: shadowParams.color ?? (currentShadow?.color || '#000000'),
+                blur: shadowParams.blur ?? (currentShadow?.blur || 0),
+                offsetX: shadowParams.offsetX ?? (currentShadow?.offsetX || 0),
+                offsetY: shadowParams.offsetY ?? (currentShadow?.offsetY || 0),
+            });
+
+            selectedObject.set({ shadow: newShadow });
+            canvas?.requestRenderAll();
             saveState();
             requestLayerSync();
         }
     },
 
-    resetObjectToDefaultTheme: () => {
-        const { canvas, selectedObject, themeData, saveState, requestLayerSync } = get();
-        if (!selectedObject || !canvas || !themeData) return;
+    setTextStroke: (strokeParams) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
 
-        let defaultTokenRole: string | null = null;
-        if (selectedObject.type === 'i-text' || selectedObject.type === 'textbox') {
-             defaultTokenRole = (selectedObject as any).role === 'heading' ? 'typography.heading.value' : 'typography.body.value';
-        } else if (selectedObject.type === 'image') {
-            defaultTokenRole = 'brand.accent.value';
-        } else {
-            defaultTokenRole = 'brand.primary.value';
-        }
-        
-        if (defaultTokenRole) {
-            const colorValue = resolveThemeValue(themeData, defaultTokenRole);
-            if (colorValue) {
-                selectedObject.set({
-                    fill: colorValue,
-                    tokenRole: defaultTokenRole,
-                    colorLocked: false,
-                });
-                if (selectedObject.type === 'image') {
-                    (selectedObject as fabric.Image).filters = [];
-                    (selectedObject as fabric.Image).applyFilters();
-                }
-                canvas.requestRenderAll();
-                saveState();
-                requestLayerSync();
-            }
+        if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
+            const updates: any = {};
+            if (strokeParams.color !== undefined) updates.stroke = strokeParams.color;
+            if (strokeParams.width !== undefined) updates.strokeWidth = strokeParams.width;
+
+            selectedObject.set(updates);
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
         }
     },
-    }),
+
+    setTextCharSpacing: (spacing) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
+            selectedObject.set({ charSpacing: spacing });
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    // Image Adjustment Actions
+    setImageBrightness: (value) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && selectedObject.type === 'image') {
+            const image = selectedObject as fabric.Image;
+
+            // Ensure adjustments property exists
+            if (!image.adjustments) {
+                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
+            }
+
+            let brightnessFilter = image.filters?.find(f => f.type === 'Brightness') as fabric.filters.Brightness | undefined;
+
+            if (brightnessFilter) {
+                brightnessFilter.brightness = value;
+            } else {
+                if (!image.filters) image.filters = [];
+                brightnessFilter = new fabric.filters.Brightness({ brightness: value });
+                (image.filters as any[]).push(brightnessFilter);
+            }
+
+            // Update the adjustments property
+            image.adjustments.brightness = value;
+
+            image.applyFilters();
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    setImageContrast: (value) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && selectedObject.type === 'image') {
+            const image = selectedObject as fabric.Image;
+
+            // Ensure adjustments property exists
+            if (!image.adjustments) {
+                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
+            }
+
+            let contrastFilter = image.filters?.find(f => f.type === 'Contrast') as fabric.filters.Contrast | undefined;
+
+            if (contrastFilter) {
+                contrastFilter.contrast = value;
+            } else {
+                if (!image.filters) image.filters = [];
+                contrastFilter = new fabric.filters.Contrast({ contrast: value });
+                (image.filters as any[]).push(contrastFilter);
+            }
+
+            // Update the adjustments property
+            image.adjustments.contrast = value;
+
+            image.applyFilters();
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    setImageSaturation: (value) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && selectedObject.type === 'image') {
+            const image = selectedObject as fabric.Image;
+
+            // Ensure adjustments property exists
+            if (!image.adjustments) {
+                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
+            }
+
+            let saturationFilter = image.filters?.find(f => f.type === 'Saturation') as fabric.filters.Saturation | undefined;
+
+            if (saturationFilter) {
+                saturationFilter.saturation = value;
+            } else {
+                if (!image.filters) image.filters = [];
+                saturationFilter = new fabric.filters.Saturation({ saturation: value });
+                (image.filters as any[]).push(saturationFilter);
+            }
+
+            // Update the adjustments property
+            image.adjustments.saturation = value;
+
+            image.applyFilters();
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    setImageAdjustments: (adjustments) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && selectedObject.type === 'image') {
+            const image = selectedObject as fabric.Image;
+
+            // Ensure adjustments property exists
+            if (!image.adjustments) {
+                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
+            }
+
+            // Update brightness filter
+            if (adjustments.brightness !== undefined) {
+                let brightnessFilter = image.filters?.find(f => f.type === 'Brightness') as fabric.filters.Brightness | undefined;
+
+                if (brightnessFilter) {
+                    brightnessFilter.brightness = adjustments.brightness;
+                } else {
+                    if (!image.filters) image.filters = [];
+                    brightnessFilter = new fabric.filters.Brightness({ brightness: adjustments.brightness });
+                    (image.filters as any[]).push(brightnessFilter);
+                }
+
+                // Update the adjustments property
+                image.adjustments.brightness = adjustments.brightness;
+            }
+
+            // Update contrast filter
+            if (adjustments.contrast !== undefined) {
+                let contrastFilter = image.filters?.find(f => f.type === 'Contrast') as fabric.filters.Contrast | undefined;
+
+                if (contrastFilter) {
+                    contrastFilter.contrast = adjustments.contrast;
+                } else {
+                    if (!image.filters) image.filters = [];
+                    contrastFilter = new fabric.filters.Contrast({ contrast: adjustments.contrast });
+                    (image.filters as any[]).push(contrastFilter);
+                }
+
+                // Update the adjustments property
+                image.adjustments.contrast = adjustments.contrast;
+            }
+
+            // Update saturation filter
+            if (adjustments.saturation !== undefined) {
+                let saturationFilter = image.filters?.find(f => f.type === 'Saturation') as fabric.filters.Saturation | undefined;
+
+                if (saturationFilter) {
+                    saturationFilter.saturation = adjustments.saturation;
+                } else {
+                    if (!image.filters) image.filters = [];
+                    saturationFilter = new fabric.filters.Saturation({ saturation: adjustments.saturation });
+                    (image.filters as any[]).push(saturationFilter);
+                }
+
+                // Update the adjustments property
+                image.adjustments.saturation = adjustments.saturation;
+            }
+
+            image.applyFilters();
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    resetImageAdjustments: () => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+
+        if (selectedObject && selectedObject.type === 'image') {
+            const image = selectedObject as fabric.Image;
+
+            // Remove all adjustment filters
+            if (image.filters) {
+                image.filters = image.filters.filter(f =>
+                    f.type !== 'Brightness' &&
+                    f.type !== 'Contrast' &&
+                    f.type !== 'Saturation'
+                );
+            }
+
+            // Reset the adjustments property
+            image.adjustments = {
+                brightness: 0,
+                contrast: 0,
+                saturation: 0
+            };
+
+            image.applyFilters();
+            canvas?.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    exportCanvas: async (options) => {
+        const { canvas } = get();
+        if (!canvas) {
+            console.error('Canvas not available for export');
+            return;
+        }
+
+        try {
+            // Handle SVG export separately
+            if (options.format === 'svg') {
+                const { downloadSvg } = await import('../fabric/exportUtils');
+                downloadSvg(canvas, 'design');
+            } else {
+                // Dynamically import the export function to avoid circular dependencies
+                const { downloadExportedCanvas } = await import('../fabric/exportCanvas');
+                const exportOptions = {
+                    ...options,
+                    format: options.format as 'png' | 'jpeg',
+                };
+                await downloadExportedCanvas(canvas, exportOptions);
+            }
+        } catch (error) {
+            console.error('Export failed:', error);
+            set({ toastMessage: 'Export failed. Please try again.' });
+        }
+    },
+
+    // Project Persistence Actions
+    saveProject: async (name) => {
+        const { canvas, unitMode } = get();
+        if (!canvas) return;
+        const { themeData } = useThemeStore.getState();
+
+        try {
+            const exportData = await buildExportCanvasData(canvas);
+
+            const payload = {
+                canvasData: exportData.canvasData,
+                assets: exportData.assets,
+                activeTheme: themeData,
+                lastUpdated: new Date().toISOString(),
+                canvasSize: {
+                    width: Math.round(canvas.getWidth()),
+                    height: Math.round(canvas.getHeight()),
+                },
+                unitMode,
+            };
+
+            const jsonPayload = JSON.stringify(payload);
+
+            // Generate thumbnail by getting a small version of the canvas
+            const thumbnail = canvas.toDataURL({
+                format: 'png',
+                multiplier: 0.1, // Small thumbnail
+                quality: 0.8
+            });
+
+            // Import and use the database
+            const { db } = await import('../db');
+            await db.saveProject(name, jsonPayload, thumbnail);
+        } catch (error) {
+            console.error('Failed to save project:', error);
+            set({ toastMessage: 'Failed to save project.' });
+        }
+    },
+
+    loadProject: async (projectId) => {
+        try {
+            const { db } = await import('../db');
+            const result = await db.loadProject(projectId);
+
+            if (!result) {
+                console.error('Project not found');
+                return;
+            }
+
+            const { canvas, requestLayerSync, setLayers, setSelectedLayerIds, setSelectedObjectId } = get();
+            if (!canvas) return;
+
+            const { canvasData, assets, activeTheme, canvasSize, unitMode } = JSON.parse(result.canvasData);
+            const hydratedCanvasData = await import('../fabric/initFabricCanvas').then(mod =>
+                mod.hydrateCanvasDataWithAssets(canvasData, assets)
+            );
+
+            // Clear canvas and load new data
+            canvas.discardActiveObject();
+            setLayers([]);
+            setSelectedLayerIds([]);
+            setSelectedObjectId(null);
+            canvas.clear();
+
+            if (canvasSize) {
+                canvas.setWidth(Math.max(1, Math.round(canvasSize.width)));
+                canvas.setHeight(Math.max(1, Math.round(canvasSize.height)));
+            }
+
+            if (unitMode) {
+                get().setUnitMode(unitMode);
+            }
+
+            await canvas.loadFromJSON(hydratedCanvasData, (await import('../fabric/initFabricCanvas')).reviveCustomFabricProps);
+            requestLayerSync();
+
+            // Update theme if available
+            if (activeTheme) {
+                get().applyTheme(activeTheme);
+            }
+
+            useHistoryStore.getState().resetHistory();
+
+            set({
+                imageAssets: { ...get().imageAssets, ...assets },
+                projectName: result.project.name,
+            });
+
+            set({ toastMessage: `Loaded project: ${result.project.name}` });
+        } catch (error) {
+            console.error('Failed to load project:', error);
+            set({ toastMessage: 'Failed to load project.' });
+        }
+    },
+
+    deleteProject: async (projectId) => {
+        try {
+            const { db } = await import('../db');
+            await db.deleteProject(projectId);
+        } catch (error) {
+            console.error('Failed to delete project:', error);
+            set({ toastMessage: 'Failed to delete project.' });
+        }
+    },
+
+    duplicateProject: async (projectId, newName) => {
+        try {
+            const { db } = await import('../db');
+            await db.duplicateProject(projectId, newName);
+            set({ toastMessage: `Project duplicated as: ${newName}` });
+        } catch (error) {
+            console.error('Failed to duplicate project:', error);
+            set({ toastMessage: 'Failed to duplicate project.' });
+        }
+    },
+
+    getAllProjects: async () => {
+        try {
+            const { db } = await import('../db');
+            return await db.getAllProjects();
+        } catch (error) {
+            console.error('Failed to get projects:', error);
+            return [];
+        }
+    },
+
+    updateCurrentProject: async () => {
+        const { projectName, canvas } = get();
+        if (!canvas || !projectName) return;
+
+        try {
+            const exportData = await buildExportCanvasData(canvas);
+
+            const payload = {
+                canvasData: exportData.canvasData,
+                assets: exportData.assets,
+                activeTheme: useThemeStore.getState().themeData,
+                lastUpdated: new Date().toISOString(),
+                canvasSize: {
+                    width: Math.round(canvas.getWidth()),
+                    height: Math.round(canvas.getHeight()),
+                },
+                unitMode: get().unitMode,
+            };
+
+            const jsonPayload = JSON.stringify(payload);
+
+            // Generate thumbnail - using 0.1 multiplier for small, fast thumbnails
+            const thumbnail = canvas.toDataURL({
+                format: 'png',
+                multiplier: 0.1, // Small thumbnail
+                quality: 0.8
+            });
+
+            // Import and use the database
+            const { db } = await import('../db');
+
+            // Find existing project by name and update it
+            const projects = await db.getAllProjects();
+            const existingProject = projects.find(p => p.name === projectName);
+
+            if (existingProject) {
+                await db.updateProject(existingProject.id!, jsonPayload, thumbnail);
+            }
+        } catch (error) {
+            console.error('Failed to update project:', error);
+        }
+    },
+
+    setAutoSaveStatus: (status) => set({ autoSaveStatus: status }),
+    setShowHelpModal: (show) => set({ showHelpModal: show }),
+    setShowExportModal: (show) => set({ showExportModal: show }),
+
+    triggerAutoSave: () => {
+        const { projectName, updateCurrentProject, setAutoSaveStatus } = get();
+        if (!projectName || projectName === 'Untitled Project') return;
+
+        // Set status to saving
+        setAutoSaveStatus('saving');
+
+        // Debounced save - wait 2 seconds of inactivity before saving
+        const currentTimer = get().autoSaveTimer;
+        if (currentTimer !== null) {
+            clearTimeout(currentTimer);
+        }
+
+        const timer = setTimeout(async () => {
+            await updateCurrentProject();
+            setAutoSaveStatus('saved');
+
+            // Reset status after 2 seconds
+            setTimeout(() => {
+                if (get().autoSaveStatus === 'saved') {
+                    setAutoSaveStatus('idle');
+                }
+            }, 2000);
+        }, 2000);
+
+        // Store timer reference to clear if another action occurs
+        set({ autoSaveTimer: timer });
+    },
+        });
+    },
     {
         name: 'designspace-editor',
         partialize: (state) => ({
-            themeData: state.themeData,
-            brandVault: state.brandVault,
-            activeBrandCollectionId: state.activeBrandCollectionId,
+            // Theme state is now persisted by the theme store (designspace-theme)
+            // We only persist non-theme editor state here
             userTemplates: state.userTemplates,
             assets: state.assets,
             unitMode: state.unitMode,
+            unitScale: state.unitScale,
+            unitZoom: state.unitZoom,
             showGuides: state.showGuides,
             bleedPx: state.bleedPx,
             isPreviewMode: state.isPreviewMode,
             projectName: state.projectName,
-            canvasBackgroundColor: state.canvasBackgroundColor,
             activeTool: state.activeTool,
             brushSize: state.brushSize,
-            brushColor: state.brushColor,
             snapEnabled: state.snapEnabled,
             gridEnabled: state.gridEnabled,
+            autoSaveStatus: state.autoSaveStatus,
         }),
     }
   )
@@ -1108,6 +1944,10 @@ export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: Apocapalette
     };
 
     canvas.getObjects().forEach(walk);
+
+    if (report.missingIds === 0 && report.invalidRoles === 0) {
+        return report;
+    }
 
     if (changed) {
         canvas.requestRenderAll();

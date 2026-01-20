@@ -3,10 +3,10 @@ import type * as fabric from 'fabric';
 import { Minus, Plus, Expand, AlertTriangle } from 'lucide-react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { SAFE_MARGIN_PX, canvasDimensionsInInches, formatInches, safeMarginInches } from '../utils/units';
+import { SAFE_MARGIN_PX, formatInches, fromCanvasUnits, UnitMode } from '../utils/units';
 
 export const StatusBar: React.FC = () => {
-  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas } = useEditorStore(
+  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, autoSaveStatus } = useEditorStore(
     (state) => ({
       zoom: state.zoom,
       unitMode: state.unitMode,
@@ -14,14 +14,25 @@ export const StatusBar: React.FC = () => {
       canvas: state.canvas,
       bleedPx: state.bleedPx,
       resetViewCanvas: state.resetViewCanvas,
+      autoSaveStatus: state.autoSaveStatus,
     }),
     shallow
   );
 
   const widthPx = canvas?.getWidth ? canvas.getWidth() : canvas?.width || 0;
   const heightPx = canvas?.getHeight ? canvas.getHeight() : canvas?.height || 0;
-  const { width: widthIn, height: heightIn } = canvasDimensionsInInches(widthPx, heightPx);
-  const safeMarginIn = safeMarginInches();
+  const formatMeasurement = (value: number, mode: UnitMode) => {
+    if (mode === 'in') {
+      return formatInches(value);
+    }
+    const rounded = Number(value.toFixed(2));
+    if (!Number.isFinite(rounded)) return '0';
+    const formatted = rounded.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+    return formatted;
+  };
+
+  const convertToUnitValue = (value: number) =>
+    unitMode === 'px' ? value : (fromCanvasUnits(value, unitMode) as number);
 
   const handleZoom = (factor: number) => {
     if (canvas) {
@@ -43,11 +54,11 @@ export const StatusBar: React.FC = () => {
 
   const dimensionLabel = unitMode === 'px'
     ? `${Math.round(widthPx)} x ${Math.round(heightPx)} px`
-    : `${formatInches(widthIn)} x ${formatInches(heightIn)} in`;
+    : `${formatMeasurement(convertToUnitValue(widthPx), unitMode)} x ${formatMeasurement(convertToUnitValue(heightPx), unitMode)} ${unitMode}`;
 
   const safeLabel = unitMode === 'px'
     ? `${SAFE_MARGIN_PX}px`
-    : `${formatInches(safeMarginIn)}in`;
+    : `${formatMeasurement(convertToUnitValue(SAFE_MARGIN_PX), unitMode)}${unitMode}`;
 
   const canvasWidth = widthPx;
   const canvasHeight = heightPx;
@@ -70,6 +81,32 @@ export const StatusBar: React.FC = () => {
       ? canvas.getObjects().some((obj) => isBackgroundCandidate(obj) && coversBleed(obj))
       : true;
   const bleedWarning = unitMode === 'in' && canvas && canvasWidth > 0 && canvasHeight > 0 && !hasBleedCoverage;
+
+  // Auto-save status indicator
+  const getAutoSaveIndicator = () => {
+    switch (autoSaveStatus) {
+      case 'saving':
+        return {
+          text: 'Saving...',
+          color: 'text-blue-400',
+          icon: '🔄',
+        };
+      case 'saved':
+        return {
+          text: 'Saved',
+          color: 'text-emerald-400',
+          icon: '✓',
+        };
+      default:
+        return {
+          text: 'Saved',
+          color: 'text-slate-400',
+          icon: '✓',
+        };
+    }
+  };
+
+  const indicator = getAutoSaveIndicator();
 
   return (
     <footer className="bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
@@ -95,6 +132,11 @@ export const StatusBar: React.FC = () => {
           >
             IN
           </button>
+        </div>
+        {/* Auto-save status indicator */}
+        <div className={`flex items-center gap-1 ${indicator.color}`}>
+          <span className="text-xs">{indicator.icon}</span>
+          <span className="text-[10px] uppercase tracking-widest">{indicator.text}</span>
         </div>
       </div>
       <div className="flex items-center gap-3">

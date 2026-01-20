@@ -1,10 +1,11 @@
 
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { X, Plus, CheckCircle } from 'lucide-react';
+import { useThemeStore } from '../state/useThemeStore';
+import { X, Plus, CheckCircle, Loader2, AlertCircle, FileJson } from 'lucide-react';
 import { VibeCard } from './VibeCard';
-import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
+import { validateThemeFile } from '../services/themeValidationService';
 
 interface BrandModalProps {
   isOpen: boolean;
@@ -12,40 +13,76 @@ interface BrandModalProps {
 }
 
 export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
-  const { brandVault, activeBrandCollectionId, addThemeToVault, setActiveBrandCollectionId } = useEditorStore(
+  const { addThemeToVault, setActiveBrandCollectionId } = useEditorStore(
     (state) => ({
-      brandVault: state.brandVault,
-      activeBrandCollectionId: state.activeBrandCollectionId,
       addThemeToVault: state.addThemeToVault,
       setActiveBrandCollectionId: state.setActiveBrandCollectionId,
     }),
     shallow
   );
+  const { brandVault, activeBrandCollectionId } = useThemeStore(
+    (state) => ({
+      brandVault: state.brandVault,
+      activeBrandCollectionId: state.activeBrandCollectionId,
+    }),
+    shallow
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result;
-        if (typeof text === 'string') {
-          addThemeToVault(text);
-        }
-      };
-      reader.readAsText(file);
+    if (!file) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Validate theme file using service
+      const result = await validateThemeFile(file, {
+        maxSizeBytes: 5 * 1024 * 1024, // 5MB
+        requiredFields: ['name', 'id'],
+        allowedExtensions: ['.json']
+      });
+
+      if (!result.success) {
+        setError(result.error!.message);
+        console.error('Theme validation error:', result.error);
+        return;
+      }
+
+      // Add validated theme to vault
+      addThemeToVault(result.data!.rawJson);
+
+      // Reset file input on success
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to import theme.';
+      setError(errorMessage);
+      console.error('Theme import error:', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleImportClick = () => {
-    fileInputRef.current?.click();
+    if (!isLoading) {
+      setError(null);
+      fileInputRef.current?.click();
+    }
   };
-  
+
   const handleSetActive = (id: string) => {
     setActiveBrandCollectionId(id);
-    setTimeout(() => applyActiveThemeToCanvas(), 50);
+  }
+
+  const handleDismissError = () => {
+    setError(null);
   }
 
   return (
@@ -59,6 +96,24 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
+          {/* Error Message */}
+          {error && (
+            <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 stroke-[1.5] text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="text-xs uppercase tracking-widest text-red-300 mb-1">Import Failed</h4>
+                <p className="text-sm text-red-200">{error}</p>
+              </div>
+              <button
+                onClick={handleDismissError}
+                className="p-1 rounded-full hover:bg-red-500/20 transition-all"
+                aria-label="Dismiss error"
+              >
+                <X className="w-4 h-4 stroke-[1.5] text-red-300" />
+              </button>
+            </div>
+          )}
+
           <section>
             <h3 className="text-sm uppercase tracking-widest text-slate-200 mb-4">Your Themes</h3>
             <div className="space-y-4">
@@ -81,7 +136,13 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
                   </div>
                 </div>
               ))}
-                {brandVault.length === 0 && <p className="text-sm text-slate-300">No themes imported yet.</p>}
+              {brandVault.length === 0 && (
+                <div className="rounded-2xl border border-[color:var(--border-subtle)] p-8 text-center bg-white/5">
+                  <FileJson className="w-12 h-12 stroke-[1.5] text-[color:var(--muted-icon)] mx-auto mb-4 opacity-50" />
+                  <p className="text-sm text-slate-300 mb-2">No themes imported yet</p>
+                  <p className="text-xs text-slate-400">Import an Apocapalette JSON file to get started</p>
+                </div>
+              )}
             </div>
           </section>
 
@@ -95,10 +156,25 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
                 onChange={handleFileChange}
                 accept=".json"
                 className="hidden"
+                disabled={isLoading}
               />
-              <button type="button" onClick={handleImportClick} className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-slate-100 rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest">
-                <Plus className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]"/>
-                Import Apocapalette JSON
+              <button
+                type="button"
+                onClick={handleImportClick}
+                disabled={isLoading}
+                className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-slate-100 rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/10 transition-all"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 stroke-[1.5] animate-spin text-[color:var(--brand-primary)]"/>
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]"/>
+                    Import Apocapalette JSON
+                  </>
+                )}
               </button>
             </form>
           </section>

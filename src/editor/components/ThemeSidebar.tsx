@@ -3,6 +3,7 @@ import React from 'react';
 import { shallow } from 'zustand/shallow';
 
 import { useEditorStore } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 
 import { VibeCard } from './VibeCard';
 
@@ -17,39 +18,40 @@ import { findBestThemeMatch } from '../fabric/themeUtils';
 export const ThemeSidebar: React.FC = () => {
 
     const {
-
-        brandVault,
-
-        activeBrandCollectionId,
-
         applyTheme,
-
         resetTheme,
-
         selectedLayerIds,
-
-        selectedObject,
-
-        themeData,
-
+        selectedObjectId,
+        layersById,
+        canvas,
         setObjectThemedFill,
-
         resetObjectToDefaultTheme
-
     } = useEditorStore(
         (state) => ({
-            brandVault: state.brandVault,
-            activeBrandCollectionId: state.activeBrandCollectionId,
             applyTheme: state.applyTheme,
             resetTheme: state.resetTheme,
             selectedLayerIds: state.selectedLayerIds,
-            selectedObject: state.selectedObject,
-            themeData: state.themeData,
+            selectedObjectId: state.selectedObjectId,
+            layersById: state.layersById,
+            canvas: state.canvas,
             setObjectThemedFill: state.setObjectThemedFill,
             resetObjectToDefaultTheme: state.resetObjectToDefaultTheme,
         }),
         shallow
     );
+    const { brandVault, activeBrandCollectionId, themeData } = useThemeStore(
+        (state) => ({
+            brandVault: state.brandVault,
+            activeBrandCollectionId: state.activeBrandCollectionId,
+            themeData: state.themeData,
+        }),
+        shallow
+    );
+
+    const selectedObject =
+        (selectedObjectId && layersById[selectedObjectId])
+            ? layersById[selectedObjectId]
+            : (canvas?.getActiveObject() ?? null);
 
 
 

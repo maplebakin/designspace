@@ -2,6 +2,7 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore, Template } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
@@ -165,7 +166,6 @@ export const TemplateBrowser: React.FC = () => {
         loadTemplate,
         setToastMessage,
         saveCurrentAsTemplate,
-        themeData,
         canvas,
         requestLayerSync,
         setUnitMode,
@@ -177,12 +177,15 @@ export const TemplateBrowser: React.FC = () => {
             loadTemplate: state.loadTemplate,
             setToastMessage: state.setToastMessage,
             saveCurrentAsTemplate: state.saveCurrentAsTemplate,
-            themeData: state.themeData,
             canvas: state.canvas,
             requestLayerSync: state.requestLayerSync,
             setUnitMode: state.setUnitMode,
             setCanvasBackgroundColor: state.setCanvasBackgroundColor,
         }),
+        shallow
+    );
+    const { themeData } = useThemeStore(
+        (state) => ({ themeData: state.themeData }),
         shallow
     );
 

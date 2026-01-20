@@ -1,79 +1,56 @@
-import * as fabric from 'fabric';
-import { useEditorStore, BrandCollection } from '../state/editorStore';
+import { useEditorStore } from '../state/editorStore';
+import { useThemeStore, applyThemeToCanvas, BrandCollection } from '../state/useThemeStore';
 import { colorDifference } from '../utils/color';
 
-/**
- * Safely retrieves a nested value from an object using a dot-notation string.
- * @param obj The object to query.
- * @param path The dot-notation path (e.g., 'brand.primary.value').
- * @returns The value if found, otherwise undefined.
- */
-const getValueByPath = (obj: object, path: string): any => {
-    return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
-};
-
-const resolveThemeValue = (obj: object, path: string): string | null => {
-    let value = getValueByPath(obj, path);
-    if (!value && !path.endsWith('.value')) {
-        value = getValueByPath(obj, `${path}.value`);
-    }
-    if (value && typeof value === 'object' && 'value' in value) {
-        return (value as { value: string }).value;
-    }
-    return typeof value === 'string' ? value : null;
-};
+// Re-export BrandCollection for backward compatibility
+export type { BrandCollection } from '../state/useThemeStore';
 
 /**
  * Iterates through all objects on the canvas and applies colors from the
  * active theme if the object has a 'tokenRole' property.
  * SKIPS any objects that are locked.
+ *
+ * PHASE 1.3 SAFETY GATE: This function will NOT execute unless canvasReadyState === 'ready'.
+ * This prevents theme application during initialization, preventing race conditions.
+ *
+ * PHASE 2.2 SYNC LOCK: This function acquires a sync lock to prevent interference
+ * during theme application.
+ *
+ * NOTE: This function now delegates to themeStore's applyThemeToCanvas for the actual
+ * theme application logic.
  */
 export const applyActiveThemeToCanvas = () => {
-    const { canvas, themeData, saveState, requestLayerSync } = useEditorStore.getState();
+    const {
+        canvas,
+        saveState,
+        requestLayerSync,
+        canvasReadyState,
+        acquireSyncLock,
+        releaseSyncLock
+    } = useEditorStore.getState();
+
+    // Get theme data from themeStore (source of truth)
+    const themeData = useThemeStore.getState().themeData;
+
+    // PHASE 1.3: Strict gate - only apply theme if canvas is fully ready
+    if (canvasReadyState !== 'ready') {
+        if (themeData) {
+            console.warn('[Phase 1.3] Theme application blocked - canvas not ready. State:', canvasReadyState);
+        }
+        return;
+    }
 
     if (!canvas || !themeData) {
         return;
     }
 
-    let objectsChanged = false;
-
-    const applyThemeToObject = (obj: fabric.Object) => {
-        if ((obj as any).colorLocked) {
-            return;
-        }
-
-        const tokenRole = (obj as any).tokenRole;
-        if (tokenRole) {
-            const colorValue = resolveThemeValue(themeData, tokenRole);
-            if (colorValue) {
-                // Determine whether to apply to fill or stroke
-                if (obj.stroke && !obj.fill) {
-                    if (obj.stroke !== colorValue) {
-                        obj.set('stroke', colorValue);
-                        objectsChanged = true;
-                    }
-                } else {
-                    if (obj.fill !== colorValue) {
-                        obj.set('fill', colorValue);
-                        objectsChanged = true;
-                    }
-                }
-            }
-        }
-
-        if (obj.type === 'group' || obj.type === 'activeSelection') {
-            const groupObjects = (obj as fabric.Group).getObjects();
-            groupObjects.forEach(applyThemeToObject);
-        }
-    };
-
-    canvas.getObjects().forEach(applyThemeToObject);
-
-    if (objectsChanged) {
-        canvas.requestRenderAll();
-        saveState();
-        requestLayerSync();
-    }
+    // Delegate to themeStore's applyThemeToCanvas
+    applyThemeToCanvas(canvas, themeData, {
+        saveState,
+        requestLayerSync,
+        acquireSyncLock,
+        releaseSyncLock,
+    });
 };
 
 /**
@@ -82,7 +59,8 @@ export const applyActiveThemeToCanvas = () => {
  * @returns The best matching BrandCollection or null if none found.
  */
 export const findBestThemeMatch = (hex: string): BrandCollection | null => {
-    const { brandVault } = useEditorStore.getState();
+    // Get brand vault from themeStore (source of truth)
+    const { brandVault } = useThemeStore.getState();
     if (brandVault.length === 0) {
         return null;
     }

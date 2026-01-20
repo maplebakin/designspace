@@ -1,11 +1,11 @@
 import * as fabric from 'fabric';
 import { inToPx } from '../utils/units';
+import { useEditorStore } from '../state/editorStore';
 
 const SNAP_THRESHOLD = 5;
 const GUIDE_COLOR = 'rgba(128, 0, 128, 0.8)'; // Purple
 const GUIDE_STROKE_WIDTH = 1;
-const GRID_COLOR = 'rgba(128, 128, 128, 0.5)';
-const GRID_STROKE_WIDTH = 0.5;
+const GRID_DOT_COLOR = 'rgba(148, 163, 184, 0.35)';
 
 interface Point {
   x: number;
@@ -23,7 +23,7 @@ interface SmartGuidesOptions {
   gridEnabled: boolean;
 }
 
-export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptions) => {
+export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOptions) => {
   let aligningLines: fabric.Line[] = [];
   let lastSnapDelta: { x: number; y: number } = { x: 0, y: 0 };
   let currentRenderRAF: number | null = null;
@@ -61,36 +61,30 @@ export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptio
   };
   
   const drawGrid = () => {
-    if (!options.gridEnabled) {
-      canvas.clearContext(canvas.contextTop);
-      canvas.requestRenderAll();
-      return;
-    }
-    
-    const halfInchPx = inToPx(0.5);
+    const { gridEnabled, unitMode } = useEditorStore.getState();
+    if (!gridEnabled) return;
+    const ctx = canvas.contextTop;
+    if (!ctx) return;
+
+    const spacing = unitMode === 'px' ? 24 : inToPx(0.5);
+    const dotRadius = unitMode === 'px' ? 0.8 : 1;
     const width = canvas.getWidth();
     const height = canvas.getHeight();
-    const ctx = canvas.contextTop;
-    
+
     ctx.save();
     const vpt = canvas.viewportTransform;
     if (vpt) {
         ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
     }
-    ctx.strokeStyle = GRID_COLOR;
-    ctx.lineWidth = GRID_STROKE_WIDTH;
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = GRID_DOT_COLOR;
 
-    for (let x = 0; x < width; x += halfInchPx) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-    }
-    for (let y = 0; y < height; y += halfInchPx) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
+    for (let x = 0; x <= width; x += spacing) {
+        for (let y = 0; y <= height; y += spacing) {
+            ctx.beginPath();
+            ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
     ctx.restore();
   };
@@ -139,7 +133,8 @@ export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptio
   const onObjectMoving = (e: any) => {
     const activeObject = e.target as fabric.Object | undefined;
     if (!activeObject) return;
-        if (!options.snapEnabled) {      removeAlignLines();
+    if (!useEditorStore.getState().snapEnabled) {
+      removeAlignLines();
       lastSnapDelta = { x: 0, y: 0 };
       return;
     }
@@ -162,43 +157,79 @@ export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptio
     let guideLineY: number | undefined;
 
     const activeObjectAnchors = getAnchorPoints(activeObject);
-    const canvasObjects = canvas.getObjects().filter(obj => obj !== activeObject && !obj.get('isGuide') && obj.evented);
-    
-    let staticAnchors: SnappingAnchor[] = [];
+    const canvasObjects = canvas
+      .getObjects()
+      .filter((obj) => obj !== activeObject && !obj.get('isGuide') && obj.evented);
 
-    if (options.gridEnabled) {
-        const halfInchPx = inToPx(0.5);
-        for (let x = 0; x < canvas.getWidth(); x += halfInchPx) {
-            staticAnchors.push({ point: { x, y: 0 }, type: 'grid', orientation: 'vertical' });
-        }
-        for (let y = 0; y < canvas.getHeight(); y += halfInchPx) {
-            staticAnchors.push({ point: { x: 0, y }, type: 'grid', orientation: 'horizontal' });
-        }
+    const bucketSize = SNAP_THRESHOLD * 2;
+    const verticalBuckets = new Map<number, SnappingAnchor[]>();
+    const horizontalBuckets = new Map<number, SnappingAnchor[]>();
+
+    const addAnchorToBucket = (anchor: SnappingAnchor) => {
+      const key =
+        anchor.orientation === 'vertical'
+          ? Math.round(anchor.point.x / bucketSize)
+          : Math.round(anchor.point.y / bucketSize);
+      const targetMap = anchor.orientation === 'vertical' ? verticalBuckets : horizontalBuckets;
+      const existing = targetMap.get(key);
+      if (existing) {
+        existing.push(anchor);
+      } else {
+        targetMap.set(key, [anchor]);
+      }
+    };
+
+    if (useEditorStore.getState().gridEnabled) {
+      const { unitMode } = useEditorStore.getState();
+      const spacing = unitMode === 'px' ? 24 : inToPx(0.5);
+      for (let x = 0; x < canvas.getWidth(); x += spacing) {
+        addAnchorToBucket({ point: { x, y: 0 }, type: 'grid', orientation: 'vertical' });
+      }
+      for (let y = 0; y < canvas.getHeight(); y += spacing) {
+        addAnchorToBucket({ point: { x: 0, y }, type: 'grid', orientation: 'horizontal' });
+      }
     }
-    
-    canvasObjects.forEach(obj => {
-        staticAnchors = staticAnchors.concat(collectAnchors(obj));
+
+    canvasObjects.forEach((obj) => {
+      collectAnchors(obj).forEach(addAnchorToBucket);
     });
 
-    activeObjectAnchors.forEach(activeAnchor => {
-      staticAnchors.forEach(staticAnchor => {
-          if (activeAnchor.orientation === 'vertical' && staticAnchor.orientation === 'vertical') {
-              const distance = Math.abs(activeAnchor.point.x - staticAnchor.point.x);
-              if (distance < SNAP_THRESHOLD && distance < minDistanceX) {
-                  minDistanceX = distance;
-                  deltaX = staticAnchor.point.x - activeAnchor.point.x;
-                  guideLineX = staticAnchor.point.x;
-              }
-          }
+    const getCandidateAnchors = (orientation: 'vertical' | 'horizontal', key: number) => {
+      const buckets = orientation === 'vertical' ? verticalBuckets : horizontalBuckets;
+      const candidates: SnappingAnchor[] = [];
+      for (let offset = -1; offset <= 1; offset += 1) {
+        const bucket = buckets.get(key + offset);
+        if (bucket) {
+          candidates.push(...bucket);
+        }
+      }
+      return candidates;
+    };
 
-          if (activeAnchor.orientation === 'horizontal' && staticAnchor.orientation === 'horizontal') {
-              const distance = Math.abs(activeAnchor.point.y - staticAnchor.point.y);
-              if (distance < SNAP_THRESHOLD && distance < minDistanceY) {
-                  minDistanceY = distance;
-                  deltaY = staticAnchor.point.y - activeAnchor.point.y;
-                  guideLineY = staticAnchor.point.y;
-              }
+    activeObjectAnchors.forEach((activeAnchor) => {
+      const key =
+        activeAnchor.orientation === 'vertical'
+          ? Math.round(activeAnchor.point.x / bucketSize)
+          : Math.round(activeAnchor.point.y / bucketSize);
+      const candidates = getCandidateAnchors(activeAnchor.orientation, key);
+      candidates.forEach((staticAnchor) => {
+        if (activeAnchor.orientation === 'vertical' && staticAnchor.orientation === 'vertical') {
+          const distance = Math.abs(activeAnchor.point.x - staticAnchor.point.x);
+          if (distance < SNAP_THRESHOLD && distance < minDistanceX) {
+            minDistanceX = distance;
+            deltaX = staticAnchor.point.x - activeAnchor.point.x;
+            guideLineX = staticAnchor.point.x;
           }
+        }
+
+        if (activeAnchor.orientation === 'horizontal' && staticAnchor.orientation === 'horizontal') {
+          const distance = Math.abs(activeAnchor.point.y - staticAnchor.point.y);
+          if (distance < SNAP_THRESHOLD && distance < minDistanceY) {
+            minDistanceY = distance;
+            deltaY = staticAnchor.point.y - activeAnchor.point.y;
+            guideLineY = staticAnchor.point.y;
+          }
+        }
       });
     });
 
@@ -225,7 +256,7 @@ export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptio
   const onMouseUpHandler = () => {
     removeAlignLines();
 
-    if (!options.snapEnabled) {
+    if (!useEditorStore.getState().snapEnabled) {
       lastSnapDelta = { x: 0, y: 0 };
       return;
     }
@@ -266,10 +297,8 @@ export const initSmartGuides = (canvas: fabric.Canvas, options: SmartGuidesOptio
   const afterRenderHandler = () => {
     drawGrid();
   };
-  
-  if (options.gridEnabled) {
-    canvas.on('after:render', afterRenderHandler);
-  }
+
+  canvas.on('after:render', afterRenderHandler);
 
   return () => {
     canvas.off('object:moving', onObjectMoving);
