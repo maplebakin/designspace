@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import * as fabric from 'fabric';
-import { useEditorStore, DEFAULT_CANVAS_SIZE, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { resolveThemeValue } from '../utils/themeResolver';
 
@@ -86,7 +86,6 @@ export const useCanvasLifecycle = (
     acquireSyncLock('init');
 
     try {
-      const container = containerRef.current;
       const canvasElement = canvasRef.current;
 
       // CRITICAL: Check if canvas element already has a Fabric.js instance
@@ -150,17 +149,14 @@ export const useCanvasLifecycle = (
         throw new Error('Canvas element is null after cleanup');
       }
 
-      let { width, height } = container.getBoundingClientRect();
+      // Get container dimensions for canvas element size
+      // Document dimensions are tracked separately in useCanvasStore (initialized to DEFAULT_CANVAS_SIZE)
+      const container = containerRef.current;
+      const containerRect = container?.getBoundingClientRect();
+      const width = containerRect?.width ?? 800;
+      const height = containerRect?.height ?? 600;
 
-      // Safety check: Ensure canvas has valid dimensions
-      // If container has 0 dimensions, use A4 as default size
-      // The ResizeObserver will correct this once container is properly sized
-      if (width === 0 || height === 0) {
-        width = DEFAULT_CANVAS_SIZE.width;
-        height = DEFAULT_CANVAS_SIZE.height;
-      }
-
-      // Step 1: Create Fabric.js canvas instance
+      // Step 1: Create Fabric.js canvas instance at container size
       const canvas = new fabric.Canvas(finalCanvasElement, {
         width,
         height,

@@ -8,12 +8,22 @@ interface ShortcutItem {
 }
 
 const shortcuts: ShortcutItem[] = [
+  // Tools
+  { keys: ['V'], action: 'Select Tool', category: 'Tools' },
+  { keys: ['E'], action: 'Eraser Tool', category: 'Tools' },
+  { keys: ['P'], action: 'Pencil Tool', category: 'Tools' },
+  { keys: ['H'], action: 'Hand/Pan Tool', category: 'Tools' },
+
+  // Shapes
+  { keys: ['R'], action: 'Add Rectangle', category: 'Shapes' },
+  { keys: ['C'], action: 'Add Circle', category: 'Shapes' },
+  { keys: ['S'], action: 'Add Star', category: 'Shapes' },
+  { keys: ['T'], action: 'Add Text', category: 'Shapes' },
+
   // Clipboard
   { keys: ['⌘', 'C'], action: 'Copy', category: 'Clipboard' },
   { keys: ['⌘', 'V'], action: 'Paste', category: 'Clipboard' },
   { keys: ['⌘', 'D'], action: 'Duplicate', category: 'Clipboard' },
-  // Help
-  { keys: ['Ctrl', 'Shift', '/'], action: 'Show Keyboard Shortcuts', category: 'Help' },
 
   // History
   { keys: ['⌘', 'Z'], action: 'Undo', category: 'History' },
@@ -22,14 +32,22 @@ const shortcuts: ShortcutItem[] = [
   // Grouping
   { keys: ['⌘', 'G'], action: 'Group Objects', category: 'Grouping' },
   { keys: ['⌘', 'Shift', 'G'], action: 'Ungroup Objects', category: 'Grouping' },
-  
-  // Navigation
+
+  // Navigation & View
   { keys: ['3'], action: 'Zoom to Selection', category: 'Navigation' },
+  { keys: ['G'], action: 'Toggle Grid', category: 'Navigation' },
+  { keys: ['ESC'], action: 'Deselect All', category: 'Navigation' },
+
+  // Edit
   { keys: ['Backspace'], action: 'Delete', category: 'Edit' },
-  
-  // Movement
   { keys: ['←', '↑', '→', '↓'], action: 'Nudge 1px', category: 'Movement' },
   { keys: ['Shift', '←', '↑', '→', '↓'], action: 'Nudge 10px', category: 'Movement' },
+
+  // Export
+  { keys: ['⌘', 'E'], action: 'Export / Download', category: 'Export' },
+
+  // Help
+  { keys: ['⌘', 'Shift', '/'], action: 'Show Keyboard Shortcuts', category: 'Help' },
 ];
 
 const KeyDisplay: React.FC<{ keys: string[] }> = ({ keys }) => {

@@ -43,7 +43,7 @@ const applyFilters = (image: fabric.Image, canvas?: fabric.Canvas) => {
 };
 
 const upsertBrightness = (image: fabric.Image, value: number) => {
-    let brightness = findFilter<fabric.filters.Brightness>(image, 'Brightness');
+    const brightness = findFilter<fabric.filters.Brightness>(image, 'Brightness');
     if (brightness) {
         brightness.brightness = value;
         return;
@@ -53,7 +53,7 @@ const upsertBrightness = (image: fabric.Image, value: number) => {
 };
 
 const upsertContrast = (image: fabric.Image, value: number) => {
-    let contrast = findFilter<fabric.filters.Contrast>(image, 'Contrast');
+    const contrast = findFilter<fabric.filters.Contrast>(image, 'Contrast');
     if (contrast) {
         contrast.contrast = value;
         return;
@@ -63,7 +63,7 @@ const upsertContrast = (image: fabric.Image, value: number) => {
 };
 
 const upsertSaturation = (image: fabric.Image, value: number) => {
-    let saturation = findFilter<fabric.filters.Saturation>(image, 'Saturation');
+    const saturation = findFilter<fabric.filters.Saturation>(image, 'Saturation');
     if (saturation) {
         saturation.saturation = value;
         return;
@@ -116,7 +116,7 @@ export const setGrayscaleFilter = (
     mode?: GrayscaleMode
 ) => {
     if (enabled) {
-        let grayscale = findFilter<fabric.filters.Grayscale>(image, 'Grayscale');
+        const grayscale = findFilter<fabric.filters.Grayscale>(image, 'Grayscale');
         if (grayscale) {
             if (mode) {
                 grayscale.mode = mode;

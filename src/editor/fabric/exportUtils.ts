@@ -166,7 +166,7 @@ export const downloadPdf = (canvas: fabric.Canvas, fileName: string = 'design') 
  */
 const cleanSvgString = (svgString: string): string => {
   // Remove internal Fabric.js IDs and metadata
-  let cleaned = svgString
+  const cleaned = svgString
     // Remove data-fabric attributes
     .replace(/data-fabric-\w+="[^"]*"/g, '')
     // Remove internal IDs

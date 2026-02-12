@@ -5,13 +5,12 @@ import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 
-import { VibeCard } from './VibeCard';
-
-import { Link, Wand2 } from 'lucide-react';
+import { Link, Wand2, Palette as PaletteIcon } from 'lucide-react';
 
 import { getDominantColor } from '../utils/color';
 
 import { findBestThemeMatch } from '../fabric/themeUtils';
+import type { ColorCategory } from '../services/designSpaceImporter';
 
 
 
@@ -25,6 +24,7 @@ export const ThemeSidebar: React.FC = () => {
         layersById,
         canvas,
         setObjectThemedFill,
+        setObjectFill,
         resetObjectToDefaultTheme
     } = useEditorStore(
         (state) => ({
@@ -35,15 +35,26 @@ export const ThemeSidebar: React.FC = () => {
             layersById: state.layersById,
             canvas: state.canvas,
             setObjectThemedFill: state.setObjectThemedFill,
+            setObjectFill: state.setObjectFill,
             resetObjectToDefaultTheme: state.resetObjectToDefaultTheme,
         }),
         shallow
     );
-    const { brandVault, activeBrandCollectionId, themeData } = useThemeStore(
+    const {
+        themeData,
+        paletteVault,
+        activePaletteId,
+        setActivePaletteId,
+        setBrushColor,
+        addRecentColor
+    } = useThemeStore(
         (state) => ({
-            brandVault: state.brandVault,
-            activeBrandCollectionId: state.activeBrandCollectionId,
             themeData: state.themeData,
+            paletteVault: state.paletteVault,
+            activePaletteId: state.activePaletteId,
+            setActivePaletteId: state.setActivePaletteId,
+            setBrushColor: state.setBrushColor,
+            addRecentColor: state.addRecentColor,
         }),
         shallow
     );
@@ -53,20 +64,37 @@ export const ThemeSidebar: React.FC = () => {
             ? layersById[selectedObjectId]
             : (canvas?.getActiveObject() ?? null);
 
+    const activePalette =
+        paletteVault.find((palette) => palette.id === activePaletteId)
+        || paletteVault[0]
+        || null;
 
+    const orderedCategories: ColorCategory[] = [
+        'brand',
+        'headers',
+        'surfaces',
+        'neutrals',
+        'accents',
+        'semantic',
+    ];
 
-    const handleThemeSelect = (collectionId: string) => {
+    const categoryLabels: Record<ColorCategory, string> = {
+        brand: 'Brand',
+        headers: 'Headers',
+        surfaces: 'Surfaces',
+        neutrals: 'Neutrals',
+        accents: 'Accents',
+        semantic: 'Semantic',
+    };
 
-        const selected = brandVault.find(c => c.id === collectionId);
-
-        if (selected) {
-
-            applyTheme(selected.themeData);
-
+    const handlePaletteColorSelect = (color: string) => {
+        if (selectedLayerIds.length > 0 || selectedObjectId) {
+            setObjectFill(color);
+        } else {
+            setBrushColor(color);
         }
-
-    }
-
+        addRecentColor(color);
+    };
 
 
     const handleMagicMatch = async () => {
@@ -176,25 +204,82 @@ export const ThemeSidebar: React.FC = () => {
             )}
 
             <div>
-                <h3 className="text-sm uppercase tracking-widest text-slate-300 mb-3">Theme Hub</h3>
-                <div className="space-y-2">
-                    {brandVault.map(collection => (
-                        <VibeCard 
-                            key={collection.id}
-                            collection={collection}
-                            isActive={collection.id === activeBrandCollectionId}
-                            onClick={() => handleThemeSelect(collection.id)}
-                        />
-                    ))}
-                </div>
-                {brandVault.length === 0 && (
-                    <p className="text-xs text-slate-500 p-2">No themes loaded. Import one from the Brand Vault modal.</p>
+                <h3 className="text-sm uppercase tracking-widest text-slate-300 mb-3 flex items-center gap-2">
+                    <PaletteIcon className="w-4 h-4" />
+                    Color Palettes
+                </h3>
+                {paletteVault.length > 0 ? (
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            {paletteVault.map((palette) => {
+                                const preview = palette.colors.slice(0, 6);
+                                const isActive = palette.id === activePalette?.id;
+                                return (
+                                    <button
+                                        key={palette.id}
+                                        onClick={() => setActivePaletteId(palette.id)}
+                                        className={`w-full text-left p-2 rounded-lg border transition-all ${
+                                            isActive
+                                                ? 'border-[color:var(--brand-primary)]/50 bg-white/10'
+                                                : 'border-white/10 bg-white/5 hover:bg-white/10'
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-xs uppercase tracking-widest text-slate-200 truncate">
+                                                {palette.name}
+                                            </span>
+                                            <div className="flex items-center gap-1">
+                                                {preview.map((color, index) => (
+                                                    <span
+                                                        key={`${palette.id}-preview-${index}`}
+                                                        className="w-3 h-3 rounded border border-white/20"
+                                                        style={{ backgroundColor: color }}
+                                                        title={color}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {activePalette && (
+                            <div className="space-y-2">
+                                <p className="text-[10px] uppercase tracking-widest text-slate-500">
+                                    Click a color to apply
+                                </p>
+                                {orderedCategories.map((category) => {
+                                    const colors = activePalette.categories[category] || [];
+                                    if (colors.length === 0) return null;
+                                    return (
+                                        <div key={category} className="space-y-1">
+                                            <div className="text-[10px] uppercase tracking-widest text-slate-400">
+                                                {categoryLabels[category]}
+                                            </div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {colors.map((color, index) => (
+                                                    <button
+                                                        key={`${category}-${color}-${index}`}
+                                                        onClick={() => handlePaletteColorSelect(color)}
+                                                        className="w-6 h-6 rounded border border-white/20 shadow-sm hover:scale-105 transition-transform"
+                                                        style={{ backgroundColor: color }}
+                                                        title={`Apply ${color}`}
+                                                        aria-label={`Apply ${color}`}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <p className="text-xs text-slate-500 p-2">
+                        No palettes loaded. Import one from the DesignSpace importer.
+                    </p>
                 )}
             </div>
-
-            {brandVault.length > 0 && (
-                 <hr className="border-white/10"/>
-            )}
 
             <div>
                  <button

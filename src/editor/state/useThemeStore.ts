@@ -7,6 +7,7 @@ import { resolveThemeValue } from '../utils/themeResolver';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import type { BrandKit } from '../db';
 import { useUiThemeStore } from './uiThemeStore';
+import { importThemeJson, type SimpleThemeJson, type ColorCategory } from '../services/designSpaceImporter';
 
 // --- INTERFACES ---
 
@@ -19,6 +20,13 @@ export interface BrandCollection {
             [key: string]: string;
         }
     }
+}
+
+export interface ColorPalette {
+    id: string;
+    name: string;
+    colors: string[];
+    categories: Partial<Record<ColorCategory, string[]>>;
 }
 
 // --- UTILITY FUNCTIONS ---
@@ -62,6 +70,19 @@ const rgbToHex = (rgb: string): string => {
         .toUpperCase()}`;
 };
 
+const normalizeCanvasBackgroundColor = (color: string | null): string | null => {
+    if (!color) return null;
+    const trimmed = color.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'transparent') return null;
+    if (/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(trimmed)) {
+        return trimmed.toUpperCase();
+    }
+    if (trimmed.startsWith('rgb(')) {
+        return rgbToHex(trimmed);
+    }
+    return null;
+};
+
 const getInitialRecentColors = () => {
     if (typeof window === 'undefined') return [];
     try {
@@ -90,6 +111,8 @@ interface ThemeState {
     activeBrandCollectionId: string | null;
     themeData: ApocapaletteTheme | null;
     brandPalette: { [key: string]: string };
+    paletteVault: ColorPalette[];
+    activePaletteId: string | null;
 
     // Canvas Background
     canvasBackgroundColor: string | null;
@@ -114,6 +137,10 @@ interface ThemeState {
     setCanvasBackgroundColor: (color: string | null) => void;
     setBrushColor: (color: string) => void;
     setBrandPalette: (palette: { [key: string]: string }) => void;
+    setPaletteVault: (vault: ColorPalette[]) => void;
+    setActivePaletteId: (id: string | null) => void;
+    addPaletteToVault: (palette: ColorPalette) => void;
+    addPalettesToVault: (palettes: ColorPalette[]) => void;
 
     // Actions - Vision Palette
     addToVisionPalette: (colors: string[]) => void;
@@ -151,6 +178,8 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
             activeBrandCollectionId: null,
             themeData: null,
             brandPalette: {},
+            paletteVault: [],
+            activePaletteId: null,
             canvasBackgroundColor: null,
             brushColor: '#111111',
             visionPalette: [],
@@ -166,11 +195,27 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
 
             setActiveBrandCollectionId: (id) => set({ activeBrandCollectionId: id }),
 
-            setCanvasBackgroundColor: (color) => set({ canvasBackgroundColor: color }),
+            setCanvasBackgroundColor: (color) =>
+                set({ canvasBackgroundColor: normalizeCanvasBackgroundColor(color) }),
 
             setBrushColor: (color) => set({ brushColor: color }),
 
             setBrandPalette: (palette) => set({ brandPalette: palette }),
+
+            setPaletteVault: (vault) => set({ paletteVault: vault }),
+
+            setActivePaletteId: (id) => set({ activePaletteId: id }),
+
+            addPaletteToVault: (palette) => {
+                const next = [...get().paletteVault, palette];
+                set({ paletteVault: next, activePaletteId: palette.id });
+            },
+
+            addPalettesToVault: (palettes) => {
+                if (palettes.length === 0) return;
+                const next = [...get().paletteVault, ...palettes];
+                set({ paletteVault: next, activePaletteId: palettes[0].id });
+            },
 
             // --- Vision Palette Actions ---
 
@@ -267,39 +312,68 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
 
             addThemeToVault: (jsonString: string) => {
                 try {
-                    const json: ApocapaletteTheme = JSON.parse(jsonString);
-                    if (json.meta?.schema && json.meta.schema !== 'generic-token-pack-v1') {
+                    const parsed = JSON.parse(jsonString) as Record<string, unknown>;
+                    const meta = (parsed as { meta?: { name?: unknown; schema?: unknown } }).meta;
+                    const metaName = typeof meta?.name === 'string' ? meta.name.trim() : '';
+                    const metaSchema = typeof meta?.schema === 'string' ? meta.schema.trim() : '';
+                    const isApocapalette = Boolean(metaName || metaSchema);
+
+                    if (metaSchema && metaSchema !== 'generic-token-pack-v1') {
                         return { success: false, error: 'Invalid Schema' };
                     }
 
-                    const newCollection: BrandCollection = {
-                        id: uuidv4(),
-                        name: json.meta.name || 'Untitled Theme',
-                        themeData: json,
-                        swatches: {
-                            'Brand': {
-                                'Primary': json.brand?.primary?.value || '#000000',
-                                'Secondary': json.brand?.secondary?.value || '#888888',
-                                'Accent': json.brand?.accent?.value || '#ff00ff',
+                    if (isApocapalette) {
+                        const json = parsed as ApocapaletteTheme;
+                        const newCollection: BrandCollection = {
+                            id: uuidv4(),
+                            name: metaName || 'Untitled Theme',
+                            themeData: json,
+                            swatches: {
+                                'Brand': {
+                                    'Primary': json.brand?.primary?.value || '#000000',
+                                    'Secondary': json.brand?.secondary?.value || '#888888',
+                                    'Accent': json.brand?.accent?.value || '#ff00ff',
+                                }
                             }
-                        }
-                    };
+                        };
 
-                    const newVault = [...get().brandVault, newCollection];
+                        const newVault = [...get().brandVault, newCollection];
+                        set({
+                            brandVault: newVault,
+                            activeBrandCollectionId: newCollection.id,
+                            themeData: json
+                        });
+                        saveBrandVaultToDb(newVault);
+
+                        // Sync with UI theme if enabled
+                        const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
+                        if (projectSyncEnabled) {
+                            applyThemeFromTokens(json);
+                        }
+
+                        return { success: true, collection: newCollection };
+                    }
+
+                    const importResult = importThemeJson(parsed as SimpleThemeJson);
+                    if (!importResult.success || !importResult.collection) {
+                        return { success: false, error: importResult.error || 'Invalid Theme File' };
+                    }
+
+                    const newVault = [...get().brandVault, importResult.collection];
                     set({
                         brandVault: newVault,
-                        activeBrandCollectionId: newCollection.id,
-                        themeData: json
+                        activeBrandCollectionId: importResult.collection.id,
+                        themeData: importResult.collection.themeData
                     });
                     saveBrandVaultToDb(newVault);
 
                     // Sync with UI theme if enabled
                     const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
                     if (projectSyncEnabled) {
-                        applyThemeFromTokens(json);
+                        applyThemeFromTokens(importResult.collection.themeData);
                     }
 
-                    return { success: true, collection: newCollection };
+                    return { success: true, collection: importResult.collection };
                 } catch (e) {
                     return { success: false, error: 'Invalid Theme File' };
                 }
@@ -371,9 +445,15 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                 canvasBackgroundColor: state.canvasBackgroundColor,
                 brushColor: state.brushColor,
                 brandPalette: state.brandPalette,
+                paletteVault: state.paletteVault,
+                activePaletteId: state.activePaletteId,
                 visionPalette: state.visionPalette,
                 recentColors: state.recentColors,
             }),
+            onRehydrateStorage: () => (state) => {
+                if (!state) return;
+                state.setCanvasBackgroundColor(state.canvasBackgroundColor);
+            },
         }
     )
 );

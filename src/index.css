@@ -101,28 +101,34 @@ body {
 }
 
 .workspace {
-  /* Workspace background - the area around the canvas */
-  --workspace-bg: #131417;
-  background: var(--workspace-bg);
+  /* Workspace background - very dark with subtle grid */
+  --workspace-grid-color: rgba(255, 255, 255, 0.04);
+  --workspace-grid-size: 20px;
+  background-color: #080608;
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.03) 1px, transparent 0);
-  background-size: 24px 24px;
+    linear-gradient(var(--workspace-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--workspace-grid-color) 1px, transparent 1px);
+  background-size: var(--workspace-grid-size) var(--workspace-grid-size);
+  background-position: center center;
 }
 
 .canvas-container {
-  /* Canvas container is transparent - canvas background color is set via Fabric.js */
-  background: transparent;
-  border-radius: 18px;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.35),
-    0 10px 40px -10px rgba(0, 0, 0, 0.5),
-    0 20px 60px -20px rgba(0, 0, 0, 0.3);
-  overflow: hidden;
+  /* Fabric.js container - fill the parent and show the document */
+  width: 100% !important;
+  height: 100% !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
 }
 
 .canvas-container .lower-canvas,
 .canvas-container .upper-canvas {
-  border-radius: 18px;
+  /* Ensure canvas elements fill the container */
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  border-radius: 0 !important;
 }
 
 /* Consistent Control Styling */

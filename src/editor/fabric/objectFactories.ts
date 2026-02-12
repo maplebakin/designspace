@@ -1,3 +1,15 @@
+/**
+ * Object Factories
+ *
+ * Factory functions for creating themed Fabric.js objects.
+ * All objects created through these factories are:
+ * - Centered in the viewport by default
+ * - Assigned unique IDs
+ * - Linked to theme tokens for dynamic color updates
+ * - Sized appropriately for the current unit mode (inches or pixels)
+ *
+ * @module objectFactories
+ */
 
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
@@ -5,14 +17,26 @@ import { useThemeStore } from '../state/useThemeStore';
 import { v4 as uuidv4 } from 'uuid';
 import { SAFE_MARGIN_PX, toCanvasUnits } from '../utils/units';
 
-const DEFAULT_STROKE_COLOR = '#000000';
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/** Default stroke color for shapes (neutral gray from palette) */
+const DEFAULT_STROKE_COLOR = '#686664';
+/** Default stroke width in pixels */
 const DEFAULT_STROKE_WIDTH = 2;
+/** Default theme token for placeholder fills */
 const DEFAULT_PLACEHOLDER_TOKEN_ROLE = 'surfaces.surface-plain';
-const DEFAULT_SHAPE_FILL = '#1f2933';
+/** Default fill color when no theme is active */
+const DEFAULT_SHAPE_FILL = '#f1f0ee';
+
+// Unit-based default sizes (in inches at 300 DPI)
 const DEFAULT_RECTANGLE_SIZE_WIDTH = 2;
 const DEFAULT_RECTANGLE_SIZE_HEIGHT = 3;
 const DEFAULT_TEXTBOX_WIDTH = 3;
 const DEFAULT_TEXTBOX_HEIGHT = 1.5;
+
+// Pixel-based default sizes (for px unit mode)
 const DEFAULT_PX_RECTANGLE_WIDTH = 200;
 const DEFAULT_PX_RECTANGLE_HEIGHT = 150;
 const DEFAULT_PX_CIRCLE_RADIUS = 80;
@@ -46,17 +70,36 @@ const getCanvasCenterPoint = (canvas: fabric.Canvas) => {
   return { x: worldCenter.x, y: worldCenter.y };
 };
 
+/**
+ * Options for inserting objects onto the canvas.
+ */
 interface InsertOptions {
-    center?: boolean;
-    activate?: boolean;
-    enterEditing?: boolean;
+  /** Center the object in the viewport (default: true) */
+  center?: boolean;
+  /** Select the object after insertion (default: true) */
+  activate?: boolean;
+  /** Enter editing mode for text objects (default: false) */
+  enterEditing?: boolean;
 }
 
+/**
+ * Inserts a Fabric.js object onto the canvas with common setup.
+ *
+ * @param canvas - The Fabric.js canvas instance
+ * @param createObject - Factory function that creates the object
+ * @param options - Insertion options (center, activate, enterEditing)
+ * @returns The created and inserted object
+ *
+ * @example
+ * ```ts
+ * const rect = insertFabricObject(canvas, () => new fabric.Rect({...}));
+ * ```
+ */
 const insertFabricObject = (
   canvas: fabric.Canvas,
   createObject: () => fabric.Object,
   options: InsertOptions = {}
-) => {
+): fabric.Object => {
   const obj = createObject();
   if (options.center !== false) {
     const center = getCanvasCenterPoint(canvas);
@@ -192,27 +235,34 @@ export const addStar = (canvas: fabric.Canvas) =>
     });
 
 
+/**
+ * Options for creating IText objects.
+ */
 interface ITextOptions {
-    text: string;
-    fontSize: number;
-    fontWeight?: string;
-    role?: 'heading' | 'subheading' | 'body';
+  /** The initial text content */
+  text: string;
+  /** Font size in pixels */
+  fontSize: number;
+  /** Font weight (e.g., 'normal', 'bold', '700') */
+  fontWeight?: string;
+  /** Typography role for theme font selection */
+  role?: 'heading' | 'subheading' | 'body';
 }
 
 const getThemeFontFamily = (role?: ITextOptions['role']) => {
     const { themeData } = useThemeStore.getState();
     if (role === 'heading' || role === 'subheading') {
-        return themeData?.typography.heading.fontFamily || 'serif';
+        return themeData?.typography?.heading?.fontFamily || 'serif';
     }
-    return themeData?.typography.body.fontFamily || 'sans-serif';
+    return themeData?.typography?.body?.fontFamily || 'sans-serif';
 };
 
 const getThemeTextColor = (role?: ITextOptions['role']) => {
     const { themeData } = useThemeStore.getState();
     if (role === 'heading' || role === 'subheading') {
-        return themeData?.typography.heading.value || '#000000';
+        return themeData?.typography?.heading?.value || '#000000';
     }
-    return themeData?.typography.body.value || '#000000';
+    return themeData?.typography?.body?.value || '#000000';
 }
 
 /**
@@ -242,44 +292,65 @@ export const addIText = (canvas: fabric.Canvas, options: ITextOptions) => {
 
 
 /**
- * Helper to adjust font size of a textbox to fit its bounds.
+ * Helper to adjust font size of a textbox to fit a fixed size.
  * @param textbox The fabric.Textbox instance.
  * @param canvas The fabric.Canvas instance.
+ * @param targetSize Optional target width/height for the textbox.
  */
-const adjustFontSizeToFit = (textbox: fabric.Textbox, canvas: fabric.Canvas) => {
-    if (!textbox.originalFontSize) {
-        textbox.originalFontSize = textbox.fontSize; // Store initial font size
+const adjustFontSizeToFit = (
+    textbox: fabric.Textbox,
+    canvas: fabric.Canvas,
+    targetSize: { width?: number; height?: number } = {}
+) => {
+    const currentWidth = textbox.width ?? textbox.getScaledWidth();
+    const currentHeight = textbox.height ?? textbox.getScaledHeight();
+    const storedWidth = (textbox as any).__fixedWidth as number | undefined;
+    const storedHeight = (textbox as any).__fixedHeight as number | undefined;
+    const targetWidth = Math.max(1, targetSize.width ?? storedWidth ?? currentWidth);
+    const targetHeight = Math.max(1, targetSize.height ?? storedHeight ?? currentHeight);
+
+    if (!(textbox as any).originalFontSize) {
+        (textbox as any).originalFontSize = textbox.fontSize;
     }
 
-    const minFontSize = 8;
-    const maxFontSize = textbox.originalFontSize;
-    let currentFontSize = textbox.fontSize;
+    const minFontSize = 4;
+    const maxFontSize = Math.max(
+        minFontSize,
+        Math.ceil(Math.max(targetHeight, (textbox as any).originalFontSize ?? 0))
+    );
 
-    // Check if text overflows
-    if (textbox.getScaledHeight() > textbox.height) {
-        // Decrease font size until it fits or reaches min
-        while (textbox.getScaledHeight() > textbox.height && currentFontSize > minFontSize) {
-            currentFontSize -= 1;
-            textbox.set('fontSize', currentFontSize);
-            textbox.initDimensions(); // Recalculate dimensions
-        }
-    } else if (textbox.getScaledHeight() < textbox.height) {
-        // Increase font size until it overflows or reaches max
-        while (textbox.getScaledHeight() < textbox.height && currentFontSize < maxFontSize) {
-            currentFontSize += 1;
-            textbox.set('fontSize', currentFontSize);
-            textbox.initDimensions();
-            // If it overshot, revert to previous size
-            if (textbox.getScaledHeight() > textbox.height) {
-                currentFontSize -= 1;
-                textbox.set('fontSize', currentFontSize);
-                textbox.initDimensions();
-                break;
-            }
+    textbox.set({ width: targetWidth });
+
+    let bestFontSize = minFontSize;
+    let low = minFontSize;
+    let high = maxFontSize;
+
+    const fits = (fontSize: number) => {
+        textbox.set('fontSize', fontSize);
+        textbox.initDimensions();
+        const textHeight = textbox.height ?? 0;
+        const textWidth = typeof textbox.calcTextWidth === 'function'
+            ? textbox.calcTextWidth()
+            : textbox.getScaledWidth();
+        return textHeight <= targetHeight && textWidth <= targetWidth;
+    };
+
+    while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        if (fits(mid)) {
+            bestFontSize = mid;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
         }
     }
-    
-    textbox.setCoords(); // Update controls
+
+    textbox.set('fontSize', bestFontSize);
+    textbox.initDimensions();
+    textbox.set({ height: targetHeight });
+    (textbox as any).__fixedWidth = targetWidth;
+    (textbox as any).__fixedHeight = targetHeight;
+    textbox.setCoords();
     canvas.requestRenderAll();
 };
 
@@ -289,31 +360,49 @@ const adjustFontSizeToFit = (textbox: fabric.Textbox, canvas: fabric.Canvas) => 
  */
 export const addFixedTextbox = (canvas: fabric.Canvas) => {
     const defaultFontSize = 30;
+    const boxWidth = getDefaultLength(DEFAULT_TEXTBOX_WIDTH, DEFAULT_PX_TEXTBOX_WIDTH);
+    const boxHeight = getDefaultLength(DEFAULT_TEXTBOX_HEIGHT, DEFAULT_PX_TEXTBOX_HEIGHT);
 
     insertFabricObject(canvas, () => {
         const textbox = new fabric.Textbox('Type here...', {
-            width: getDefaultLength(DEFAULT_TEXTBOX_WIDTH, DEFAULT_PX_TEXTBOX_WIDTH),
-            height: getDefaultLength(DEFAULT_TEXTBOX_HEIGHT, DEFAULT_PX_TEXTBOX_HEIGHT),
+            width: boxWidth,
+            height: boxHeight,
             fontSize: defaultFontSize,
-            originalFontSize: defaultFontSize, // Custom property to store original size
             fill: getThemeTextColor('body'),
             textAlign: 'center',
             originX: 'center',
             originY: 'center',
             fontFamily: getThemeFontFamily('body'),
-            lockScalingX: true,
-            lockScalingY: true,
             lockRotation: true,
-            hasControls: false,
+            hasControls: true,
             hasBorders: true,
         });
         (textbox as any).id = uuidv4();
         (textbox as any).tokenRole = 'typography.body.value';
+        (textbox as any).__fixedWidth = boxWidth;
+        (textbox as any).__fixedHeight = boxHeight;
+        (textbox as any).originalFontSize = defaultFontSize;
+
+        const handleScaling = () => {
+            const scaleX = Math.abs(textbox.scaleX ?? 1);
+            const scaleY = Math.abs(textbox.scaleY ?? 1);
+            if (scaleX === 1 && scaleY === 1) {
+                return;
+            }
+            const targetWidth = Math.max(1, (textbox.width ?? 0) * scaleX);
+            const targetHeight = Math.max(1, (textbox.height ?? 0) * scaleY);
+            textbox.set({ width: targetWidth, scaleX: 1, scaleY: 1 });
+            adjustFontSizeToFit(textbox, canvas, { width: targetWidth, height: targetHeight });
+        };
+
+        textbox.on('scaling', handleScaling);
 
         // Attach listener for text changes
         textbox.on('changed', () => {
             adjustFontSizeToFit(textbox, canvas);
         });
+
+        adjustFontSizeToFit(textbox, canvas, { width: boxWidth, height: boxHeight });
 
         return textbox;
     }, { activate: true, enterEditing: true });

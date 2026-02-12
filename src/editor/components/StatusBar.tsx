@@ -1,12 +1,14 @@
 import React from 'react';
 import type * as fabric from 'fabric';
-import { Minus, Plus, Expand, AlertTriangle } from 'lucide-react';
+import { Minus, Plus, Expand, AlertTriangle, MousePointer2, Layers } from 'lucide-react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { SAFE_MARGIN_PX, formatInches, fromCanvasUnits, UnitMode } from '../utils/units';
+import { zoomToCenter } from '../fabric/canvasUtils';
 
 export const StatusBar: React.FC = () => {
-  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, autoSaveStatus } = useEditorStore(
+  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, autoSaveStatus, showSafeZones, setShowSafeZones, selectedLayerIds, layers } = useEditorStore(
     (state) => ({
       zoom: state.zoom,
       unitMode: state.unitMode,
@@ -15,12 +17,40 @@ export const StatusBar: React.FC = () => {
       bleedPx: state.bleedPx,
       resetViewCanvas: state.resetViewCanvas,
       autoSaveStatus: state.autoSaveStatus,
+      showSafeZones: state.showSafeZones,
+      setShowSafeZones: state.setShowSafeZones,
+      selectedLayerIds: state.selectedLayerIds,
+      layers: state.layers,
     }),
     shallow
   );
 
-  const widthPx = canvas?.getWidth ? canvas.getWidth() : canvas?.width || 0;
-  const heightPx = canvas?.getHeight ? canvas.getHeight() : canvas?.height || 0;
+  // Get document dimensions from the canvas store (not canvas element size)
+  const { width: widthPx, height: heightPx } = useCanvasStore(
+    (state) => ({ width: state.width, height: state.height }),
+    shallow
+  );
+
+  // Get selection info
+  const selectionCount = selectedLayerIds.length;
+  const getSelectionLabel = () => {
+    if (selectionCount === 0) return null;
+    if (selectionCount === 1) {
+      const layer = layers.find((l) => l.id === selectedLayerIds[0]);
+      if (layer) {
+        const typeLabel = layer.type === 'i-text' || layer.type === 'textbox' ? 'Text' :
+                         layer.type === 'rect' ? 'Rectangle' :
+                         layer.type === 'circle' ? 'Circle' :
+                         layer.type === 'triangle' ? 'Triangle' :
+                         layer.type === 'polygon' ? 'Star' :
+                         layer.type === 'image' ? 'Image' :
+                         layer.type === 'group' ? 'Group' : layer.type;
+        return typeLabel;
+      }
+    }
+    return `${selectionCount} objects`;
+  };
+  const selectionLabel = getSelectionLabel();
   const formatMeasurement = (value: number, mode: UnitMode) => {
     if (mode === 'in') {
       return formatInches(value);
@@ -37,18 +67,14 @@ export const StatusBar: React.FC = () => {
   const handleZoom = (factor: number) => {
     if (canvas) {
       const newZoom = canvas.getZoom() * factor;
-      canvas.setZoom(newZoom);
-      canvas.requestRenderAll();
-      useEditorStore.getState().setZoom(newZoom);
+      zoomToCenter(newZoom);
     }
   };
 
   const zoomPresets = [0.25, 0.5, 1, 2];
   const setZoomLevel = (level: number) => {
     if (!canvas) return;
-    canvas.setZoom(level);
-    canvas.requestRenderAll();
-    useEditorStore.getState().setZoom(level);
+    zoomToCenter(level);
   };
   const isZoomActive = (level: number) => Math.abs(zoom - level) < 0.01;
 
@@ -111,6 +137,17 @@ export const StatusBar: React.FC = () => {
   return (
     <footer className="bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
       <div className="flex items-center gap-4 text-[11px] uppercase tracking-widest text-slate-300">
+        {/* Selection Indicator */}
+        {selectionLabel && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[color:var(--brand-primary)]/15 border border-[color:var(--brand-primary)]/30 text-[color:var(--brand-primary)]">
+            <MousePointer2 className="w-3 h-3 stroke-[1.5]" />
+            <span className="text-[10px] font-medium">{selectionLabel}</span>
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 text-slate-400">
+          <Layers className="w-3 h-3 stroke-[1.5]" />
+          <span className="text-[10px]">{layers.length} layers</span>
+        </div>
         <span>Canvas: {dimensionLabel}</span>
         <span>Safe: {safeLabel}</span>
         {bleedWarning && (
@@ -133,6 +170,17 @@ export const StatusBar: React.FC = () => {
             IN
           </button>
         </div>
+        <button
+          onClick={() => setShowSafeZones(!showSafeZones)}
+          className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] uppercase tracking-widest transition-all duration-300 ease-in-out ${
+            showSafeZones
+              ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] border border-[color:var(--brand-primary)]/30'
+              : 'text-slate-400 hover:text-[color:var(--brand-primary)] border border-transparent'
+          }`}
+          title={showSafeZones ? "Hide Safe Zones" : "Show Safe Zones"}
+        >
+          <span>{showSafeZones ? "Safe Zones ✓" : "Safe Zones"}</span>
+        </button>
         {/* Auto-save status indicator */}
         <div className={`flex items-center gap-1 ${indicator.color}`}>
           <span className="text-xs">{indicator.icon}</span>

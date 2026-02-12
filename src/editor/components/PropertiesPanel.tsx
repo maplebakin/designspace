@@ -5,7 +5,6 @@ import {
   Palette,
   Type,
   Image as ImageIcon,
-  Sliders,
   Layout,
   Sparkles,
   RotateCcw,
@@ -19,8 +18,12 @@ import {
   AlignVerticalJustifyStart,
   AlignVerticalJustifyCenter,
   AlignVerticalJustifyEnd,
+  MoveHorizontal,
+  MoveVertical,
+  Scaling,
 } from 'lucide-react';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { useVisionPalette, useThemeStore } from '../state/useThemeStore';
 import { ThemeSidebar } from './ThemeSidebar';
 import {
@@ -89,7 +92,6 @@ const CanvasEmptyState: React.FC = () => {
     setGridEnabled,
     snapEnabled,
     setSnapEnabled,
-    canvas,
   } = useEditorStore(
     (state) => ({
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
@@ -97,7 +99,6 @@ const CanvasEmptyState: React.FC = () => {
       setGridEnabled: state.setGridEnabled,
       snapEnabled: state.snapEnabled,
       setSnapEnabled: state.setSnapEnabled,
-      canvas: state.canvas,
     }),
     shallow
   );
@@ -105,9 +106,16 @@ const CanvasEmptyState: React.FC = () => {
     (state) => ({ canvasBackgroundColor: state.canvasBackgroundColor }),
     shallow
   );
+  const safeCanvasBackgroundColor =
+    canvasBackgroundColor && canvasBackgroundColor.toLowerCase() !== 'transparent'
+      ? canvasBackgroundColor
+      : null;
 
-  const canvasWidth = canvas ? Math.round(canvas.getWidth()) : 0;
-  const canvasHeight = canvas ? Math.round(canvas.getHeight()) : 0;
+  // Get document dimensions from the canvas store
+  const { width: canvasWidth, height: canvasHeight } = useCanvasStore(
+    (state) => ({ width: state.width, height: state.height }),
+    shallow
+  );
 
   return (
     <div className="space-y-4">
@@ -128,7 +136,7 @@ const CanvasEmptyState: React.FC = () => {
         <div className="space-y-3">
           <ControlRow label="Background">
             <ColorPicker
-              value={canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
+              value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
               onChange={setCanvasBackgroundColor}
               aria-label="Canvas background color"
             />
@@ -185,6 +193,80 @@ interface ShapePropertiesProps {
   addColorToBrandKit: (color: string) => Promise<{ success: boolean; error?: string }>;
 }
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const hexToRgb = (hex: string) => {
+  const normalized = hex.replace('#', '').trim();
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16);
+    const g = parseInt(normalized[1] + normalized[1], 16);
+    const b = parseInt(normalized[2] + normalized[2], 16);
+    return { r, g, b };
+  }
+  if (normalized.length === 6) {
+    const r = parseInt(normalized.slice(0, 2), 16);
+    const g = parseInt(normalized.slice(2, 4), 16);
+    const b = parseInt(normalized.slice(4, 6), 16);
+    return { r, g, b };
+  }
+  return null;
+};
+
+const parseFillColor = (fill: unknown, fallback = '#f1f0ee') => {
+  if (typeof fill !== 'string') {
+    return { hex: fallback, alpha: 1 };
+  }
+  const trimmed = fill.trim();
+  if (trimmed.toLowerCase() === 'transparent') {
+    return { hex: fallback, alpha: 0 };
+  }
+  if (trimmed.startsWith('#')) {
+    if (trimmed.length === 4) {
+      const hex = `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
+      return { hex, alpha: 1 };
+    }
+    if (trimmed.length === 7) {
+      return { hex: trimmed, alpha: 1 };
+    }
+    if (trimmed.length === 9) {
+      const alpha = parseInt(trimmed.slice(7, 9), 16) / 255;
+      return { hex: trimmed.slice(0, 7), alpha: clamp(alpha, 0, 1) };
+    }
+  }
+  const match = trimmed.match(/rgba?\(([^)]+)\)/i);
+  if (match) {
+    const parts = match[1].split(',').map((part) => parseFloat(part.trim()));
+    if (parts.length >= 3) {
+      const r = clamp(parts[0], 0, 255);
+      const g = clamp(parts[1], 0, 255);
+      const b = clamp(parts[2], 0, 255);
+      const alpha = parts.length >= 4 ? clamp(parts[3], 0, 1) : 1;
+      const hex = `#${Math.round(r).toString(16).padStart(2, '0')}${Math.round(g).toString(16).padStart(2, '0')}${Math.round(b).toString(16).padStart(2, '0')}`;
+      return { hex, alpha };
+    }
+  }
+  return { hex: fallback, alpha: 1 };
+};
+
+const getFillKindLabel = (fill: unknown) => {
+  if (typeof fill === 'string') return null;
+  if (!fill) return 'None';
+  const anyFill = fill as any;
+  if (anyFill?.source || anyFill?.repeat) return 'Pattern';
+  if (anyFill?.colorStops || anyFill?.coords || anyFill?.type === 'linear' || anyFill?.type === 'radial') {
+    return 'Gradient';
+  }
+  return 'Fill';
+};
+
+const applyFillAlpha = (hex: string, alpha: number) => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return hex;
+  const normalizedAlpha = clamp(alpha, 0, 1);
+  if (normalizedAlpha >= 1) return hex;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${normalizedAlpha})`;
+};
+
 const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   object,
   onUpdate,
@@ -192,22 +274,75 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   addColorToBrandKit,
 }) => {
   const isRect = object.type === 'rect';
-  const fillValue =
-    typeof (object as any)?.fill === 'string'
-      ? ((object as any).fill as string)
-      : '#ffffff';
+  const rawFill = (object as any)?.fill;
+  const fillIsString = typeof rawFill === 'string';
+  const fillKindLabel = getFillKindLabel(rawFill);
+  const { hex: fillValue, alpha: fillOpacity } = parseFillColor(rawFill, '#f1f0ee');
+  const strokeValue =
+    typeof (object as any)?.stroke === 'string'
+      ? ((object as any).stroke as string)
+      : '#686664'; // Default stroke color from palette
+  const strokeWidthValue = (object as any)?.strokeWidth ?? 2;
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-4">
       <SectionHeader title="Shape" icon={<Palette className="w-4 h-4" />} />
 
       <ControlRow label="Fill Color">
+        <div className="flex items-start gap-2">
+          <ColorPicker
+            value={fillValue}
+            onChange={(val) => onUpdate({ fill: applyFillAlpha(val, fillOpacity), tokenRole: null })}
+            aria-label="Fill color"
+          />
+          {fillKindLabel && (
+            <span className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-slate-300">
+              {fillKindLabel}
+            </span>
+          )}
+        </div>
+      </ControlRow>
+
+      <div className="space-y-2">
+        <ControlRow label="Fill Opacity">
+          <span className="text-[10px] text-slate-300">
+            {fillIsString ? `${Math.round(fillOpacity * 100)}%` : '—'}
+          </span>
+        </ControlRow>
+        <ControlSlider
+          min={0}
+          max={1}
+          step={0.01}
+          value={fillOpacity}
+          disabled={!fillIsString}
+          onChange={(val) => {
+            if (!fillIsString) return;
+            onUpdate({ fill: applyFillAlpha(fillValue, val), tokenRole: null });
+          }}
+        />
+      </div>
+
+      <ControlRow label="Stroke Color">
         <ColorPicker
-          value={fillValue}
-          onChange={(val) => onUpdate({ fill: val, tokenRole: null })}
-          aria-label="Fill color"
+          value={strokeValue}
+          onChange={(val) => onUpdate({ stroke: val })}
+          aria-label="Stroke color"
         />
       </ControlRow>
+
+      <div className="space-y-2">
+        <ControlRow label="Stroke Width">
+          <span className="text-[10px] text-slate-300">
+            {Math.round(strokeWidthValue)}px
+          </span>
+        </ControlRow>
+        <ControlSlider
+          min={0}
+          max={20}
+          value={strokeWidthValue}
+          onChange={(val) => onUpdate({ strokeWidth: val })}
+        />
+      </div>
 
       {/* Opacity Slider */}
       <div className="space-y-2">
@@ -263,6 +398,7 @@ interface TextPropertiesProps {
   setTextShadow: (opts: any) => void;
   setTextStroke: (opts: any) => void;
   setTextCharSpacing: (val: number) => void;
+  setTextLineHeight: (val: number) => void;
 }
 
 const TextProperties: React.FC<TextPropertiesProps> = ({
@@ -271,11 +407,13 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
   setTextShadow,
   setTextStroke,
   setTextCharSpacing,
+  setTextLineHeight,
 }) => {
   const currentShadow = object.shadow as fabric.Shadow | null;
   const currentStroke = typeof object.stroke === 'string' ? object.stroke : '#000000';
   const currentStrokeWidth = object.strokeWidth || 0;
   const currentCharSpacing = object.charSpacing || 0;
+  const currentLineHeight = (object as fabric.Textbox).lineHeight || 1;
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-4">
@@ -376,6 +514,33 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
           </button>
         </div>
 
+        {/* Line Height */}
+        <div className="space-y-2">
+          <ControlRow label="Line Height">
+            <span className="text-[10px] text-slate-300">{currentLineHeight.toFixed(2)}</span>
+          </ControlRow>
+          <ControlSlider
+            min={0.5}
+            max={3}
+            step={0.01}
+            value={currentLineHeight}
+            onChange={setTextLineHeight}
+          />
+        </div>
+
+        {/* Letter Spacing */}
+        <div className="space-y-2">
+          <ControlRow label="Letter Spacing">
+            <span className="text-[10px] text-slate-300">{Math.round(currentCharSpacing)}</span>
+          </ControlRow>
+          <ControlSlider
+            min={-100}
+            max={500}
+            value={currentCharSpacing}
+            onChange={setTextCharSpacing}
+          />
+        </div>
+
         {/* Shadow Controls */}
         <details className="group">
           <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
@@ -455,19 +620,6 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             </div>
           </div>
         </details>
-
-        {/* Letter Spacing */}
-        <div className="space-y-2">
-          <ControlRow label="Letter Spacing">
-            <span className="text-[10px] text-slate-300">{Math.round(currentCharSpacing)}</span>
-          </ControlRow>
-          <ControlSlider
-            min={-100}
-            max={100}
-            value={currentCharSpacing}
-            onChange={setTextCharSpacing}
-          />
-        </div>
       </div>
     </div>
   );
@@ -571,6 +723,136 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
   );
 };
 
+// Transform Controls Section - Position, Size, Rotation
+interface TransformControlsProps {
+  object: fabric.Object;
+  onUpdate: (updates: Record<string, any>) => void;
+}
+
+const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate }) => {
+  const left = Math.round(object.left ?? 0);
+  const top = Math.round(object.top ?? 0);
+  const width = Math.round((object.width ?? 0) * (object.scaleX ?? 1));
+  const height = Math.round((object.height ?? 0) * (object.scaleY ?? 1));
+  const angle = Math.round(object.angle ?? 0);
+
+  const handlePositionChange = (axis: 'left' | 'top', value: number) => {
+    if (!Number.isFinite(value)) return;
+    onUpdate({ [axis]: value });
+  };
+
+  const handleSizeChange = (dimension: 'width' | 'height', value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return;
+
+    if (dimension === 'width') {
+      const newScaleX = value / (object.width ?? 1);
+      onUpdate({ scaleX: newScaleX });
+    } else {
+      const newScaleY = value / (object.height ?? 1);
+      onUpdate({ scaleY: newScaleY });
+    }
+  };
+
+  const handleRotationChange = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    // Normalize to 0-360
+    const normalized = ((value % 360) + 360) % 360;
+    onUpdate({ angle: normalized });
+  };
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-4">
+      <SectionHeader title="Transform" icon={<Move className="w-4 h-4" />} />
+
+      {/* Position */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+            <MoveHorizontal className="w-3 h-3" /> X
+          </label>
+          <ControlInput
+            type="number"
+            value={left}
+            onChange={(e) => handlePositionChange('left', Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+            <MoveVertical className="w-3 h-3" /> Y
+          </label>
+          <ControlInput
+            type="number"
+            value={top}
+            onChange={(e) => handlePositionChange('top', Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+      </div>
+
+      {/* Size */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+            <Scaling className="w-3 h-3" /> W
+          </label>
+          <ControlInput
+            type="number"
+            min={1}
+            value={width}
+            onChange={(e) => handleSizeChange('width', Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+            <Scaling className="w-3 h-3" /> H
+          </label>
+          <ControlInput
+            type="number"
+            min={1}
+            value={height}
+            onChange={(e) => handleSizeChange('height', Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+      </div>
+
+      {/* Rotation */}
+      <div className="space-y-2">
+        <ControlRow label="Rotation">
+          <div className="flex items-center gap-2">
+            <ControlInput
+              type="number"
+              min={0}
+              max={360}
+              value={angle}
+              onChange={(e) => handleRotationChange(Number(e.target.value))}
+              className="w-16"
+            />
+            <span className="text-[10px] text-slate-400">°</span>
+          </div>
+        </ControlRow>
+        <div className="flex gap-1">
+          {[0, 45, 90, 180, 270].map((preset) => (
+            <button
+              key={preset}
+              onClick={() => handleRotationChange(preset)}
+              className={`flex-1 h-6 text-[9px] rounded border transition-all duration-200 ${
+                angle === preset
+                  ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
+                  : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+              }`}
+            >
+              {preset}°
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Main Properties Panel
 export const PropertiesPanel: React.FC = () => {
   const {
@@ -582,6 +864,7 @@ export const PropertiesPanel: React.FC = () => {
     setTextShadow,
     setTextStroke,
     setTextCharSpacing,
+    setTextLineHeight,
     setImageAdjustments,
     resetImageAdjustments,
     alignSelectedObjects,
@@ -595,6 +878,7 @@ export const PropertiesPanel: React.FC = () => {
       setTextShadow: state.setTextShadow,
       setTextStroke: state.setTextStroke,
       setTextCharSpacing: state.setTextCharSpacing,
+      setTextLineHeight: state.setTextLineHeight,
       setImageAdjustments: state.setImageAdjustments,
       resetImageAdjustments: state.resetImageAdjustments,
       alignSelectedObjects: state.alignSelectedObjects,
@@ -758,6 +1042,7 @@ export const PropertiesPanel: React.FC = () => {
                 setTextShadow={setTextShadow}
                 setTextStroke={setTextStroke}
                 setTextCharSpacing={setTextCharSpacing}
+                setTextLineHeight={setTextLineHeight}
               />
             )}
 
@@ -769,14 +1054,20 @@ export const PropertiesPanel: React.FC = () => {
                 resetImageAdjustments={resetImageAdjustments}
               />
             )}
+
+            {/* Transform Controls - Position, Size, Rotation */}
+            <TransformControls
+              object={selectedObject}
+              onUpdate={updateSelectedObject}
+            />
           </>
         )}
 
         <SectionDivider />
 
-        {/* Theme Hub - Always visible */}
+        {/* Palette Hub - Always visible */}
         <div className="space-y-3">
-          <SectionHeader title="Theme Hub" icon={<Sliders className="w-4 h-4" />} />
+          <SectionHeader title="Color Palettes" icon={<Palette className="w-4 h-4" />} />
           <ThemeSidebar />
         </div>
       </div>

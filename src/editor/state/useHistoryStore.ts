@@ -464,7 +464,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         }
 
         const dropped: string[] = _snapshots.slice(historyIndex + 1);
-        let trimmed = _snapshots.slice(0, historyIndex + 1);
+        const trimmed = _snapshots.slice(0, historyIndex + 1);
 
         trimmed.push(snapshot);
 

@@ -44,13 +44,12 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
       // Validate theme file using service
       const result = await validateThemeFile(file, {
         maxSizeBytes: 5 * 1024 * 1024, // 5MB
-        requiredFields: ['name', 'id'],
+        requiredFields: ['name'],
         allowedExtensions: ['.json']
       });
 
       if (!result.success) {
         setError(result.error!.message);
-        console.error('Theme validation error:', result.error);
         return;
       }
 
@@ -140,7 +139,7 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
                 <div className="rounded-2xl border border-[color:var(--border-subtle)] p-8 text-center bg-white/5">
                   <FileJson className="w-12 h-12 stroke-[1.5] text-[color:var(--muted-icon)] mx-auto mb-4 opacity-50" />
                   <p className="text-sm text-slate-300 mb-2">No themes imported yet</p>
-                  <p className="text-xs text-slate-400">Import an Apocapalette JSON file to get started</p>
+                  <p className="text-xs text-slate-400">Import a theme JSON file to get started</p>
                 </div>
               )}
             </div>
@@ -172,7 +171,7 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
                 ) : (
                   <>
                     <Plus className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]"/>
-                    Import Apocapalette JSON
+                    Import Theme JSON
                   </>
                 )}
               </button>

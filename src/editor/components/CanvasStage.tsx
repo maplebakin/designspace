@@ -3,12 +3,12 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
-import { Square, Upload } from 'lucide-react';
+import { Square, Monitor, Printer, Settings2, FileText, Image, Smartphone } from 'lucide-react';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import { PRINT_DPI } from '../utils/units';
 import { useThemeStore } from '../state/useThemeStore';
 import { initFabricSerialization } from '../fabric/initFabricCanvas';
-import { resizeCanvas, updateGuides } from '../fabric/canvasUtils';
-import * as objectFactories from '../fabric/objectFactories';
+import { resizeCanvas, updateGuides, fitCanvasToViewport, updateDocumentPaper, clearDocumentPaper } from '../fabric/canvasUtils';
 import { useCanvasLifecycle } from '../hooks/useCanvasLifecycle';
 import { resolveThemeValue } from '../utils/themeResolver';
 import { dirtyObjects, registerAllCanvasEventHandlers } from '../services/canvasEventService';
@@ -16,18 +16,234 @@ import { loadImageFromFile, safeLoadImage } from '../services/assetLoader';
 import { ContextMenu, useContextMenu } from './ContextMenu';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { guideRegistry } from '../fabric/guideRegistry';
+import { frameScheduler, TaskPriority } from '../utils/frameScheduler';
+import { coordinateSystem } from '../utils/coordinateSystem';
 
 initFabricSerialization();
 
 type CanvasNavKey = 'insert' | 'layers';
 
+// Canvas size presets
+type SizePreset = {
+  id: string;
+  name: string;
+  description: string;
+  width: number;
+  height: number;
+  icon: React.ReactNode;
+  category: 'print' | 'digital';
+  recommended?: boolean;
+};
 
+const SIZE_PRESETS: SizePreset[] = [
+  // Print presets (300 DPI)
+  { id: 'us-letter', name: 'US Letter', description: '8.5" × 11"', width: Math.round(8.5 * PRINT_DPI), height: Math.round(11 * PRINT_DPI), icon: <FileText className="w-5 h-5" />, category: 'print', recommended: true },
+  { id: 'a4', name: 'A4', description: '210 × 297 mm', width: 2480, height: 3508, icon: <FileText className="w-5 h-5" />, category: 'print' },
+  { id: 'a5', name: 'A5', description: '148 × 210 mm', width: 1748, height: 2480, icon: <FileText className="w-5 h-5" />, category: 'print' },
+  { id: 'postcard', name: 'Postcard', description: '4" × 6"', width: Math.round(4 * PRINT_DPI), height: Math.round(6 * PRINT_DPI), icon: <Image className="w-5 h-5" />, category: 'print' },
+  // Digital presets
+  { id: 'instagram-square', name: 'Instagram', description: '1080 × 1080', width: 1080, height: 1080, icon: <Square className="w-5 h-5" />, category: 'digital' },
+  { id: 'instagram-story', name: 'Story', description: '1080 × 1920', width: 1080, height: 1920, icon: <Smartphone className="w-5 h-5" />, category: 'digital' },
+  { id: 'hd', name: 'HD', description: '1920 × 1080', width: 1920, height: 1080, icon: <Monitor className="w-5 h-5" />, category: 'digital' },
+  { id: '4k', name: '4K', description: '3840 × 2160', width: 3840, height: 2160, icon: <Monitor className="w-5 h-5" />, category: 'digital' },
+];
+
+type CanvasSizePickerProps = {
+  onSelect: (width: number, height: number) => void;
+  onDismiss: () => void;
+};
+
+const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, onDismiss }) => {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customWidth, setCustomWidth] = useState('8.5');
+  const [customHeight, setCustomHeight] = useState('11');
+  const [customUnit, setCustomUnit] = useState<'in' | 'px'>('in');
+
+  const printPresets = SIZE_PRESETS.filter(p => p.category === 'print');
+  const digitalPresets = SIZE_PRESETS.filter(p => p.category === 'digital');
+
+  const handleCustomApply = () => {
+    const w = parseFloat(customWidth);
+    const h = parseFloat(customHeight);
+    if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return;
+
+    const widthPx = customUnit === 'in' ? Math.round(w * PRINT_DPI) : Math.round(w);
+    const heightPx = customUnit === 'in' ? Math.round(h * PRINT_DPI) : Math.round(h);
+    onSelect(widthPx, heightPx);
+  };
+
+  const getPreviewAspect = (preset: SizePreset) => {
+    const maxSize = 48;
+    const aspect = preset.width / preset.height;
+    if (aspect > 1) {
+      return { width: maxSize, height: Math.round(maxSize / aspect) };
+    }
+    return { width: Math.round(maxSize * aspect), height: maxSize };
+  };
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+      <div className="pointer-events-auto flex flex-col gap-6 rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-8 py-7 backdrop-blur-[var(--ui-blur)] shadow-[0_25px_70px_rgba(0,0,0,0.5)] max-w-2xl">
+        {/* Header */}
+        <div className="text-center space-y-1">
+          <h2 className="text-lg font-medium text-[color:var(--ui-panel-text)]">New Canvas</h2>
+          <p className="text-xs text-[color:var(--ui-panel-text)]/60">Choose a size to get started</p>
+        </div>
+
+        {/* Presets Grid */}
+        <div className="space-y-5">
+          {/* Print Section */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
+              <Printer className="w-3.5 h-3.5" />
+              <span className="text-[10px] uppercase tracking-widest">Print (300 DPI)</span>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {printPresets.map(preset => {
+                const preview = getPreviewAspect(preset);
+                return (
+                  <button
+                    key={preset.id}
+                    onClick={() => onSelect(preset.width, preset.height)}
+                    className={`group relative flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
+                      preset.recommended
+                        ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/10 hover:bg-[color:var(--brand-primary)]/20'
+                        : 'border-white/10 bg-white/5 hover:border-[color:var(--brand-primary)]/50 hover:bg-white/10'
+                    }`}
+                  >
+                    {preset.recommended && (
+                      <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-2 py-0.5 text-[8px] uppercase tracking-wider bg-[color:var(--brand-primary)] text-white rounded-full">
+                        Default
+                      </span>
+                    )}
+                    <div
+                      className="border border-[color:var(--ui-panel-text)]/20 bg-white/90 rounded-sm"
+                      style={{ width: preview.width, height: preview.height }}
+                    />
+                    <div className="text-center">
+                      <div className={`text-xs font-medium ${preset.recommended ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)]'}`}>
+                        {preset.name}
+                      </div>
+                      <div className="text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Digital Section */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
+              <Monitor className="w-3.5 h-3.5" />
+              <span className="text-[10px] uppercase tracking-widest">Digital</span>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {digitalPresets.map(preset => {
+                const preview = getPreviewAspect(preset);
+                return (
+                  <button
+                    key={preset.id}
+                    onClick={() => onSelect(preset.width, preset.height)}
+                    className="group flex flex-col items-center gap-2 p-3 rounded-xl border border-white/10 bg-white/5 hover:border-[color:var(--brand-primary)]/50 hover:bg-white/10 transition-all duration-200"
+                  >
+                    <div
+                      className="border border-[color:var(--ui-panel-text)]/20 bg-white/90 rounded-sm"
+                      style={{ width: preview.width, height: preview.height }}
+                    />
+                    <div className="text-center">
+                      <div className="text-xs font-medium text-[color:var(--ui-panel-text)]">{preset.name}</div>
+                      <div className="text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Custom Size */}
+          <div className="pt-2 border-t border-white/10">
+            {showCustom ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">Width</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="1"
+                      value={customWidth}
+                      onChange={(e) => setCustomWidth(e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-black/30 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] focus:border-[color:var(--brand-primary)] outline-none"
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">Height</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="1"
+                      value={customHeight}
+                      onChange={(e) => setCustomHeight(e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-black/30 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] focus:border-[color:var(--brand-primary)] outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">Unit</label>
+                    <select
+                      value={customUnit}
+                      onChange={(e) => setCustomUnit(e.target.value as 'in' | 'px')}
+                      className="px-3 py-2 text-sm bg-black/30 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] focus:border-[color:var(--brand-primary)] outline-none"
+                    >
+                      <option value="in">inches</option>
+                      <option value="px">pixels</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowCustom(false)}
+                    className="flex-1 px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCustomApply}
+                    className="flex-1 px-4 py-2 text-xs uppercase tracking-widest text-white bg-[color:var(--brand-primary)] rounded-lg hover:brightness-110 transition-all"
+                  >
+                    Create Canvas
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowCustom(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 border border-dashed border-white/20 rounded-xl hover:border-[color:var(--brand-primary)]/50 hover:text-[color:var(--ui-panel-text)] hover:bg-white/5 transition-all"
+              >
+                <Settings2 className="w-4 h-4" />
+                Custom Size
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Skip */}
+        <button
+          onClick={onDismiss}
+          className="text-xs text-[color:var(--ui-panel-text)]/40 hover:text-[color:var(--ui-panel-text)]/70 transition-colors"
+        >
+          Skip and use default (US Letter)
+        </button>
+      </div>
+    </div>
+  );
+};
 
 type CanvasStageProps = {
   onSelectNav?: (nav: CanvasNavKey) => void;
 };
 
-export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
+export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelectNav }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -36,6 +252,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   const { contextMenu, showContextMenu, hideContextMenu } = useContextMenu();
   const {
     canvas: fabricCanvas,
+    canvasReadyState,
     setSelectedObjectId,
     syncCanvasToStore,
     setSelectedLayerIds,
@@ -57,9 +274,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     markHistoryDirty,
     unitScale,
     setDirtyObjectsRef,
+    showSafeZones,
+    restoreSessionFromStorage,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
+      canvasReadyState: state.canvasReadyState,
       setSelectedObjectId: state.setSelectedObjectId,
       syncCanvasToStore: state.syncCanvasToStore,
       setSelectedLayerIds: state.setSelectedLayerIds,
@@ -81,6 +301,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       markHistoryDirty: state.markHistoryDirty,
       unitScale: state.unitScale,
       setDirtyObjectsRef: state.setDirtyObjectsRef,
+      showSafeZones: state.showSafeZones,
+      restoreSessionFromStorage: state.restoreSessionFromStorage,
     }),
     shallow
   );
@@ -90,6 +312,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       brushColor: state.brushColor,
       canvasBackgroundColor: state.canvasBackgroundColor,
     }),
+    shallow
+  );
+
+  // Subscribe to document dimensions for paper updates
+  const { width: docWidth, height: docHeight } = useCanvasStore(
+    (state) => ({ width: state.width, height: state.height }),
     shallow
   );
 
@@ -130,11 +358,18 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   const { initializeCanvas, disposeCanvas } = useCanvasLifecycle(canvasRef, containerRef);
 
   useEffect(() => {
+    if (canvasReadyState !== 'ready' || !fabricCanvas) return;
+    void restoreSessionFromStorage();
+  }, [canvasReadyState, fabricCanvas, restoreSessionFromStorage]);
+
+  useEffect(() => {
     if (!fabricCanvas) return;
     const pendingSize = useCanvasStore.getState().consumePendingSize();
     if (!pendingSize) return;
     resizeCanvas(pendingSize.width, pendingSize.height);
   }, [fabricCanvas]);
+
+  // Canvas frame styling is now handled by CSS .canvas-wrapper class
 
   const updateViewportState = useCallback((nextCanvas: fabric.Canvas) => {
     const vpt = nextCanvas.viewportTransform;
@@ -149,10 +384,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         y: canvasRect.top - containerRect.top,
       };
       if (
-        Math.abs(nextOffset.x - canvasOffsetRef.current.x) >= 0.5
-        || Math.abs(nextOffset.y - canvasOffsetRef.current.y) >= 0.5
+        Math.abs(nextOffset.x - canvasOffsetRef.current.x) >= 1.0  // Increased threshold to 1px
+        || Math.abs(nextOffset.y - canvasOffsetRef.current.y) >= 1.0
       ) {
         canvasOffsetRef.current = nextOffset;
+        // Use unitScale from store for conversion (keeping consistent with existing approach)
         const scaledOffset = {
           x: nextOffset.x * unitScale,
           y: nextOffset.y * unitScale,
@@ -161,7 +397,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         nextCanvas.calcOffset();
       }
     }
-  }, [setCanvasOffset, setVpt, unitScale]);
+  }, [setCanvasOffset, setVpt]);
 
   const scheduleUpdate = useCallback((
     targetCanvas?: fabric.Canvas | null,
@@ -179,20 +415,22 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       persistCountRef.current += 1;
     }
 
-    if (updateScheduledRef.current) return;
-    updateScheduledRef.current = true;
-    updateRafRef.current = requestAnimationFrame(() => {
-      updateScheduledRef.current = false;
-      updateRafRef.current = null;
-      syncCanvasToStore(nextCanvas);
-      updateViewportState(nextCanvas);
-      nextCanvas.requestRenderAll();
+    // Use the FrameScheduler to schedule the update
+    frameScheduler.schedule({
+      callback: () => {
+        updateScheduledRef.current = false;
+        updateRafRef.current = null;
+        syncCanvasToStore(nextCanvas);
+        updateViewportState(nextCanvas);
+        nextCanvas.requestRenderAll();
 
-      // PHASE 2.3: Counter-based persistence - reset counter and persist if > 0
-      if (persistCountRef.current > 0) {
-        persistCountRef.current = 0;
-        useEditorStore.getState().endBatch();
-      }
+        // PHASE 2.3: Counter-based persistence - reset counter and persist if > 0
+        if (persistCountRef.current > 0) {
+          persistCountRef.current = 0;
+          useEditorStore.getState().endBatch();
+        }
+      },
+      priority: TaskPriority.REQUEST_RENDER,
     });
   }, [fabricCanvas, syncCanvasToStore, updateViewportState]);
 
@@ -212,12 +450,14 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const nextCanvas = targetCanvas ?? fabricCanvas;
     if (!nextCanvas) return;
 
-    if (viewportScheduledRef.current) return;
-    viewportScheduledRef.current = true;
-    viewportRafRef.current = requestAnimationFrame(() => {
-      viewportScheduledRef.current = false;
-      viewportRafRef.current = null;
-      updateViewportState(nextCanvas);
+    // Use the FrameScheduler to schedule the viewport update
+    frameScheduler.schedule({
+      callback: () => {
+        viewportScheduledRef.current = false;
+        viewportRafRef.current = null;
+        updateViewportState(nextCanvas);
+      },
+      priority: TaskPriority.UPDATE_VIEWPORT,
     });
   }, [fabricCanvas, updateViewportState]);
 
@@ -470,6 +710,108 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     }
   }, [layers, setShowOnboarding]);
 
+  // Safe Zone Overlay Effect
+  useEffect(() => {
+    if (!fabricCanvas) return;
+
+    const addSafeZoneOverlay = () => {
+      // Remove existing safe zone overlay if it exists
+      const existingOverlays = fabricCanvas.getObjects().filter(obj => (obj as any).isSafeZoneOverlay);
+      existingOverlays.forEach(overlay => fabricCanvas.remove(overlay));
+
+      if (!showSafeZones) {
+        fabricCanvas.requestRenderAll();
+        return;
+      }
+
+      // Calculate safe zone dimensions
+      const canvasWidth = fabricCanvas.getWidth();
+      const canvasHeight = fabricCanvas.getHeight();
+
+      // Create four rectangles for the safe zone borders
+      const overlays = [];
+
+      // Top rectangle (above safe area)
+      const topOverlay = new fabric.Rect({
+        left: 0,
+        top: 0,
+        width: canvasWidth,
+        height: bleedPx,
+        fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
+        selectable: false,
+        evented: false,
+        isSafeZoneOverlay: true,
+      });
+      overlays.push(topOverlay);
+
+      // Bottom rectangle (below safe area)
+      const bottomOverlay = new fabric.Rect({
+        left: 0,
+        top: canvasHeight - bleedPx,
+        width: canvasWidth,
+        height: bleedPx,
+        fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
+        selectable: false,
+        evented: false,
+        isSafeZoneOverlay: true,
+      });
+      overlays.push(bottomOverlay);
+
+      // Left rectangle (left of safe area)
+      const leftOverlay = new fabric.Rect({
+        left: 0,
+        top: bleedPx,
+        width: bleedPx,
+        height: canvasHeight - 2 * bleedPx,
+        fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
+        selectable: false,
+        evented: false,
+        isSafeZoneOverlay: true,
+      });
+      overlays.push(leftOverlay);
+
+      // Right rectangle (right of safe area)
+      const rightOverlay = new fabric.Rect({
+        left: canvasWidth - bleedPx,
+        top: bleedPx,
+        width: bleedPx,
+        height: canvasHeight - 2 * bleedPx,
+        fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
+        selectable: false,
+        evented: false,
+        isSafeZoneOverlay: true,
+      });
+      overlays.push(rightOverlay);
+
+      // Add all overlays to canvas
+      overlays.forEach(overlay => fabricCanvas.add(overlay));
+      fabricCanvas.renderAll();
+    };
+
+    addSafeZoneOverlay();
+
+    // Return cleanup function
+    return () => {
+      if (fabricCanvas) {
+        // Remove existing safe zone overlay if it exists
+        const existingOverlays = fabricCanvas.getObjects().filter(obj => (obj as any).isSafeZoneOverlay);
+        existingOverlays.forEach(overlay => fabricCanvas.remove(overlay));
+        fabricCanvas.renderAll();
+      }
+    };
+  }, [fabricCanvas, showSafeZones, bleedPx]);
+
+  // Document Paper Cleanup - Clears paper rect when canvas is disposed
+  useEffect(() => {
+    if (!fabricCanvas) return;
+
+    return () => {
+      if (fabricCanvas) {
+        clearDocumentPaper(fabricCanvas);
+      }
+    };
+  }, [fabricCanvas]);
+
   const trackPromise = <T,>(promise: Promise<T>, abortSignal?: AbortSignal) => {
     pendingPromisesRef.current.add(promise);
     promise.finally(() => pendingPromisesRef.current.delete(promise));
@@ -572,6 +914,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         viewportScheduledRef.current = false;
       }
 
+      // Clean up the FrameScheduler
+      frameScheduler.cancel();
+
       // Clean up all event handlers using the registry
       eventRegistry.cleanupAll();
       setDirtyObjectsRef(null);
@@ -619,10 +964,31 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       canvasBackgroundColor
       || resolveThemeValue(themeData, 'surfaces.page-background')
       || DEFAULT_CANVAS_BACKGROUND; // Use the defined default background
-    fabricCanvas.backgroundColor = paperColor;
+
+    // Set canvas background to transparent so workspace shows through
+    fabricCanvas.backgroundColor = 'transparent';
+
+    // Create/update the document paper rectangle with the background color
+    // This ensures only the document area has the background color
+    updateDocumentPaper(fabricCanvas, paperColor);
+
     updateGuides(fabricCanvas, showGuides);
     fabricCanvas.requestRenderAll();
-  }, [fabricCanvas, themeData, bleedPx, canvasBackgroundColor, showGuides]);
+  }, [fabricCanvas, themeData, bleedPx, canvasBackgroundColor, showGuides, docWidth, docHeight]);
+
+  // Update CoordinateSystem when unit mode changes
+  const { unitMode } = useEditorStore(
+    (state) => ({ unitMode: state.unitMode }),
+    shallow
+  );
+
+  useEffect(() => {
+    try {
+      coordinateSystem.setMode(unitMode);
+    } catch (error) {
+      console.error('Error setting unit mode in CoordinateSystem:', error);
+    }
+  }, [unitMode]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -630,12 +996,15 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     const isDrawing = tool === 'draw' || tool === 'erase';
     fabricCanvas.isDrawingMode = isDrawing;
     fabricCanvas.selection = tool === 'select';
-    fabricCanvas.skipTargetFind = tool !== 'select';
+    fabricCanvas.skipTargetFind = tool !== 'select' && tool !== 'textbox';
 
     if (tool === 'pan') {
       fabricCanvas.defaultCursor = 'grab';
       fabricCanvas.hoverCursor = 'grab';
     } else if (tool === 'draw' || tool === 'erase') {
+      fabricCanvas.defaultCursor = 'crosshair';
+      fabricCanvas.hoverCursor = 'crosshair';
+    } else if (tool === 'textbox') {
       fabricCanvas.defaultCursor = 'crosshair';
       fabricCanvas.hoverCursor = 'crosshair';
     } else {
@@ -647,6 +1016,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
       applyDrawingBrush(fabricCanvas, tool === 'erase' ? 'erase' : 'draw');
     }
   }, [fabricCanvas, activeTool, brushColor, brushSize]);
+
+  // Update CoordinateSystem when zoom changes
+  const { zoom } = useEditorStore(
+    (state) => ({ zoom: state.zoom }),
+    shallow
+  );
+
+  useEffect(() => {
+    coordinateSystem.setZoom(zoom);
+  }, [zoom]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -1113,13 +1492,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
     if (uploadInputRef.current) uploadInputRef.current.value = '';
   };
 
-  const handleAddShape = () => {
-    if (!fabricCanvas) return;
-    setShowOnboarding(false);
-    objectFactories.addRectangle(fabricCanvas);
-    scheduleUpdate(fabricCanvas, { persist: true });
-  };
-
   const handleDismissOverlay = () => {
     if (!isOverlayDismissed) {
       setShowOnboarding(false);
@@ -1128,19 +1500,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
   };
 
   return (
-    <div 
-      className="workspace relative w-full h-full flex items-center justify-center"
+    <div
+      className="workspace relative w-full h-full flex items-center justify-center overflow-hidden"
       onClick={handleDismissOverlay}
     >
       <div
         ref={containerRef}
-        className="w-full h-full flex items-center justify-center"
+        className="w-full h-full overflow-hidden bg-transparent"
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onDragLeave={handleDragLeave}
         onContextMenu={showContextMenu}
       >
-        <canvas id="design-canvas" ref={canvasRef} className="rounded-[18px]" />
+        <canvas id="design-canvas" ref={canvasRef} />
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
@@ -1157,39 +1529,29 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav }) => {
         className="hidden"
       />
       {showOnboarding && !isOverlayDismissed && (
-        <div className="hearth absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto flex flex-col items-center gap-5 rounded-3xl border border-black/15 bg-white/90 px-10 py-8 text-center backdrop-blur-[var(--ui-blur)] shadow-[0_22px_60px_rgba(0,0,0,0.35)]">
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-[11px] uppercase tracking-widest text-[#1a1a1a]">Start Ritual</span>
-              <h2 className="text-xl font-semibold text-[#1a1a1a]">What shall we create today, Maddie?</h2>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <button
-                onClick={() => onSelectNav?.('insert')}
-                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-              >
-                <Square className="w-6 h-6 stroke-[1.5]" />
-                Insert Elements
-              </button>
-              <button
-                onClick={() => {
-                  uploadInputRef.current?.click();
-                }}
-                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-              >
-                <Upload className="w-6 h-6 stroke-[1.5]" />
-                Upload Image
-              </button>
-              <button
-                onClick={handleAddShape}
-                className="flex h-28 w-40 flex-col items-center justify-center gap-2 rounded-2xl border border-black/10 bg-black/5 text-xs uppercase tracking-widest text-slate-900 transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-              >
-                <Square className="w-6 h-6 stroke-[1.5]" />
-                Add Shape
-              </button>
-            </div>
-          </div>
-        </div>
+        <CanvasSizePicker
+          onSelect={(width, height) => {
+            resizeCanvas(width, height);
+            // Fit canvas to viewport after a brief delay to ensure DOM is updated
+            requestAnimationFrame(() => {
+              if (containerRef.current) {
+                const rect = containerRef.current.getBoundingClientRect();
+                fitCanvasToViewport(rect.width, rect.height);
+              }
+            });
+            setIsOverlayDismissed(true);
+            setShowOnboarding(false);
+          }}
+          onDismiss={() => {
+            // Default to US Letter and fit to viewport
+            if (containerRef.current) {
+              const rect = containerRef.current.getBoundingClientRect();
+              fitCanvasToViewport(rect.width, rect.height);
+            }
+            setIsOverlayDismissed(true);
+            setShowOnboarding(false);
+          }}
+        />
       )}
       {/* PHASE 3.3: Circuit breaker error notification */}
       {syncError && (

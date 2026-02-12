@@ -1,5 +1,5 @@
 import { createWithEqualityFn } from 'zustand/traditional';
-import { DEFAULT_CANVAS_SIZE } from './editorStore';
+import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 
 interface CanvasState {
     width: number;

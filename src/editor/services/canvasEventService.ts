@@ -1,9 +1,14 @@
 import * as fabric from 'fabric';
 import { ensureObjectId } from '../fabric/initFabricCanvas';
 import { initSmartGuides } from '../fabric/smartGuides';
-import { updateGuides } from '../fabric/canvasUtils';
+import { updateGuides, fitCanvasToViewport, centerDocumentInViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { drawSmartDistanceIndicators, clearSmartGuides } from '../utils/smartGuides';
+import {
+    handleTextboxMouseDown,
+    handleTextboxMouseMove,
+    handleTextboxMouseUp,
+} from './textboxDrawingService';
 
 /**
  * Canvas Event Service
@@ -53,6 +58,26 @@ export interface CanvasEventHandlerOptions {
 }
 
 export const dirtyObjects = new Set<string>();
+
+const isEditableTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    const tagName = target.tagName;
+    return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || target.isContentEditable;
+};
+
+const isTextObject = (obj: fabric.Object | null) => {
+    if (!obj) return false;
+    return obj.type === 'i-text' || obj.type === 'textbox' || obj.type === 'text';
+};
+
+const isTextEditing = (canvas: fabric.Canvas) => {
+    const candidates = canvas.getObjects();
+    return candidates.some((obj) => {
+        if (!isTextObject(obj)) return false;
+        const anyObj = obj as any;
+        return !!anyObj.isEditing || !!anyObj.editing || !!anyObj.textEditing;
+    });
+};
 
 // --- UTILITY FUNCTIONS ---
 
@@ -297,6 +322,7 @@ export function registerSelectionEventHandlers(
 
 /**
  * Registers handlers for viewport events (rendering, mouse wheel zoom).
+ * Zoom keeps the document centered in the viewport.
  */
 export function registerViewportEventHandlers(
     options: CanvasEventHandlerOptions
@@ -311,10 +337,10 @@ export function registerViewportEventHandlers(
         zoom *= zoomFactor;
 
         const clampedZoom = Math.min(20, Math.max(0.05, zoom));
-        const pointer = canvas.getPointer(evt);
-        canvas.zoomToPoint(new fabric.Point(pointer.x, pointer.y), clampedZoom);
 
-        clampPan(canvas);
+        // Zoom keeping the document centered using the shared utility
+        centerDocumentInViewport(canvas, clampedZoom);
+
         onZoom?.(clampedZoom);
         onViewportChange?.(canvas);
 
@@ -336,6 +362,11 @@ export function registerViewportEventHandlers(
 
 /**
  * Registers handlers for panning (mouse down/move/up with spacebar or pan tool).
+ * Supports:
+ * - Pan tool: click and drag to pan
+ * - Spacebar + drag: hold space and drag to pan (in select mode)
+ * - Right-click drag: pan with right mouse button
+ * - Middle-click drag: pan with middle mouse button
  */
 export function registerPanEventHandlers(
     options: CanvasEventHandlerOptions
@@ -349,84 +380,138 @@ export function registerPanEventHandlers(
     }
 
     const { activeTool, isSpacebarDown, isPanning, lastPosX, lastPosY } = refs;
-    let isRightClickPanning = false;
-    let rightLastPosX = 0;
-    let rightLastPosY = 0;
+
+    // Track auxiliary button panning (right-click or middle-click)
+    let isAuxPanning = false;
+    let auxLastPosX = 0;
+    let auxLastPosY = 0;
     let previousCursor = canvas.defaultCursor;
     let previousSelection = canvas.selection;
+
+    const startPan = (clientX: number, clientY: number, isAux = false) => {
+        if (isAux) {
+            isAuxPanning = true;
+            previousCursor = canvas.defaultCursor;
+            previousSelection = canvas.selection;
+            canvas.selection = false;
+            auxLastPosX = clientX;
+            auxLastPosY = clientY;
+        } else if (isPanning && lastPosX && lastPosY) {
+            isPanning.current = true;
+            lastPosX.current = clientX;
+            lastPosY.current = clientY;
+        }
+        canvas.defaultCursor = 'grabbing';
+        canvas.setCursor('grabbing');
+    };
+
+    const updatePan = (clientX: number, clientY: number) => {
+        let deltaX: number;
+        let deltaY: number;
+
+        if (isAuxPanning) {
+            deltaX = clientX - auxLastPosX;
+            deltaY = clientY - auxLastPosY;
+            auxLastPosX = clientX;
+            auxLastPosY = clientY;
+        } else if (isPanning?.current && lastPosX && lastPosY) {
+            deltaX = clientX - lastPosX.current;
+            deltaY = clientY - lastPosY.current;
+            lastPosX.current = clientX;
+            lastPosY.current = clientY;
+        } else {
+            return;
+        }
+
+        canvas.relativePan(new fabric.Point(deltaX, deltaY));
+        onViewportChange?.(canvas);
+    };
+
+    const endPan = (isAux = false) => {
+        if (isAux && isAuxPanning) {
+            isAuxPanning = false;
+            canvas.selection = previousSelection;
+            canvas.defaultCursor = previousCursor;
+        } else if (!isAux && isPanning) {
+            isPanning.current = false;
+        }
+
+        // Restore cursor based on current state
+        const tool = activeTool?.current;
+        if (tool === 'pan') {
+            canvas.setCursor('grab');
+        } else if (tool === 'select' && isSpacebarDown?.current) {
+            canvas.setCursor('grab');
+        } else {
+            canvas.setCursor(canvas.defaultCursor);
+        }
+    };
 
     const onMouseDown = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
         if (!activeTool || !isSpacebarDown || !isPanning || !lastPosX || !lastPosY) return;
 
         const e = opt.e as MouseEvent;
-        if (e.button === 2) {
-            isRightClickPanning = true;
-            previousCursor = canvas.defaultCursor;
-            previousSelection = canvas.selection;
-            canvas.selection = false;
-            canvas.defaultCursor = 'grabbing';
-            canvas.setCursor('grabbing');
-            rightLastPosX = e.clientX;
-            rightLastPosY = e.clientY;
+        const tool = activeTool.current;
+
+        // Handle textbox drawing tool
+        if (tool === 'textbox' && e.button === 0) {
+            handleTextboxMouseDown(canvas, e);
             e.preventDefault();
             return;
         }
-        const tool = activeTool.current;
+
+        // Right-click (button 2) or middle-click (button 1) - auxiliary panning
+        if (e.button === 2 || e.button === 1) {
+            startPan(e.clientX, e.clientY, true);
+            e.preventDefault();
+            return;
+        }
+
+        // Left-click panning conditions:
+        // 1. Pan tool is active
+        // 2. Select tool with spacebar held
         const shouldPan = tool === 'pan' || (tool === 'select' && isSpacebarDown.current);
 
         if (shouldPan && e.button === 0) {
-            isPanning.current = true;
-            canvas.setCursor('grab');
-            lastPosX.current = e.clientX;
-            lastPosY.current = e.clientY;
+            startPan(e.clientX, e.clientY, false);
         }
     };
 
     const onMouseMove = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
-        if (isRightClickPanning) {
-            const e = opt.e as MouseEvent;
-            const deltaX = e.clientX - rightLastPosX;
-            const deltaY = e.clientY - rightLastPosY;
-            canvas.relativePan(new fabric.Point(deltaX, deltaY));
-            clampPan(canvas);
-            onViewportChange?.(canvas);
-            rightLastPosX = e.clientX;
-            rightLastPosY = e.clientY;
+        const e = opt.e as MouseEvent;
+        const tool = activeTool?.current;
+
+        // Handle textbox drawing tool
+        if (tool === 'textbox') {
+            handleTextboxMouseMove(canvas, e);
             return;
         }
-        if (!isPanning || !lastPosX || !lastPosY) return;
-        if (!isPanning.current) return;
 
-        canvas.setCursor('grabbing');
-        const e = opt.e as MouseEvent;
-        const deltaX = e.clientX - lastPosX.current;
-        const deltaY = e.clientY - lastPosY.current;
-
-        canvas.relativePan(new fabric.Point(deltaX, deltaY));
-        clampPan(canvas);
-        onViewportChange?.(canvas);
-
-        lastPosX.current = e.clientX;
-        lastPosY.current = e.clientY;
+        // Check if we're panning
+        if (isAuxPanning || isPanning?.current) {
+            updatePan(e.clientX, e.clientY);
+        }
     };
 
-    const onMouseUp = () => {
-        if (isRightClickPanning) {
-            isRightClickPanning = false;
-            canvas.selection = previousSelection;
-            canvas.defaultCursor = previousCursor;
-            canvas.setCursor(previousCursor);
+    const onMouseUp = (opt: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
+        const e = opt.e as MouseEvent;
+        const tool = activeTool?.current;
+
+        // Handle textbox drawing tool
+        if (tool === 'textbox' && e.button === 0) {
+            handleTextboxMouseUp(canvas, e);
             return;
         }
-        if (!isPanning || !activeTool || !isSpacebarDown) return;
 
-        isPanning.current = false;
-        const tool = activeTool.current;
+        // End auxiliary panning (right or middle click)
+        if (isAuxPanning && (e.button === 2 || e.button === 1)) {
+            endPan(true);
+            return;
+        }
 
-        if (tool === 'pan') {
-            canvas.setCursor('grab');
-        } else {
-            canvas.setCursor(isSpacebarDown.current ? 'grab' : canvas.defaultCursor);
+        // End left-click panning
+        if (isPanning?.current && e.button === 0) {
+            endPan(false);
         }
     };
 
@@ -462,6 +547,13 @@ export function registerKeyboardEventHandlers(
     const { activeTool, isSpacebarDown } = refs;
 
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+        if (
+            isEditableTarget(e.target)
+            || isEditableTarget(document.activeElement)
+            || isTextEditing(canvas)
+        ) {
+            return;
+        }
         if (activeTool.current !== 'select') return;
         if (e.code === 'Space' && !isSpacebarDown.current) {
             e.preventDefault();
@@ -498,6 +590,8 @@ export function registerKeyboardEventHandlers(
 
 /**
  * Registers a ResizeObserver for container resize events.
+ * Resizes the canvas element to match container, then fits the document within it.
+ * Document dimensions are tracked separately in useCanvasStore.
  */
 export function registerResizeEventHandler(
     canvas: fabric.Canvas,
@@ -506,15 +600,34 @@ export function registerResizeEventHandler(
 ): EventHandlerCleanup {
     const handleResize = () => {
         const { width, height } = container.getBoundingClientRect();
-        canvas.setDimensions({ width, height });
-        canvas.calcOffset();
-        updateGuides(canvas, useEditorStore.getState().showGuides);
-        canvas.requestRenderAll();
-        onViewportChange?.(canvas);
+        if (width > 0 && height > 0) {
+            // Resize canvas element to match container
+            canvas.setDimensions({ width, height });
+            canvas.calcOffset();
+
+            // Fit the document to the viewport using stored document dimensions
+            fitCanvasToViewport(width, height);
+
+            updateGuides(canvas, useEditorStore.getState().showGuides);
+            canvas.requestRenderAll();
+            onViewportChange?.(canvas);
+        }
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
+
+    // Also fit to viewport on initial load
+    requestAnimationFrame(() => {
+        const { width, height } = container.getBoundingClientRect();
+        if (width > 0 && height > 0) {
+            // Resize canvas element to match container
+            canvas.setDimensions({ width, height });
+            canvas.calcOffset();
+
+            fitCanvasToViewport(width, height);
+        }
+    });
 
     return {
         cleanup: () => {

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { ensureObjectId, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { MemoryManager } from '../../utils/memoryManager';
 import {
     alignLeft,
     alignCenter,
@@ -14,12 +15,14 @@ import {
     distributeVertically,
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
-import { resizeCanvas } from '../fabric/canvasUtils';
+import { resizeCanvas, centerDocumentInViewport } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { applyAssetRefCounts, hydrateCanvasDataWithAssets, prepareCanvasDataForPersistence } from './useHistoryStore';
 import { useHistoryStore } from './useHistoryStore';
+import { useCanvasStore } from './useCanvasStore';
+import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 import { unitScale as unitScaleMap, UnitMode } from '../utils/units';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
 import {
@@ -30,21 +33,25 @@ import {
     resetObjectToDefaultTheme as resetObjectTheme,
     resetAllThemeLinks,
 } from './useThemeStore';
+import {
+    applyAdjustmentToSelection,
+    applyAdjustments,
+    resetAdjustmentsOnSelection,
+} from '../utils/imageAdjustments';
+import { isImage } from '../utils/typeGuards';
+import { showError, showInfo, ErrorMessages } from '../utils/errorHandling';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
+export { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 
 
 // --- CONSTANTS ---
 
-// Default canvas size: US Letter at 300 DPI (8.5" × 11")
-export const DEFAULT_CANVAS_SIZE = {
-  width: 2550,   // 8.5" at 300 DPI = 2550px
-  height: 3300,  // 11" at 300 DPI = 3300px
-};
-
 // Default canvas background color (cream)
 export const DEFAULT_CANVAS_BACKGROUND = '#FAF8F5';
+const AUTOSAVE_STORAGE_KEY = 'designspace_autosave_v1';
+const AUTOSAVE_VERSION = 1;
 
 export interface Template {
   id: string;
@@ -77,7 +84,7 @@ export interface StickerData {
 
 // BrandCollection is now defined in useThemeStore.ts and re-exported above
 
-export type EditorTool = 'select' | 'draw' | 'pan' | 'erase';
+export type EditorTool = 'select' | 'draw' | 'pan' | 'erase' | 'textbox';
 
 export type CanvasReadyState = 'uninitialized' | 'initializing' | 'ready' | 'disposing' | 'disposed';
 
@@ -167,6 +174,10 @@ export type ProjectFilePayload = {
   lastUpdated: string;
   canvasSize?: { width: number; height: number };
   unitMode?: UnitMode;
+};
+
+type AutosavePayload = ProjectFilePayload & {
+  autosaveVersion: number;
 };
 
 // --- UTILITY FUNCTIONS ---
@@ -381,10 +392,17 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
 
     const serializedObjects = canvas.getObjects().map(toSerializableObject);
     const objectsWithAssets = replaceImageSources(serializedObjects, assets);
+    const themeBackground = useThemeStore.getState().canvasBackgroundColor;
+    const rawBackground =
+        themeBackground || (canvas.backgroundColor ? String(canvas.backgroundColor) : '');
+    const normalizedBackground =
+        rawBackground && rawBackground.toLowerCase() !== 'transparent'
+            ? rawBackground
+            : undefined;
     return {
         canvasData: {
             objects: objectsWithAssets,
-            background: canvas.backgroundColor || undefined,
+            background: normalizedBackground,
         },
         assets,
     };
@@ -474,6 +492,8 @@ interface EditorState {
   batchNeedsSave: boolean;
   autoSaveStatus: 'idle' | 'saving' | 'saved';
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
+  sessionAutoSaveTimer: ReturnType<typeof setTimeout> | null;
+  hasRestoredSession: boolean;
 
   // PHASE 2.2: Sync Lock Mechanism
   syncLock: {
@@ -577,6 +597,9 @@ interface EditorState {
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
   setAutoSaveStatus: (status: 'idle' | 'saving' | 'saved') => void;
+  triggerSessionAutoSave: () => void;
+  restoreSessionFromStorage: () => Promise<boolean>;
+  clearSessionFromStorage: () => void;
 
   // History Actions
   takeSnapshot: () => void;
@@ -589,6 +612,18 @@ interface EditorState {
   setShowHelpModal: (show: boolean) => void;
   showExportModal: boolean;
   setShowExportModal: (show: boolean) => void;
+
+  // Safe Zone State
+  showSafeZones: boolean;
+  setShowSafeZones: (show: boolean) => void;
+
+  // Stroke and Lock Actions
+  setObjectStrokeColor: (color: string) => void;
+  setObjectStrokeWidth: (width: number) => void;
+  toggleObjectLock: () => void;
+
+  // Text Formatting Actions
+  setTextLineHeight: (lineHeight: number) => void;
 }
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
@@ -647,8 +682,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         batchNeedsSave: false,
         autoSaveStatus: 'idle',
         autoSaveTimer: null,
+        sessionAutoSaveTimer: null,
+        hasRestoredSession: false,
         showHelpModal: false,
         showExportModal: false,
+        showSafeZones: false,
         syncLock: {
             isLocked: false,
             reason: null,
@@ -889,11 +927,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     resetViewCanvas: () => {
         const { canvas } = get();
         if (!canvas) return;
-        const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
-        canvas.setZoom(1);
-        canvas.setViewportTransform(nextVpt);
-        canvas.requestRenderAll();
-        set({ zoom: 1, vpt: [...nextVpt] });
+        // Reset to 100% zoom and center the document
+        centerDocumentInViewport(canvas, 1);
     },
     addAssetToLibrary: (asset) => {
         const normalized: StickerData = {
@@ -1000,8 +1035,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             && typeof nextHeight === 'number'
             && Number.isFinite(nextHeight)
         ) {
-            canvas.setWidth(Math.max(1, Math.round(nextWidth)));
-            canvas.setHeight(Math.max(1, Math.round(nextHeight)));
+            const normalizedWidth = Math.max(1, Math.round(nextWidth));
+            const normalizedHeight = Math.max(1, Math.round(nextHeight));
+            canvas.setWidth(normalizedWidth);
+            canvas.setHeight(normalizedHeight);
+            useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
+            useCanvasStore.getState().clearPendingSize();
         }
         if (template.unitMode) {
             get().setUnitMode(template.unitMode);
@@ -1025,6 +1064,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     setToastMessage(`Template theme not found: ${template.defaultThemeId}`);
                 }
             }
+
+            get().triggerSessionAutoSave();
         });
     },
     saveCurrentAsTemplate: () => {
@@ -1091,6 +1132,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: 'Untitled Project',
             isProjectPresetsOpen: false, // Don't show presets by default anymore
         });
+
+        get().triggerSessionAutoSave();
     },
 
     downloadProjectFile: async () => {
@@ -1205,8 +1248,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 && typeof nextSize.height === 'number'
                 && Number.isFinite(nextSize.height)
             ) {
-                canvas.setWidth(Math.max(1, Math.round(nextSize.width)));
-                canvas.setHeight(Math.max(1, Math.round(nextSize.height)));
+                const normalizedWidth = Math.max(1, Math.round(nextSize.width));
+                const normalizedHeight = Math.max(1, Math.round(nextSize.height));
+                canvas.setWidth(normalizedWidth);
+                canvas.setHeight(normalizedHeight);
+                useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
+                useCanvasStore.getState().clearPendingSize();
             }
             await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
             resetViewCanvas();
@@ -1238,6 +1285,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
 
             setToastMessage(`Project loaded: ${projectName}`);
+            get().triggerSessionAutoSave();
         } catch (error) {
             setToastMessage('Failed to load project file.');
         }
@@ -1255,6 +1303,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (projectName && projectName !== 'Untitled Project') {
             get().triggerAutoSave();
         }
+
+        get().triggerSessionAutoSave();
     },
 
     takeSnapshot: () => {
@@ -1263,6 +1313,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     clearHistory: () => {
         useHistoryStore.getState().clearHistory();
+        // Trigger memory cleanup when history is cleared
+        MemoryManager.getInstance().performCleanup();
     },
 
     undo: async () => {
@@ -1459,204 +1511,67 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
 
-    // Image Adjustment Actions
+    // Image Adjustment Actions (using consolidated utilities)
     setImageBrightness: (value) => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
-
-        if (selectedObject && selectedObject.type === 'image') {
-            const image = selectedObject as fabric.Image;
-
-            // Ensure adjustments property exists
-            if (!image.adjustments) {
-                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
-            }
-
-            let brightnessFilter = image.filters?.find(f => f.type === 'Brightness') as fabric.filters.Brightness | undefined;
-
-            if (brightnessFilter) {
-                brightnessFilter.brightness = value;
-            } else {
-                if (!image.filters) image.filters = [];
-                brightnessFilter = new fabric.filters.Brightness({ brightness: value });
-                (image.filters as any[]).push(brightnessFilter);
-            }
-
-            // Update the adjustments property
-            image.adjustments.brightness = value;
-
-            image.applyFilters();
-            canvas?.requestRenderAll();
-            saveState();
-            requestLayerSync();
-        }
+        applyAdjustmentToSelection(selectedObject, 'brightness', value, {
+            canvas,
+            onSaveState: saveState,
+            onLayerSync: requestLayerSync,
+        });
     },
 
     setImageContrast: (value) => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
-
-        if (selectedObject && selectedObject.type === 'image') {
-            const image = selectedObject as fabric.Image;
-
-            // Ensure adjustments property exists
-            if (!image.adjustments) {
-                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
-            }
-
-            let contrastFilter = image.filters?.find(f => f.type === 'Contrast') as fabric.filters.Contrast | undefined;
-
-            if (contrastFilter) {
-                contrastFilter.contrast = value;
-            } else {
-                if (!image.filters) image.filters = [];
-                contrastFilter = new fabric.filters.Contrast({ contrast: value });
-                (image.filters as any[]).push(contrastFilter);
-            }
-
-            // Update the adjustments property
-            image.adjustments.contrast = value;
-
-            image.applyFilters();
-            canvas?.requestRenderAll();
-            saveState();
-            requestLayerSync();
-        }
+        applyAdjustmentToSelection(selectedObject, 'contrast', value, {
+            canvas,
+            onSaveState: saveState,
+            onLayerSync: requestLayerSync,
+        });
     },
 
     setImageSaturation: (value) => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
-
-        if (selectedObject && selectedObject.type === 'image') {
-            const image = selectedObject as fabric.Image;
-
-            // Ensure adjustments property exists
-            if (!image.adjustments) {
-                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
-            }
-
-            let saturationFilter = image.filters?.find(f => f.type === 'Saturation') as fabric.filters.Saturation | undefined;
-
-            if (saturationFilter) {
-                saturationFilter.saturation = value;
-            } else {
-                if (!image.filters) image.filters = [];
-                saturationFilter = new fabric.filters.Saturation({ saturation: value });
-                (image.filters as any[]).push(saturationFilter);
-            }
-
-            // Update the adjustments property
-            image.adjustments.saturation = value;
-
-            image.applyFilters();
-            canvas?.requestRenderAll();
-            saveState();
-            requestLayerSync();
-        }
+        applyAdjustmentToSelection(selectedObject, 'saturation', value, {
+            canvas,
+            onSaveState: saveState,
+            onLayerSync: requestLayerSync,
+        });
     },
 
     setImageAdjustments: (adjustments) => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
-
-        if (selectedObject && selectedObject.type === 'image') {
-            const image = selectedObject as fabric.Image;
-
-            // Ensure adjustments property exists
-            if (!image.adjustments) {
-                image.adjustments = { brightness: 0, contrast: 0, saturation: 0 };
-            }
-
-            // Update brightness filter
-            if (adjustments.brightness !== undefined) {
-                let brightnessFilter = image.filters?.find(f => f.type === 'Brightness') as fabric.filters.Brightness | undefined;
-
-                if (brightnessFilter) {
-                    brightnessFilter.brightness = adjustments.brightness;
-                } else {
-                    if (!image.filters) image.filters = [];
-                    brightnessFilter = new fabric.filters.Brightness({ brightness: adjustments.brightness });
-                    (image.filters as any[]).push(brightnessFilter);
-                }
-
-                // Update the adjustments property
-                image.adjustments.brightness = adjustments.brightness;
-            }
-
-            // Update contrast filter
-            if (adjustments.contrast !== undefined) {
-                let contrastFilter = image.filters?.find(f => f.type === 'Contrast') as fabric.filters.Contrast | undefined;
-
-                if (contrastFilter) {
-                    contrastFilter.contrast = adjustments.contrast;
-                } else {
-                    if (!image.filters) image.filters = [];
-                    contrastFilter = new fabric.filters.Contrast({ contrast: adjustments.contrast });
-                    (image.filters as any[]).push(contrastFilter);
-                }
-
-                // Update the adjustments property
-                image.adjustments.contrast = adjustments.contrast;
-            }
-
-            // Update saturation filter
-            if (adjustments.saturation !== undefined) {
-                let saturationFilter = image.filters?.find(f => f.type === 'Saturation') as fabric.filters.Saturation | undefined;
-
-                if (saturationFilter) {
-                    saturationFilter.saturation = adjustments.saturation;
-                } else {
-                    if (!image.filters) image.filters = [];
-                    saturationFilter = new fabric.filters.Saturation({ saturation: adjustments.saturation });
-                    (image.filters as any[]).push(saturationFilter);
-                }
-
-                // Update the adjustments property
-                image.adjustments.saturation = adjustments.saturation;
-            }
-
-            image.applyFilters();
-            canvas?.requestRenderAll();
-            saveState();
-            requestLayerSync();
+        if (selectedObject && isImage(selectedObject)) {
+            applyAdjustments(selectedObject as fabric.Image, adjustments, {
+                canvas,
+                onSaveState: saveState,
+                onLayerSync: requestLayerSync,
+            });
         }
     },
 
     resetImageAdjustments: () => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
-
-        if (selectedObject && selectedObject.type === 'image') {
-            const image = selectedObject as fabric.Image;
-
-            // Remove all adjustment filters
-            if (image.filters) {
-                image.filters = image.filters.filter(f =>
-                    f.type !== 'Brightness' &&
-                    f.type !== 'Contrast' &&
-                    f.type !== 'Saturation'
-                );
-            }
-
-            // Reset the adjustments property
-            image.adjustments = {
-                brightness: 0,
-                contrast: 0,
-                saturation: 0
-            };
-
-            image.applyFilters();
-            canvas?.requestRenderAll();
-            saveState();
-            requestLayerSync();
-        }
+        resetAdjustmentsOnSelection(selectedObject, {
+            canvas,
+            onSaveState: saveState,
+            onLayerSync: requestLayerSync,
+        });
     },
 
     exportCanvas: async (options) => {
-        const { canvas } = get();
+        const { canvas, canvasReadyState } = get();
         if (!canvas) {
-            console.error('Canvas not available for export');
+            showError(ErrorMessages.CANVAS_NOT_READY);
+            return;
+        }
+        if (canvasReadyState !== 'ready') {
+            showError(ErrorMessages.CANVAS_NOT_READY);
             return;
         }
 
@@ -1665,6 +1580,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             if (options.format === 'svg') {
                 const { downloadSvg } = await import('../fabric/exportUtils');
                 downloadSvg(canvas, 'design');
+                showInfo('SVG exported successfully');
             } else {
                 // Dynamically import the export function to avoid circular dependencies
                 const { downloadExportedCanvas } = await import('../fabric/exportCanvas');
@@ -1673,10 +1589,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     format: options.format as 'png' | 'jpeg',
                 };
                 await downloadExportedCanvas(canvas, exportOptions);
+                showInfo(`${options.format.toUpperCase()} exported successfully`);
             }
         } catch (error) {
-            console.error('Export failed:', error);
-            set({ toastMessage: 'Export failed. Please try again.' });
+            showError(ErrorMessages.EXPORT_FAILED, {
+                context: { error: error instanceof Error ? error.message : error },
+            });
         }
     },
 
@@ -1745,8 +1663,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvas.clear();
 
             if (canvasSize) {
-                canvas.setWidth(Math.max(1, Math.round(canvasSize.width)));
-                canvas.setHeight(Math.max(1, Math.round(canvasSize.height)));
+                const normalizedWidth = Math.max(1, Math.round(canvasSize.width));
+                const normalizedHeight = Math.max(1, Math.round(canvasSize.height));
+                canvas.setWidth(normalizedWidth);
+                canvas.setHeight(normalizedHeight);
+                useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
+                useCanvasStore.getState().clearPendingSize();
             }
 
             if (unitMode) {
@@ -1769,6 +1691,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             });
 
             set({ toastMessage: `Loaded project: ${result.project.name}` });
+            get().triggerSessionAutoSave();
         } catch (error) {
             console.error('Failed to load project:', error);
             set({ toastMessage: 'Failed to load project.' });
@@ -1852,6 +1775,220 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setAutoSaveStatus: (status) => set({ autoSaveStatus: status }),
     setShowHelpModal: (show) => set({ showHelpModal: show }),
     setShowExportModal: (show) => set({ showExportModal: show }),
+    setShowSafeZones: (show) => set({ showSafeZones: show }),
+    clearSessionFromStorage: () => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+        } catch (error) {
+            console.warn('Failed to clear autosave session:', error);
+        }
+    },
+    triggerSessionAutoSave: () => {
+        if (typeof window === 'undefined') return;
+        const { canvas, unitMode, projectName } = get();
+        if (!canvas) return;
+
+        const currentTimer = get().sessionAutoSaveTimer;
+        if (currentTimer !== null) {
+            clearTimeout(currentTimer);
+        }
+
+        const timer = setTimeout(async () => {
+            try {
+                const exportData = await buildExportCanvasData(canvas);
+                const payload: AutosavePayload = {
+                    autosaveVersion: AUTOSAVE_VERSION,
+                    projectName: projectName || 'Untitled Project',
+                    canvasData: exportData.canvasData,
+                    assets: exportData.assets,
+                    activeTheme: useThemeStore.getState().themeData,
+                    lastUpdated: new Date().toISOString(),
+                    canvasSize: {
+                        width: Math.round(canvas.getWidth()),
+                        height: Math.round(canvas.getHeight()),
+                    },
+                    unitMode,
+                };
+                window.localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(payload));
+            } catch (error) {
+                console.warn('Session autosave failed:', error);
+            }
+        }, 1500);
+
+        set({ sessionAutoSaveTimer: timer });
+    },
+    restoreSessionFromStorage: async () => {
+        if (get().hasRestoredSession) return false;
+        set({ hasRestoredSession: true });
+
+        if (typeof window === 'undefined') return false;
+        let payload: AutosavePayload | null = null;
+        try {
+            const raw = window.localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+            if (!raw) return false;
+            payload = JSON.parse(raw) as AutosavePayload;
+        } catch (error) {
+            console.warn('Failed to parse autosave session:', error);
+            window.localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+            return false;
+        }
+
+        if (!payload || !payload.canvasData) return false;
+        if (
+            payload.autosaveVersion
+            && payload.autosaveVersion !== AUTOSAVE_VERSION
+        ) {
+            window.localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+            return false;
+        }
+
+        const {
+            canvas,
+            requestLayerSync,
+            resetViewCanvas,
+            setLayers,
+            setSelectedLayerIds,
+            setSelectedObjectId,
+            setShowOnboarding,
+        } = get();
+        if (!canvas) return false;
+
+        let canvasData = payload.canvasData;
+        if (typeof canvasData === 'string') {
+            canvasData = JSON.parse(canvasData);
+        }
+
+        const fileAssets =
+            payload.assets && typeof payload.assets === 'object'
+                ? (payload.assets as Record<string, string>)
+                : {};
+
+        const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
+            prepareCanvasDataForPersistence(canvasData, fileAssets);
+        const hydratedCanvasData = hydrateCanvasDataWithAssets(
+            migratedCanvasData,
+            nextAssets
+        );
+
+        canvas.discardActiveObject();
+        setLayers([]);
+        setSelectedLayerIds([]);
+        setSelectedObjectId(null);
+        canvas.clear();
+
+        const nextSize = payload.canvasSize;
+        if (
+            nextSize
+            && typeof nextSize.width === 'number'
+            && Number.isFinite(nextSize.width)
+            && typeof nextSize.height === 'number'
+            && Number.isFinite(nextSize.height)
+        ) {
+            const normalizedWidth = Math.max(1, Math.round(nextSize.width));
+            const normalizedHeight = Math.max(1, Math.round(nextSize.height));
+            canvas.setWidth(normalizedWidth);
+            canvas.setHeight(normalizedHeight);
+            useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
+            useCanvasStore.getState().clearPendingSize();
+        }
+
+        if (payload.unitMode) {
+            get().setUnitMode(payload.unitMode);
+        }
+
+        await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+        resetViewCanvas();
+
+        const activeTheme =
+            payload.activeTheme && typeof payload.activeTheme === 'object'
+                ? (payload.activeTheme as ApocapaletteTheme)
+                : null;
+
+        sanityCheckCanvas(canvas, activeTheme);
+        requestLayerSync();
+        useHistoryStore.getState().resetHistory();
+
+        set({
+            projectName: payload.projectName || 'Untitled Project',
+            isProjectPresetsOpen: false,
+            imageAssets: nextAssets,
+        });
+
+        setShowOnboarding(false);
+        useThemeStore.getState().setCanvasBackgroundColor(
+            canvas.backgroundColor ? String(canvas.backgroundColor) : null
+        );
+
+        if (activeTheme) {
+            useThemeStore.getState().setThemeData(activeTheme);
+            useThemeStore.getState().setActiveBrandCollectionId(null);
+            applyActiveThemeToCanvas();
+            const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
+            if (projectSyncEnabled) {
+                applyThemeFromTokens(activeTheme);
+            }
+        }
+
+        return true;
+    },
+
+    // Stroke and Lock Actions
+    setObjectStrokeColor: (color) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        if (selectedObject && canvas) {
+            selectedObject.set({ stroke: color });
+            canvas.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    setObjectStrokeWidth: (width) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        if (selectedObject && canvas) {
+            selectedObject.set({ strokeWidth: width });
+            canvas.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    toggleObjectLock: () => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        if (selectedObject && canvas) {
+            const isCurrentlyLocked = selectedObject.lockMovementX;
+            selectedObject.set({
+                lockMovementX: !isCurrentlyLocked,
+                lockMovementY: !isCurrentlyLocked,
+                lockRotation: !isCurrentlyLocked,
+                lockScalingX: !isCurrentlyLocked,
+                lockScalingY: !isCurrentlyLocked,
+                lockSkewingX: !isCurrentlyLocked,
+                lockSkewingY: !isCurrentlyLocked,
+                hasControls: isCurrentlyLocked,
+                selectable: isCurrentlyLocked
+            });
+            canvas.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
+
+    // Text Formatting Actions
+    setTextLineHeight: (lineHeight) => {
+        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        if (selectedObject && canvas && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
+            (selectedObject as fabric.Textbox | fabric.IText).set({ lineHeight });
+            canvas.requestRenderAll();
+            saveState();
+            requestLayerSync();
+        }
+    },
 
     triggerAutoSave: () => {
         const { projectName, updateCurrentProject, setAutoSaveStatus } = get();

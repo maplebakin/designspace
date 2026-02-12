@@ -6,6 +6,7 @@ import * as objectFactories from '../fabric/objectFactories';
 import { MaskFrame } from './MaskFrame';
 import { loadPdfAsBackground } from '../fabric/pdfUtils';
 import { StickerTab } from './StickerTab';
+import { TemplateBrowser } from './TemplateBrowser';
 import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
 import * as fabric from 'fabric';
 import { SAFE_MARGIN_PX } from '../utils/units';
@@ -50,9 +51,11 @@ export const Inserter: React.FC = () => {
 }
 
 const DesignTab: React.FC = () => {
-    const { canvas } = useEditorStore(
+    const { canvas, setActiveTool, setToastMessage } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
+            setActiveTool: state.setActiveTool,
+            setToastMessage: state.setToastMessage,
         }),
         shallow
     );
@@ -60,15 +63,19 @@ const DesignTab: React.FC = () => {
     const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
         if (canvas) {
             factory(canvas);
+            // Automatically switch to selection tool after inserting a shape
+            setActiveTool('select');
         } else {
-            console.error('[Inserter] Cannot add item - canvas is null!');
+            setToastMessage('Canvas is still loading.');
         }
     };
     const handleAddText = (options: any) => {
         if (canvas) {
             objectFactories.addIText(canvas, options);
+            // Automatically switch to selection tool after inserting text
+            setActiveTool('select');
         } else {
-            console.error('[Inserter] Cannot add text - canvas is null!');
+            setToastMessage('Canvas is still loading.');
         }
     };
 
@@ -90,7 +97,10 @@ const DesignTab: React.FC = () => {
                     { label: 'Heading', icon: <Heading1 className={INSERT_ICON} />, onClick: () => handleAddText({ text: 'Heading', fontSize: 80, fontWeight: 'bold', role: 'heading' }) },
                     { label: 'Subheading', icon: <Heading2 className={INSERT_ICON} />, onClick: () => handleAddText({ text: 'Subheading', fontSize: 50, fontWeight: 'normal', role: 'subheading' }) },
                     { label: 'Body', icon: <Pilcrow className={INSERT_ICON} />, onClick: () => handleAddText({ text: 'Some body text...', fontSize: 24, fontWeight: 'normal', role: 'body' }) },
-                    { label: 'Fixed Textbox', icon: <FileText className={INSERT_ICON} />, onClick: () => handleAddItem(objectFactories.addFixedTextbox) },
+                    { label: 'Draw Text Box', icon: <FileText className={INSERT_ICON} />, onClick: () => {
+                        setActiveTool('textbox');
+                        setToastMessage('Draw a rectangle to create a text box');
+                    }},
                 ]}
             />
             <LayoutsDropdown />
@@ -194,10 +204,11 @@ const UploadsDropdown: React.FC = () => {
 }
 
 const LayoutsDropdown: React.FC = () => {
-    const { canvas, bleedPx } = useEditorStore(
+    const { canvas, bleedPx, setActiveTool } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
             bleedPx: state.bleedPx,
+            setActiveTool: state.setActiveTool,
         }),
         shallow
     );
@@ -280,6 +291,8 @@ const LayoutsDropdown: React.FC = () => {
     const handleGenerateGrid = (gridRows: number, gridCols: number) => {
         if (!canvas) return;
         objectFactories.generateGrid(canvas, gridRows, gridCols);
+        // Automatically switch to selection tool after inserting grid
+        setActiveTool('select');
         setIsOpen(false);
         setShowCustomGrid(false);
         clearGhostGrid();
@@ -350,6 +363,8 @@ const LayoutsDropdown: React.FC = () => {
                                 onClick={() => {
                                     if (!canvas) return;
                                     objectFactories.addHerbProfileLayout(canvas);
+                                    // Automatically switch to selection tool after inserting layout
+                                    setActiveTool('select');
                                     setIsOpen(false);
                                     setShowCustomGrid(false);
                                 }}
@@ -374,7 +389,7 @@ const LayoutsDropdown: React.FC = () => {
                         </li>
                     </ul>
                     {showCustomGrid && (
-                        <div className="mt-2 rounded-md border border-[color:var(--border-subtle)] bg-[#0f0707] p-3 text-xs uppercase tracking-widest text-slate-300 space-y-3">
+                        <div className="mt-2 rounded-md border border-[color:var(--border-subtle)] bg-black/40 p-3 text-xs uppercase tracking-widest text-slate-300 space-y-3">
                             <div className="flex items-center gap-2">
                                 <label className="w-16 text-[10px] text-slate-400">Rows</label>
                                 <input
@@ -455,8 +470,8 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
 
 const TemplatesTab: React.FC = () => {
     return (
-        <div className="p-4 text-[11px] uppercase tracking-widest text-slate-500">
-            Template functionality is temporarily disabled.
+        <div className="h-full overflow-y-auto">
+            <TemplateBrowser />
         </div>
     );
 };

@@ -16,13 +16,14 @@ import { v4 as uuidv4 } from 'uuid';
 import type * as fabric from 'fabric';
 
 export type GuideType =
-  | 'safe-margin'    // Cyan dashed lines for safe area
-  | 'bleed'          // Red dashed lines for bleed area
-  | 'trim'           // White edge trim lines
-  | 'smart-guide'    // Purple snap lines (temporary)
-  | 'grid'           // Grid overlay lines
-  | 'ruler'          // Ruler markings
-  | 'bleed-zone';    // Grey background for bleed
+  | 'safe-margin'      // Cyan dashed lines for safe area
+  | 'bleed'            // Red dashed lines for bleed area
+  | 'trim'             // White edge trim lines
+  | 'smart-guide'      // Purple snap lines (temporary)
+  | 'grid'             // Grid overlay lines
+  | 'ruler'            // Ruler markings
+  | 'bleed-zone'       // Grey background for bleed
+  | 'document-paper';  // Document background rectangle
 
 // Internal ID property name to avoid conflicts
 const GUIDE_ID_PROP = '__guideRegistryId';

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { sanityCheckCanvas, useEditorStore, Layer } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
-import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand, Search } from 'lucide-react';
+import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand, Search, CheckSquare, XSquare } from 'lucide-react';
 import * as fabric from 'fabric';
 import * as objectFactories from '../fabric/objectFactories';
 import { loadImageFromFile } from '../services/assetLoader';
@@ -210,12 +210,16 @@ export const LayersPanel: React.FC = () => {
   const handleAddShape = (factory: (canvas: fabric.Canvas) => void) => {
     if (!canvas) return;
     factory(canvas);
+    // Automatically switch to selection tool after inserting a shape
+    useEditorStore.getState().setActiveTool('select');
     setIsMenuOpen(false);
   };
 
   const handleAddText = () => {
     if (!canvas) return;
     objectFactories.addIText(canvas, { text: 'New Text', fontSize: 32, role: 'body' });
+    // Automatically switch to selection tool after inserting text
+    useEditorStore.getState().setActiveTool('select');
     setIsMenuOpen(false);
   };
 
@@ -415,8 +419,48 @@ export const LayersPanel: React.FC = () => {
         )}
       </div>
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-panel-text)]">Layers</h3>
-        <div className="relative" ref={menuRef}>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-panel-text)]">Layers</h3>
+          {layers.length > 0 && (
+            <span className="px-2 py-0.5 text-[10px] bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] rounded-full font-medium">
+              {layers.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {layers.length > 0 && (
+            <>
+              <Tooltip content="Select All" side="top">
+                <button
+                  onClick={() => {
+                    if (!canvas) return;
+                    const allObjects = canvas.getObjects().filter((obj) => !(obj as any).isGuide);
+                    if (allObjects.length === 0) return;
+                    canvas.discardActiveObject();
+                    const selection = new fabric.ActiveSelection(allObjects, { canvas });
+                    canvas.setActiveObject(selection);
+                    canvas.requestRenderAll();
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                >
+                  <CheckSquare className="h-3.5 w-3.5 stroke-[1.5]" />
+                </button>
+              </Tooltip>
+              <Tooltip content="Deselect All" side="top">
+                <button
+                  onClick={() => {
+                    if (!canvas) return;
+                    canvas.discardActiveObject();
+                    canvas.requestRenderAll();
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                >
+                  <XSquare className="h-3.5 w-3.5 stroke-[1.5]" />
+                </button>
+              </Tooltip>
+            </>
+          )}
+          <div className="relative" ref={menuRef}>
           <button
             onClick={() => setIsMenuOpen((prev) => !prev)}
             className="rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-1 text-[color:var(--ui-accent)] transition-all duration-300 ease-in-out hover:shadow-[0_0_12px_var(--ui-accent)]"
@@ -478,6 +522,7 @@ export const LayersPanel: React.FC = () => {
             onChange={handleImageFileChange}
             className="hidden"
           />
+          </div>
         </div>
       </div>
       {layers.length === 0 ? (

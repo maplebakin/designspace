@@ -1,8 +1,30 @@
+/**
+ * Alignment Utilities
+ *
+ * Provides functions to align objects to the canvas/document bounds.
+ * All alignment operations use the document dimensions from useCanvasStore.
+ *
+ * @module alignment
+ */
 
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 
-const PAGE_PADDING = 20;
+/**
+ * Gets the document bounds for alignment.
+ * Always uses the document dimensions from the store (0, 0, width, height).
+ * This ensures alignment is relative to the actual document, not the viewport.
+ */
+const getDocumentBounds = () => {
+    const { width: docWidth, height: docHeight } = useCanvasStore.getState();
+    return {
+        left: 0,
+        top: 0,
+        width: docWidth,
+        height: docHeight,
+    };
+};
 
 const getActiveSelection = (canvas: fabric.Canvas) => {
     const activeObject = canvas.getActiveObject();
@@ -27,39 +49,57 @@ const finalizeAlignment = (canvas: fabric.Canvas) => {
     saveState();
 };
 
+/**
+ * Calculates the delta needed to align an object to the document bounds.
+ */
+const calculateAlignmentDelta = (
+    rect: { left: number; top: number; width: number; height: number },
+    direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+): { dx: number; dy: number } => {
+    const { left: docLeft, top: docTop, width: docWidth, height: docHeight } = getDocumentBounds();
+    let dx = 0;
+    let dy = 0;
+
+    switch (direction) {
+        case 'left':
+            // Align left edge of object to left edge of document
+            dx = docLeft - rect.left;
+            break;
+        case 'center':
+            // Align center of object to horizontal center of document
+            dx = docLeft + docWidth / 2 - (rect.left + rect.width / 2);
+            break;
+        case 'right':
+            // Align right edge of object to right edge of document
+            dx = docLeft + docWidth - (rect.left + rect.width);
+            break;
+        case 'top':
+            // Align top edge of object to top edge of document
+            dy = docTop - rect.top;
+            break;
+        case 'middle':
+            // Align center of object to vertical center of document
+            dy = docTop + docHeight / 2 - (rect.top + rect.height / 2);
+            break;
+        case 'bottom':
+            // Align bottom edge of object to bottom edge of document
+            dy = docTop + docHeight - (rect.top + rect.height);
+            break;
+    }
+
+    return { dx, dy };
+};
+
+/**
+ * Aligns a single object to the document bounds.
+ */
 const alignSingleObject = (
     canvas: fabric.Canvas,
     object: fabric.Object,
     direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
 ) => {
     const rect = object.getBoundingRect();
-    const canvasWidth = canvas.getWidth();
-    const canvasHeight = canvas.getHeight();
-    let dx = 0;
-    let dy = 0;
-
-    switch (direction) {
-        case 'left':
-            dx = PAGE_PADDING - rect.left;
-            break;
-        case 'center':
-            dx = canvasWidth / 2 - rect.width / 2 - rect.left;
-            break;
-        case 'right':
-            dx = canvasWidth - PAGE_PADDING - (rect.left + rect.width);
-            break;
-        case 'top':
-            dy = PAGE_PADDING - rect.top;
-            break;
-        case 'middle':
-            dy = canvasHeight / 2 - rect.height / 2 - rect.top;
-            break;
-        case 'bottom':
-            dy = canvasHeight - PAGE_PADDING - (rect.top + rect.height);
-            break;
-        default:
-            break;
-    }
+    const { dx, dy } = calculateAlignmentDelta(rect, direction);
 
     if (dx || dy) {
         applyObjectDelta(object, dx, dy);
@@ -68,6 +108,10 @@ const alignSingleObject = (
     finalizeAlignment(canvas);
 };
 
+/**
+ * Aligns multiple objects to the document bounds.
+ * Each object is aligned independently to the document edge/center.
+ */
 const alignMultipleObjects = (
     canvas: fabric.Canvas,
     selection: fabric.ActiveSelection,
@@ -76,48 +120,10 @@ const alignMultipleObjects = (
     const objects = selection.getObjects();
     if (objects.length === 0) return;
 
-    const rects = objects.map((object) => object.getBoundingRect());
-    const lefts = rects.map((rect) => rect.left);
-    const rights = rects.map((rect) => rect.left + rect.width);
-    const tops = rects.map((rect) => rect.top);
-    const bottoms = rects.map((rect) => rect.top + rect.height);
-    const centersX = rects.map((rect) => rect.left + rect.width / 2);
-    const centersY = rects.map((rect) => rect.top + rect.height / 2);
-
-    const targetLeft = Math.min(...lefts);
-    const targetRight = Math.max(...rights);
-    const targetTop = Math.min(...tops);
-    const targetBottom = Math.max(...bottoms);
-    const targetCenterX = centersX.reduce((sum, value) => sum + value, 0) / centersX.length;
-    const targetCenterY = centersY.reduce((sum, value) => sum + value, 0) / centersY.length;
-
-    objects.forEach((object, index) => {
-        const rect = rects[index];
-        let dx = 0;
-        let dy = 0;
-
-        switch (direction) {
-            case 'left':
-                dx = targetLeft - rect.left;
-                break;
-            case 'center':
-                dx = targetCenterX - (rect.left + rect.width / 2);
-                break;
-            case 'right':
-                dx = targetRight - (rect.left + rect.width);
-                break;
-            case 'top':
-                dy = targetTop - rect.top;
-                break;
-            case 'middle':
-                dy = targetCenterY - (rect.top + rect.height / 2);
-                break;
-            case 'bottom':
-                dy = targetBottom - (rect.top + rect.height);
-                break;
-            default:
-                break;
-        }
+    // Align each object to the document bounds
+    objects.forEach((object) => {
+        const rect = object.getBoundingRect();
+        const { dx, dy } = calculateAlignmentDelta(rect, direction);
 
         if (dx || dy) {
             applyObjectDelta(object, dx, dy);
@@ -128,6 +134,12 @@ const alignMultipleObjects = (
     finalizeAlignment(canvas);
 };
 
+/**
+ * Aligns the selected object(s) to the document bounds.
+ *
+ * @param canvas - The fabric.Canvas instance
+ * @param direction - The alignment direction
+ */
 const alignObjects = (
     canvas: fabric.Canvas,
     direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
@@ -142,11 +154,40 @@ const alignObjects = (
     }
 };
 
+/**
+ * Aligns selected object(s) to the left edge of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignLeft = (canvas: fabric.Canvas) => alignObjects(canvas, 'left');
+
+/**
+ * Aligns selected object(s) to the horizontal center of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignCenter = (canvas: fabric.Canvas) => alignObjects(canvas, 'center');
+
+/**
+ * Aligns selected object(s) to the right edge of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignRight = (canvas: fabric.Canvas) => alignObjects(canvas, 'right');
+
+/**
+ * Aligns selected object(s) to the top edge of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignTop = (canvas: fabric.Canvas) => alignObjects(canvas, 'top');
+
+/**
+ * Aligns selected object(s) to the vertical center of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignMiddle = (canvas: fabric.Canvas) => alignObjects(canvas, 'middle');
+
+/**
+ * Aligns selected object(s) to the bottom edge of the document.
+ * @param canvas - The fabric.Canvas instance
+ */
 export const alignBottom = (canvas: fabric.Canvas) => alignObjects(canvas, 'bottom');
 
 /**

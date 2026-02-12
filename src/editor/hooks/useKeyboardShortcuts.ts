@@ -89,25 +89,64 @@ export const useKeyboardShortcuts = () => {
       }
 
       if (!isMeta && !event.altKey) {
+        // Tool shortcuts
+        if (key === 'v') {
+          event.preventDefault();
+          useEditorStore.getState().setActiveTool('select');
+          return;
+        }
+        if (key === 'e') {
+          event.preventDefault();
+          useEditorStore.getState().setActiveTool('erase');
+          return;
+        }
+        if (key === 'p') {
+          event.preventDefault();
+          useEditorStore.getState().setActiveTool('draw');
+          return;
+        }
+        if (key === 'h') {
+          event.preventDefault();
+          useEditorStore.getState().setActiveTool('pan');
+          return;
+        }
+
+        // Shape shortcuts
         if (key === 'r') {
           event.preventDefault();
           objectFactories.addRectangle(canvas);
+          useEditorStore.getState().setActiveTool('select');
           return;
         }
         if (key === 'c') {
           event.preventDefault();
           objectFactories.addCircle(canvas);
+          useEditorStore.getState().setActiveTool('select');
+          return;
+        }
+        if (key === 's') {
+          event.preventDefault();
+          objectFactories.addStar(canvas);
+          useEditorStore.getState().setActiveTool('select');
           return;
         }
         if (key === 't') {
           event.preventDefault();
-          objectFactories.addIText(canvas, { text: 'Text', fontSize: 32, role: 'body' });
+          useEditorStore.getState().setActiveTool('textbox');
           return;
         }
         if (key === 'g') {
           event.preventDefault();
           const { gridEnabled, setGridEnabled } = useEditorStore.getState();
           setGridEnabled(!gridEnabled);
+          return;
+        }
+
+        // Escape to deselect
+        if (key === 'escape') {
+          event.preventDefault();
+          canvas.discardActiveObject();
+          canvas.requestRenderAll();
           return;
         }
       }

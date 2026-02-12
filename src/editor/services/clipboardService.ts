@@ -152,12 +152,13 @@ const createObjectFromData = async (data: any): Promise<fabric.Object | null> =>
           return await fabric.FabricImage.fromURL(data.src, { crossOrigin: 'anonymous', ...data });
         }
         return null;
-      case 'group':
+      case 'group': {
         const groupObjects = await Promise.all(
           (data.objects || []).map((objData: any) => createObjectFromData(objData))
         );
         const validObjects = groupObjects.filter((obj): obj is fabric.Object => obj !== null);
         return new fabric.Group(validObjects, data);
+      }
       default:
         console.warn(`[ClipboardService] Unknown object type: ${type}`);
         return null;

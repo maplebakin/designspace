@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface TooltipProps {
   content: string;
@@ -250,11 +250,26 @@ interface FontPickerProps {
 
 export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-label': ariaLabel }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedFont = SYSTEM_FONTS.find(font => font.value === value) || SYSTEM_FONTS[0];
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -262,7 +277,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
         className="w-full h-8 rounded-lg border border-white/10 bg-black/30 px-3 text-xs text-slate-200 flex items-center justify-between"
       >
         <span style={{ fontFamily: selectedFont.value }}>{selectedFont.name}</span>
-        <span className="ml-2">▼</span>
+        <span className={`ml-2 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
 
       {isOpen && (
@@ -338,9 +353,10 @@ interface SliderProps {
   value: number;
   onChange: (value: number) => void;
   step?: number;
+  disabled?: boolean;
 }
 
-export const ControlSlider: React.FC<SliderProps> = ({ min, max, value, onChange, step = 1 }) => (
+export const ControlSlider: React.FC<SliderProps> = ({ min, max, value, onChange, step = 1, disabled = false }) => (
   <input
     type="range"
     min={min}
@@ -348,6 +364,7 @@ export const ControlSlider: React.FC<SliderProps> = ({ min, max, value, onChange
     step={step}
     value={value}
     onChange={(e) => onChange(Number(e.target.value))}
-    className="w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/10 cursor-pointer"
+    disabled={disabled}
+    className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/10 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
   />
 );

@@ -1,11 +1,13 @@
 import * as fabric from 'fabric';
-import { inToPx } from '../utils/units';
 import { useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
+import { CanvasLayer, assignZIndex, enforceZOrder } from './zIndexManifest';
+import { guideRegistry } from './guideRegistry';
 
-const SNAP_THRESHOLD = 5;
-const GUIDE_COLOR = 'rgba(128, 0, 128, 0.8)'; // Purple
+const SNAP_THRESHOLD = 8;
+const GUIDE_COLOR = '#a855f7'; // Purple for visibility
 const GUIDE_STROKE_WIDTH = 1;
-const GRID_DOT_COLOR = 'rgba(148, 163, 184, 0.35)';
+const GRID_SPACING = 75; // 1/4 inch at 300 DPI - matches visual grid
 
 interface Point {
   x: number;
@@ -29,8 +31,28 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
   let currentRenderRAF: number | null = null;
   let isAltKeyDown = false;
 
+  const getDocumentBounds = () => {
+    const { width: docWidth, height: docHeight } = useCanvasStore.getState();
+    const documentPaper = canvas.getObjects().find((obj) => (obj as any).isDocumentPaper) as fabric.Object | undefined;
+    if (!documentPaper) {
+      return { left: 0, top: 0, width: docWidth, height: docHeight };
+    }
+
+    documentPaper.setCoords();
+    const bounds = documentPaper.getBoundingRect();
+    return {
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width || docWidth,
+      height: bounds.height || docHeight,
+    };
+  };
+
   const removeAlignLines = () => {
-    aligningLines.forEach(line => canvas.remove(line));
+    aligningLines.forEach(line => {
+      guideRegistry.unregister(line);
+      canvas.remove(line);
+    });
     aligningLines = [];
     if (currentRenderRAF) {
       cancelAnimationFrame(currentRenderRAF);
@@ -39,53 +61,82 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
   };
 
   const drawVerticalLine = (x: number) => {
-    const line = new fabric.Line([x, -canvas.height * 2, x, canvas.height * 2], {
+    const { top: docTop, height: docHeight } = getDocumentBounds();
+    const line = new fabric.Line([x, docTop - docHeight, x, docTop + docHeight * 2], {
       stroke: GUIDE_COLOR,
       strokeWidth: GUIDE_STROKE_WIDTH,
       selectable: false,
       evented: false,
     });
+    (line as any).isGuide = true;
+    guideRegistry.register(line, 'smart-guide');
+    assignZIndex(line, CanvasLayer.SMART_GUIDES);
     aligningLines.push(line);
     canvas.add(line);
   };
 
   const drawHorizontalLine = (y: number) => {
-    const line = new fabric.Line([-canvas.width * 2, y, canvas.width * 2, y], {
+    const { left: docLeft, width: docWidth } = getDocumentBounds();
+    const line = new fabric.Line([docLeft - docWidth, y, docLeft + docWidth * 2, y], {
       stroke: GUIDE_COLOR,
       strokeWidth: GUIDE_STROKE_WIDTH,
       selectable: false,
       evented: false,
     });
+    (line as any).isGuide = true;
+    guideRegistry.register(line, 'smart-guide');
+    assignZIndex(line, CanvasLayer.SMART_GUIDES);
     aligningLines.push(line);
     canvas.add(line);
   };
   
   const drawGrid = () => {
-    const { gridEnabled, unitMode } = useEditorStore.getState();
-    if (!gridEnabled) return;
     const ctx = canvas.contextTop;
     if (!ctx) return;
 
-    const spacing = unitMode === 'px' ? 24 : inToPx(0.5);
-    const dotRadius = unitMode === 'px' ? 0.8 : 1;
-    const width = canvas.getWidth();
-    const height = canvas.getHeight();
+    // Always clear contextTop first to sync with zoom/pan
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const { gridEnabled } = useEditorStore.getState();
+    if (!gridEnabled) return;
+
+    const { left: docLeft, top: docTop, width: docWidth, height: docHeight } = getDocumentBounds();
+
+    // Print-friendly grid: 1/4 inch (75px at 300 DPI)
+    const spacing = GRID_SPACING;
+    const gridColor = 'rgba(0, 0, 0, 0.1)'; // Black grid over the visible canvas
 
     ctx.save();
     const vpt = canvas.viewportTransform;
     if (vpt) {
         ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
     }
-    ctx.globalCompositeOperation = 'destination-over';
-    ctx.fillStyle = GRID_DOT_COLOR;
 
-    for (let x = 0; x <= width; x += spacing) {
-        for (let y = 0; y <= height; y += spacing) {
-            ctx.beginPath();
-            ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
-            ctx.fill();
-        }
+    // Clip to document area only
+    ctx.beginPath();
+    ctx.rect(docLeft, docTop, docWidth, docHeight);
+    ctx.clip();
+
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.3; // Make grid more subtle
+
+    // Draw vertical lines
+    for (let x = docLeft; x <= docLeft + docWidth; x += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(x, docTop);
+        ctx.lineTo(x, docTop + docHeight);
+        ctx.stroke();
     }
+
+    // Draw horizontal lines
+    for (let y = docTop; y <= docTop + docHeight; y += spacing) {
+        ctx.beginPath();
+        ctx.moveTo(docLeft, y);
+        ctx.lineTo(docLeft + docWidth, y);
+        ctx.stroke();
+    }
+
     ctx.restore();
   };
 
@@ -179,14 +230,26 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
       }
     };
 
+    const { left: docLeft, top: docTop, width: docWidth, height: docHeight } = getDocumentBounds();
+    const docRight = docLeft + docWidth;
+    const docBottom = docTop + docHeight;
+    const docCenterX = docLeft + docWidth / 2;
+    const docCenterY = docTop + docHeight / 2;
+
+    addAnchorToBucket({ point: { x: docLeft, y: docCenterY }, type: 'left', orientation: 'vertical' });
+    addAnchorToBucket({ point: { x: docCenterX, y: docCenterY }, type: 'center', orientation: 'vertical' });
+    addAnchorToBucket({ point: { x: docRight, y: docCenterY }, type: 'right', orientation: 'vertical' });
+    addAnchorToBucket({ point: { x: docCenterX, y: docTop }, type: 'top', orientation: 'horizontal' });
+    addAnchorToBucket({ point: { x: docCenterX, y: docCenterY }, type: 'middle', orientation: 'horizontal' });
+    addAnchorToBucket({ point: { x: docCenterX, y: docBottom }, type: 'bottom', orientation: 'horizontal' });
+
     if (useEditorStore.getState().gridEnabled) {
-      const { unitMode } = useEditorStore.getState();
-      const spacing = unitMode === 'px' ? 24 : inToPx(0.5);
-      for (let x = 0; x < canvas.getWidth(); x += spacing) {
-        addAnchorToBucket({ point: { x, y: 0 }, type: 'grid', orientation: 'vertical' });
+      // Use document bounds and matching grid spacing
+      for (let x = docLeft; x <= docRight; x += GRID_SPACING) {
+        addAnchorToBucket({ point: { x, y: docTop }, type: 'grid', orientation: 'vertical' });
       }
-      for (let y = 0; y < canvas.getHeight(); y += spacing) {
-        addAnchorToBucket({ point: { x: 0, y }, type: 'grid', orientation: 'horizontal' });
+      for (let y = docTop; y <= docBottom; y += GRID_SPACING) {
+        addAnchorToBucket({ point: { x: docLeft, y }, type: 'grid', orientation: 'horizontal' });
       }
     }
 
@@ -235,11 +298,11 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
 
     if (deltaX !== 0) {
         lastSnapDelta.x = deltaX;
-        if(minDistanceX > 0) drawVerticalLine(guideLineX as number);
+        if(minDistanceX <= SNAP_THRESHOLD) drawVerticalLine(guideLineX as number);
     }
     if (deltaY !== 0) {
         lastSnapDelta.y = deltaY;
-        if(minDistanceY > 0) drawHorizontalLine(guideLineY as number);
+        if(minDistanceY <= SNAP_THRESHOLD) drawHorizontalLine(guideLineY as number);
     }
 
     if (aligningLines.length > 0) {
@@ -270,6 +333,8 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
         activeObject.setCoords();
         canvas.requestRenderAll();
     }
+    // Enforce z-order after snapping or when releasing an object
+    enforceZOrder(canvas);
     lastSnapDelta = { x: 0, y: 0 };
   };
 
@@ -296,6 +361,8 @@ export const initSmartGuides = (canvas: fabric.Canvas, _options: SmartGuidesOpti
   
   const afterRenderHandler = () => {
     drawGrid();
+    // Only enforce z-order when needed to avoid performance issues
+    // The z-order is also enforced in other places like onMouseUpHandler
   };
 
   canvas.on('after:render', afterRenderHandler);

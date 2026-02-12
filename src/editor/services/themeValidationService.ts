@@ -29,7 +29,7 @@ export interface ThemeValidationOptions {
 
 export interface ValidatedTheme {
   rawJson: string;
-  parsed: ApocapaletteTheme;
+  parsed: ApocapaletteTheme | Record<string, unknown>;
   metadata: {
     fileName: string;
     fileSize: number;
@@ -40,7 +40,7 @@ export interface ValidatedTheme {
 // --- CONSTANTS ---
 
 const DEFAULT_MAX_SIZE = 5 * 1024 * 1024; // 5MB
-const DEFAULT_REQUIRED_FIELDS = ['name', 'id'];
+const DEFAULT_REQUIRED_FIELDS = ['name'];
 const DEFAULT_ALLOWED_EXTENSIONS = ['.json'];
 
 // --- VALIDATION FUNCTIONS ---
@@ -168,10 +168,26 @@ export function parseJSON<T = any>(jsonString: string): ValidationResult<T> {
 export function validateThemeSchema(
   theme: any,
   requiredFields: string[] = DEFAULT_REQUIRED_FIELDS
-): ValidationResult<ApocapaletteTheme> {
+): ValidationResult<Record<string, unknown>> {
   const missingFields: string[] = [];
+  const themeName =
+    typeof theme?.meta?.name === 'string' && theme.meta.name.trim().length > 0
+      ? theme.meta.name.trim()
+      : typeof theme?.name === 'string' && theme.name.trim().length > 0
+        ? theme.name.trim()
+        : '';
 
   for (const field of requiredFields) {
+    if (field === 'name') {
+      if (!themeName) missingFields.push(field);
+      continue;
+    }
+    if (field === 'id') {
+      if (typeof theme?.id !== 'string' || theme.id.trim().length === 0) {
+        missingFields.push(field);
+      }
+      continue;
+    }
     if (!(field in theme) || !theme[field]) {
       missingFields.push(field);
     }
@@ -188,32 +204,33 @@ export function validateThemeSchema(
     };
   }
 
-  // Additional Apocapalette-specific validation
-  if (typeof theme.name !== 'string' || theme.name.trim().length === 0) {
+  if (requiredFields.includes('name') && !themeName) {
     return {
       success: false,
       error: {
         code: 'INVALID_SCHEMA',
         message: 'Invalid theme format. Theme name must be a non-empty string.',
-        details: { field: 'name', value: theme.name }
+        details: { field: 'name', value: theme?.name ?? theme?.meta?.name }
       }
     };
   }
 
-  if (typeof theme.id !== 'string' || theme.id.trim().length === 0) {
-    return {
-      success: false,
-      error: {
-        code: 'INVALID_SCHEMA',
-        message: 'Invalid theme format. Theme ID must be a non-empty string.',
-        details: { field: 'id', value: theme.id }
-      }
-    };
+  if (requiredFields.includes('id')) {
+    if (typeof theme?.id !== 'string' || theme.id.trim().length === 0) {
+      return {
+        success: false,
+        error: {
+          code: 'INVALID_SCHEMA',
+          message: 'Invalid theme format. Theme ID must be a non-empty string.',
+          details: { field: 'id', value: theme?.id }
+        }
+      };
+    }
   }
 
   return {
     success: true,
-    data: theme as ApocapaletteTheme
+    data: theme as Record<string, unknown>
   };
 }
 

@@ -3,11 +3,19 @@ import { EditorShell } from './editor/components/EditorShell';
 import { UIThemeProvider } from './editor/components/UIThemeProvider';
 import { ProjectDashboard } from './editor/components/ProjectDashboard';
 import { useEditorStore } from './editor/state/editorStore';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { NetworkStatusIndicator } from './components/NetworkStatusIndicator';
+import { injectAccessibilityStyles } from './utils/accessibility';
 
 type AppView = 'dashboard' | 'editor';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
+
+  // Initialize accessibility features
+  useEffect(() => {
+    injectAccessibilityStyles();
+  }, []);
 
   // Subscribe to project changes to know when to switch to editor
   const projectName = useEditorStore((state) => state.projectName);
@@ -26,13 +34,16 @@ function App() {
   };
 
   return (
-    <UIThemeProvider>
-      {currentView === 'dashboard' ? (
-        <ProjectDashboard onProjectOpen={() => setCurrentView('editor')} />
-      ) : (
-        <EditorShell onBackToDashboard={handleBackToDashboard} />
-      )}
-    </UIThemeProvider>
+    <ErrorBoundary>
+      <UIThemeProvider>
+        <NetworkStatusIndicator />
+        {currentView === 'dashboard' ? (
+          <ProjectDashboard onProjectOpen={() => setCurrentView('editor')} />
+        ) : (
+          <EditorShell onBackToDashboard={handleBackToDashboard} />
+        )}
+      </UIThemeProvider>
+    </ErrorBoundary>
   );
 }
 

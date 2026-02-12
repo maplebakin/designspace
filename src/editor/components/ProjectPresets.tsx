@@ -1,6 +1,6 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
-import { resizeCanvas } from '../fabric/canvasUtils';
+import { resizeCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { PRINT_DPI } from '../utils/units';
 
@@ -62,6 +62,15 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
 
     resizeCanvas(widthPx, heightPx);
     setCanvasBackgroundColor('#ffffff');
+
+    // Fit canvas to viewport after resize
+    requestAnimationFrame(() => {
+      const container = document.querySelector('.workspace');
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        fitCanvasToViewport(rect.width, rect.height);
+      }
+    });
 
     onPresetApplied?.();
   };

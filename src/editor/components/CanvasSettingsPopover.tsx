@@ -1,11 +1,13 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { resizeCanvas, rotateCanvas } from '../fabric/canvasUtils';
+import { resizeCanvas, rotateCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
-import { ChevronDown, Check, RotateCw } from 'lucide-react';
+import { useCanvasStore } from '../state/useCanvasStore';
+import { ChevronDown, Check, RotateCw, Settings2 } from 'lucide-react';
 import { PopoverSurface } from './PopoverSurface';
+import { PRINT_DPI } from '../utils/units';
 
 type CanvasPreset = {
   name: string;
@@ -32,6 +34,7 @@ export const CanvasSettingsPopover: React.FC = () => {
     showGuides,
     toggleShowGuides,
     setCanvasBackgroundColor,
+    setProjectPresetsOpen,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
@@ -39,6 +42,7 @@ export const CanvasSettingsPopover: React.FC = () => {
       showGuides: state.showGuides,
       toggleShowGuides: state.toggleShowGuides,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+      setProjectPresetsOpen: state.setProjectPresetsOpen,
     }),
     shallow
   );
@@ -46,30 +50,32 @@ export const CanvasSettingsPopover: React.FC = () => {
     (state) => ({ canvasBackgroundColor: state.canvasBackgroundColor }),
     shallow
   );
+  const safeCanvasBackgroundColor =
+    canvasBackgroundColor && canvasBackgroundColor.toLowerCase() !== 'transparent'
+      ? canvasBackgroundColor
+      : null;
   const [isOpen, setIsOpen] = useState(false);
-  const [currentSize, setCurrentSize] = useState('');
-  const lastSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const [showCustomSize, setShowCustomSize] = useState(false);
+  const [customWidth, setCustomWidth] = useState('8.5');
+  const [customHeight, setCustomHeight] = useState('11');
 
-  const updateSize = useCallback(() => {
-    if (!canvas) return;
-    const width = Math.round(canvas.getWidth());
-    const height = Math.round(canvas.getHeight());
-    const lastSize = lastSizeRef.current;
-    if (lastSize && lastSize.width === width && lastSize.height === height) return;
-    lastSizeRef.current = { width, height };
-    setCurrentSize(`${width} × ${height} px`);
-  }, [canvas]);
+  // Get document dimensions from the canvas store (not canvas element)
+  const { width: docWidth, height: docHeight } = useCanvasStore(
+    (state) => ({ width: state.width, height: state.height }),
+    shallow
+  );
 
-  useEffect(() => {
-    if (!canvas) return;
-    updateSize();
-    canvas.on('object:modified', updateSize);
-    canvas.on('after:render', updateSize);
-    return () => {
-      canvas.off('object:modified', updateSize);
-      canvas.off('after:render', updateSize);
-    };
-  }, [canvas, updateSize]);
+  const currentSize = `${Math.round(docWidth)} × ${Math.round(docHeight)} px`;
+
+  const fitToViewport = () => {
+    requestAnimationFrame(() => {
+      const container = document.querySelector('.workspace');
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        fitCanvasToViewport(rect.width, rect.height);
+      }
+    });
+  };
 
   const applyPreset = (preset: CanvasPreset) => {
     if (!canvas) return;
@@ -83,8 +89,29 @@ export const CanvasSettingsPopover: React.FC = () => {
 
     requestLayerSync();
     resizeCanvas(preset.width, preset.height);
-    updateSize();
-    
+    fitToViewport();
+
+    setIsOpen(false);
+  };
+
+  const applyCustomSize = () => {
+    if (!canvas) return;
+    const widthIn = parseFloat(customWidth);
+    const heightIn = parseFloat(customHeight);
+    if (isNaN(widthIn) || isNaN(heightIn) || widthIn <= 0 || heightIn <= 0) return;
+
+    if (canvas.getObjects().length > 0) {
+      const proceed = window.confirm(confirmClearMessage);
+      if (!proceed) return;
+    }
+
+    canvas.discardActiveObject();
+    canvas.clear();
+
+    requestLayerSync();
+    resizeCanvas(Math.round(widthIn * PRINT_DPI), Math.round(heightIn * PRINT_DPI));
+    fitToViewport();
+    setShowCustomSize(false);
     setIsOpen(false);
   };
 
@@ -105,7 +132,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                     <button
                         onClick={() => {
                             rotateCanvas();
-                            updateSize();
+                            fitToViewport();
                         }}
                         className="flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] hover:text-slate-100 transition-all duration-200"
                         title="Rotate canvas (swap width/height)"
@@ -119,12 +146,74 @@ export const CanvasSettingsPopover: React.FC = () => {
                         <button
                             key={p.name}
                             onClick={() => applyPreset(p)}
-                            className="w-full text-left px-3 py-2 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out"
+                            className={`w-full text-left px-3 py-2 rounded-lg border transition-all duration-300 ease-in-out ${
+                              p.name === 'US Letter'
+                                ? 'bg-[color:var(--brand-primary)]/20 border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--brand-primary)]/30'
+                                : 'bg-white/5 border-transparent hover:border-[color:var(--brand-primary)]'
+                            }`}
                         >
-                            <span className="text-xs uppercase tracking-widest text-slate-200">{p.name}</span>
+                            <span className={`text-xs uppercase tracking-widest ${p.name === 'US Letter' ? 'text-[color:var(--brand-primary)]' : 'text-slate-200'}`}>{p.name}</span>
                             <p className="text-[10px] uppercase tracking-widest text-slate-300">{p.description}</p>
                         </button>
                     ))}
+                </div>
+                <div className="pt-2 space-y-2">
+                    {showCustomSize ? (
+                        <div className="space-y-2">
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <label className="text-[9px] uppercase tracking-widest text-slate-400 block mb-1">Width (in)</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        min="1"
+                                        value={customWidth}
+                                        onChange={(e) => setCustomWidth(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-slate-200 focus:border-[color:var(--brand-primary)] outline-none"
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="text-[9px] uppercase tracking-widest text-slate-400 block mb-1">Height (in)</label>
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        min="1"
+                                        value={customHeight}
+                                        onChange={(e) => setCustomHeight(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-slate-200 focus:border-[color:var(--brand-primary)] outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setShowCustomSize(false)}
+                                    className="flex-1 px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg hover:bg-white/10"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={applyCustomSize}
+                                    className="flex-1 px-3 py-1.5 text-[10px] uppercase tracking-widest text-white bg-[color:var(--brand-primary)] rounded-lg hover:brightness-110"
+                                >
+                                    Apply
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <button
+                            onClick={() => setShowCustomSize(true)}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] hover:text-slate-100 transition-all duration-200"
+                        >
+                            <Settings2 className="w-3.5 h-3.5" />
+                            Custom Size
+                        </button>
+                    )}
+                    <button
+                        onClick={() => { setProjectPresetsOpen(true); setIsOpen(false); }}
+                        className="w-full px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-200 transition-colors"
+                    >
+                        More Presets...
+                    </button>
                 </div>
                 <hr className="border-t border-white/10" />
                 <div className="space-y-2">
@@ -133,7 +222,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                         <span className="text-[10px] uppercase tracking-widest text-slate-200">Fill Color</span>
                         <input
                             type="color"
-                            value={canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
+                            value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
                             onChange={(e) => setCanvasBackgroundColor(e.target.value)}
                             className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
                             aria-label="Canvas background color"
