@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { FileText, Plus, Trash2, Copy, Search, X } from 'lucide-react';
+import { DASHBOARD_PRESETS, type CanvasPreset } from '../config/canvasPresets';
 
 interface ProjectItem {
   id: string;
@@ -9,51 +10,6 @@ interface ProjectItem {
   lastModified: Date;
   thumbnail?: string;
 }
-
-const CanvasPresets = [
-  {
-    id: 'instagram-square',
-    name: 'Instagram Square',
-    width: 1080,
-    height: 1080,
-    description: '1080 x 1080',
-  },
-  {
-    id: 'instagram-story',
-    name: 'Instagram Story',
-    width: 1080,
-    height: 1920,
-    description: '1080 x 1920',
-  },
-  {
-    id: 'youtube-thumbnail',
-    name: 'YouTube Thumbnail',
-    width: 1280,
-    height: 720,
-    description: '1280 x 720',
-  },
-  {
-    id: 'tiktok-vertical',
-    name: 'TikTok Video',
-    width: 1080,
-    height: 1920,
-    description: '1080 x 1920',
-  },
-  {
-    id: 'pinterest-pin',
-    name: 'Pinterest Pin',
-    width: 1000,
-    height: 1500,
-    description: '1000 x 1500',
-  },
-  {
-    id: 'desktop-wallpaper',
-    name: 'Desktop Wallpaper',
-    width: 1920,
-    height: 1080,
-    description: '1920 x 1080',
-  },
-];
 
 interface ProjectDashboardProps {
   onProjectOpen?: () => void;
@@ -134,10 +90,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     }
   };
 
-  const handlePresetSelect = (preset: typeof CanvasPresets[number]) => {
+  const handlePresetSelect = (preset: CanvasPreset) => {
     createProject({
       canvasSize: { width: preset.width, height: preset.height },
-      unitMode: 'px',
+      unitMode: preset.unitMode,
       source: 'dashboard-preset',
     });
     onProjectOpen?.();
@@ -212,7 +168,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {CanvasPresets.map((preset) => (
+            {DASHBOARD_PRESETS.map((preset) => (
               <button
                 key={preset.id}
                 onClick={() => handlePresetSelect(preset)}
@@ -222,8 +178,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                   <span className="text-xs uppercase tracking-widest text-[color:var(--ui-text)]">{preset.name}</span>
                   <span className="text-[10px] uppercase tracking-widest text-slate-400">{preset.width} x {preset.height}</span>
                 </div>
-                <span className="text-[10px] uppercase tracking-widest text-slate-500">{preset.description}</span>
-              </button>
+                  <span className="text-[10px] uppercase tracking-widest text-slate-500">{preset.description}</span>
+                </button>
             ))}
           </div>
         </section>

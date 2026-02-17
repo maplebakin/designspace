@@ -13,13 +13,7 @@ import { useCanvasStore } from '../state/useCanvasStore';
 import { ChevronDown, Check, RotateCw, Settings2 } from 'lucide-react';
 import { PopoverSurface } from './PopoverSurface';
 import { PRINT_DPI } from '../utils/units';
-
-type CanvasPreset = {
-  name: string;
-  description: string;
-  width: number;
-  height: number;
-};
+import { CANVAS_SETTINGS_PRESETS, type CanvasPreset } from '../config/canvasPresets';
 
 type PendingResize = {
   width: number;
@@ -28,14 +22,6 @@ type PendingResize = {
 };
 
 type ResizeChoice = 'keep' | 'scale' | 'clear';
-
-const presets: CanvasPreset[] = [
-  { name: 'US Letter', description: '8.5" × 11"', width: Math.round(8.5 * 300), height: Math.round(11 * 300) },
-  { name: 'A4', description: '210 × 297 mm', width: 2480, height: 3508 },
-  { name: 'A5 Grimoire', description: '5.8" × 8.3"', width: 1740, height: 2490 },
-  { name: 'Ritual Card', description: '5" × 7"', width: 1500, height: 2100 },
-  { name: 'Instagram Square', description: '1080 × 1080 px', width: 1080, height: 1080 },
-];
 
 export const CanvasSettingsPopover: React.FC = () => {
   const {
@@ -159,7 +145,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {presets.map((preset) => (
+                {CANVAS_SETTINGS_PRESETS.map((preset) => (
                   <button
                     key={preset.name}
                     onClick={() => applyPreset(preset)}

@@ -2,29 +2,7 @@ import React from 'react';
 import { shallow } from 'zustand/shallow';
 import { fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
-import { PRINT_DPI } from '../utils/units';
-
-type ProjectPreset = {
-  name: string;
-  description: string;
-  unit: 'in' | 'px';
-  width: number;
-  height: number;
-  dpi: number;
-};
-
-const printPresets: ProjectPreset[] = [
-  { name: 'Ritual Card', description: 'Standard • 5" × 7" @ 300 DPI', unit: 'in', width: 5, height: 7, dpi: PRINT_DPI },
-  { name: 'Tarot Card', description: 'Large • 3.5" × 5" @ 300 DPI', unit: 'in', width: 3.5, height: 5, dpi: PRINT_DPI },
-  { name: 'A4 Document', description: '8.27" × 11.69" @ 300 DPI', unit: 'in', width: 8.27, height: 11.69, dpi: PRINT_DPI },
-  { name: 'US Letter', description: '8.5" × 11" @ 300 DPI', unit: 'in', width: 8.5, height: 11, dpi: PRINT_DPI },
-];
-
-const digitalPresets: ProjectPreset[] = [
-  { name: 'Instagram Square', description: '1080 × 1080 px • 96 DPI', unit: 'px', width: 1080, height: 1080, dpi: 96 },
-  { name: 'Instagram Story', description: '1080 × 1920 px • 96 DPI', unit: 'px', width: 1080, height: 1920, dpi: 96 },
-  { name: 'Desktop Wallpaper', description: '1920 × 1080 px • 96 DPI', unit: 'px', width: 1920, height: 1080, dpi: 96 },
-];
+import { PROJECT_PRESET_GROUPS, type CanvasPreset } from '../config/canvasPresets';
 
 const confirmClearMessage =
   'Selecting a new preset will clear your current design. Save first if needed before continuing.';
@@ -43,19 +21,16 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     shallow
   );
 
-  const applyPreset = (preset: ProjectPreset) => {
+  const applyPreset = (preset: CanvasPreset) => {
     if (!canvas) return;
     if (canvas.getObjects().length > 0) {
       const proceed = window.confirm(confirmClearMessage);
       if (!proceed) return;
     }
 
-    const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
-    const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
-
     createProject({
-      canvasSize: { width: widthPx, height: heightPx },
-      unitMode: preset.unit,
+      canvasSize: { width: preset.width, height: preset.height },
+      unitMode: preset.unitMode,
       source: 'project-presets-modal',
     });
     setCanvasBackgroundColor('#ffffff');
@@ -72,7 +47,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     onPresetApplied?.();
   };
 
-  const renderButton = (preset: ProjectPreset) => (
+  const renderButton = (preset: CanvasPreset) => (
     <button
       key={`${preset.name}-${preset.width}-${preset.height}`}
       onClick={() => applyPreset(preset)}
@@ -99,7 +74,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
           <span className="text-[9px] uppercase tracking-widest text-amber-200">Safe Margin 24px</span>
         </div>
         <div className="space-y-2">
-          {printPresets.map(renderButton)}
+          {PROJECT_PRESET_GROUPS.print.map(renderButton)}
         </div>
       </div>
       <div className="space-y-2">
@@ -108,7 +83,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
           <span className="text-[9px] uppercase tracking-widest text-slate-300">Pixels Mode</span>
         </div>
         <div className="space-y-2">
-          {digitalPresets.map(renderButton)}
+          {PROJECT_PRESET_GROUPS.social.map(renderButton)}
         </div>
       </div>
     </section>
