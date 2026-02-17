@@ -71,14 +71,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     loadProject,
     deleteProject,
     duplicateProject,
-    startNewProject,
+    createProject,
     setProjectPresetsOpen,
   } = useEditorStore((state) => ({
     getAllProjects: state.getAllProjects,
     loadProject: state.loadProject,
     deleteProject: state.deleteProject,
     duplicateProject: state.duplicateProject,
-    startNewProject: state.startNewProject,
+    createProject: state.createProject,
     setProjectPresetsOpen: state.setProjectPresetsOpen,
   }), shallow);
 
@@ -135,11 +135,11 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   const handlePresetSelect = (preset: typeof CanvasPresets[number]) => {
-    startNewProject({
+    createProject({
       canvasSize: { width: preset.width, height: preset.height },
       unitMode: 'px',
+      source: 'dashboard-preset',
     });
-    setProjectPresetsOpen(false);
     onProjectOpen?.();
   };
 
@@ -173,7 +173,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
           </div>
           <button
             onClick={() => {
-              startNewProject();
+              setProjectPresetsOpen(true);
               onProjectOpen?.();
             }}
             className="flex items-center gap-2 px-4 py-2 bg-[color:var(--brand-primary)] rounded-lg hover:opacity-90 transition-opacity"
@@ -243,7 +243,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
             {!searchQuery && (
               <button
                 onClick={() => {
-                  startNewProject();
+                  setProjectPresetsOpen(true);
                   onProjectOpen?.();
                 }}
                 className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-[color:var(--brand-primary)] rounded-lg hover:opacity-90 transition-opacity"

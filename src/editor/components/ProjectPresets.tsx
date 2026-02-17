@@ -1,6 +1,6 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
-import { resizeCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
+import { fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { PRINT_DPI } from '../utils/units';
 
@@ -34,11 +34,10 @@ type ProjectPresetsProps = {
 };
 
 export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied }) => {
-  const { canvas, requestLayerSync, setUnitMode, setCanvasBackgroundColor } = useEditorStore(
+  const { canvas, createProject, setCanvasBackgroundColor } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      requestLayerSync: state.requestLayerSync,
-      setUnitMode: state.setUnitMode,
+      createProject: state.createProject,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
     }),
     shallow
@@ -51,16 +50,14 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
       if (!proceed) return;
     }
 
-    canvas.discardActiveObject();
-    canvas.clear();
-
     const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
     const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
 
-    setUnitMode(preset.unit);
-    requestLayerSync();
-
-    resizeCanvas(widthPx, heightPx);
+    createProject({
+      canvasSize: { width: widthPx, height: heightPx },
+      unitMode: preset.unit,
+      source: 'project-presets-modal',
+    });
     setCanvasBackgroundColor('#ffffff');
 
     // Fit canvas to viewport after resize

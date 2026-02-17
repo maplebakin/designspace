@@ -180,6 +180,13 @@ type AutosavePayload = ProjectFilePayload & {
   autosaveVersion: number;
 };
 
+type CreateProjectOptions = {
+  canvasSize?: { width: number; height: number };
+  unitMode?: UnitMode;
+  name?: string;
+  source?: string;
+};
+
 // --- UTILITY FUNCTIONS ---
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const formatObjectType = (type: string | undefined) => {
@@ -553,6 +560,7 @@ interface EditorState {
   decrementAssetRef: (id: string) => void;
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
+  createProject: (options?: CreateProjectOptions) => void;
   startNewProject: (options?: {
     canvasSize?: { width: number; height: number };
     unitMode?: UnitMode;
@@ -1097,7 +1105,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
     },
 
-    startNewProject: (options) => {
+    createProject: (options) => {
         const {
             canvas,
             requestLayerSync,
@@ -1109,6 +1117,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const nextWidth = options?.canvasSize?.width ?? DEFAULT_CANVAS_SIZE.width;
         const nextHeight = options?.canvasSize?.height ?? DEFAULT_CANVAS_SIZE.height;
         const nextUnitMode = options?.unitMode ?? 'in';
+        const normalizedName = options?.name?.trim();
+        const nextProjectName = normalizedName && normalizedName.length > 0
+            ? normalizedName
+            : 'Untitled Project';
 
         if (canvas) {
             canvas.discardActiveObject();
@@ -1133,11 +1145,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         useThemeStore.getState().setCanvasBackgroundColor(null);
 
         set({
-            projectName: 'Untitled Project',
+            projectName: nextProjectName,
             isProjectPresetsOpen: false, // Don't show presets by default anymore
         });
 
         get().triggerSessionAutoSave();
+    },
+    startNewProject: (options) => {
+        get().createProject(options);
     },
 
     downloadProjectFile: async () => {
