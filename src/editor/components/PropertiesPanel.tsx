@@ -268,6 +268,32 @@ const applyFillAlpha = (hex: string, alpha: number) => {
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${normalizedAlpha})`;
 };
 
+const getStrokeStyleFromDash = (dash?: number[] | null): 'solid' | 'dashed' | 'dotted' => {
+  if (!dash || dash.length === 0) return 'solid';
+  if (dash.length >= 2 && dash[0] <= 3 && dash[1] >= 3) return 'dotted';
+  return 'dashed';
+};
+
+const getDashFromStrokeStyle = (style: 'solid' | 'dashed' | 'dotted'): number[] | null => {
+  if (style === 'dashed') return [12, 8];
+  if (style === 'dotted') return [2, 6];
+  return null;
+};
+
+const getGradientStops = (fill: unknown) => {
+  const fallback = { from: '#111827', to: '#6366f1', angle: 0 };
+  if (!fill || typeof fill !== 'object') return fallback;
+  const anyFill = fill as any;
+  if (!Array.isArray(anyFill.colorStops)) return fallback;
+  const first = anyFill.colorStops.find((s: any) => typeof s?.color === 'string');
+  const last = [...anyFill.colorStops].reverse().find((s: any) => typeof s?.color === 'string');
+  return {
+    from: first?.color || fallback.from,
+    to: last?.color || fallback.to,
+    angle: 0,
+  };
+};
+
 const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   object,
   onUpdate,
@@ -285,6 +311,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       ? ((object as any).stroke as string)
       : '#686664'; // Default stroke color from palette
   const strokeWidthValue = (object as any)?.strokeWidth ?? 2;
+  const strokeStyle = getStrokeStyleFromDash((object as any)?.strokeDashArray as number[] | undefined);
+  const currentShadow = object.shadow as fabric.Shadow | null;
+  const gradientDefaults = getGradientStops(rawFill);
+  const isGradientFill = !!rawFill && typeof rawFill === 'object' && Array.isArray((rawFill as any)?.colorStops);
   const rectScaleX = Math.abs((object as fabric.Rect).scaleX ?? 1) || 1;
   const rectScaleY = Math.abs((object as fabric.Rect).scaleY ?? 1) || 1;
   const rectCornerRadiusPx = isRect
@@ -359,6 +389,124 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           onChange={(val) => onUpdate({ strokeWidth: val })}
         />
       </div>
+
+      <ControlRow label="Border Style">
+        <ControlSelect
+          value={strokeStyle}
+          onChange={(e) => {
+            const style = e.target.value as 'solid' | 'dashed' | 'dotted';
+            const dash = getDashFromStrokeStyle(style);
+            onUpdate({ strokeDashArray: dash || undefined });
+          }}
+          className="w-36"
+        >
+          <option value="solid">Solid</option>
+          <option value="dashed">Dashed</option>
+          <option value="dotted">Dotted</option>
+        </ControlSelect>
+      </ControlRow>
+
+      <div className="space-y-2">
+        <ControlRow label="Fill Mode">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onUpdate({ fill: applyFillAlpha(fillValue, fillOpacity), tokenRole: null })}
+              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${!isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+            >
+              Solid
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const grad = new fabric.Gradient({
+                  type: 'linear',
+                  gradientUnits: 'pixels',
+                  coords: { x1: 0, y1: 0, x2: Number((object as any).width || 100), y2: 0 },
+                  colorStops: [
+                    { offset: 0, color: gradientDefaults.from },
+                    { offset: 1, color: gradientDefaults.to },
+                  ],
+                });
+                onUpdate({ fill: grad, tokenRole: null });
+              }}
+              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+            >
+              Gradient
+            </button>
+          </div>
+        </ControlRow>
+        {isGradientFill && (
+          <div className="grid grid-cols-2 gap-3">
+            <ControlRow label="From" vertical>
+              <ColorPicker
+                value={gradientDefaults.from}
+                onChange={(val) => {
+                  const grad = new fabric.Gradient({
+                    type: 'linear',
+                    gradientUnits: 'pixels',
+                    coords: { x1: 0, y1: 0, x2: Number((object as any).width || 100), y2: 0 },
+                    colorStops: [
+                      { offset: 0, color: val },
+                      { offset: 1, color: gradientDefaults.to },
+                    ],
+                  });
+                  onUpdate({ fill: grad, tokenRole: null });
+                }}
+                aria-label="Gradient from color"
+              />
+            </ControlRow>
+            <ControlRow label="To" vertical>
+              <ColorPicker
+                value={gradientDefaults.to}
+                onChange={(val) => {
+                  const grad = new fabric.Gradient({
+                    type: 'linear',
+                    gradientUnits: 'pixels',
+                    coords: { x1: 0, y1: 0, x2: Number((object as any).width || 100), y2: 0 },
+                    colorStops: [
+                      { offset: 0, color: gradientDefaults.from },
+                      { offset: 1, color: val },
+                    ],
+                  });
+                  onUpdate({ fill: grad, tokenRole: null });
+                }}
+                aria-label="Gradient to color"
+              />
+            </ControlRow>
+          </div>
+        )}
+      </div>
+
+      <details className="group">
+        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+          Drop Shadow
+          <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+        </summary>
+        <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
+          <ControlRow label="Color">
+            <ColorPicker
+              value={typeof currentShadow?.color === 'string' ? currentShadow.color : '#000000'}
+              onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: val, blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })}
+              aria-label="Shape shadow color"
+            />
+          </ControlRow>
+          <div className="space-y-2">
+            <ControlRow label="Blur"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.blur || 0)}px</span></ControlRow>
+            <ControlSlider min={0} max={40} value={currentShadow?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: val, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <ControlRow label="Offset X"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetX || 0)}</span></ControlRow>
+              <ControlSlider min={-30} max={30} value={currentShadow?.offsetX || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: val, offsetY: currentShadow?.offsetY || 0 }) })} />
+            </div>
+            <div className="space-y-2">
+              <ControlRow label="Offset Y"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetY || 0)}</span></ControlRow>
+              <ControlSlider min={-30} max={30} value={currentShadow?.offsetY || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: val }) })} />
+            </div>
+          </div>
+        </div>
+      </details>
 
       {/* Opacity Slider */}
       <div className="space-y-2">
@@ -724,6 +872,26 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
           onChange={(val) => onUpdate({ opacity: val })}
         />
       </div>
+
+      <details className="group">
+        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+          Drop Shadow
+          <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+        </summary>
+        <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
+          <ControlRow label="Color">
+            <ColorPicker
+              value={typeof (object.shadow as any)?.color === 'string' ? (object.shadow as any).color : '#000000'}
+              onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: val, blur: (object.shadow as any)?.blur || 0, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })}
+              aria-label="Image shadow color"
+            />
+          </ControlRow>
+          <div className="space-y-2">
+            <ControlRow label="Blur"><span className="text-[10px] text-slate-300">{Math.round((object.shadow as any)?.blur || 0)}px</span></ControlRow>
+            <ControlSlider min={0} max={40} value={(object.shadow as any)?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: ((object.shadow as any)?.color as string) || '#000000', blur: val, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })} />
+          </div>
+        </div>
+      </details>
 
       <div className="space-y-4">
         <div className="space-y-2">

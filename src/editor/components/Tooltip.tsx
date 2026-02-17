@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { loadAndCheckFont } from '../utils/fonts';
 
 interface TooltipProps {
   content: string;
@@ -44,6 +45,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
     left: 'left-full top-1/2 -translate-y-1/2 border-t-transparent border-b-transparent border-r-transparent border-l-[color:var(--ui-panel)]',
     right: 'right-full top-1/2 -translate-y-1/2 border-t-transparent border-b-transparent border-l-transparent border-r-[color:var(--ui-panel)]',
   };
+
 
   return (
     <div
@@ -235,6 +237,10 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange, 'aria
 
 // System font stacks
 const SYSTEM_FONTS = [
+  { name: 'Inter', value: 'Inter, sans-serif' },
+  { name: 'Roboto', value: 'Roboto, sans-serif' },
+  { name: 'Playfair Display', value: '"Playfair Display", serif' },
+  { name: 'Space Mono', value: '"Space Mono", monospace' },
   { name: 'Standard Sans', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' },
   { name: 'Modern Serif', value: 'Charter, "Bitstream Charter", "Sitka Text", Cambria, serif' },
   { name: 'Monospace', value: '"SF Mono", "Roboto Mono", "Cascadia Code", "Source Code Pro", monospace' },
@@ -250,9 +256,29 @@ interface FontPickerProps {
 
 export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-label': ariaLabel }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [customFont, setCustomFont] = useState('');
+  const [fontStatus, setFontStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const selectedFont = SYSTEM_FONTS.find(font => font.value === value) || SYSTEM_FONTS[0];
+  const selectedFont = SYSTEM_FONTS.find(font => font.value === value) || { name: 'Custom', value };
+
+  const handleApplyGoogleFont = async () => {
+    const normalized = customFont.trim();
+    if (!normalized) return;
+    setFontStatus('loading');
+    try {
+      const ok = await loadAndCheckFont(normalized);
+      if (!ok) {
+        setFontStatus('error');
+        return;
+      }
+      onChange(`"${normalized}", sans-serif`);
+      setFontStatus('ready');
+      setIsOpen(false);
+    } catch {
+      setFontStatus('error');
+    }
+  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -298,8 +324,33 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
               >
                 {font.name}
               </button>
+
             ))}
           </div>
+          <div className="border-t border-white/10 p-2 space-y-2">
+            <label className="block text-[9px] uppercase tracking-widest text-slate-400">Google Font</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={customFont}
+                onChange={(e) => {
+                  setCustomFont(e.target.value);
+                  if (fontStatus !== 'idle') setFontStatus('idle');
+                }}
+                placeholder="e.g. Montserrat"
+                className="h-8 flex-1 rounded-lg border border-white/10 bg-black/30 px-2 text-xs text-slate-200"
+              />
+              <button
+                type="button"
+                onClick={() => void handleApplyGoogleFont()}
+                className="h-8 rounded-lg border border-white/10 bg-white/10 px-2 text-[10px] uppercase tracking-widest text-slate-200 hover:bg-white/20"
+              >
+                Load
+              </button>
+            </div>
+            {fontStatus === 'error' && <p className="text-[9px] uppercase tracking-widest text-rose-300">Font failed to load</p>}
+          </div>
+
         </div>
       )}
     </div>
