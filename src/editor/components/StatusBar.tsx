@@ -6,9 +6,10 @@ import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { SAFE_MARGIN_PX, formatInches, fromCanvasUnits, UnitMode } from '../utils/units';
 import { zoomToCenter } from '../fabric/canvasUtils';
+import { SaveStatusBadge } from './SaveStatusBadge';
 
 export const StatusBar: React.FC = () => {
-  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, autoSaveStatus, showSafeZones, setShowSafeZones, selectedLayerIds, layers } = useEditorStore(
+  const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, saveStatus, showSafeZones, setShowSafeZones, selectedLayerIds, layers } = useEditorStore(
     (state) => ({
       zoom: state.zoom,
       unitMode: state.unitMode,
@@ -16,7 +17,7 @@ export const StatusBar: React.FC = () => {
       canvas: state.canvas,
       bleedPx: state.bleedPx,
       resetViewCanvas: state.resetViewCanvas,
-      autoSaveStatus: state.autoSaveStatus,
+      saveStatus: state.saveStatus,
       showSafeZones: state.showSafeZones,
       setShowSafeZones: state.setShowSafeZones,
       selectedLayerIds: state.selectedLayerIds,
@@ -108,32 +109,6 @@ export const StatusBar: React.FC = () => {
       : true;
   const bleedWarning = unitMode === 'in' && canvas && canvasWidth > 0 && canvasHeight > 0 && !hasBleedCoverage;
 
-  // Auto-save status indicator
-  const getAutoSaveIndicator = () => {
-    switch (autoSaveStatus) {
-      case 'saving':
-        return {
-          text: 'Saving...',
-          color: 'text-blue-400',
-          icon: '🔄',
-        };
-      case 'saved':
-        return {
-          text: 'Saved',
-          color: 'text-emerald-400',
-          icon: '✓',
-        };
-      default:
-        return {
-          text: 'Saved',
-          color: 'text-slate-400',
-          icon: '✓',
-        };
-    }
-  };
-
-  const indicator = getAutoSaveIndicator();
-
   return (
     <footer className="bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
       <div className="flex items-center gap-4 text-[11px] uppercase tracking-widest text-slate-300">
@@ -181,11 +156,7 @@ export const StatusBar: React.FC = () => {
         >
           <span>{showSafeZones ? "Safe Zones ✓" : "Safe Zones"}</span>
         </button>
-        {/* Auto-save status indicator */}
-        <div className={`flex items-center gap-1 ${indicator.color}`}>
-          <span className="text-xs">{indicator.icon}</span>
-          <span className="text-[10px] uppercase tracking-widest">{indicator.text}</span>
-        </div>
+        <SaveStatusBadge status={saveStatus} compact />
       </div>
       <div className="flex items-center gap-3">
         <div className="hidden md:flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/10 px-3 py-1 text-[10px] uppercase tracking-widest text-slate-300 shadow-[0_0_24px_rgba(0,0,0,0.25)]">

@@ -52,6 +52,7 @@ import { PropertiesPanel } from './PropertiesPanel';
 import { Tooltip } from './Tooltip';
 import { KeyboardShortcutHelp } from './KeyboardShortcutHelp';
 import { registerToastCallback } from '../utils/errorHandling';
+import { SaveStatusBadge } from './SaveStatusBadge';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
@@ -259,6 +260,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     canvas,
     saveState,
     consumeHistoryDirty,
+    saveStatus,
     activeTool,
     setActiveTool,
     setBrushColor,
@@ -279,6 +281,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     canvas: state.canvas,
     saveState: state.saveState,
     consumeHistoryDirty: state.consumeHistoryDirty,
+    saveStatus: state.saveStatus,
     activeTool: state.activeTool,
     setActiveTool: state.setActiveTool,
     setBrushColor: state.setBrushColor,
@@ -394,9 +397,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         )}
 
       <header className="toolbar-section justify-between bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
-        <div className="w-72 flex items-center gap-3">
+        <div className="min-w-[22rem] flex items-center gap-3">
           <h1 className="font-semibold uppercase tracking-widest text-xs text-slate-200">DSGN Studio</h1>
           <FileDropdown onImportDesignSpace={() => setIsDesignSpaceImportOpen(true)} />
+          <SaveStatusBadge status={saveStatus} />
         </div>
         <div className="flex-1 flex justify-center items-center gap-4">
             <div className="flex items-center gap-1 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-2 py-1.5">

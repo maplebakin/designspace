@@ -53,6 +53,24 @@ export const DEFAULT_CANVAS_BACKGROUND = '#FAF8F5';
 const AUTOSAVE_STORAGE_KEY = 'designspace_autosave_v1';
 const AUTOSAVE_VERSION = 1;
 
+export type AutoSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
+export type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
+
+export const deriveSaveStatus = (status: AutoSaveStatus): SaveStatus => {
+    switch (status) {
+        case 'dirty':
+            return 'unsaved';
+        case 'saving':
+            return 'saving';
+        case 'error':
+            return 'error';
+        case 'saved':
+        case 'idle':
+        default:
+            return 'saved';
+    }
+};
+
 export interface Template {
   id: string;
   name: string;
@@ -497,7 +515,8 @@ interface EditorState {
   batchDepth: number;
   batchNeedsSync: boolean;
   batchNeedsSave: boolean;
-  autoSaveStatus: 'idle' | 'saving' | 'saved';
+  autoSaveStatus: AutoSaveStatus;
+  saveStatus: SaveStatus;
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
   sessionAutoSaveTimer: ReturnType<typeof setTimeout> | null;
   hasRestoredSession: boolean;
@@ -607,7 +626,7 @@ interface EditorState {
   duplicateProject: (projectId: string, newName: string) => Promise<void>;
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
-  setAutoSaveStatus: (status: 'idle' | 'saving' | 'saved') => void;
+  setAutoSaveStatus: (status: AutoSaveStatus) => void;
   triggerSessionAutoSave: () => void;
   restoreSessionFromStorage: () => Promise<boolean>;
   clearSessionFromStorage: () => void;
@@ -692,6 +711,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         batchNeedsSync: false,
         batchNeedsSave: false,
         autoSaveStatus: 'idle',
+        saveStatus: 'saved',
         autoSaveTimer: null,
         sessionAutoSaveTimer: null,
         hasRestoredSession: false,
@@ -1147,6 +1167,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({
             projectName: nextProjectName,
             isProjectPresetsOpen: false, // Don't show presets by default anymore
+            autoSaveStatus: 'idle',
+            saveStatus: 'saved',
         });
 
         get().triggerSessionAutoSave();
@@ -1203,6 +1225,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
+        get().setAutoSaveStatus('saved');
         setToastMessage(`Saved project: ${payload.projectName}`);
     },
 
@@ -1285,6 +1308,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 projectName,
                 isProjectPresetsOpen: false,
                 imageAssets: nextAssets,
+                autoSaveStatus: 'idle',
+                saveStatus: 'saved',
             });
             useThemeStore.getState().setCanvasBackgroundColor(
                 canvas.backgroundColor ? String(canvas.backgroundColor) : null
@@ -1318,6 +1343,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         useHistoryStore.getState().saveState(options);
 
         // Only trigger auto-save for named projects to avoid unnecessary state updates
+        get().setAutoSaveStatus('dirty');
         const projectName = get().projectName;
         if (projectName && projectName !== 'Untitled Project') {
             get().triggerAutoSave();
@@ -1737,6 +1763,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 imageAssets: nextAssets,
                 projectName: result.project.name,
                 isProjectPresetsOpen: false,
+                autoSaveStatus: 'idle',
+                saveStatus: 'saved',
             });
 
             setShowOnboarding(false);
@@ -1823,10 +1851,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
         } catch (error) {
             console.error('Failed to update project:', error);
+            throw error;
         }
     },
 
-    setAutoSaveStatus: (status) => set({ autoSaveStatus: status }),
+    setAutoSaveStatus: (status) => set({ autoSaveStatus: status, saveStatus: deriveSaveStatus(status) }),
     setShowHelpModal: (show) => set({ showHelpModal: show }),
     setShowExportModal: (show) => set({ showExportModal: show }),
     setShowSafeZones: (show) => set({ showSafeZones: show }),
@@ -1967,6 +1996,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: payload.projectName || 'Untitled Project',
             isProjectPresetsOpen: false,
             imageAssets: nextAssets,
+            autoSaveStatus: 'idle',
+            saveStatus: 'saved',
         });
 
         setShowOnboarding(false);
@@ -2048,9 +2079,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { projectName, updateCurrentProject, setAutoSaveStatus } = get();
         if (!projectName || projectName === 'Untitled Project') return;
 
-        // Set status to saving
-        setAutoSaveStatus('saving');
-
         // Debounced save - wait 2 seconds of inactivity before saving
         const currentTimer = get().autoSaveTimer;
         if (currentTimer !== null) {
@@ -2058,15 +2086,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         const timer = setTimeout(async () => {
-            await updateCurrentProject();
-            setAutoSaveStatus('saved');
+            setAutoSaveStatus('saving');
+            try {
+                await updateCurrentProject();
+                setAutoSaveStatus('saved');
 
-            // Reset status after 2 seconds
-            setTimeout(() => {
-                if (get().autoSaveStatus === 'saved') {
-                    setAutoSaveStatus('idle');
-                }
-            }, 2000);
+                // Reset status after 2 seconds
+                setTimeout(() => {
+                    if (get().autoSaveStatus === 'saved') {
+                        setAutoSaveStatus('idle');
+                    }
+                }, 2000);
+            } catch {
+                setAutoSaveStatus('error');
+            }
         }, 2000);
 
         // Store timer reference to clear if another action occurs
@@ -2093,6 +2126,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             snapEnabled: state.snapEnabled,
             gridEnabled: state.gridEnabled,
             autoSaveStatus: state.autoSaveStatus,
+            saveStatus: state.saveStatus,
         }),
     }
   )
