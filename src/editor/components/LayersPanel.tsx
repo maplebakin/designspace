@@ -18,6 +18,7 @@ export const LayersPanel: React.FC = () => {
     requestLayerSync,
     syncCanvasToStore,
     toggleMovementLock,
+    toggleObjectLock,
     toggleColorLock,
     saveState,
     activeTool,
@@ -25,6 +26,7 @@ export const LayersPanel: React.FC = () => {
     brushSize,
     setBrushSize,
     setBrushColor,
+    setSelectedObjectId,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
@@ -34,6 +36,7 @@ export const LayersPanel: React.FC = () => {
       requestLayerSync: state.requestLayerSync,
       syncCanvasToStore: state.syncCanvasToStore,
       toggleMovementLock: state.toggleMovementLock,
+      toggleObjectLock: state.toggleObjectLock,
       toggleColorLock: state.toggleColorLock,
       saveState: state.saveState,
       activeTool: state.activeTool,
@@ -41,6 +44,7 @@ export const LayersPanel: React.FC = () => {
       brushSize: state.brushSize,
       setBrushSize: state.setBrushSize,
       setBrushColor: state.setBrushColor,
+      setSelectedObjectId: state.setSelectedObjectId,
     }),
     shallow
   );
@@ -186,7 +190,18 @@ export const LayersPanel: React.FC = () => {
     }
   };
 
-  const handleToggleMovementLock = (id: string) => {
+  const handleToggleMovementLock = (id: string, event?: React.MouseEvent) => {
+      if (event?.shiftKey) {
+        const object = findObjectById(id);
+        if (canvas && object) {
+          canvas.setActiveObject(object);
+          setSelectedObjectId(id);
+          canvas.requestRenderAll();
+          toggleObjectLock();
+          requestLayerSync();
+        }
+        return;
+      }
       toggleMovementLock(id);
   }
 
@@ -594,9 +609,9 @@ export const LayersPanel: React.FC = () => {
                           }
                         </button>
                       </Tooltip>
-                      <Tooltip content={layer.movementLocked ? 'Unlock Position' : 'Lock Position'} side="top">
+                      <Tooltip content={layer.movementLocked ? 'Unlock Position (Shift: Toggle Selection Lock)' : 'Lock Position (Shift: Toggle Selection Lock)'} side="top">
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id); }}
+                          onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id, e); }}
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           {layer.movementLocked

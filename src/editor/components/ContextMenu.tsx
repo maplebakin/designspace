@@ -70,12 +70,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
     selectedObjectId,
     removeSelectedObject,
     toggleMovementLock,
+    toggleObjectLock,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       selectedObjectId: state.selectedObjectId,
       removeSelectedObject: state.removeSelectedObject,
       toggleMovementLock: state.toggleMovementLock,
+      toggleObjectLock: state.toggleObjectLock,
     }),
     shallow
   );
@@ -84,6 +86,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
   const hasSelection = !!activeObject;
   const hasClipboard = hasClipboardContent();
   const isLocked = activeObject ? !!(activeObject as any).lockMovementX : false;
+  const isSelectionLocked = activeObject ? (activeObject as any).selectable === false : false;
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -171,8 +174,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
   };
 
   const handleToggleLock = () => {
-    if (selectedObjectId) {
-      toggleMovementLock(selectedObjectId);
+    const targetId = selectedObjectId || ((activeObject as any)?.id as string | undefined);
+    if (targetId) {
+      toggleMovementLock(targetId);
+    }
+    onClose();
+  };
+
+  const handleToggleSelectionLock = () => {
+    const targetId = selectedObjectId || ((activeObject as any)?.id as string | undefined);
+    if (targetId && canvas) {
+      const obj = canvas.getObjects().find((o) => (o as any).id === targetId);
+      if (obj) {
+        canvas.setActiveObject(obj);
+      }
+      useEditorStore.getState().setSelectedObjectId(targetId);
+      toggleObjectLock();
     }
     onClose();
   };
@@ -242,9 +259,18 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
       {/* Object Actions */}
       <MenuItem
         icon={isLocked ? <Unlock className="w-4 h-4 stroke-[1.5]" /> : <Lock className="w-4 h-4 stroke-[1.5]" />}
-        label={isLocked ? 'Unlock' : 'Lock'}
+        label={isLocked ? 'Unlock Position' : 'Lock Position'}
         disabled={!hasSelection}
         onClick={handleToggleLock}
+      />
+
+      <MenuDivider />
+
+      <MenuItem
+        icon={isSelectionLocked ? <Unlock className="w-4 h-4 stroke-[1.5]" /> : <Lock className="w-4 h-4 stroke-[1.5]" />}
+        label={isSelectionLocked ? 'Unlock Selection' : 'Lock Selection'}
+        disabled={!hasSelection}
+        onClick={handleToggleSelectionLock}
       />
 
       <MenuDivider />
