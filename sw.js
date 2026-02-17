@@ -21,7 +21,7 @@ const urlsToCache = [
 ];
 
 // Install event - cache assets
-self.addEventListener('install', (event: ExtendableEvent) => {
+self.addEventListener('install', (event) => {
   console.log('Service Worker: Installing...');
 
   event.waitUntil(
@@ -41,7 +41,7 @@ self.addEventListener('install', (event: ExtendableEvent) => {
 });
 
 // Activate event - clean up old caches
-self.addEventListener('activate', (event: ExtendableEvent) => {
+self.addEventListener('activate', (event) => {
   console.log('Service Worker: Activating...');
 
   event.waitUntil(
@@ -66,7 +66,7 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 });
 
 // Fetch event - serve cached assets or fetch from network
-self.addEventListener('fetch', (event: FetchEvent) => {
+self.addEventListener('fetch', (event) => {
   // Don't cache requests to external domains
   if (event.request.url.startsWith(self.location.origin)) {
     event.respondWith(
@@ -82,14 +82,14 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 });
 
 // Background sync for offline operations
-self.addEventListener('sync', (event: SyncEvent) => {
+self.addEventListener('sync', (event) => {
   if (event.tag === 'sync-operations') {
     event.waitUntil(syncOfflineOperations());
   }
 });
 
 // Push notifications
-self.addEventListener('push', (event: PushEvent) => {
+self.addEventListener('push', (event) => {
   const options = {
     body: event.data ? event.data.text() : 'Default notification body',
     icon: '/favicon.ico',
@@ -103,7 +103,7 @@ self.addEventListener('push', (event: PushEvent) => {
 });
 
 // Notification click handler
-self.addEventListener('notificationclick', (event: NotificationEvent) => {
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   
   event.waitUntil(
