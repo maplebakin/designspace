@@ -10,9 +10,10 @@
  * @module canvasOperations
  */
 
+import { ActiveSelection } from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
-import { resizeCanvas, zoomToCenter, fitCanvasToViewport } from '../fabric/canvasUtils';
+import { resizeCanvas, zoomToCenter, fitCanvasToViewport, rotateCanvas as rotateCanvasInternal } from '../fabric/canvasUtils';
 import { PrintSizes, SocialSizes, convertDimensions, UnitMode } from './units';
 import { showError, showInfo, ErrorMessages } from './errorHandling';
 
@@ -127,8 +128,7 @@ export function getCanvasSize(unit: UnitMode = 'px'): { width: number; height: n
  * Rotates the canvas (swaps width and height).
  */
 export function rotateCanvas(): void {
-  const { rotateCanvas } = require('../fabric/canvasUtils');
-  rotateCanvas();
+  rotateCanvasInternal();
 }
 
 // ============================================================================
@@ -239,7 +239,7 @@ export function selectAll(): void {
   const objects = canvas.getObjects().filter((obj) => !(obj as any).isGuide);
   if (objects.length === 0) return;
 
-  const selection = new (require('fabric').ActiveSelection)(objects, { canvas });
+  const selection = new ActiveSelection(objects, { canvas });
   canvas.setActiveObject(selection);
   canvas.requestRenderAll();
 }
