@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { useCanvasStore } from '../state/useCanvasStore';
 import { FileText, Plus, Trash2, Copy, Search, X } from 'lucide-react';
 
 interface ProjectItem {
@@ -83,9 +82,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     setProjectPresetsOpen: state.setProjectPresetsOpen,
   }), shallow);
 
-  const { setCanvasSize } = useCanvasStore((state) => ({
-    setCanvasSize: state.setCanvasSize,
-  }));
 
   useEffect(() => {
     loadProjects();
@@ -139,8 +135,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   const handlePresetSelect = (preset: typeof CanvasPresets[number]) => {
-    setCanvasSize(preset.width, preset.height);
-    startNewProject();
+    startNewProject({
+      canvasSize: { width: preset.width, height: preset.height },
+      unitMode: 'px',
+    });
     setProjectPresetsOpen(false);
     onProjectOpen?.();
   };

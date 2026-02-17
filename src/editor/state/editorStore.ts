@@ -553,7 +553,10 @@ interface EditorState {
   decrementAssetRef: (id: string) => void;
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
-  startNewProject: () => void;
+  startNewProject: (options?: {
+    canvasSize?: { width: number; height: number };
+    unitMode?: UnitMode;
+  }) => void;
   downloadProjectFile: () => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
@@ -1094,7 +1097,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
     },
 
-    startNewProject: () => {
+    startNewProject: (options) => {
         const {
             canvas,
             requestLayerSync,
@@ -1103,6 +1106,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setSelectedObjectId,
             setUnitMode,
         } = get();
+        const nextWidth = options?.canvasSize?.width ?? DEFAULT_CANVAS_SIZE.width;
+        const nextHeight = options?.canvasSize?.height ?? DEFAULT_CANVAS_SIZE.height;
+        const nextUnitMode = options?.unitMode ?? 'in';
+
         if (canvas) {
             canvas.discardActiveObject();
             setLayers([]);
@@ -1110,11 +1117,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setSelectedObjectId(null);
             canvas.clear();
 
-            // Set default canvas size to US Letter (8.5" × 11" at 300 DPI)
-            resizeCanvas(DEFAULT_CANVAS_SIZE.width, DEFAULT_CANVAS_SIZE.height);
-
-            // Set unit mode to inches for print projects
-            setUnitMode('in');
+            resizeCanvas(nextWidth, nextHeight);
+            setUnitMode(nextUnitMode);
 
             requestLayerSync();
         }
@@ -1647,12 +1651,31 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 return;
             }
 
-            const { canvas, requestLayerSync, setLayers, setSelectedLayerIds, setSelectedObjectId } = get();
+            const {
+                canvas,
+                requestLayerSync,
+                resetViewCanvas,
+                setLayers,
+                setSelectedLayerIds,
+                setSelectedObjectId,
+                setShowOnboarding,
+            } = get();
             if (!canvas) return;
 
-            const { canvasData, assets, activeTheme, canvasSize, unitMode } = JSON.parse(result.canvasData);
-            const hydratedCanvasData = await import('../fabric/initFabricCanvas').then(mod =>
-                mod.hydrateCanvasDataWithAssets(canvasData, assets)
+            const parsed = JSON.parse(result.canvasData);
+            const rawCanvasData = parsed.canvasData;
+            const rawAssets = parsed.assets && typeof parsed.assets === 'object'
+                ? (parsed.assets as Record<string, string>)
+                : {};
+            const activeTheme = parsed.activeTheme ?? null;
+            const canvasSize = parsed.canvasSize;
+            const unitMode = parsed.unitMode;
+
+            const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
+                prepareCanvasDataForPersistence(rawCanvasData, rawAssets);
+            const hydratedCanvasData = hydrateCanvasDataWithAssets(
+                migratedCanvasData,
+                nextAssets
             );
 
             // Clear canvas and load new data
@@ -1662,7 +1685,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setSelectedObjectId(null);
             canvas.clear();
 
-            if (canvasSize) {
+            if (
+                canvasSize
+                && typeof canvasSize.width === 'number'
+                && Number.isFinite(canvasSize.width)
+                && typeof canvasSize.height === 'number'
+                && Number.isFinite(canvasSize.height)
+            ) {
                 const normalizedWidth = Math.max(1, Math.round(canvasSize.width));
                 const normalizedHeight = Math.max(1, Math.round(canvasSize.height));
                 canvas.setWidth(normalizedWidth);
@@ -1675,20 +1704,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 get().setUnitMode(unitMode);
             }
 
-            await canvas.loadFromJSON(hydratedCanvasData, (await import('../fabric/initFabricCanvas')).reviveCustomFabricProps);
+            await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            resetViewCanvas();
+            sanityCheckCanvas(canvas, activeTheme);
             requestLayerSync();
 
-            // Update theme if available
             if (activeTheme) {
                 get().applyTheme(activeTheme);
+            } else {
+                useThemeStore.getState().setThemeData(null);
+                useThemeStore.getState().setActiveBrandCollectionId(null);
             }
 
             useHistoryStore.getState().resetHistory();
 
             set({
-                imageAssets: { ...get().imageAssets, ...assets },
+                imageAssets: nextAssets,
                 projectName: result.project.name,
+                isProjectPresetsOpen: false,
             });
+
+            setShowOnboarding(false);
+            useThemeStore.getState().setCanvasBackgroundColor(
+                canvas.backgroundColor ? String(canvas.backgroundColor) : null
+            );
 
             set({ toastMessage: `Loaded project: ${result.project.name}` });
             get().triggerSessionAutoSave();
