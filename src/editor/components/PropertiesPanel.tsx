@@ -190,6 +190,7 @@ interface ShapePropertiesProps {
   object: fabric.Object;
   onUpdate: (updates: Record<string, any>) => void;
   onCornerRadius: (value: number) => void;
+  onCornerRadiusXY: (rxValue: number, ryValue: number) => void;
   addColorToBrandKit: (color: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -271,6 +272,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   object,
   onUpdate,
   onCornerRadius,
+  onCornerRadiusXY,
   addColorToBrandKit,
 }) => {
   const isRect = object.type === 'rect';
@@ -288,6 +290,15 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   const rectCornerRadiusPx = isRect
     ? Math.round(Math.max(((object as fabric.Rect).rx ?? 0) * rectScaleX, ((object as fabric.Rect).ry ?? 0) * rectScaleY))
     : 0;
+  const rectCornerRadiusXPx = isRect
+    ? Math.round(((object as fabric.Rect).rx ?? 0) * rectScaleX)
+    : 0;
+  const rectCornerRadiusYPx = isRect
+    ? Math.round(((object as fabric.Rect).ry ?? 0) * rectScaleY)
+    : 0;
+  const [isCornerRadiusLinked, setIsCornerRadiusLinked] = useState(
+    !isRect || Math.abs(rectCornerRadiusXPx - rectCornerRadiusYPx) <= 1
+  );
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-4">
@@ -369,15 +380,51 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
         <div className="space-y-2">
           <ControlRow label="Corner Radius">
             <span className="text-[10px] text-slate-300">
-              {rectCornerRadiusPx}px
+              {isCornerRadiusLinked ? `${rectCornerRadiusPx}px` : `${rectCornerRadiusXPx}px × ${rectCornerRadiusYPx}px`}
             </span>
           </ControlRow>
-          <ControlSlider
-            min={0}
-            max={80}
-            value={rectCornerRadiusPx}
-            onChange={onCornerRadius}
-          />
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => setIsCornerRadiusLinked((prev) => !prev)}
+              className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-slate-300 hover:bg-white/10"
+            >
+              {isCornerRadiusLinked ? 'Linked' : 'Independent'}
+            </button>
+          </div>
+          {isCornerRadiusLinked ? (
+            <ControlSlider
+              min={0}
+              max={80}
+              value={rectCornerRadiusPx}
+              onChange={onCornerRadius}
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <ControlRow label="Radius X">
+                  <span className="text-[10px] text-slate-300">{rectCornerRadiusXPx}px</span>
+                </ControlRow>
+                <ControlSlider
+                  min={0}
+                  max={80}
+                  value={rectCornerRadiusXPx}
+                  onChange={(val) => onCornerRadiusXY(val, rectCornerRadiusYPx)}
+                />
+              </div>
+              <div className="space-y-1">
+                <ControlRow label="Radius Y">
+                  <span className="text-[10px] text-slate-300">{rectCornerRadiusYPx}px</span>
+                </ControlRow>
+                <ControlSlider
+                  min={0}
+                  max={80}
+                  value={rectCornerRadiusYPx}
+                  onChange={(val) => onCornerRadiusXY(rectCornerRadiusXPx, val)}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -942,6 +989,30 @@ export const PropertiesPanel: React.FC = () => {
     saveState();
   };
 
+  const handleCornerRadiusXY = (rxValue: number, ryValue: number) => {
+    if (!selectedObject || selectedObject.type !== 'rect' || !canvas) return;
+    const rect = selectedObject as fabric.Rect;
+
+    const scaleX = Math.abs(rect.scaleX ?? 1) || 1;
+    const scaleY = Math.abs(rect.scaleY ?? 1) || 1;
+    const width = Math.abs(rect.width ?? 0);
+    const height = Math.abs(rect.height ?? 0);
+
+    const maxVisibleRadiusX = Math.max(0, Math.min(rxValue, (width * scaleX) / 2));
+    const maxVisibleRadiusY = Math.max(0, Math.min(ryValue, (height * scaleY) / 2));
+
+    const nextRx = maxVisibleRadiusX / scaleX;
+    const nextRy = maxVisibleRadiusY / scaleY;
+
+    rect.set({ rx: nextRx, ry: nextRy });
+    (rect as any).__baseRx = maxVisibleRadiusX;
+    (rect as any).__baseRy = maxVisibleRadiusY;
+    rect.setCoords();
+    canvas.requestRenderAll();
+    requestLayerSync();
+    saveState();
+  };
+
   const getObjectTypeLabel = () => {
     if (!selectedObject) return 'None';
     switch (selectedObject.type) {
@@ -1048,6 +1119,7 @@ export const PropertiesPanel: React.FC = () => {
                 object={selectedObject}
                 onUpdate={updateSelectedObject}
                 onCornerRadius={handleCornerRadius}
+                onCornerRadiusXY={handleCornerRadiusXY}
                 addColorToBrandKit={addColorToBrandKit}
               />
             )}
