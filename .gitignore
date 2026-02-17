@@ -41,3 +41,12 @@ coverage/
 
 # Backup files
 *.backup
+
+node_modules/
+dist/
+.cache/
+.astro/
+test-results/
+coverage/
+playwright-report/
+*.log
