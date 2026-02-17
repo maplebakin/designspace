@@ -20,6 +20,7 @@ import {
   Triangle,
   Star,
   Image as ImageIcon,
+  Search,
   Download,
   Home,
   Undo2,
@@ -53,6 +54,7 @@ import { Tooltip } from './Tooltip';
 import { KeyboardShortcutHelp } from './KeyboardShortcutHelp';
 import { registerToastCallback } from '../utils/errorHandling';
 import { SaveStatusBadge } from './SaveStatusBadge';
+import { ProjectQuickOpenModal } from './ProjectQuickOpenModal';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
@@ -271,6 +273,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setGridEnabled,
     showExportModal,
     setShowExportModal,
+    setProjectQuickOpenOpen,
     setShowHelpModal,
     undo,
     redo,
@@ -292,6 +295,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setGridEnabled: state.setGridEnabled,
     showExportModal: state.showExportModal,
     setShowExportModal: state.setShowExportModal,
+    setProjectQuickOpenOpen: state.setProjectQuickOpenOpen,
     setShowHelpModal: state.setShowHelpModal,
     undo: state.undo,
     redo: state.redo,
@@ -389,6 +393,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
         <DesignSpaceImportModal isOpen={isDesignSpaceImportOpen} onClose={() => setIsDesignSpaceImportOpen(false)} />
         <ProjectPresetsModal />
+        <ProjectQuickOpenModal />
         
         {toastMessage && (
             <div className="fixed bottom-4 right-4 bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] text-sm px-4 py-2 rounded-lg shadow-[0_0_24px_rgba(0,0,0,0.35)] border border-[color:var(--ui-border)] z-50">
@@ -590,6 +595,15 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             ) : (
               <ProjectBrowser />
             )}
+            <Tooltip content="Quick Open (⌘K)" side="bottom">
+              <button
+                onClick={() => setProjectQuickOpenOpen(true)}
+                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
+                aria-label="Quick Open Projects"
+              >
+                <Search className={ICON_SMALL} />
+              </button>
+            </Tooltip>
             <Tooltip content="Keyboard Shortcuts (⌘⇧/)" side="bottom">
               <button
                 onClick={() => setShowHelpModal(true)}

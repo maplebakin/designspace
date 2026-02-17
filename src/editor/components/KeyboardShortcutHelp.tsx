@@ -34,6 +34,7 @@ const shortcuts: ShortcutItem[] = [
   { keys: ['⌘', 'Shift', 'G'], action: 'Ungroup Objects', category: 'Grouping' },
 
   // Navigation & View
+  { keys: ['⌘', 'K'], action: 'Quick Open Projects', category: 'Navigation' },
   { keys: ['3'], action: 'Zoom to Selection', category: 'Navigation' },
   { keys: ['G'], action: 'Toggle Grid', category: 'Navigation' },
   { keys: ['ESC'], action: 'Deselect All', category: 'Navigation' },

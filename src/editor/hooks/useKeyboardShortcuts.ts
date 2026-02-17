@@ -34,6 +34,13 @@ export const useKeyboardShortcuts = () => {
       const isMeta = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
 
+      if (isMeta && key === 'k') {
+        event.preventDefault();
+        const { setProjectQuickOpenOpen } = useEditorStore.getState();
+        setProjectQuickOpenOpen(true);
+        return;
+      }
+
       if (isMeta && key === 'e') {
         event.preventDefault();
         const { setShowExportModal } = useEditorStore.getState();

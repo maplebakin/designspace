@@ -507,6 +507,7 @@ interface EditorState {
   assetRefCount: Map<string, number>;
   projectName: string;
   isProjectPresetsOpen: boolean;
+  isProjectQuickOpenOpen: boolean;
   activeTool: EditorTool;
   brushSize: number;
   showOnboarding: boolean;
@@ -587,6 +588,7 @@ interface EditorState {
   downloadProjectFile: () => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
+  setProjectQuickOpenOpen: (open: boolean) => void;
   setProjectName: (name: string) => void;
   setActiveTool: (tool: EditorTool) => void;
   setBrushSize: (size: number) => void;
@@ -702,6 +704,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         assetRefCount: new Map(),
         projectName: 'Untitled Project',
         isProjectPresetsOpen: false,
+        isProjectQuickOpenOpen: false,
         activeTool: 'select',
         brushSize: 8,
         showOnboarding: true,
@@ -1032,6 +1035,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         });
     },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
+    setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
