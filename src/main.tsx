@@ -5,7 +5,7 @@ import App from './App.tsx'
 import './index.css'
 
 
-if (import.meta.env.DEV && 'serviceWorker' in navigator) {
+if (typeof window !== 'undefined' && window.location.hostname === 'localhost' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     registrations.forEach((registration) => {
       void registration.unregister();

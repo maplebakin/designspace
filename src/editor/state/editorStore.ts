@@ -1316,9 +1316,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             requestLayerSync,
             setToastMessage,
             resetViewCanvas,
-            setLayers,
-            setSelectedLayerIds,
-            setSelectedObjectId,
         } = get();
         if (!canvas) return;
 
@@ -1336,9 +1333,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 ? (raw.activeTheme as ApocapaletteTheme)
                 : null;
             const rawUnitMode = raw.unitMode;
-            if (rawUnitMode === 'px' || rawUnitMode === 'in' || rawUnitMode === 'cm' || rawUnitMode === 'mm') {
-                get().setUnitMode(rawUnitMode);
-            }
+            const normalizedUnitMode =
+                rawUnitMode === 'px' || rawUnitMode === 'in' || rawUnitMode === 'cm' || rawUnitMode === 'mm'
+                    ? rawUnitMode
+                    : 'in';
 
             let canvasData = raw.canvasData;
             if (!canvasData) {
@@ -1358,30 +1356,33 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 nextAssets
             );
 
-            canvas.discardActiveObject();
-            setLayers([]);
-            setSelectedLayerIds([]);
-            setSelectedObjectId(null);
-            canvas.clear();
             const nextSize = raw.canvasSize;
-            if (
+            const normalizedWidth =
                 nextSize
                 && typeof nextSize.width === 'number'
                 && Number.isFinite(nextSize.width)
+                    ? Math.max(1, Math.round(nextSize.width))
+                    : DEFAULT_CANVAS_SIZE.width;
+            const normalizedHeight =
+                nextSize
                 && typeof nextSize.height === 'number'
                 && Number.isFinite(nextSize.height)
-            ) {
-                const normalizedWidth = Math.max(1, Math.round(nextSize.width));
-                const normalizedHeight = Math.max(1, Math.round(nextSize.height));
-                canvas.setWidth(normalizedWidth);
-                canvas.setHeight(normalizedHeight);
-                useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
-                useCanvasStore.getState().clearPendingSize();
-            }
-            await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+                    ? Math.max(1, Math.round(nextSize.height))
+                    : DEFAULT_CANVAS_SIZE.height;
+
+            get().createProject({
+                canvasSize: { width: normalizedWidth, height: normalizedHeight },
+                unitMode: normalizedUnitMode,
+                name: projectName,
+                source: 'load-project-file',
+            });
+
+            const nextCanvas = get().canvas;
+            if (!nextCanvas) return;
+            await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
             resetViewCanvas();
 
-            sanityCheckCanvas(canvas, activeTheme);
+            sanityCheckCanvas(nextCanvas, activeTheme);
             requestLayerSync();
             useHistoryStore.getState().resetHistory();
 
@@ -1389,13 +1390,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 projectName,
                 isProjectPresetsOpen: false,
                 imageAssets: nextAssets,
-                autoSaveStatus: 'idle',
-                saveStatus: 'saved',
-                showSessionRestoreBanner: false,
-                restoredSessionTimestamp: null,
             });
             useThemeStore.getState().setCanvasBackgroundColor(
-                canvas.backgroundColor ? String(canvas.backgroundColor) : null
+                nextCanvas.backgroundColor ? String(nextCanvas.backgroundColor) : null
             );
 
             if (activeTheme) {
@@ -1779,9 +1776,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas,
                 requestLayerSync,
                 resetViewCanvas,
-                setLayers,
-                setSelectedLayerIds,
-                setSelectedObjectId,
                 setShowOnboarding,
             } = get();
             if (!canvas) return;
@@ -1802,35 +1796,35 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 nextAssets
             );
 
-            // Clear canvas and load new data
-            canvas.discardActiveObject();
-            setLayers([]);
-            setSelectedLayerIds([]);
-            setSelectedObjectId(null);
-            canvas.clear();
-
-            if (
+            const normalizedWidth =
                 canvasSize
                 && typeof canvasSize.width === 'number'
                 && Number.isFinite(canvasSize.width)
+                    ? Math.max(1, Math.round(canvasSize.width))
+                    : DEFAULT_CANVAS_SIZE.width;
+            const normalizedHeight =
+                canvasSize
                 && typeof canvasSize.height === 'number'
                 && Number.isFinite(canvasSize.height)
-            ) {
-                const normalizedWidth = Math.max(1, Math.round(canvasSize.width));
-                const normalizedHeight = Math.max(1, Math.round(canvasSize.height));
-                canvas.setWidth(normalizedWidth);
-                canvas.setHeight(normalizedHeight);
-                useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
-                useCanvasStore.getState().clearPendingSize();
-            }
+                    ? Math.max(1, Math.round(canvasSize.height))
+                    : DEFAULT_CANVAS_SIZE.height;
+            const normalizedUnitMode =
+                unitMode === 'px' || unitMode === 'in' || unitMode === 'cm' || unitMode === 'mm'
+                    ? unitMode
+                    : 'in';
 
-            if (unitMode) {
-                get().setUnitMode(unitMode);
-            }
+            get().createProject({
+                canvasSize: { width: normalizedWidth, height: normalizedHeight },
+                unitMode: normalizedUnitMode,
+                name: result.project.name,
+                source: 'load-project-db',
+            });
 
-            await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            const nextCanvas = get().canvas;
+            if (!nextCanvas) return;
+            await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
             resetViewCanvas();
-            sanityCheckCanvas(canvas, activeTheme);
+            sanityCheckCanvas(nextCanvas, activeTheme);
             requestLayerSync();
 
             if (activeTheme) {
@@ -1846,15 +1840,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 imageAssets: nextAssets,
                 projectName: result.project.name,
                 isProjectPresetsOpen: false,
-                autoSaveStatus: 'idle',
-                saveStatus: 'saved',
-                showSessionRestoreBanner: false,
-                restoredSessionTimestamp: null,
             });
 
             setShowOnboarding(false);
             useThemeStore.getState().setCanvasBackgroundColor(
-                canvas.backgroundColor ? String(canvas.backgroundColor) : null
+                nextCanvas.backgroundColor ? String(nextCanvas.backgroundColor) : null
             );
 
             set({ toastMessage: `Loaded project: ${result.project.name}` });
@@ -2039,9 +2029,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvas,
             requestLayerSync,
             resetViewCanvas,
-            setLayers,
-            setSelectedLayerIds,
-            setSelectedObjectId,
             setShowOnboarding,
         } = get();
         if (!canvas) return false;
@@ -2063,33 +2050,34 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             nextAssets
         );
 
-        canvas.discardActiveObject();
-        setLayers([]);
-        setSelectedLayerIds([]);
-        setSelectedObjectId(null);
-        canvas.clear();
-
         const nextSize = payload.canvasSize;
-        if (
+        const normalizedWidth =
             nextSize
             && typeof nextSize.width === 'number'
             && Number.isFinite(nextSize.width)
+                ? Math.max(1, Math.round(nextSize.width))
+                : DEFAULT_CANVAS_SIZE.width;
+        const normalizedHeight =
+            nextSize
             && typeof nextSize.height === 'number'
             && Number.isFinite(nextSize.height)
-        ) {
-            const normalizedWidth = Math.max(1, Math.round(nextSize.width));
-            const normalizedHeight = Math.max(1, Math.round(nextSize.height));
-            canvas.setWidth(normalizedWidth);
-            canvas.setHeight(normalizedHeight);
-            useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
-            useCanvasStore.getState().clearPendingSize();
-        }
+                ? Math.max(1, Math.round(nextSize.height))
+                : DEFAULT_CANVAS_SIZE.height;
+        const normalizedUnitMode =
+            payload.unitMode === 'px' || payload.unitMode === 'in' || payload.unitMode === 'cm' || payload.unitMode === 'mm'
+                ? payload.unitMode
+                : 'in';
 
-        if (payload.unitMode) {
-            get().setUnitMode(payload.unitMode);
-        }
+        get().createProject({
+            canvasSize: { width: normalizedWidth, height: normalizedHeight },
+            unitMode: normalizedUnitMode,
+            name: payload.projectName || 'Untitled Project',
+            source: 'restore-session',
+        });
 
-        await canvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+        const nextCanvas = get().canvas;
+        if (!nextCanvas) return false;
+        await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
         resetViewCanvas();
 
         const activeTheme =
@@ -2097,7 +2085,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 ? (payload.activeTheme as ApocapaletteTheme)
                 : null;
 
-        sanityCheckCanvas(canvas, activeTheme);
+        sanityCheckCanvas(nextCanvas, activeTheme);
         requestLayerSync();
         useHistoryStore.getState().resetHistory();
 
@@ -2105,15 +2093,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: payload.projectName || 'Untitled Project',
             isProjectPresetsOpen: false,
             imageAssets: nextAssets,
-            autoSaveStatus: 'idle',
-            saveStatus: 'saved',
             showSessionRestoreBanner: true,
             restoredSessionTimestamp: typeof payload.lastUpdated === 'string' ? payload.lastUpdated : null,
         });
 
         setShowOnboarding(false);
         useThemeStore.getState().setCanvasBackgroundColor(
-            canvas.backgroundColor ? String(canvas.backgroundColor) : null
+            nextCanvas.backgroundColor ? String(nextCanvas.backgroundColor) : null
         );
 
         if (activeTheme) {
