@@ -283,6 +283,11 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       ? ((object as any).stroke as string)
       : '#686664'; // Default stroke color from palette
   const strokeWidthValue = (object as any)?.strokeWidth ?? 2;
+  const rectScaleX = Math.abs((object as fabric.Rect).scaleX ?? 1) || 1;
+  const rectScaleY = Math.abs((object as fabric.Rect).scaleY ?? 1) || 1;
+  const rectCornerRadiusPx = isRect
+    ? Math.round(Math.max(((object as fabric.Rect).rx ?? 0) * rectScaleX, ((object as fabric.Rect).ry ?? 0) * rectScaleY))
+    : 0;
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-4">
@@ -364,13 +369,13 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
         <div className="space-y-2">
           <ControlRow label="Corner Radius">
             <span className="text-[10px] text-slate-300">
-              {Math.round((object as fabric.Rect).rx ?? 0)}px
+              {rectCornerRadiusPx}px
             </span>
           </ControlRow>
           <ControlSlider
             min={0}
             max={80}
-            value={(object as fabric.Rect).rx ?? 0}
+            value={rectCornerRadiusPx}
             onChange={onCornerRadius}
           />
         </div>
@@ -916,9 +921,21 @@ export const PropertiesPanel: React.FC = () => {
   const handleCornerRadius = (value: number) => {
     if (!selectedObject || selectedObject.type !== 'rect' || !canvas) return;
     const rect = selectedObject as fabric.Rect;
-    rect.set({ rx: value, ry: value });
-    (rect as any).__baseRx = value * (rect.scaleX ?? 1);
-    (rect as any).__baseRy = value * (rect.scaleY ?? 1);
+
+    const scaleX = Math.abs(rect.scaleX ?? 1) || 1;
+    const scaleY = Math.abs(rect.scaleY ?? 1) || 1;
+    const width = Math.abs(rect.width ?? 0);
+    const height = Math.abs(rect.height ?? 0);
+
+    const maxVisibleRadius = Math.max(0, Math.min((width * scaleX) / 2, (height * scaleY) / 2));
+    const clampedVisibleRadius = Math.max(0, Math.min(value, maxVisibleRadius));
+
+    const nextRx = clampedVisibleRadius / scaleX;
+    const nextRy = clampedVisibleRadius / scaleY;
+
+    rect.set({ rx: nextRx, ry: nextRy });
+    (rect as any).__baseRx = clampedVisibleRadius;
+    (rect as any).__baseRy = clampedVisibleRadius;
     rect.setCoords();
     canvas.requestRenderAll();
     requestLayerSync();
