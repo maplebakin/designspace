@@ -290,6 +290,61 @@ export const resizeCanvas = (width: number, height: number): void => {
   saveState();
 };
 
+const isDesignObject = (obj: fabric.Object) => !(obj as any).isGuide;
+
+export const resizeCanvasOnly = (width: number, height: number): void => {
+  resizeCanvas(width, height);
+  useEditorStore.getState().requestLayerSync();
+};
+
+export const clearAndResizeCanvas = (width: number, height: number): void => {
+  const {
+    canvas,
+    setLayers,
+    setSelectedLayerIds,
+    setSelectedObjectId,
+    requestLayerSync,
+  } = useEditorStore.getState();
+  if (!canvas) return;
+
+  canvas.discardActiveObject();
+  setLayers([]);
+  setSelectedLayerIds([]);
+  setSelectedObjectId(null);
+  canvas.clear();
+  requestLayerSync();
+  resizeCanvas(width, height);
+};
+
+export const resizeCanvasAndScaleContent = (width: number, height: number): void => {
+  const { canvas } = useEditorStore.getState();
+  if (!canvas) return;
+
+  const { width: currentWidth, height: currentHeight } = useCanvasStore.getState();
+  if (currentWidth <= 0 || currentHeight <= 0) {
+    resizeCanvasOnly(width, height);
+    return;
+  }
+
+  const scaleX = width / currentWidth;
+  const scaleY = height / currentHeight;
+
+  canvas.discardActiveObject();
+  canvas.getObjects().forEach((obj) => {
+    if (!isDesignObject(obj)) return;
+    obj.set({
+      left: (obj.left ?? 0) * scaleX,
+      top: (obj.top ?? 0) * scaleY,
+      scaleX: (obj.scaleX ?? 1) * scaleX,
+      scaleY: (obj.scaleY ?? 1) * scaleY,
+    });
+    obj.setCoords();
+  });
+
+  resizeCanvas(width, height);
+  useEditorStore.getState().requestLayerSync();
+};
+
 /**
  * Centers the document in the viewport at the given zoom level.
  * This is the core centering logic used by both fitCanvasToViewport and zoomToCenter.
