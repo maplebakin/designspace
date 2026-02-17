@@ -508,6 +508,7 @@ interface EditorState {
   projectName: string;
   isProjectPresetsOpen: boolean;
   isProjectQuickOpenOpen: boolean;
+  quickBarPinned: boolean;
   activeTool: EditorTool;
   brushSize: number;
   showOnboarding: boolean;
@@ -589,6 +590,7 @@ interface EditorState {
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
+  setQuickBarPinned: (pinned: boolean) => void;
   setProjectName: (name: string) => void;
   setActiveTool: (tool: EditorTool) => void;
   setBrushSize: (size: number) => void;
@@ -705,6 +707,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         projectName: 'Untitled Project',
         isProjectPresetsOpen: false,
         isProjectQuickOpenOpen: false,
+        quickBarPinned: false,
         activeTool: 'select',
         brushSize: 8,
         showOnboarding: true,
@@ -1036,6 +1039,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
     setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
+    setQuickBarPinned: (pinned) => set({ quickBarPinned: pinned }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
@@ -2125,6 +2129,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             bleedPx: state.bleedPx,
             isPreviewMode: state.isPreviewMode,
             projectName: state.projectName,
+            quickBarPinned: state.quickBarPinned,
             activeTool: state.activeTool,
             brushSize: state.brushSize,
             snapEnabled: state.snapEnabled,

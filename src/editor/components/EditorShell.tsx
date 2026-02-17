@@ -27,6 +27,7 @@ import {
   Redo2,
   Keyboard,
   Type,
+  Pin,
 } from 'lucide-react';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
 import { useCanUndo, useCanRedo } from '../state/useHistoryStore';
@@ -229,7 +230,11 @@ const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 };
 
-const CanvasQuickBar: React.FC<{ onSelectNav: (nav: NavId) => void }> = ({ onSelectNav }) => (
+const CanvasQuickBar: React.FC<{
+  onSelectNav: (nav: NavId) => void;
+  quickBarPinned: boolean;
+  onTogglePinned: () => void;
+}> = ({ onSelectNav, quickBarPinned, onTogglePinned }) => (
   <div className="canvas-quickbar absolute left-1/2 top-12 z-30 toolbar-section toolbar-compact -translate-x-1/2 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] backdrop-blur-[var(--ui-blur)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
     <button
       onClick={() => onSelectNav('layers')}
@@ -246,6 +251,18 @@ const CanvasQuickBar: React.FC<{ onSelectNav: (nav: NavId) => void }> = ({ onSel
       title="Insert Elements"
     >
       <Square className={NAV_ICON} />
+    </button>
+    <button
+      onClick={onTogglePinned}
+      className={`group rounded-full px-3 py-2 transition-all duration-300 ease-in-out ${
+        quickBarPinned
+          ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
+          : 'text-slate-200 hover:bg-white/10'
+      }`}
+      aria-label={quickBarPinned ? 'Disable quick bar pin' : 'Enable quick bar pin'}
+      title={quickBarPinned ? 'Quick bar pinned' : 'Pin quick bar'}
+    >
+      <Pin className={NAV_ICON} />
     </button>
   </div>
 );
@@ -264,6 +281,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty,
     saveStatus,
     activeTool,
+    showOnboarding,
+    quickBarPinned,
     setActiveTool,
     setBrushColor,
     setCanvasBackgroundColor,
@@ -274,6 +293,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     showExportModal,
     setShowExportModal,
     setProjectQuickOpenOpen,
+    setQuickBarPinned,
     setShowHelpModal,
     undo,
     redo,
@@ -286,6 +306,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty: state.consumeHistoryDirty,
     saveStatus: state.saveStatus,
     activeTool: state.activeTool,
+    showOnboarding: state.showOnboarding,
+    quickBarPinned: state.quickBarPinned,
     setActiveTool: state.setActiveTool,
     setBrushColor: state.setBrushColor,
     setCanvasBackgroundColor: state.setCanvasBackgroundColor,
@@ -296,6 +318,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     showExportModal: state.showExportModal,
     setShowExportModal: state.setShowExportModal,
     setProjectQuickOpenOpen: state.setProjectQuickOpenOpen,
+    setQuickBarPinned: state.setQuickBarPinned,
     setShowHelpModal: state.setShowHelpModal,
     undo: state.undo,
     redo: state.redo,
@@ -371,6 +394,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setActiveNav(null);
     setIsShapesOpen((prev) => !prev);
   };
+
+  const showCanvasQuickBar = showOnboarding || activeNav === null || quickBarPinned;
 
   const renderPanel = () => {
     if (!activeNav) return null;
@@ -665,7 +690,13 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
 
         <main className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
-            <CanvasQuickBar onSelectNav={handleSelectNav} />
+            {showCanvasQuickBar && (
+              <CanvasQuickBar
+                onSelectNav={handleSelectNav}
+                quickBarPinned={quickBarPinned}
+                onTogglePinned={() => setQuickBarPinned(!quickBarPinned)}
+              />
+            )}
             <SelectionToolbar />
             <CanvasStage onSelectNav={handleSelectNav} />
         </main>
