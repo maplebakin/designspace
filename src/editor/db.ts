@@ -160,6 +160,13 @@ export class DesignSpaceDB extends Dexie {
     });
   }
 
+  async renameProject(projectId: string, newName: string): Promise<void> {
+    await this.projects.update(projectId, {
+      name: newName,
+      lastModified: new Date(),
+    });
+  }
+
   async getBrandKit(): Promise<BrandKit | null> {
     const brandKitRecords = await this.brandKit.toArray();
     return brandKitRecords.length > 0 ? brandKitRecords[0] : null;

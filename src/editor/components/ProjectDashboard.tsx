@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { FileText, Plus, Trash2, Copy, Search, X } from 'lucide-react';
+import { FileText, Plus, Search, X, MoreHorizontal } from 'lucide-react';
 import { DASHBOARD_PRESETS, type CanvasPreset } from '../config/canvasPresets';
 
 interface ProjectItem {
@@ -21,12 +21,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   const [searchQuery, setSearchQuery] = useState('');
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isDuplicating, setIsDuplicating] = useState<string | null>(null);
+  const [openMenuProjectId, setOpenMenuProjectId] = useState<string | null>(null);
   
   const {
     getAllProjects,
     loadProject,
     deleteProject,
     duplicateProject,
+    renameProject,
     createProject,
     setProjectPresetsOpen,
   } = useEditorStore((state) => ({
@@ -34,6 +36,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     loadProject: state.loadProject,
     deleteProject: state.deleteProject,
     duplicateProject: state.duplicateProject,
+    renameProject: state.renameProject,
     createProject: state.createProject,
     setProjectPresetsOpen: state.setProjectPresetsOpen,
   }), shallow);
@@ -42,6 +45,31 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   useEffect(() => {
     loadProjects();
   }, []);
+
+  useEffect(() => {
+    if (!openMenuProjectId) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!target.closest('[data-project-card-menu="true"]')) {
+        setOpenMenuProjectId(null);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenMenuProjectId(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [openMenuProjectId]);
 
   const loadProjects = async () => {
     setIsLoading(true);
@@ -88,6 +116,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     } finally {
       setIsDuplicating(null);
     }
+  };
+
+  const handleRenameProject = async (projectId: string, projectName: string) => {
+    const proposedName = window.prompt('Rename project', projectName);
+    if (proposedName === null) return;
+    const normalizedName = proposedName.trim();
+    if (!normalizedName || normalizedName === projectName) return;
+    await renameProject(projectId, normalizedName);
+    loadProjects();
   };
 
   const handlePresetSelect = (preset: CanvasPreset) => {
@@ -229,31 +266,66 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                     </div>
                   )}
                   
-                  <div className="absolute top-2 right-2 flex gap-1">
+                  <div className="absolute top-2 right-2" data-project-card-menu="true">
                     <button
-                      onClick={() => handleDuplicateProject(project.id, project.name)}
-                      disabled={isDuplicating === project.id}
-                      className="p-1.5 rounded-full bg-black/50 hover:bg-black/70 transition-colors disabled:opacity-50"
-                      title="Duplicate project"
+                      onClick={() => setOpenMenuProjectId((current) => (current === project.id ? null : project.id))}
+                      className="rounded-full bg-black/55 p-1.5 text-white transition-colors hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]"
+                      aria-haspopup="menu"
+                      aria-expanded={openMenuProjectId === project.id}
+                      aria-label={`Project actions for ${project.name}`}
                     >
-                      {isDuplicating === project.id ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      ) : (
-                        <Copy className="w-4 h-4 text-white" />
-                      )}
+                      <MoreHorizontal className="h-4 w-4" />
                     </button>
-                    <button
-                      onClick={() => handleDeleteProject(project.id, project.name)}
-                      disabled={isDeleting === project.id}
-                      className="p-1.5 rounded-full bg-black/50 hover:bg-red-500/70 transition-colors disabled:opacity-50"
-                      title="Delete project"
-                    >
-                      {isDeleting === project.id ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      ) : (
-                        <Trash2 className="w-4 h-4 text-white" />
-                      )}
-                    </button>
+                    {openMenuProjectId === project.id && (
+                      <div
+                        role="menu"
+                        className="absolute right-0 mt-2 w-44 rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-1 text-xs shadow-[0_12px_30px_rgba(0,0,0,0.35)]"
+                      >
+                        <button
+                          autoFocus
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenMenuProjectId(null);
+                            void handleLoadProject(project.id);
+                          }}
+                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                        >
+                          Open
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenMenuProjectId(null);
+                            void handleDuplicateProject(project.id, project.name);
+                          }}
+                          disabled={isDuplicating === project.id}
+                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10 disabled:opacity-60"
+                        >
+                          {isDuplicating === project.id ? 'Duplicating...' : 'Duplicate'}
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenMenuProjectId(null);
+                            void handleRenameProject(project.id, project.name);
+                          }}
+                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setOpenMenuProjectId(null);
+                            void handleDeleteProject(project.id, project.name);
+                          }}
+                          disabled={isDeleting === project.id}
+                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
+                        >
+                          {isDeleting === project.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 

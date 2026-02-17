@@ -628,6 +628,7 @@ interface EditorState {
   loadProject: (projectId: string) => Promise<void>;
   deleteProject: (projectId: string) => Promise<void>;
   duplicateProject: (projectId: string, newName: string) => Promise<void>;
+  renameProject: (projectId: string, newName: string) => Promise<void>;
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
   setAutoSaveStatus: (status: AutoSaveStatus) => void;
@@ -1806,6 +1807,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         } catch (error) {
             console.error('Failed to duplicate project:', error);
             set({ toastMessage: 'Failed to duplicate project.' });
+        }
+    },
+    renameProject: async (projectId, newName) => {
+        const normalizedName = newName.trim();
+        if (!normalizedName) return;
+        try {
+            const { db } = await import('../db');
+            await db.renameProject(projectId, normalizedName);
+            set({ toastMessage: `Project renamed to: ${normalizedName}` });
+        } catch (error) {
+            console.error('Failed to rename project:', error);
+            set({ toastMessage: 'Failed to rename project.' });
         }
     },
 
