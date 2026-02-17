@@ -275,7 +275,9 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   useKeyboardShortcuts();
   const {
     toastMessage,
-    setToastMessage,
+    toast,
+    setToast,
+    dismissToast,
     canvas,
     saveState,
     consumeHistoryDirty,
@@ -304,7 +306,9 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   } = useEditorStore(
     (state) => ({
       toastMessage: state.toastMessage,
-    setToastMessage: state.setToastMessage,
+    toast: state.toast,
+    setToast: state.setToast,
+    dismissToast: state.dismissToast,
     canvas: state.canvas,
     saveState: state.saveState,
     consumeHistoryDirty: state.consumeHistoryDirty,
@@ -352,17 +356,40 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const [activeNav, setActiveNav] = useState<NavId | null>(null);
   const [isShapesOpen, setIsShapesOpen] = useState(false);
   const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
+  const [expandedToastId, setExpandedToastId] = useState<string | null>(null);
+
+  const activeToast = useMemo(() => {
+    if (toast) return toast;
+    if (!toastMessage) return null;
+    return {
+      id: `legacy-${toastMessage}`,
+      message: toastMessage,
+      variant: 'info' as const,
+      durationMs: 3000,
+    };
+  }, [toast, toastMessage]);
 
   // Register toast callback for error handling utilities
   useEffect(() => {
-    registerToastCallback(setToastMessage);
-  }, [setToastMessage]);
+    registerToastCallback(setToast);
+  }, [setToast]);
 
   useEffect(() => {
-    if (!toastMessage) return;
-    const timeout = window.setTimeout(() => setToastMessage(null), 3000);
+    if (!activeToast) return;
+    if (!activeToast.durationMs || activeToast.durationMs <= 0) return;
+    const timeout = window.setTimeout(() => dismissToast(), activeToast.durationMs);
     return () => window.clearTimeout(timeout);
-  }, [toastMessage, setToastMessage]);
+  }, [activeToast, dismissToast]);
+
+  useEffect(() => {
+    if (!activeToast) {
+      setExpandedToastId(null);
+      return;
+    }
+    if (expandedToastId && expandedToastId !== activeToast.id) {
+      setExpandedToastId(null);
+    }
+  }, [activeToast, expandedToastId]);
 
   useEffect(() => {
     if (activeTool !== 'draw' && activeTool !== 'pan' && activeTool !== 'select') {
@@ -439,9 +466,57 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         <ProjectPresetsModal />
         <ProjectQuickOpenModal />
         
-        {toastMessage && (
-            <div className="fixed bottom-4 right-4 bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] text-sm px-4 py-2 rounded-lg shadow-[0_0_24px_rgba(0,0,0,0.35)] border border-[color:var(--ui-border)] z-50">
-                {toastMessage}
+        {activeToast && (
+            <div
+              className={`fixed bottom-4 right-4 z-50 w-[22rem] rounded-lg border px-4 py-3 text-sm shadow-[0_0_24px_rgba(0,0,0,0.35)] ${
+                activeToast.variant === 'error'
+                  ? 'border-rose-400/40 bg-rose-500/12 text-rose-100'
+                  : activeToast.variant === 'warning'
+                    ? 'border-amber-300/35 bg-amber-500/10 text-amber-100'
+                    : activeToast.variant === 'success'
+                      ? 'border-emerald-300/35 bg-emerald-500/10 text-emerald-100'
+                      : 'border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)]'
+              }`}
+              role="status"
+              aria-live={activeToast.variant === 'error' ? 'assertive' : 'polite'}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-xs uppercase tracking-widest">{activeToast.message}</p>
+                </div>
+                <button
+                  onClick={dismissToast}
+                  className="rounded-md border border-white/20 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                  aria-label="Dismiss toast"
+                >
+                  Close
+                </button>
+              </div>
+              {(activeToast.details || activeToast.action) && (
+                <div className="mt-2 flex items-center gap-2">
+                  {activeToast.details && (
+                    <button
+                      onClick={() => setExpandedToastId((current) => (current === activeToast.id ? null : activeToast.id))}
+                      className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                    >
+                      {expandedToastId === activeToast.id ? 'Hide Details' : 'Details'}
+                    </button>
+                  )}
+                  {activeToast.action && (
+                    <button
+                      onClick={() => activeToast.action?.onAction()}
+                      className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                    >
+                      {activeToast.action.label}
+                    </button>
+                  )}
+                </div>
+              )}
+              {activeToast.details && expandedToastId === activeToast.id && (
+                <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-white/15 bg-black/20 p-2 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+{activeToast.details}
+                </pre>
+              )}
             </div>
         )}
 

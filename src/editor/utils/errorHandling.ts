@@ -15,6 +15,19 @@
 /** Error severity levels for logging and display */
 export type ErrorSeverity = 'info' | 'warning' | 'error';
 
+export type ToastVariant = 'success' | 'info' | 'warning' | 'error';
+
+export interface ToastNotification {
+  message: string;
+  variant?: ToastVariant;
+  details?: string;
+  action?: {
+    label: string;
+    onAction: () => void;
+  };
+  durationMs?: number;
+}
+
 /** Standard result type for operations that can fail */
 export interface OperationResult<T = void> {
   success: boolean;
@@ -30,6 +43,11 @@ interface ErrorDisplayOptions {
   log?: boolean;
   /** Additional context for logging */
   context?: Record<string, unknown>;
+  /** Optional secondary toast action */
+  action?: {
+    label: string;
+    onAction: () => void;
+  };
 }
 
 // ============================================================================
@@ -37,22 +55,23 @@ interface ErrorDisplayOptions {
 // ============================================================================
 
 /** Callback to display toast messages (set by EditorShell on mount) */
-let toastCallback: ((message: string) => void) | null = null;
+let toastCallback: ((toast: string | ToastNotification) => void) | null = null;
 
 /**
  * Registers the toast callback. Called once by EditorShell on mount.
  * This avoids circular dependencies with the editor store.
  */
-export function registerToastCallback(callback: (message: string) => void): void {
+export function registerToastCallback(callback: (toast: string | ToastNotification) => void): void {
   toastCallback = callback;
 }
 
 /**
  * Internal helper to show a toast message.
  */
-function showToast(message: string): void {
+function showToast(toast: string | ToastNotification): void {
+  const message = typeof toast === 'string' ? toast : toast.message;
   if (toastCallback) {
-    toastCallback(message);
+    toastCallback(toast);
   } else {
     // Fallback to console if toast not registered yet
     console.log(`[Toast] ${message}`);
@@ -70,10 +89,20 @@ function showToast(message: string): void {
  * @param options - Display and logging options
  */
 export function showError(message: string, options: ErrorDisplayOptions = {}): void {
-  const { log = true, context } = options;
+  const { log = true, context, action } = options;
+  const rawDetail = context?.detail;
+  const details =
+    typeof rawDetail === 'string'
+      ? rawDetail
+      : (rawDetail != null ? JSON.stringify(rawDetail, null, 2) : undefined);
 
   // Display toast
-  showToast(message);
+  showToast({
+    message,
+    variant: 'error',
+    details,
+    action,
+  });
 
   // Log to console
   if (log) {
@@ -90,7 +119,7 @@ export function showError(message: string, options: ErrorDisplayOptions = {}): v
 export function showWarning(message: string, options: ErrorDisplayOptions = {}): void {
   const { log = true, context } = options;
 
-  showToast(message);
+  showToast({ message, variant: 'warning', durationMs: 4500 });
 
   if (log) {
     console.warn(`[DesignSpace Warning] ${message}`, context ?? '');
@@ -103,7 +132,11 @@ export function showWarning(message: string, options: ErrorDisplayOptions = {}):
  * @param message - The info message to display
  */
 export function showInfo(message: string): void {
-  showToast(message);
+  showToast({ message, variant: 'info', durationMs: 3000 });
+}
+
+export function showSuccess(message: string): void {
+  showToast({ message, variant: 'success', durationMs: 3000 });
 }
 
 // ============================================================================

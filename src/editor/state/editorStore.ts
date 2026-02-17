@@ -55,6 +55,29 @@ const AUTOSAVE_VERSION = 1;
 
 export type AutoSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 export type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
+export type ToastVariant = 'success' | 'info' | 'warning' | 'error';
+
+export type ToastAction = {
+    label: string;
+    onAction: () => void;
+};
+
+export type ToastPayload = {
+    id: string;
+    message: string;
+    variant: ToastVariant;
+    details?: string;
+    action?: ToastAction;
+    durationMs?: number;
+};
+
+export type ToastInput = string | {
+    message: string;
+    variant?: ToastVariant;
+    details?: string;
+    action?: ToastAction;
+    durationMs?: number;
+};
 
 export const deriveSaveStatus = (status: AutoSaveStatus): SaveStatus => {
     switch (status) {
@@ -490,6 +513,7 @@ interface EditorState {
   dirtyObjectsRef: Set<string> | null;
 
   toastMessage: string | null;
+  toast: ToastPayload | null;
   unitMode: UnitMode;
   unitScale: number;
   unitZoom: number;
@@ -564,6 +588,8 @@ interface EditorState {
   toggleShowGuides: () => void;
   saveState: (options?: { force?: boolean }) => void;
   triggerAutoSave: () => void;
+  setToast: (toast: ToastInput | null) => void;
+  dismissToast: () => void;
   setToastMessage: (message: string | null) => void;
   setUnitMode: (mode: UnitMode) => void;
   setCanvasBackgroundColor: (color: string) => void;
@@ -694,6 +720,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         dirtyObjectsRef: null,
 
         toastMessage: null,
+        toast: null,
         unitMode: 'in', // Default to inches for print-focused design
         unitScale: unitScaleMap['in'],
         unitZoom: 1,
@@ -935,7 +962,44 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         return useHistoryStore.getState().consumeHistoryDirty();
     },
     toggleShowGuides: () => set((state) => ({ showGuides: !state.showGuides })),
-    setToastMessage: (message) => set({ toastMessage: message }),
+    setToast: (toast) => {
+        if (!toast) {
+            set({ toast: null, toastMessage: null });
+            return;
+        }
+        if (typeof toast === 'string') {
+            const normalizedToast: ToastPayload = {
+                id: uuidv4(),
+                message: toast,
+                variant: 'info',
+                durationMs: 3000,
+            };
+            set({ toast: normalizedToast, toastMessage: toast });
+            return;
+        }
+
+        const variant = toast.variant ?? 'info';
+        const normalizedToast: ToastPayload = {
+            id: uuidv4(),
+            message: toast.message,
+            variant,
+            details: toast.details,
+            action: toast.action,
+            durationMs:
+                typeof toast.durationMs === 'number'
+                    ? toast.durationMs
+                    : (variant === 'error' ? undefined : 3000),
+        };
+        set({ toast: normalizedToast, toastMessage: toast.message });
+    },
+    dismissToast: () => set({ toast: null, toastMessage: null }),
+    setToastMessage: (message) => {
+        if (!message) {
+            get().dismissToast();
+            return;
+        }
+        get().setToast(message);
+    },
     setUnitMode: (mode) => {
         set((state) => {
             const nextScale = unitScaleMap[mode];
