@@ -60,12 +60,13 @@ import { ProjectQuickOpenModal } from './ProjectQuickOpenModal';
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
 
-type NavId = 'insert' | 'layers' | 'assets';
+type NavId = 'shapes' | 'insert' | 'layers' | 'assets';
 
-const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ReactElement }> = [
-  { id: 'insert', label: 'Insert', icon: <Square /> },
-  { id: 'layers', label: 'Layers', icon: <Layers /> },
-  { id: 'assets', label: 'Assets', icon: <ImageIcon /> },
+const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ReactElement; description: string }> = [
+  { id: 'shapes', label: 'Shapes', icon: <Square />, description: 'Quick geometric primitives' },
+  { id: 'insert', label: 'Insert', icon: <Type />, description: 'Text, placeholders, and media tools' },
+  { id: 'layers', label: 'Layers', icon: <Layers />, description: 'Order, visibility, and locking' },
+  { id: 'assets', label: 'Assets', icon: <ImageIcon />, description: 'Library and imports' },
 ];
 
 interface FileDropdownProps {
@@ -162,71 +163,56 @@ interface NavStripProps {
 }
 
 const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
-  <div className="flex flex-col items-center gap-4 py-4">
+  <div className="flex flex-col gap-2 p-3">
     {NAV_ITEMS.map((item) => {
       const isActive = activeNav === item.id;
       return (
-        <Tooltip key={item.id} content={item.label} side="right">
-          <button
-            onClick={() => onSelect(item.id)}
-            className={`group w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-200 ${
-              isActive
-                ? 'bg-white/20 text-white shadow-[0_0_16px_rgba(255,255,255,0.3)]'
-                : 'text-slate-400 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
-            }`}
-          >
-            {React.cloneElement(item.icon, { className: `${NAV_ICON} transition-colors` })}
-          </button>
-        </Tooltip>
+        <button
+          key={item.id}
+          onClick={() => onSelect(item.id)}
+          className={`w-full rounded-xl border px-3 py-2 text-left transition-all duration-200 ${
+            isActive
+              ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/15 text-white'
+              : 'border-transparent bg-white/5 text-slate-300 hover:border-white/10 hover:bg-white/10'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {React.cloneElement(item.icon, { className: `${NAV_ICON} shrink-0` })}
+            <span className="text-[11px] uppercase tracking-widest">{item.label}</span>
+          </div>
+          <p className="mt-1 text-[9px] uppercase tracking-widest text-slate-400">{item.description}</p>
+        </button>
       );
     })}
   </div>
 );
 
-const ShapesPopover: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const ShapesPanel: React.FC = () => {
   const handleAddShape = (factory: (canvas: fabric.Canvas) => void) => {
     const canvas = useEditorStore.getState().canvas;
     if (!canvas) return;
     factory(canvas);
-    // Automatically switch to selection tool after inserting a shape
     useEditorStore.getState().setActiveTool('select');
-    onClose();
   };
 
   return (
-    <PopoverSurface className="min-w-[160px] w-fit z-50">
-      <h3 className="text-[10px] uppercase tracking-widest mb-3">Shapes</h3>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => handleAddShape(objectFactories.addRectangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-        >
-          <Square className={ICON_SMALL} />
-          <span className="shrink-0 whitespace-nowrap">Rectangle</span>
+    <div className="p-4 space-y-3">
+      <h3 className="text-[10px] uppercase tracking-widest text-slate-300">Shapes</h3>
+      <div className="grid grid-cols-1 gap-2">
+        <button onClick={() => handleAddShape(objectFactories.addRectangle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
+          <Square className={ICON_SMALL} /><span>Rectangle</span>
         </button>
-        <button
-          onClick={() => handleAddShape(objectFactories.addCircle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-        >
-          <Circle className={ICON_SMALL} />
-          <span className="shrink-0 whitespace-nowrap">Circle</span>
+        <button onClick={() => handleAddShape(objectFactories.addCircle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
+          <Circle className={ICON_SMALL} /><span>Circle</span>
         </button>
-        <button
-          onClick={() => handleAddShape(objectFactories.addTriangle)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-        >
-          <Triangle className={ICON_SMALL} />
-          <span className="shrink-0 whitespace-nowrap">Triangle</span>
+        <button onClick={() => handleAddShape(objectFactories.addTriangle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
+          <Triangle className={ICON_SMALL} /><span>Triangle</span>
         </button>
-        <button
-          onClick={() => handleAddShape(objectFactories.addStar)}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out hover:border-[color:var(--brand-primary)]"
-        >
-          <Star className={ICON_SMALL} />
-          <span className="shrink-0 whitespace-nowrap">Star</span>
+        <button onClick={() => handleAddShape(objectFactories.addStar)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
+          <Star className={ICON_SMALL} /><span>Star</span>
         </button>
       </div>
-    </PopoverSurface>
+    </div>
   );
 };
 
@@ -354,7 +340,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const [isDesignSpaceImportOpen, setIsDesignSpaceImportOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [activeNav, setActiveNav] = useState<NavId | null>(null);
-  const [isShapesOpen, setIsShapesOpen] = useState(false);
   const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
   const [expandedToastId, setExpandedToastId] = useState<string | null>(null);
 
@@ -421,13 +406,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   }, []);
 
   const handleSelectNav = (id: NavId) => {
-    setIsShapesOpen(false);
     setActiveNav((prev) => (prev === id ? null : id));
-  };
-
-  const toggleShapes = () => {
-    setActiveNav(null);
-    setIsShapesOpen((prev) => !prev);
   };
 
   const showCanvasQuickBar = showOnboarding || activeNav === null || quickBarPinned;
@@ -446,6 +425,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const renderPanel = () => {
     if (!activeNav) return null;
     switch (activeNav) {
+      case 'shapes':
+        return <ShapesPanel />;
       case 'insert':
         return <Inserter />;
       case 'layers':
@@ -775,42 +756,31 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
       )}
 
       <div className="flex-1 flex overflow-hidden">
-        <div className="relative flex h-full">
-          <div className="relative flex h-full">
-            <div className="flex flex-col items-center gap-6 py-5 px-1 bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)]">
-              <button
-                onClick={toggleShapes}
-                className={`group w-10 h-10 flex items-center justify-center rounded-2xl transition-all duration-300 ease-in-out ${
-                  isShapesOpen ? 'bg-white/20 text-[color:var(--ui-panel-text)] shadow-[0_0_22px_rgba(248,249,250,0.5)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] hover:bg-white/10'
-                }`}
-                aria-label="Shapes"
-                title="Shapes"
-              >
-                <Square className={NAV_ICON} />
-              </button>
-              <div className="h-px w-6 bg-white/10" />
+        <aside className="w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex flex-col">
+          <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
+            <p className="text-[10px] uppercase tracking-widest text-slate-300">Workspace</p>
+            <p className="text-[9px] uppercase tracking-widest text-slate-500 mt-1">Choose a panel to work faster</p>
+          </div>
+          <div className="flex-1 min-h-0 flex overflow-hidden">
+            <div className="w-[150px] border-r border-[color:var(--border-subtle)] overflow-y-auto">
               <NavStrip activeNav={activeNav} onSelect={handleSelectNav} />
-              <div className="flex-1" />
             </div>
-            {isShapesOpen && (
-              <div className="absolute left-full top-4 z-50 ml-3">
-                <ShapesPopover onClose={() => setIsShapesOpen(false)} />
-              </div>
-            )}
-            {activeNav && (
-              <div className="absolute left-full top-20 z-30 ml-3 w-[280px]">
-                <div className="rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] shadow-[0_18px_40px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)] overflow-hidden">
+            <div className="flex-1 overflow-y-auto">
+              {activeNav ? (
+                <div>
                   <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
                     <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
                   </div>
-                  <div className="max-h-[75vh] overflow-y-auto">
+                  <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
                     {renderPanel()}
                   </div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="p-4 text-[10px] uppercase tracking-widest text-slate-400">Select Shapes, Insert, Layers, or Assets.</div>
+              )}
+            </div>
           </div>
-        </div>
+        </aside>
 
         <main className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
