@@ -522,6 +522,8 @@ interface EditorState {
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
   sessionAutoSaveTimer: ReturnType<typeof setTimeout> | null;
   hasRestoredSession: boolean;
+  showSessionRestoreBanner: boolean;
+  restoredSessionTimestamp: string | null;
 
   // PHASE 2.2: Sync Lock Mechanism
   syncLock: {
@@ -635,6 +637,8 @@ interface EditorState {
   triggerSessionAutoSave: () => void;
   restoreSessionFromStorage: () => Promise<boolean>;
   clearSessionFromStorage: () => void;
+  dismissSessionRestoreBanner: () => void;
+  discardRestoredSession: () => void;
 
   // History Actions
   takeSnapshot: () => void;
@@ -722,6 +726,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         autoSaveTimer: null,
         sessionAutoSaveTimer: null,
         hasRestoredSession: false,
+        showSessionRestoreBanner: false,
+        restoredSessionTimestamp: null,
         showHelpModal: false,
         showExportModal: false,
         showSafeZones: false,
@@ -1178,6 +1184,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             isProjectPresetsOpen: false, // Don't show presets by default anymore
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
+            showSessionRestoreBanner: false,
+            restoredSessionTimestamp: null,
         });
 
         get().triggerSessionAutoSave();
@@ -1319,6 +1327,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 imageAssets: nextAssets,
                 autoSaveStatus: 'idle',
                 saveStatus: 'saved',
+                showSessionRestoreBanner: false,
+                restoredSessionTimestamp: null,
             });
             useThemeStore.getState().setCanvasBackgroundColor(
                 canvas.backgroundColor ? String(canvas.backgroundColor) : null
@@ -1774,6 +1784,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 isProjectPresetsOpen: false,
                 autoSaveStatus: 'idle',
                 saveStatus: 'saved',
+                showSessionRestoreBanner: false,
+                restoredSessionTimestamp: null,
             });
 
             setShowOnboarding(false);
@@ -1887,6 +1899,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         } catch (error) {
             console.warn('Failed to clear autosave session:', error);
         }
+    },
+    dismissSessionRestoreBanner: () => {
+        set({ showSessionRestoreBanner: false });
+    },
+    discardRestoredSession: () => {
+        get().clearSessionFromStorage();
+        get().createProject({ source: 'restored-session-discard' });
+        get().setShowOnboarding(true);
+        set({
+            showSessionRestoreBanner: false,
+            restoredSessionTimestamp: null,
+        });
     },
     triggerSessionAutoSave: () => {
         if (typeof window === 'undefined') return;
@@ -2019,6 +2043,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             imageAssets: nextAssets,
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
+            showSessionRestoreBanner: true,
+            restoredSessionTimestamp: typeof payload.lastUpdated === 'string' ? payload.lastUpdated : null,
         });
 
         setShowOnboarding(false);
@@ -2149,6 +2175,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             gridEnabled: state.gridEnabled,
             autoSaveStatus: state.autoSaveStatus,
             saveStatus: state.saveStatus,
+            showSessionRestoreBanner: state.showSessionRestoreBanner,
+            restoredSessionTimestamp: state.restoredSessionTimestamp,
         }),
     }
   )

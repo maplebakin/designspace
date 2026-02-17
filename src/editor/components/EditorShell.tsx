@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
@@ -294,6 +294,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setShowExportModal,
     setProjectQuickOpenOpen,
     setQuickBarPinned,
+    showSessionRestoreBanner,
+    restoredSessionTimestamp,
+    dismissSessionRestoreBanner,
+    discardRestoredSession,
     setShowHelpModal,
     undo,
     redo,
@@ -319,6 +323,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setShowExportModal: state.setShowExportModal,
     setProjectQuickOpenOpen: state.setProjectQuickOpenOpen,
     setQuickBarPinned: state.setQuickBarPinned,
+    showSessionRestoreBanner: state.showSessionRestoreBanner,
+    restoredSessionTimestamp: state.restoredSessionTimestamp,
+    dismissSessionRestoreBanner: state.dismissSessionRestoreBanner,
+    discardRestoredSession: state.discardRestoredSession,
     setShowHelpModal: state.setShowHelpModal,
     undo: state.undo,
     redo: state.redo,
@@ -396,6 +404,17 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   };
 
   const showCanvasQuickBar = showOnboarding || activeNav === null || quickBarPinned;
+  const restoredSessionLabel = useMemo(() => {
+    if (!restoredSessionTimestamp) return null;
+    const recoveredAt = new Date(restoredSessionTimestamp);
+    if (Number.isNaN(recoveredAt.getTime())) return null;
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(recoveredAt);
+  }, [restoredSessionTimestamp]);
 
   const renderPanel = () => {
     if (!activeNav) return null;
@@ -649,6 +668,36 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             </Tooltip>
         </div>
       </header>
+
+      {showSessionRestoreBanner && (
+        <div className="px-4 pt-3">
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-4 py-2 text-[11px] uppercase tracking-widest text-slate-200 shadow-[0_10px_28px_rgba(0,0,0,0.25)]">
+            <span>
+              {restoredSessionLabel
+                ? `Recovered unsaved session from ${restoredSessionLabel}`
+                : 'Recovered unsaved session'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={dismissSessionRestoreBanner}
+                className="rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-widest text-slate-200 hover:bg-white/10"
+              >
+                Keep
+              </button>
+              <button
+                onClick={() => {
+                  const shouldDiscard = window.confirm('Discard recovered session and start a new project?');
+                  if (!shouldDiscard) return;
+                  discardRestoredSession();
+                }}
+                className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-[10px] uppercase tracking-widest text-rose-200 hover:bg-rose-500/20"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         <div className="relative flex h-full">
