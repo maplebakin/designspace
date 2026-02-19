@@ -11,6 +11,7 @@ interface ExportModalProps {
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => {
+  const isDev = import.meta.env.DEV;
   const { canvas } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
@@ -62,7 +63,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     onClose();
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !isDev) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">

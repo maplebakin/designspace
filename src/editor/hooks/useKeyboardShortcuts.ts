@@ -42,6 +42,7 @@ export const useKeyboardShortcuts = () => {
       }
 
       if (isMeta && key === 'e') {
+        if (!import.meta.env.DEV) return;
         event.preventDefault();
         const { setShowExportModal } = useEditorStore.getState();
         setShowExportModal(true);

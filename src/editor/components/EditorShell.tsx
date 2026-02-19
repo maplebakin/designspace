@@ -713,15 +713,17 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Keyboard className={ICON_SMALL} />
               </button>
             </Tooltip>
-            <Tooltip content="Download (⌘E)" side="bottom">
-              <button
-                onClick={() => setShowExportModal(true)}
-                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
-                aria-label="Download"
-              >
-                <Download className={ICON_SMALL} />
-              </button>
-            </Tooltip>
+            {import.meta.env.DEV && (
+              <Tooltip content="Download (⌘E)" side="bottom">
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
+                  aria-label="Download"
+                >
+                  <Download className={ICON_SMALL} />
+                </button>
+              </Tooltip>
+            )}
         </div>
       </header>
 

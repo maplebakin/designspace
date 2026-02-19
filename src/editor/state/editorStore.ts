@@ -1690,6 +1690,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     exportCanvas: async (options) => {
+        if (!import.meta.env.DEV) {
+            showError('Export is disabled in deployed builds.');
+            return;
+        }
+
         const { canvas, canvasReadyState } = get();
         if (!canvas) {
             showError(ErrorMessages.CANVAS_NOT_READY);
@@ -1944,7 +1949,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     setAutoSaveStatus: (status) => set({ autoSaveStatus: status, saveStatus: deriveSaveStatus(status) }),
     setShowHelpModal: (show) => set({ showHelpModal: show }),
-    setShowExportModal: (show) => set({ showExportModal: show }),
+    setShowExportModal: (show) => set({ showExportModal: import.meta.env.DEV ? show : false }),
     setShowSafeZones: (show) => set({ showSafeZones: show }),
     clearSessionFromStorage: () => {
         if (typeof window === 'undefined') return;
