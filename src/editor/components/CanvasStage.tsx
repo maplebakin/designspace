@@ -346,6 +346,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const snapEnabledRef = useRef(snapEnabled);
   const viewportRecoveryAttemptsRef = useRef(0);
   const didForceRerenderRef = useRef(false);
+  const didInitialViewportFitRef = useRef(false);
   const [isOverlayDismissed, setIsOverlayDismissed] = useState(false);
 
   // PHASE 3.3: Circuit breaker for infinite re-render loop prevention
@@ -398,6 +399,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       }
     }
   }, [setCanvasOffset, setVpt]);
+
+  useEffect(() => {
+    if (!fabricCanvas || !containerRef.current || didInitialViewportFitRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) return;
+
+    didInitialViewportFitRef.current = true;
+    requestAnimationFrame(() => {
+      fitCanvasToViewport(rect.width, rect.height);
+      updateViewportState(fabricCanvas);
+    });
+  }, [fabricCanvas, updateViewportState]);
 
   const scheduleUpdate = useCallback((
     targetCanvas?: fabric.Canvas | null,
