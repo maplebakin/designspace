@@ -28,6 +28,7 @@ import {
   Keyboard,
   Type,
   Pin,
+  Frame,
 } from 'lucide-react';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
 import { useCanUndo, useCanRedo } from '../state/useHistoryStore';
@@ -57,6 +58,7 @@ import { registerToastCallback } from '../utils/errorHandling';
 import { SaveStatusBadge } from './SaveStatusBadge';
 import { ProjectQuickOpenModal } from './ProjectQuickOpenModal';
 import { PageStrip } from './PageStrip';
+import { PageBorderPopover } from './PageBorderPopover';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
@@ -337,6 +339,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const [activeNav, setActiveNav] = useState<NavId | null>(null);
   const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
   const [expandedToastId, setExpandedToastId] = useState<string | null>(null);
+  const [isBorderPopoverOpen, setIsBorderPopoverOpen] = useState(false);
 
   const activeToast = useMemo(() => {
     if (toast) return toast;
@@ -668,6 +671,21 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <SlidersHorizontal className={ICON_SMALL} />
                 Vibe
             </button>
+            <Popover
+              isOpen={isBorderPopoverOpen}
+              onOpenChange={setIsBorderPopoverOpen}
+              ariaLabel="Page Border"
+              trigger={
+                <button
+                  className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+                >
+                  <Frame className={ICON_SMALL} />
+                  Border
+                </button>
+              }
+            >
+              <PageBorderPopover />
+            </Popover>
             {onBackToDashboard ? (
               <button
                 onClick={onBackToDashboard}

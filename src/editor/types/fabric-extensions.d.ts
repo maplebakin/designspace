@@ -118,6 +118,10 @@ interface CustomObjectProps {
   excludeFromExport?: boolean;
   /** Custom name for the layer panel */
   name?: string;
+  /** Marks object as page border group */
+  isPageBorder?: boolean;
+  /** Serialized page border settings */
+  borderSettings?: any;
 }
 
 // ============================================================================

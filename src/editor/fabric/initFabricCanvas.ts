@@ -18,6 +18,9 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
   if (target.isPlaceholder === undefined) target.isPlaceholder = serialized?.isPlaceholder ?? false;
   if (target.isFrame === undefined) target.isFrame = serialized?.isFrame ?? false;
   if (target.frameType === undefined) target.frameType = serialized?.frameType ?? undefined;
+  if (target.isPageBorder === undefined) target.isPageBorder = serialized?.isPageBorder ?? false;
+  if (target.name === undefined) target.name = serialized?.name ?? undefined;
+  if (target.borderSettings === undefined) target.borderSettings = serialized?.borderSettings ?? undefined;
 
   // Handle text-specific properties
   if (instance.type === 'i-text' || instance.type === 'textbox') {

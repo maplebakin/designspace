@@ -20,6 +20,7 @@ import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { SAFE_MARGIN_PX } from '../utils/units';
 import { guideRegistry } from './guideRegistry';
+import { refitPageBorder } from '../services/pageBorderService';
 import { CanvasLayer, assignZIndex } from './zIndexManifest';
 
 let safeMarginGuides: fabric.Line[] = [];
@@ -277,6 +278,7 @@ export const resizeCanvas = (width: number, height: number): void => {
   const { canvasBackgroundColor } = useThemeStore.getState();
   const paperColor = canvasBackgroundColor || '#FAF8F5';
   updateDocumentPaper(canvas, paperColor);
+  refitPageBorder(canvas);
 
   if (!hasObjects) {
     canvas.requestRenderAll();

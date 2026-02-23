@@ -19,6 +19,9 @@ const CUSTOM_PROPS = [
   'charSpacing',
   'stroke',
   'strokeWidth',
+  'name',
+  'isPageBorder',
+  'borderSettings',
 ] as const;
 
 export const toSerializableObject = (obj: fabric.Object) => {
@@ -88,6 +91,9 @@ export const toSerializableObject = (obj: fabric.Object) => {
     charSpacing: target.charSpacing ?? 0,
     stroke: target.stroke ?? undefined,
     strokeWidth: target.strokeWidth ?? 0,
+    name: target.name ?? undefined,
+    isPageBorder: target.isPageBorder ?? false,
+    borderSettings: target.borderSettings ?? undefined,
     shadow: shadowData,
     filters: filtersData,
     adjustments: obj.type === 'image' ? adjustmentsData : undefined,
