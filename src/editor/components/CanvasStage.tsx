@@ -252,7 +252,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const { contextMenu, showContextMenu, hideContextMenu } = useContextMenu();
   const {
     canvas: fabricCanvas,
-    canvasReadyState,
     setSelectedObjectId,
     syncCanvasToStore,
     setSelectedLayerIds,
@@ -275,11 +274,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     unitScale,
     setDirtyObjectsRef,
     showSafeZones,
-    restoreSessionFromStorage,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
-      canvasReadyState: state.canvasReadyState,
       setSelectedObjectId: state.setSelectedObjectId,
       syncCanvasToStore: state.syncCanvasToStore,
       setSelectedLayerIds: state.setSelectedLayerIds,
@@ -302,7 +299,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       unitScale: state.unitScale,
       setDirtyObjectsRef: state.setDirtyObjectsRef,
       showSafeZones: state.showSafeZones,
-      restoreSessionFromStorage: state.restoreSessionFromStorage,
     }),
     shallow
   );
@@ -357,11 +353,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
 
   // Use the canvas lifecycle hook for atomic initialization and cleanup
   const { initializeCanvas, disposeCanvas } = useCanvasLifecycle(canvasRef, containerRef);
-
-  useEffect(() => {
-    if (canvasReadyState !== 'ready' || !fabricCanvas) return;
-    void restoreSessionFromStorage();
-  }, [canvasReadyState, fabricCanvas, restoreSessionFromStorage]);
 
   useEffect(() => {
     if (!fabricCanvas) return;

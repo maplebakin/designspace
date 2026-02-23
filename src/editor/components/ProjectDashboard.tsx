@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { FileText, Plus, Search, X, MoreHorizontal } from 'lucide-react';
-import { DASHBOARD_PRESETS, type CanvasPreset } from '../config/canvasPresets';
+import { Sparkles, FolderOpen, Plus } from 'lucide-react';
 
 interface ProjectItem {
   id: string;
@@ -18,342 +17,108 @@ interface ProjectDashboardProps {
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpen }) => {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isDeleting, setIsDeleting] = useState<string | null>(null);
-  const [isDuplicating, setIsDuplicating] = useState<string | null>(null);
-  const [openMenuProjectId, setOpenMenuProjectId] = useState<string | null>(null);
-  
+
   const {
     getAllProjects,
     loadProject,
-    deleteProject,
-    duplicateProject,
-    renameProject,
-    createProject,
     setProjectPresetsOpen,
+    loadProjectFile,
   } = useEditorStore((state) => ({
     getAllProjects: state.getAllProjects,
     loadProject: state.loadProject,
-    deleteProject: state.deleteProject,
-    duplicateProject: state.duplicateProject,
-    renameProject: state.renameProject,
-    createProject: state.createProject,
     setProjectPresetsOpen: state.setProjectPresetsOpen,
+    loadProjectFile: state.loadProjectFile,
   }), shallow);
 
-
   useEffect(() => {
-    loadProjects();
-  }, []);
-
-  useEffect(() => {
-    if (!openMenuProjectId) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      if (!target.closest('[data-project-card-menu="true"]')) {
-        setOpenMenuProjectId(null);
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpenMenuProjectId(null);
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
-    };
-  }, [openMenuProjectId]);
-
-  const loadProjects = async () => {
-    setIsLoading(true);
-    try {
-      const projectList = await getAllProjects();
-      setProjects(projectList.map((proj: any) => ({
-        ...proj,
-        lastModified: new Date(proj.lastModified),
-      })));
-    } catch (error) {
-      console.error('Failed to load projects:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleLoadProject = async (projectId: string) => {
-    await loadProject(projectId);
-    onProjectOpen?.();
-  };
-
-  const handleDeleteProject = async (projectId: string, projectName: string) => {
-    if (confirm(`Are you sure you want to delete "${projectName}"?`)) {
-      setIsDeleting(projectId);
+    const run = async () => {
+      setIsLoading(true);
       try {
-        await deleteProject(projectId);
-        loadProjects(); // Refresh the list
-      } catch (error) {
-        console.error('Failed to delete project:', error);
+        const list = await getAllProjects();
+        setProjects(
+          list
+            .slice(0, 5)
+            .map((p: any) => ({ ...p, lastModified: new Date(p.lastModified) }))
+        );
       } finally {
-        setIsDeleting(null);
+        setIsLoading(false);
       }
-    }
-  };
+    };
+    void run();
+  }, [getAllProjects]);
 
-  const handleDuplicateProject = async (projectId: string, projectName: string) => {
-    const newName = `${projectName} Copy`;
-    setIsDuplicating(projectId);
-    try {
-      await duplicateProject(projectId, newName);
-      loadProjects(); // Refresh the list
-    } catch (error) {
-      console.error('Failed to duplicate project:', error);
-    } finally {
-      setIsDuplicating(null);
-    }
-  };
-
-  const handleRenameProject = async (projectId: string, projectName: string) => {
-    const proposedName = window.prompt('Rename project', projectName);
-    if (proposedName === null) return;
-    const normalizedName = proposedName.trim();
-    if (!normalizedName || normalizedName === projectName) return;
-    await renameProject(projectId, normalizedName);
-    loadProjects();
-  };
-
-  const handlePresetSelect = (preset: CanvasPreset) => {
-    createProject({
-      canvasSize: { width: preset.width, height: preset.height },
-      unitMode: preset.unitMode,
-      source: 'dashboard-preset',
-    });
-    onProjectOpen?.();
-  };
-
-  const formatDate = (date: Date) => {
-    return new Intl.DateTimeFormat('en-US', {
+  const formatDate = (date: Date) =>
+    new Intl.DateTimeFormat('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     }).format(date);
-  };
-
-  // Filter projects based on search query
-  const filteredProjects = useMemo(() => {
-    if (!searchQuery) return projects;
-    const query = searchQuery.toLowerCase();
-    return projects.filter(project => 
-      project.name.toLowerCase().includes(query) ||
-      project.lastModified.toLocaleString().toLowerCase().includes(query)
-    );
-  }, [projects, searchQuery]);
 
   return (
-    <div className="flex flex-col h-full bg-[color:var(--ui-bg)] text-[color:var(--ui-text)]">
-      <div className="p-6 border-b border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold uppercase tracking-widest">Project Dashboard</h1>
-            <p className="text-slate-400 mt-1">Manage your design projects</p>
+    <div className="min-h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex items-center justify-center p-6">
+      <div className="w-full max-w-4xl rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
+        <div className="text-center mb-8">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] flex items-center justify-center mb-3">
+            <Sparkles className="w-6 h-6" />
           </div>
+          <h1 className="text-3xl font-semibold tracking-wide">Design Space</h1>
+          <p className="text-slate-400 mt-2 text-sm">Multi-page design studio</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
           <button
             onClick={() => {
               setProjectPresetsOpen(true);
               onProjectOpen?.();
             }}
-            className="flex items-center gap-2 px-4 py-2 bg-[color:var(--brand-primary)] rounded-lg hover:opacity-90 transition-opacity"
+            className="h-12 rounded-xl border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/15 hover:bg-[color:var(--brand-primary)]/25 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2"
           >
-            <Plus className="w-4 h-4" />
-            New Project
+            <Plus className="w-4 h-4" /> New Project
           </button>
+
+          <label className="h-12 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2 cursor-pointer">
+            <FolderOpen className="w-4 h-4" /> Open Project
+            <input
+              type="file"
+              accept=".apocaproject.json,.json"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                await loadProjectFile(file);
+                onProjectOpen?.();
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
         </div>
-        
-        <div className="mt-6 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 stroke-[1.5] text-[color:var(--ui-panel-text)] opacity-70" />
-          <input
-            type="text"
-            placeholder="Search projects..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 text-sm bg-white/10 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] placeholder:text-[color:var(--ui-panel-text)] placeholder:opacity-60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[color:var(--ui-panel-text)] opacity-70 hover:opacity-100"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+        <div>
+          <h2 className="text-[11px] uppercase tracking-widest text-slate-300 mb-3">Recent Projects</h2>
+          {isLoading ? (
+            <div className="text-sm text-slate-400">Loading…</div>
+          ) : projects.length === 0 ? (
+            <div className="text-sm text-slate-400">No recent projects yet.</div>
+          ) : (
+            <div className="space-y-2">
+              {projects.map((project) => (
+                <button
+                  key={project.id}
+                  onClick={async () => {
+                    await loadProject(project.id);
+                    onProjectOpen?.();
+                  }}
+                  className="w-full text-left rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-4 py-3"
+                >
+                  <div className="text-sm text-slate-100">{project.name}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-slate-500">{formatDate(project.lastModified)}</div>
+                </button>
+              ))}
+            </div>
           )}
         </div>
-      </div>
-      
-      <div className="flex-1 overflow-y-auto p-6">
-        <section className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-[11px] uppercase tracking-widest text-slate-300">Templates Gallery</h2>
-              <p className="text-[10px] uppercase tracking-widest text-slate-500 mt-1">Start with a preset canvas size</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {DASHBOARD_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                onClick={() => handlePresetSelect(preset)}
-                className="text-left p-4 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] hover:border-[color:var(--brand-primary)] hover:bg-white/10 transition-all"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs uppercase tracking-widest text-[color:var(--ui-text)]">{preset.name}</span>
-                  <span className="text-[10px] uppercase tracking-widest text-slate-400">{preset.width} x {preset.height}</span>
-                </div>
-                  <span className="text-[10px] uppercase tracking-widest text-slate-500">{preset.description}</span>
-                </button>
-            ))}
-          </div>
-        </section>
-        {isLoading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[color:var(--brand-primary)]"></div>
-          </div>
-        ) : filteredProjects.length === 0 ? (
-          <div className="text-center py-20 text-slate-400">
-            <FileText className="mx-auto h-16 w-16 mb-4 opacity-50" />
-            <h3 className="text-lg font-medium">No projects found</h3>
-            <p className="mt-1">
-              {searchQuery 
-                ? "No projects match your search." 
-                : "Get started by creating a new project."}
-            </p>
-            {!searchQuery && (
-              <button
-                onClick={() => {
-                  setProjectPresetsOpen(true);
-                  onProjectOpen?.();
-                }}
-                className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-[color:var(--brand-primary)] rounded-lg hover:opacity-90 transition-opacity"
-              >
-                <Plus className="w-4 h-4" />
-                Create Project
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-            {filteredProjects.map((project) => (
-              <div
-                key={project.id}
-                className="bg-[color:var(--ui-panel)] rounded-xl border border-[color:var(--ui-border)] overflow-hidden transition-transform hover:scale-[1.02] hover:shadow-lg"
-              >
-                <div className="relative">
-                  {project.thumbnail ? (
-                    <img 
-                      src={project.thumbnail} 
-                      alt={project.name} 
-                      className="w-full h-40 object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-40 bg-white/5 flex items-center justify-center">
-                      <FileText className="w-12 h-12 opacity-30" />
-                    </div>
-                  )}
-                  
-                  <div className="absolute top-2 right-2" data-project-card-menu="true">
-                    <button
-                      onClick={() => setOpenMenuProjectId((current) => (current === project.id ? null : project.id))}
-                      className="rounded-full bg-black/55 p-1.5 text-white transition-colors hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]"
-                      aria-haspopup="menu"
-                      aria-expanded={openMenuProjectId === project.id}
-                      aria-label={`Project actions for ${project.name}`}
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </button>
-                    {openMenuProjectId === project.id && (
-                      <div
-                        role="menu"
-                        className="absolute right-0 mt-2 w-44 rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-1 text-xs shadow-[0_12px_30px_rgba(0,0,0,0.35)]"
-                      >
-                        <button
-                          autoFocus
-                          role="menuitem"
-                          onClick={() => {
-                            setOpenMenuProjectId(null);
-                            void handleLoadProject(project.id);
-                          }}
-                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10"
-                        >
-                          Open
-                        </button>
-                        <button
-                          role="menuitem"
-                          onClick={() => {
-                            setOpenMenuProjectId(null);
-                            void handleDuplicateProject(project.id, project.name);
-                          }}
-                          disabled={isDuplicating === project.id}
-                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10 disabled:opacity-60"
-                        >
-                          {isDuplicating === project.id ? 'Duplicating...' : 'Duplicate'}
-                        </button>
-                        <button
-                          role="menuitem"
-                          onClick={() => {
-                            setOpenMenuProjectId(null);
-                            void handleRenameProject(project.id, project.name);
-                          }}
-                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-slate-200 hover:bg-white/10"
-                        >
-                          Rename
-                        </button>
-                        <button
-                          role="menuitem"
-                          onClick={() => {
-                            setOpenMenuProjectId(null);
-                            void handleDeleteProject(project.id, project.name);
-                          }}
-                          disabled={isDeleting === project.id}
-                          className="w-full rounded-md px-3 py-2 text-left uppercase tracking-widest text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
-                        >
-                          {isDeleting === project.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="p-4">
-                  <h3 
-                    className="font-semibold text-sm mb-1 truncate cursor-pointer hover:text-[color:var(--brand-primary)] transition-colors"
-                    onClick={() => handleLoadProject(project.id)}
-                    title={project.name}
-                  >
-                    {project.name}
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Last edited: {formatDate(project.lastModified)}
-                  </p>
-                  
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      onClick={() => handleLoadProject(project.id)}
-                      className="flex-1 py-1.5 text-xs bg-white/10 rounded-lg hover:bg-white/20 transition-colors"
-                    >
-                      Open
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
