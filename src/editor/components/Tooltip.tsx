@@ -108,7 +108,7 @@ export const IconButton: React.FC<IconButtonProps> = ({
           transition-all duration-200 ease-out
           ${isActive
             ? 'bg-white/20 text-[color:var(--ui-panel-text)] shadow-[0_0_12px_rgba(255,255,255,0.15)]'
-            : 'text-[color:var(--ui-panel-text)] hover:bg-white/10 hover:scale-105 active:scale-95'
+            : 'text-[color:var(--ui-panel-text)] hover:bg-white/55 hover:scale-105 active:scale-95'
           }
           disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100 disabled:hover:bg-transparent
           ${className}
@@ -131,7 +131,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({ title, icon, child
   <div className="flex items-center justify-between mb-3">
     <div className="flex items-center gap-2">
       {icon && <span className="text-[color:var(--muted-icon)]">{icon}</span>}
-      <span className="text-[10px] uppercase tracking-widest font-medium text-slate-400">{title}</span>
+      <span className="text-[10px] uppercase tracking-widest font-medium text-[color:var(--ui-panel-text)]/70">{title}</span>
     </div>
     {children}
   </div>
@@ -139,7 +139,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({ title, icon, child
 
 // Divider for visual separation
 export const SectionDivider: React.FC = () => (
-  <div className="h-px bg-white/10 my-4" />
+  <div className="h-px bg-white/55 my-4" />
 );
 
 // Control row with consistent height (32px)
@@ -151,7 +151,7 @@ interface ControlRowProps {
 
 export const ControlRow: React.FC<ControlRowProps> = ({ label, children, vertical = false }) => (
   <div className={`${vertical ? 'space-y-2' : 'flex items-center justify-between min-h-[32px]'}`}>
-    <span className="text-[10px] uppercase tracking-widest text-slate-400">{label}</span>
+    <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/70">{label}</span>
     <div className={vertical ? 'mt-1' : ''}>{children}</div>
   </div>
 );
@@ -161,8 +161,8 @@ export const ControlInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>>
   <input
     {...props}
     className={`
-      h-8 rounded-lg border border-white/10 bg-black/30 px-3
-      text-xs text-slate-200 placeholder:text-slate-500
+      h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-3
+      text-xs text-[color:var(--ui-panel-text)] placeholder:text-slate-500
       focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]
       transition-all duration-200
       ${props.className || ''}
@@ -175,8 +175,8 @@ export const ControlSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElemen
   <select
     {...props}
     className={`
-      h-8 rounded-lg border border-white/10 bg-black/30 px-3
-      text-xs text-slate-200 appearance-none cursor-pointer
+      h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-3
+      text-xs text-[color:var(--ui-panel-text)] appearance-none cursor-pointer
       focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]
       transition-all duration-200
       ${props.className || ''}
@@ -213,7 +213,7 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange, 'aria
         value={value}
         onChange={(e) => handleColorChange(e.target.value)}
         aria-label={ariaLabel}
-        className="h-8 w-12 cursor-pointer rounded-lg border border-white/10 bg-transparent transition-all duration-200 hover:border-white/20"
+        className="h-8 w-12 cursor-pointer rounded-lg border border-[color:var(--ui-border)] bg-transparent transition-all duration-200 hover:border-white/20"
       />
 
       {/* Recent Colors */}
@@ -300,14 +300,14 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-label={ariaLabel}
-        className="w-full h-8 rounded-lg border border-white/10 bg-black/30 px-3 text-xs text-slate-200 flex items-center justify-between"
+        className="w-full h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-3 text-xs text-[color:var(--ui-panel-text)] flex items-center justify-between"
       >
         <span style={{ fontFamily: selectedFont.value }}>{selectedFont.name}</span>
         <span className={`ml-2 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 mt-1 w-full rounded-lg border border-white/10 bg-[color:var(--ui-panel)] shadow-lg max-h-60 overflow-y-auto">
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] shadow-lg max-h-60 overflow-y-auto">
           <div className="max-h-48 overflow-y-auto">
             {SYSTEM_FONTS.map((font, index) => (
               <button
@@ -317,8 +317,8 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
                   onChange(font.value);
                   setIsOpen(false);
                 }}
-                className={`w-full px-3 py-2 text-left text-xs hover:bg-white/10 ${
-                  value === font.value ? 'bg-white/10' : ''
+                className={`w-full px-3 py-2 text-left text-xs hover:bg-white/55 ${
+                  value === font.value ? 'bg-white/55' : ''
                 }`}
                 style={{ fontFamily: font.value }}
               >
@@ -327,8 +327,8 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
 
             ))}
           </div>
-          <div className="border-t border-white/10 p-2 space-y-2">
-            <label className="block text-[9px] uppercase tracking-widest text-slate-400">Google Font</label>
+          <div className="border-t border-[color:var(--ui-border)] p-2 space-y-2">
+            <label className="block text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/70">Google Font</label>
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -338,12 +338,12 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, 'aria-l
                   if (fontStatus !== 'idle') setFontStatus('idle');
                 }}
                 placeholder="e.g. Montserrat"
-                className="h-8 flex-1 rounded-lg border border-white/10 bg-black/30 px-2 text-xs text-slate-200"
+                className="h-8 flex-1 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-2 text-xs text-[color:var(--ui-panel-text)]"
               />
               <button
                 type="button"
                 onClick={() => void handleApplyGoogleFont()}
-                className="h-8 rounded-lg border border-white/10 bg-white/10 px-2 text-[10px] uppercase tracking-widest text-slate-200 hover:bg-white/20"
+                className="h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/55 px-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/75"
               >
                 Load
               </button>
@@ -385,7 +385,7 @@ export const TextAlignControl: React.FC<TextAlignControlProps> = ({ value, onCha
             className={`h-8 flex items-center justify-center rounded-lg border transition-all duration-200 ${
               value === align.key
                 ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
-                : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                : 'border-[color:var(--ui-border)] bg-white/5 text-[color:var(--ui-panel-text)]/70 hover:bg-white/55'
             }`}
             aria-label={align.label}
           >
@@ -416,6 +416,6 @@ export const ControlSlider: React.FC<SliderProps> = ({ min, max, value, onChange
     value={value}
     onChange={(e) => onChange(Number(e.target.value))}
     disabled={disabled}
-    className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/10 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+    className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/55 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
   />
 );

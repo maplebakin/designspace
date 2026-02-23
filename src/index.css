@@ -10,6 +10,15 @@
   --font-ui: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'Space Grotesk', var(--font-ui);
 
+  /* Cozy warmth palette */
+  --warm-cream: #f4eee5;
+  --warm-ivory: #fbf7f2;
+  --warm-taupe: #b89f8c;
+  --warm-sage: #8fa28d;
+  --warm-rose: #c4969a;
+  --warm-ink: #463a34;
+  --warm-shadow: 0 16px 38px rgba(56, 40, 33, 0.18);
+
   /* Control Heights - Consistent 32px for all inputs */
   --control-height: 32px;
   --control-height-sm: 28px;
@@ -26,7 +35,7 @@
   --popover-radius: 1rem;
   --popover-gap: 0.75rem;
   --popover-font: var(--font-ui);
-  --popover-shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+  --popover-shadow: 0 18px 46px rgba(56, 40, 33, 0.16);
 
   /* Toolbar Styles */
   --toolbar-orient-gap: 0.75rem;
@@ -34,7 +43,7 @@
   --toolbar-font: var(--font-ui);
   --toolbar-compact-gap: 0.35rem;
   --toolbar-compact-padding: 0.35rem 0.8rem;
-  --toolbar-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  --toolbar-shadow: 0 12px 28px rgba(56, 40, 33, 0.14);
 
   /* Transitions */
   --transition-fast: 150ms ease-out;
@@ -47,6 +56,8 @@ body {
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: radial-gradient(circle at 20% 10%, #fff8ef 0%, var(--warm-ivory) 35%, #efe6dc 100%);
+  color: var(--warm-ink);
 }
 
 .icon-muted {
@@ -101,10 +112,9 @@ body {
 }
 
 .workspace {
-  /* Workspace background - very dark with subtle grid */
-  --workspace-grid-color: rgba(255, 255, 255, 0.04);
-  --workspace-grid-size: 20px;
-  background-color: #080608;
+  --workspace-grid-color: rgba(120, 93, 74, 0.065);
+  --workspace-grid-size: 24px;
+  background-color: #efe5d9;
   background-image:
     linear-gradient(var(--workspace-grid-color) 1px, transparent 1px),
     linear-gradient(90deg, var(--workspace-grid-color) 1px, transparent 1px);
@@ -141,12 +151,12 @@ body {
 
 .control-input {
   height: var(--control-height);
-  border-radius: 0.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.3);
+  border-radius: 0.75rem;
+  border: 1px solid rgba(133, 101, 81, 0.22);
+  background: rgba(255, 250, 245, 0.92);
   padding: 0 0.75rem;
   font-size: 0.75rem;
-  color: #e2e8f0;
+  color: var(--warm-ink);
   transition: all var(--transition-normal);
 }
 
@@ -278,6 +288,6 @@ details[open] > summary::after {
 
 /* Focus Visible for Accessibility */
 :focus-visible {
-  outline: 2px solid var(--brand-primary, #6366f1);
+  outline: 2px solid rgba(196, 150, 154, 0.75);
   outline-offset: 2px;
 }
