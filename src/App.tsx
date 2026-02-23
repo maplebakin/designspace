@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { EditorShell } from './editor/components/EditorShell';
 import { UIThemeProvider } from './editor/components/UIThemeProvider';
 import { ProjectDashboard } from './editor/components/ProjectDashboard';
@@ -11,6 +11,8 @@ type AppView = 'dashboard' | 'editor';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const isProgrammaticCloseRef = useRef(false);
 
   useEffect(() => {
     injectAccessibilityStyles();
@@ -29,7 +31,7 @@ function App() {
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!isDirty) return;
+      if (!isDirty || isProgrammaticCloseRef.current) return;
       e.preventDefault();
       e.returnValue = '';
     };
@@ -45,21 +47,16 @@ function App() {
       try {
         const eventApi = await import('@tauri-apps/api/event');
         unlisten = await eventApi.listen('tauri://close-requested', async (event: any) => {
-          if (!isDirty) return;
-          const answer = window.prompt('Save project before closing? Type: save / dont / cancel', 'save');
-          const normalized = (answer || 'cancel').trim().toLowerCase();
-          if (normalized === 'save') {
-            await downloadProjectFile();
-            const appWindow = await import('@tauri-apps/api/window');
-            appWindow.getCurrentWindow().close();
+          if (isProgrammaticCloseRef.current) {
             return;
           }
-          if (normalized === 'dont') {
-            const appWindow = await import('@tauri-apps/api/window');
-            appWindow.getCurrentWindow().close();
+
+          if (!isDirty) {
             return;
           }
+
           event.payload?.preventDefault?.();
+          setShowCloseModal(true);
         });
       } catch {
         // ignore
@@ -69,7 +66,34 @@ function App() {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [isDirty, downloadProjectFile]);
+  }, [isDirty]);
+
+  const closeTauriWindow = async () => {
+    isProgrammaticCloseRef.current = true;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } finally {
+      setTimeout(() => {
+        isProgrammaticCloseRef.current = false;
+      }, 250);
+    }
+  };
+
+  const handleSaveAndClose = async () => {
+    await downloadProjectFile();
+    setShowCloseModal(false);
+    await closeTauriWindow();
+  };
+
+  const handleDontSaveAndClose = async () => {
+    setShowCloseModal(false);
+    await closeTauriWindow();
+  };
+
+  const handleCancelClose = () => {
+    setShowCloseModal(false);
+  };
 
   const handleBackToDashboard = () => {
     setCurrentView('dashboard');
@@ -83,6 +107,37 @@ function App() {
           <ProjectDashboard onProjectOpen={() => setCurrentView('editor')} />
         ) : (
           <EditorShell onBackToDashboard={handleBackToDashboard} />
+        )}
+
+        {showCloseModal && (
+          <div className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] text-[color:var(--ui-text)] shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6">
+              <h2 className="text-lg font-semibold mb-2">Save project before closing?</h2>
+              <p className="text-sm text-slate-400 mb-6">
+                You have unsaved changes. Choose what to do before Design Space closes.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={handleCancelClose}
+                  className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-xs uppercase tracking-widest"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleDontSaveAndClose()}
+                  className="px-4 py-2 rounded-lg border border-rose-400/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-100 text-xs uppercase tracking-widest"
+                >
+                  Don&apos;t Save
+                </button>
+                <button
+                  onClick={() => void handleSaveAndClose()}
+                  className="px-4 py-2 rounded-lg border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/20 hover:bg-[color:var(--brand-primary)]/30 text-xs uppercase tracking-widest"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </UIThemeProvider>
     </ErrorBoundary>
