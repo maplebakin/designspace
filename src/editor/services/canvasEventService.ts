@@ -291,11 +291,29 @@ export function registerSelectionEventHandlers(
         }
     };
 
-    const handleSelectionCreated = () => {
+    const handleSelectionCreated = (event?: { selected?: fabric.Object[] }) => {
+        const selected = event?.selected;
+        if (Array.isArray(selected) && selected.length > 1) {
+            onSelectedObjectId?.(null);
+            const ids = selected
+                .map((obj) => (obj as any).id)
+                .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+            onSelectedLayerIds?.(ids);
+            return;
+        }
         applySelectionState();
     };
 
-    const handleSelectionUpdated = () => {
+    const handleSelectionUpdated = (event?: { selected?: fabric.Object[] }) => {
+        const selected = event?.selected;
+        if (Array.isArray(selected) && selected.length > 1) {
+            onSelectedObjectId?.(null);
+            const ids = selected
+                .map((obj) => (obj as any).id)
+                .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+            onSelectedLayerIds?.(ids);
+            return;
+        }
         applySelectionState();
     };
 
