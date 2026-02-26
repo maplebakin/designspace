@@ -345,7 +345,7 @@ export const LayersPanel: React.FC = () => {
   };
 
   return (
-    <div className="p-4 bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)] backdrop-blur-[var(--ui-blur)] border border-[color:var(--ui-border)] rounded-xl transition-all duration-300 ease-in-out">
+    <div className="h-full p-4 text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out">
       <div className="mb-4 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>

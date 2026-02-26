@@ -27,7 +27,6 @@ import {
   Redo2,
   Keyboard,
   Type,
-  Pin,
   Frame,
 } from 'lucide-react';
 import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
@@ -219,43 +218,6 @@ const ShapesPanel: React.FC = () => {
   );
 };
 
-const CanvasQuickBar: React.FC<{
-  onSelectNav: (nav: NavId) => void;
-  quickBarPinned: boolean;
-  onTogglePinned: () => void;
-}> = ({ onSelectNav, quickBarPinned, onTogglePinned }) => (
-  <div className="canvas-quickbar absolute left-1/2 top-12 z-30 toolbar-section toolbar-compact -translate-x-1/2 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] backdrop-blur-[var(--ui-blur)] shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
-    <button
-      onClick={() => onSelectNav('layers')}
-      className="group rounded-full px-3 py-2 text-slate-200 transition-all duration-300 ease-in-out hover:bg-white/10"
-      aria-label="Layers"
-      title="Layers"
-    >
-      <Layers className={NAV_ICON} />
-    </button>
-    <button
-      onClick={() => onSelectNav('insert')}
-      className="group rounded-full px-3 py-2 text-slate-200 transition-all duration-300 ease-in-out hover:bg-white/10"
-      aria-label="Insert"
-      title="Insert Elements"
-    >
-      <Square className={NAV_ICON} />
-    </button>
-    <button
-      onClick={onTogglePinned}
-      className={`group rounded-full px-3 py-2 transition-all duration-300 ease-in-out ${
-        quickBarPinned
-          ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
-          : 'text-slate-200 hover:bg-white/10'
-      }`}
-      aria-label={quickBarPinned ? 'Disable quick bar pin' : 'Enable quick bar pin'}
-      title={quickBarPinned ? 'Quick bar pinned' : 'Pin quick bar'}
-    >
-      <Pin className={NAV_ICON} />
-    </button>
-  </div>
-);
-
 interface EditorShellProps {
   onBackToDashboard?: () => void;
 }
@@ -272,8 +234,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty,
     saveStatus,
     activeTool,
-    showOnboarding,
-    quickBarPinned,
+    selectedObjectId,
     setActiveTool,
     setBrushColor,
     setCanvasBackgroundColor,
@@ -284,7 +245,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     showExportModal,
     setShowExportModal,
     setProjectQuickOpenOpen,
-    setQuickBarPinned,
 
     setShowHelpModal,
     undo,
@@ -300,8 +260,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty: state.consumeHistoryDirty,
     saveStatus: state.saveStatus,
     activeTool: state.activeTool,
-    showOnboarding: state.showOnboarding,
-    quickBarPinned: state.quickBarPinned,
+    selectedObjectId: state.selectedObjectId,
     setActiveTool: state.setActiveTool,
     setBrushColor: state.setBrushColor,
     setCanvasBackgroundColor: state.setCanvasBackgroundColor,
@@ -312,7 +271,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     showExportModal: state.showExportModal,
     setShowExportModal: state.setShowExportModal,
     setProjectQuickOpenOpen: state.setProjectQuickOpenOpen,
-    setQuickBarPinned: state.setQuickBarPinned,
 
     setShowHelpModal: state.setShowHelpModal,
     undo: state.undo,
@@ -339,7 +297,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const [activeNav, setActiveNav] = useState<NavId | null>(null);
   const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
   const [expandedToastId, setExpandedToastId] = useState<string | null>(null);
-  const [isBorderPopoverOpen, setIsBorderPopoverOpen] = useState(false);
+  const [rightTab, setRightTab] = useState<'layers' | 'properties' | 'settings'>('layers');
 
   const activeToast = useMemo(() => {
     if (toast) return toast;
@@ -403,11 +361,13 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     };
   }, []);
 
+  useEffect(() => {
+    if (selectedObjectId) setRightTab('properties');
+  }, [selectedObjectId]);
+
   const handleSelectNav = (id: NavId) => {
     setActiveNav((prev) => (prev === id ? null : id));
   };
-
-  const showCanvasQuickBar = showOnboarding || activeNav === null || quickBarPinned;
 
   const renderPanel = () => {
     if (!activeNav) return null;
@@ -664,28 +624,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         </div>
         <div className="w-auto flex justify-end items-center gap-4">
             <CanvasSettingsPopover />
-            <button
-                onClick={() => setIsSettingsModalOpen(true)}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
-            >
-                <SlidersHorizontal className={ICON_SMALL} />
-                Vibe
-            </button>
-            <Popover
-              isOpen={isBorderPopoverOpen}
-              onOpenChange={setIsBorderPopoverOpen}
-              ariaLabel="Page Border"
-              trigger={
-                <button
-                  className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
-                >
-                  <Frame className={ICON_SMALL} />
-                  Border
-                </button>
-              }
-            >
-              <PageBorderPopover />
-            </Popover>
             {onBackToDashboard ? (
               <button
                 onClick={onBackToDashboard}
@@ -757,19 +695,73 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
 
         <main className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
-            {showCanvasQuickBar && (
-              <CanvasQuickBar
-                onSelectNav={handleSelectNav}
-                quickBarPinned={quickBarPinned}
-                onTogglePinned={() => setQuickBarPinned(!quickBarPinned)}
-              />
-            )}
             <SelectionToolbar />
             <CanvasStage onSelectNav={handleSelectNav} />
         </main>
 
-        <aside className={`bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] transition-all duration-300 ease-in-out overflow-hidden w-80 border-l border-[color:var(--ui-border)]`}>
-            <PropertiesPanel />
+        <aside className="bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] transition-all duration-300 ease-in-out overflow-hidden w-80 border-l border-[color:var(--ui-border)] flex flex-col">
+            {/* Tab strip */}
+            <div className="flex border-b border-[color:var(--ui-border)] shrink-0">
+              <button
+                onClick={() => setRightTab('layers')}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
+                  rightTab === 'layers'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Layers
+              </button>
+              <button
+                onClick={() => setRightTab('properties')}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
+                  rightTab === 'properties'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                Properties
+              </button>
+              <button
+                onClick={() => setRightTab('settings')}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
+                  rightTab === 'settings'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                }`}
+              >
+                <Frame className="w-3.5 h-3.5" />
+                Style
+              </button>
+            </div>
+            {/* Tab content */}
+            <div className="flex-1 overflow-hidden">
+              {rightTab === 'layers' && (
+                <div className="h-full overflow-y-auto">
+                  <LayersPanel />
+                </div>
+              )}
+              {rightTab === 'properties' && <PropertiesPanel />}
+              {rightTab === 'settings' && (
+                <div className="h-full overflow-y-auto p-4 space-y-4">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Page Border</p>
+                    <PageBorderPopover />
+                  </div>
+                  <div className="border-t border-[color:var(--ui-border)] pt-4">
+                    <button
+                      onClick={() => setIsSettingsModalOpen(true)}
+                      className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      Vibe Settings
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
         </aside>
       </div>
       <PageStrip />
