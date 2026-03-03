@@ -132,8 +132,9 @@ export class CollaborativeEditingManager {
     
     // Listen for mouse moves to update cursor position
     this.canvas.on('mouse:move', (e) => {
-      if (e.absolutePointer) {
-        this.updateCursorPosition(e.absolutePointer.x, e.absolutePointer.y);
+      const pointer = (e as any).scenePoint ?? (e as any).absolutePointer ?? null;
+      if (pointer) {
+        this.updateCursorPosition(pointer.x, pointer.y);
       }
     });
   }

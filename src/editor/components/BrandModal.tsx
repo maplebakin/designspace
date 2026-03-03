@@ -86,9 +86,9 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-slate-100">
+      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-[color:var(--ui-text)]">
         <header className="flex items-center justify-between p-4 border-b border-[color:var(--border-subtle)]">
-          <h2 className="text-[11px] uppercase tracking-widest text-slate-100">Brand Vault</h2>
+          <h2 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">Brand Vault</h2>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-white/10 transition-all duration-300 ease-in-out">
             <X className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)]" />
           </button>
@@ -114,7 +114,7 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
           )}
 
           <section>
-            <h3 className="text-sm uppercase tracking-widest text-slate-200 mb-4">Your Themes</h3>
+            <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-text)] mb-4">Your Themes</h3>
             <div className="space-y-4">
               {brandVault.map((collection) => (
                 <div key={collection.id} className="border border-[color:var(--border-subtle)] rounded-lg p-4 flex items-center justify-between bg-white/5">
@@ -138,8 +138,8 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
               {brandVault.length === 0 && (
                 <div className="rounded-2xl border border-[color:var(--border-subtle)] p-8 text-center bg-white/5">
                   <FileJson className="w-12 h-12 stroke-[1.5] text-[color:var(--muted-icon)] mx-auto mb-4 opacity-50" />
-                  <p className="text-sm text-slate-300 mb-2">No themes imported yet</p>
-                  <p className="text-xs text-slate-400">Import a theme JSON file to get started</p>
+                  <p className="text-sm text-[color:var(--ui-panel-text)] mb-2">No themes imported yet</p>
+                  <p className="text-xs text-[color:var(--ui-panel-text)]">Import a theme JSON file to get started</p>
                 </div>
               )}
             </div>
@@ -147,7 +147,7 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
 
           <section>
              <hr className="my-6 border-[color:var(--border-subtle)]"/>
-            <h3 className="text-sm uppercase tracking-widest text-slate-200 mb-4">Import Theme</h3>
+            <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-text)] mb-4">Import Theme</h3>
             <form onSubmit={(e) => e.preventDefault()} className="space-y-4">
                <input
                 type="file"
@@ -161,7 +161,7 @@ export const BrandModal: React.FC<BrandModalProps> = ({ isOpen, onClose }) => {
                 type="button"
                 onClick={handleImportClick}
                 disabled={isLoading}
-                className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-slate-100 rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/10 transition-all"
+                className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-[color:var(--ui-text)] rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/10 transition-all"
               >
                 {isLoading ? (
                   <>

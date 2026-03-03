@@ -29,6 +29,19 @@ export interface ColorPalette {
     categories: Partial<Record<ColorCategory, string[]>>;
 }
 
+export interface IngestedPalette {
+    name: string;
+    mode: string;
+    categories: {
+        backgrounds?: Record<string, string>;
+        text?: Record<string, string>;
+        brand?: Record<string, string>;
+        interactive?: Record<string, string>;
+        status?: Record<string, string>;
+        neutrals?: Record<string, string>;
+    };
+}
+
 // --- UTILITY FUNCTIONS ---
 
 const LEGACY_RECENT_COLORS_KEY = 'designspace_recent_colors';
@@ -113,6 +126,7 @@ interface ThemeState {
     brandPalette: { [key: string]: string };
     paletteVault: ColorPalette[];
     activePaletteId: string | null;
+    importedPalette: IngestedPalette | null;
 
     // Canvas Background
     canvasBackgroundColor: string | null;
@@ -139,6 +153,7 @@ interface ThemeState {
     setBrandPalette: (palette: { [key: string]: string }) => void;
     setPaletteVault: (vault: ColorPalette[]) => void;
     setActivePaletteId: (id: string | null) => void;
+    setImportedPalette: (palette: IngestedPalette | null) => void;
     addPaletteToVault: (palette: ColorPalette) => void;
     addPalettesToVault: (palettes: ColorPalette[]) => void;
 
@@ -180,6 +195,7 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
             brandPalette: {},
             paletteVault: [],
             activePaletteId: null,
+            importedPalette: null,
             canvasBackgroundColor: null,
             brushColor: '#111111',
             visionPalette: [],
@@ -205,6 +221,8 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
             setPaletteVault: (vault) => set({ paletteVault: vault }),
 
             setActivePaletteId: (id) => set({ activePaletteId: id }),
+
+            setImportedPalette: (palette) => set({ importedPalette: palette }),
 
             addPaletteToVault: (palette) => {
                 const next = [...get().paletteVault, palette];
@@ -447,6 +465,7 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                 brandPalette: state.brandPalette,
                 paletteVault: state.paletteVault,
                 activePaletteId: state.activePaletteId,
+                importedPalette: state.importedPalette,
                 visionPalette: state.visionPalette,
                 recentColors: state.recentColors,
             }),

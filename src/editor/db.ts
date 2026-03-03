@@ -33,23 +33,40 @@ export interface BrandKit {
   logoAssets: string[]; // Array of asset IDs
 }
 
+export interface TemplateRecord {
+  id?: number;
+  name: string;
+  thumbnail?: string;
+  canvasData: object;
+  canvasSize: { width: number; height: number };
+  unitMode?: string;
+  defaultThemeId?: string;
+  category?: string;
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class DesignSpaceDB extends Dexie {
   projects!: Table<Project>;
   canvasData!: Table<CanvasData>;
   brandKit!: Table<BrandKit>;
+  templates!: Table<TemplateRecord, number>;
 
   constructor() {
     super('DesignSpaceDB');
-    this.version(3).stores({
+    this.version(4).stores({
       projects: '++id, name, lastModified, thumbnail, canvasDataId',
       canvasData: 'id, jsonPayload, projectId, lastModified',
       brandKit: '++id, colors, typography, logoAssets',
+      templates: '++id, name, updatedAt, category',
     });
 
     // Create indexes
     this.projects = this.table('projects');
     this.canvasData = this.table('canvasData');
     this.brandKit = this.table('brandKit');
+    this.templates = this.table('templates');
   }
 
   async saveProject(name: string, jsonPayload: string, thumbnail?: string): Promise<string> {

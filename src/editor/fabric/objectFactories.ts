@@ -16,6 +16,9 @@ import { useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { v4 as uuidv4 } from 'uuid';
 import { SAFE_MARGIN_PX, toCanvasUnits } from '../utils/units';
+import { toSerializableObject } from '../utils/serialization';
+import { frameScheduler, TaskPriority } from '../utils/frameScheduler';
+import { ZIndexLayer, withManifestZIndex } from './zIndexManifest';
 
 // ============================================================================
 // CONSTANTS
@@ -106,16 +109,28 @@ const insertFabricObject = (
     obj.set({ left: center.x, top: center.y });
     obj.setCoords();
   }
-  canvas.add(obj);
   const shouldActivate = options.activate ?? true;
-  if (shouldActivate) {
-    canvas.setActiveObject(obj);
-  }
+  const serialized = withManifestZIndex(
+    toSerializableObject(obj),
+    ZIndexLayer.Content
+  );
+  useEditorStore.getState().addObject(serialized, {
+    save: true,
+    select: shouldActivate,
+  });
+
   if (options.enterEditing && typeof (obj as any).enterEditing === 'function') {
-    (obj as any).enterEditing();
+    const objectId = (serialized as any).id;
+    frameScheduler.scheduleTask(() => {
+      const activeCanvas = useEditorStore.getState().canvas;
+      const syncedObject = activeCanvas?.getObjects().find((candidate) => (candidate as any).id === objectId) as any;
+      if (syncedObject && typeof syncedObject.enterEditing === 'function') {
+        syncedObject.enterEditing();
+        activeCanvas?.requestRenderAll();
+      }
+    }, TaskPriority.High);
   }
 
-  canvas.requestRenderAll();
   return obj;
 };
 

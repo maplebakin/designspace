@@ -1,14 +1,18 @@
 /**
- * FrameScheduler - Unified RAF cycle for all canvas operations
- * Implements Task 3.2: Unified RAF Cycle from the roadmap
+ * FrameScheduler - Unified frame cycle for canvas and UI work.
  */
 
 export enum TaskPriority {
-  UPDATE_GUIDES = 0,
-  UPDATE_LAYERS = 10,
-  UPDATE_VIEWPORT = 20,
-  CALCULATE_OFFSET = 30,
-  REQUEST_RENDER = 40,
+  Critical = 0,
+  High = 10,
+  Normal = 20,
+  Low = 30,
+  Idle = 40,
+  UPDATE_GUIDES = Low,
+  UPDATE_LAYERS = High,
+  UPDATE_VIEWPORT = Normal,
+  CALCULATE_OFFSET = Normal,
+  REQUEST_RENDER = Critical,
 }
 
 export interface ScheduledTask {
@@ -21,6 +25,7 @@ export class FrameScheduler {
   private rafId: number | null = null;
   private tasks = new Set<ScheduledTask>();
   private scheduledTasks = new Map<TaskPriority, ScheduledTask[]>();
+  private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Schedule a task to run in the next animation frame
@@ -44,9 +49,7 @@ export class FrameScheduler {
     this.scheduledTasks.get(task.priority)!.push(scheduledTask);
 
     // Schedule RAF if not already scheduled
-    if (!this.rafId) {
-      this.rafId = requestAnimationFrame(() => this.flush());
-    }
+    this.ensureScheduled();
 
     // Return a function to cancel this specific task
     return () => {
@@ -54,9 +57,30 @@ export class FrameScheduler {
     };
   }
 
+  scheduleTask(callback: () => void, priority: TaskPriority = TaskPriority.Normal): () => void {
+    return this.schedule({ callback, priority });
+  }
+
+  private ensureScheduled(): void {
+    if (this.rafId !== null || this.timeoutId !== null) {
+      return;
+    }
+
+    if (typeof requestAnimationFrame === 'function') {
+      this.rafId = requestAnimationFrame(() => this.flush());
+      return;
+    }
+
+    this.timeoutId = setTimeout(() => this.flush(), 16);
+  }
+
   private flush(): void {
     // Clear the RAF ID since we're executing now
     this.rafId = null;
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
 
     // Execute all tasks in priority order
     const priorities = Array.from(this.scheduledTasks.keys()).sort((a, b) => a - b);
@@ -109,6 +133,10 @@ export class FrameScheduler {
     if (this.rafId) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
+    }
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
     }
     
     this.tasks.clear();

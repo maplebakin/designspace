@@ -54,7 +54,7 @@ export const PageStrip: React.FC = () => {
               <div className="w-full h-full bg-black/20" />
             )}
           </div>
-          <div className="mt-1 text-[9px] uppercase tracking-widest text-slate-200">Page {index + 1}</div>
+          <div className="mt-1 text-[9px] uppercase tracking-widest text-[color:var(--ui-text)]">Page {index + 1}</div>
           {pages.length > 1 && (
             <span
               onClick={(e) => {
@@ -70,7 +70,7 @@ export const PageStrip: React.FC = () => {
       ))}
       <button
         onClick={() => void addPage()}
-        className="shrink-0 w-10 h-20 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] text-slate-300 flex items-center justify-center"
+        className="shrink-0 w-10 h-20 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] text-[color:var(--ui-panel-text)] flex items-center justify-center"
         aria-label="Add page"
       >
         <Plus className="w-4 h-4" />

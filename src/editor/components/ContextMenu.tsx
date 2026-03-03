@@ -46,16 +46,16 @@ const MenuItem: React.FC<MenuItemProps> = ({ icon, label, shortcut, disabled, da
     onClick={onClick}
     className={`flex w-full items-center gap-3 px-3 py-2 text-left text-xs transition-colors ${
       disabled
-        ? 'cursor-not-allowed text-slate-500'
+        ? 'cursor-not-allowed text-[color:var(--ui-panel-text)]/60'
         : danger
         ? 'text-red-400 hover:bg-red-500/10'
-        : 'text-slate-200 hover:bg-white/10'
+        : 'text-[color:var(--ui-text)] hover:bg-white/10'
     }`}
   >
     <span className="w-4 h-4 flex-shrink-0">{icon}</span>
     <span className="flex-1 uppercase tracking-widest">{label}</span>
     {shortcut && (
-      <span className="text-[10px] text-slate-500 uppercase tracking-wider">{shortcut}</span>
+      <span className="text-[10px] text-[color:var(--ui-panel-text)]/60 uppercase tracking-wider">{shortcut}</span>
     )}
   </button>
 );
@@ -197,7 +197,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
   return (
     <div
       ref={menuRef}
-      className="fixed z-[100] min-w-[180px] rounded-xl border border-white/10 bg-slate-900/95 py-1 shadow-[0_10px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+      className="fixed z-[100] min-w-[180px] rounded-xl border border-white/10 bg-[color:var(--ui-bg)] py-1 shadow-[0_10px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl"
       style={{
         left: position.x,
         top: position.y,

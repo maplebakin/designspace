@@ -135,7 +135,7 @@ export const BrandKit: React.FC = () => {
 
       {/* Color Swatches */}
       <div className="mb-6">
-        <h4 className="text-[10px] uppercase tracking-widest text-slate-400 mb-2">Brand Colors</h4>
+        <h4 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-2">Brand Colors</h4>
         <div className="flex flex-wrap gap-2 mb-3">
           {activeBrandKit.colors.map((color, index) => (
             <div key={index} className="relative group">
@@ -175,7 +175,7 @@ export const BrandKit: React.FC = () => {
 
       {/* Typography Styles */}
       <div className="mb-6">
-        <h4 className="text-[10px] uppercase tracking-widest text-slate-400 mb-2">Typography</h4>
+        <h4 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-2">Typography</h4>
         <div className="space-y-2">
           <button
             onClick={handleAddHeading}

@@ -39,9 +39,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-slate-100">
+      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-[color:var(--ui-text)]">
         <header className="flex items-center justify-between p-4 border-b border-[color:var(--ui-border)]">
-          <h2 className="text-[11px] uppercase tracking-widest text-slate-100">Vibe Settings</h2>
+          <h2 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">Vibe Settings</h2>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-white/10 transition-all duration-300 ease-in-out">
             <X className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)]" />
           </button>
@@ -49,7 +49,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
           <section className="space-y-4">
-            <h3 className="text-sm uppercase tracking-widest text-slate-200">Import UI Theme</h3>
+            <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-text)]">Import UI Theme</h3>
             <input
               type="file"
               ref={fileInputRef}
@@ -60,7 +60,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             <button
               type="button"
               onClick={handleImportClick}
-              className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-slate-100 rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest"
+              className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/10 text-[color:var(--ui-text)] rounded-lg hover:bg-white/20 text-xs uppercase tracking-widest"
             >
               <Upload className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]" />
               Import UI Theme
@@ -68,7 +68,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </section>
 
           <section className="space-y-4">
-            <h3 className="text-sm uppercase tracking-widest text-slate-200">Preset Vibes</h3>
+            <h3 className="text-sm uppercase tracking-widest text-[color:var(--ui-text)]">Preset Vibes</h3>
             <div className="grid grid-cols-3 gap-3">
               {UI_THEME_PRESETS.map((preset) => (
                 <button
@@ -95,8 +95,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       }}
                     />
                   </div>
-                  <div className="text-xs uppercase tracking-widest text-slate-100">{preset.name}</div>
-                  <div className="text-[10px] uppercase tracking-widest text-slate-300">{preset.description}</div>
+                  <div className="text-xs uppercase tracking-widest text-[color:var(--ui-text)]">{preset.name}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{preset.description}</div>
                 </button>
               ))}
             </div>

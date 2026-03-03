@@ -4,6 +4,7 @@ import { initSmartGuides } from '../fabric/smartGuides';
 import { updateGuides, fitCanvasToViewport, centerDocumentInViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { drawSmartDistanceIndicators, clearSmartGuides } from '../utils/smartGuides';
+import { frameScheduler, TaskPriority } from '../utils/frameScheduler';
 import {
     handleTextboxMouseDown,
     handleTextboxMouseMove,
@@ -636,7 +637,7 @@ export function registerResizeEventHandler(
     resizeObserver.observe(container);
 
     // Also fit to viewport on initial load
-    requestAnimationFrame(() => {
+    frameScheduler.scheduleTask(() => {
         const { width, height } = container.getBoundingClientRect();
         if (width > 0 && height > 0) {
             // Resize canvas element to match container
@@ -645,7 +646,7 @@ export function registerResizeEventHandler(
 
             fitCanvasToViewport(width, height);
         }
-    });
+    }, TaskPriority.Normal);
 
     return {
         cleanup: () => {

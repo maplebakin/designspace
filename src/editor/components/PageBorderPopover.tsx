@@ -64,7 +64,7 @@ export const PageBorderPopover: React.FC = () => {
   };
 
   return (
-    <div className="popover-container w-[360px]">
+    <div className="popover-container w-full">
       <div className="flex items-center justify-between">
         <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Page Border</h3>
         <button

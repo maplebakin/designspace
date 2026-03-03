@@ -96,11 +96,11 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
         </div>
 
         <div>
-          <h2 className="text-[11px] uppercase tracking-widest text-slate-300 mb-3">Recent Projects Library</h2>
+          <h2 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Recent Projects Library</h2>
           {isLoading ? (
-            <div className="text-sm text-slate-400">Loading…</div>
+            <div className="text-sm text-[color:var(--ui-panel-text)]">Loading…</div>
           ) : projects.length === 0 ? (
-            <div className="text-sm text-slate-400">No recent projects yet.</div>
+            <div className="text-sm text-[color:var(--ui-panel-text)]">No recent projects yet.</div>
           ) : (
             <div className="space-y-3">
               {projects.map((project) => (
@@ -112,8 +112,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                   }}
                   className="w-full text-left rounded-2xl border border-[color:var(--ui-border)] bg-white/50 hover:bg-white/70 px-5 py-4 shadow-[0_8px_20px_rgba(74,56,45,0.08)]"
                 >
-                  <div className="text-sm text-slate-100">{project.name}</div>
-                  <div className="text-[10px] uppercase tracking-widest text-slate-500">{formatDate(project.lastModified)}</div>
+                  <div className="text-sm text-[color:var(--ui-text)]">{project.name}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60">{formatDate(project.lastModified)}</div>
                 </button>
               ))}
             </div>

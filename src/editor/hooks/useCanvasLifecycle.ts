@@ -18,8 +18,8 @@ import { resolveThemeValue } from '../utils/themeResolver';
 const initializationTracker = new WeakMap<HTMLCanvasElement, boolean>();
 
 export const useCanvasLifecycle = (
-  canvasRef: React.RefObject<HTMLCanvasElement>,
-  containerRef: React.RefObject<HTMLDivElement>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  containerRef: React.RefObject<HTMLDivElement | null>
 ) => {
   const isInitializingRef = useRef(false);
   const cleanupAbortControllerRef = useRef<AbortController | null>(null);

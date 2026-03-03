@@ -9,7 +9,7 @@ export const ProjectBrowser: React.FC = () => {
     <>
       <button
         onClick={() => setIsOpen(true)}
-        className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+        className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
       >
         <Folder className="w-4 h-4 stroke-[1.5]" />
         <span>Projects</span>

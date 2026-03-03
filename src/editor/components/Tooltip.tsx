@@ -162,7 +162,7 @@ export const ControlInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>>
     {...props}
     className={`
       h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-3
-      text-xs text-[color:var(--ui-panel-text)] placeholder:text-slate-500
+      text-xs text-[color:var(--ui-panel-text)] placeholder:text-[color:var(--ui-panel-text)]/60
       focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]
       transition-all duration-200
       ${props.className || ''}

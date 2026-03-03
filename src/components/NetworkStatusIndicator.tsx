@@ -1,7 +1,17 @@
+import { useEffect, useState } from 'react';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { pwaOfflineManager } from '../editor/offline/pwaOfflineManager';
+import { useEditorStore } from '../editor/state/editorStore';
 
 export function NetworkStatusIndicator() {
   const { isOnline, isSlowConnection, effectiveType } = useNetworkStatus();
+  const [hasOfflineState, setHasOfflineState] = useState(false);
+  const setCanvasObjects = useEditorStore((state) => state.setCanvasObjects);
+  const setProjectName = useEditorStore((state) => state.setProjectName);
+
+  useEffect(() => {
+    void pwaOfflineManager.hasOfflineState().then(setHasOfflineState);
+  }, [isOnline]);
 
   if (isOnline && !isSlowConnection) {
     return null; // Don't show anything when everything is fine
@@ -33,6 +43,21 @@ export function NetworkStatusIndicator() {
         {!isOnline && 'Changes will sync when connection is restored'}
         {isOnline && isSlowConnection && 'Some features may be limited'}
       </div>
+      {!isOnline && hasOfflineState && (
+        <button
+          type="button"
+          onClick={() => {
+            void pwaOfflineManager.loadOfflineState().then((snapshot) => {
+              if (!snapshot) return;
+              setProjectName(snapshot.projectName);
+              setCanvasObjects(snapshot.canvasObjects);
+            });
+          }}
+          className="mt-2 rounded-md bg-white/70 px-3 py-1 text-xs font-medium text-slate-900"
+        >
+          Restore offline snapshot
+        </button>
+      )}
     </div>
   );
 }

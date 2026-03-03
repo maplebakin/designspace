@@ -350,13 +350,13 @@ export const LayersPanel: React.FC = () => {
         <div className="flex items-center justify-between">
           <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
             <input
               type="text"
               placeholder="Search layers..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-[color:var(--ui-text)] placeholder:text-[color:var(--ui-panel-text)]/60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
             />
           </div>
         </div>
@@ -456,7 +456,7 @@ export const LayersPanel: React.FC = () => {
                     canvas.setActiveObject(selection);
                     canvas.requestRenderAll();
                   }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                  className="p-1.5 rounded-lg text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 transition-all duration-200"
                 >
                   <CheckSquare className="h-3.5 w-3.5 stroke-[1.5]" />
                 </button>
@@ -468,7 +468,7 @@ export const LayersPanel: React.FC = () => {
                     canvas.discardActiveObject();
                     canvas.requestRenderAll();
                   }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all duration-200"
+                  className="p-1.5 rounded-lg text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 transition-all duration-200"
                 >
                   <XSquare className="h-3.5 w-3.5 stroke-[1.5]" />
                 </button>
@@ -545,7 +545,7 @@ export const LayersPanel: React.FC = () => {
       ) : (
         <ul className="space-y-2">
           {filteredLayers.length === 0 ? (
-            <li className="p-2 text-center text-xs text-slate-400">
+            <li className="p-2 text-center text-xs text-[color:var(--ui-panel-text)]">
               No layers match your search
             </li>
           ) : (

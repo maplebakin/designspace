@@ -25,6 +25,7 @@ import { useCanvasStore } from './useCanvasStore';
 import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 import { unitScale as unitScaleMap, UnitMode } from '../utils/units';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
+import { CanvasLayer, enforceSerializedZOrder, withManifestZIndex, ZIndexLayer } from '../fabric/zIndexManifest';
 import {
     useThemeStore,
     applyThemeToCanvas,
@@ -40,6 +41,10 @@ import {
 } from '../utils/imageAdjustments';
 import { isImage } from '../utils/typeGuards';
 import { showError, showInfo, ErrorMessages } from '../utils/errorHandling';
+import { coordinateSystem } from '../utils/coordinateSystem';
+import { type AccessibilitySettings, AccessibilityManager } from '../utils/accessibilityModes';
+import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
+import { historySnapshotManager } from '../history/historySnapshotManager';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
@@ -248,6 +253,32 @@ const buildLayerFromSerializedObject = (obj: SerializedFabricObject): Layer => (
   movementLocked: !!obj.lockMovementX,
   colorLocked: !!obj.colorLocked,
 });
+
+const buildLayerStateFromSerializedObjects = (
+    objects: SerializedFabricObject[],
+    layersById: Record<string, fabric.Object> = {}
+) => {
+    const orderedObjects = enforceSerializedZOrder(objects);
+    const nextLayers = orderedObjects
+        .filter((obj) => !obj.isGuide)
+        .map(buildLayerFromSerializedObject)
+        .filter((layer) => layer.id);
+
+    const nextById: Record<string, fabric.Object> = {};
+    Object.entries(layersById).forEach(([id, value]) => {
+        if (orderedObjects.some((obj) => obj.id === id)) {
+            nextById[id] = value;
+        }
+    });
+
+    return {
+        canvasObjects: orderedObjects,
+        layers: nextLayers,
+        layersById: nextById,
+    };
+};
+
+const getSuggestedLayouts = (objects: SerializedFabricObject[]) => generateSuggestions(objects);
 const getValueByPath = (obj: object, path: string): any => {
     return path.split('.').reduce((acc, part) => acc && (acc as any)[part], obj);
 };
@@ -517,6 +548,9 @@ interface EditorState {
   selectedLayerIds: string[];
   showGuides: boolean;
   dirtyObjectsRef: Set<string> | null;
+  layoutSuggestions: LayoutSuggestion[];
+  showSuggestionSidebar: boolean;
+  accessibilitySettings: AccessibilitySettings;
 
   toastMessage: string | null;
   toast: ToastPayload | null;
@@ -541,7 +575,6 @@ interface EditorState {
   isDirty: boolean;
   isProjectPresetsOpen: boolean;
   isProjectQuickOpenOpen: boolean;
-  quickBarPinned: boolean;
   activeTool: EditorTool;
   brushSize: number;
   showOnboarding: boolean;
@@ -581,6 +614,10 @@ interface EditorState {
 
   // PHASE 2.1: Canvas objects management (Primary source of truth)
   setCanvasObjects: (objects: SerializedFabricObject[]) => void;
+  addObject: (object: SerializedFabricObject, options?: { save?: boolean; select?: boolean }) => void;
+  addObjects: (objects: SerializedFabricObject[], options?: { save?: boolean; selectLast?: boolean }) => void;
+  updateObject: (id: string, updater: Partial<SerializedFabricObject> | ((object: SerializedFabricObject) => SerializedFabricObject)) => void;
+  removeObject: (id: string, options?: { save?: boolean }) => void;
 
   // PHASE 2.2: Sync Lock Management
   acquireSyncLock: (reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch') => void;
@@ -604,6 +641,11 @@ interface EditorState {
   setSnapEnabled: (enabled: boolean) => void;
   setGridEnabled: (enabled: boolean) => void;
   setShowOnboarding: (show: boolean) => void;
+  toggleSuggestionSidebar: () => void;
+  dismissSuggestion: (id: string) => void;
+  refreshLayoutSuggestions: () => void;
+  applySuggestion: (id: string) => void;
+  updateAccessibilitySettings: (settings: Partial<AccessibilitySettings>) => void;
   resetViewCanvas: () => void;
   addAssetToLibrary: (asset: StickerData) => void;
   removeAssetFromLibrary: (id: string) => void;
@@ -629,7 +671,6 @@ interface EditorState {
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
-  setQuickBarPinned: (pinned: boolean) => void;
   setProjectName: (name: string) => void;
   setActiveTool: (tool: EditorTool) => void;
   setBrushSize: (size: number) => void;
@@ -724,6 +765,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         selectedLayerIds: [],
         showGuides: true,
         dirtyObjectsRef: null,
+        layoutSuggestions: [],
+        showSuggestionSidebar: true,
+        accessibilitySettings: AccessibilityManager.getInstance().getSettings(),
 
         toastMessage: null,
         toast: null,
@@ -748,7 +792,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         isDirty: false,
         isProjectPresetsOpen: false,
         isProjectQuickOpenOpen: false,
-        quickBarPinned: false,
         activeTool: 'select',
         brushSize: 8,
         showOnboarding: true,
@@ -811,7 +854,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (!targetCanvas) return;
         const objects = targetCanvas.getObjects();
         const nextState = buildLayerStateFromObjects(objects, targetCanvas);
-        set(nextState);
+        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
     },
     removeSelectedObject: () => {
         const { canvas, setSelectedObjectId, setSelectedLayerIds, requestLayerSync, saveState } = get();
@@ -957,7 +1000,73 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     setCanvasObjects: (objects) => {
-        set({ canvasObjects: objects });
+        const nextState = buildLayerStateFromSerializedObjects(objects, get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
+        get().requestLayerSync();
+    },
+    addObject: (object, options) => {
+        const nextObject = withManifestZIndex(object, object.zIndex as CanvasLayer | undefined);
+        const nextState = buildLayerStateFromSerializedObjects([...get().canvasObjects, nextObject], get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
+        if (options?.select !== false && nextObject.id) {
+            set({ selectedObjectId: nextObject.id, selectedLayerIds: [nextObject.id] });
+        }
+        get().requestLayerSync();
+        if (options?.save !== false) {
+            get().saveState();
+        }
+    },
+    addObjects: (objects, options) => {
+        if (objects.length === 0) return;
+        const nextObjects = objects.map((object, index) =>
+            withManifestZIndex(
+                object,
+                object.zIndex as CanvasLayer | undefined
+                    ?? (index === 0 ? ZIndexLayer.Content : undefined)
+            )
+        );
+        const nextState = buildLayerStateFromSerializedObjects([...get().canvasObjects, ...nextObjects], get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
+        if (options?.selectLast !== false) {
+            const lastObject = nextObjects[nextObjects.length - 1];
+            if (lastObject?.id) {
+                set({ selectedObjectId: lastObject.id, selectedLayerIds: [lastObject.id] });
+            }
+        }
+        get().requestLayerSync();
+        if (options?.save !== false) {
+            get().saveState();
+        }
+    },
+    updateObject: (id, updater) => {
+        const nextObjects = get().canvasObjects.map((object) => {
+            if (object.id !== id) return object;
+            const nextObject = typeof updater === 'function' ? updater(object) : { ...object, ...updater };
+            return withManifestZIndex(nextObject, nextObject.zIndex as CanvasLayer | undefined);
+        });
+        const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
+        get().requestLayerSync();
+        get().saveState();
+    },
+    removeObject: (id, options) => {
+        const nextObjects = get().canvasObjects.filter((object) => object.id !== id);
+        const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({
+            ...nextState,
+            layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
+            selectedObjectId: get().selectedObjectId === id ? null : get().selectedObjectId,
+            selectedLayerIds: get().selectedLayerIds.filter((layerId) => layerId !== id),
+        });
+        get().requestLayerSync();
+        if (options?.save !== false) {
+            get().saveState();
+        }
     },
 
     markHistoryDirty: () => {
@@ -1006,14 +1115,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         get().setToast(message);
     },
     setUnitMode: (mode) => {
-        set((state) => {
-            const nextScale = unitScaleMap[mode];
-            return {
-                unitMode: mode,
-                unitScale: nextScale,
-                unitZoom: state.zoom * nextScale,
-            };
-        });
+        coordinateSystem.setMode(mode);
     },
     setCanvasBackgroundColor: (color) => {
         const { canvas, saveState } = get();
@@ -1025,7 +1127,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         // Delegate to theme store (single source of truth)
         useThemeStore.getState().setCanvasBackgroundColor(color);
     },
-    setZoom: (zoom) => set((state) => ({ zoom, unitZoom: zoom * state.unitScale })),
+    setZoom: (zoom) => {
+        coordinateSystem.setZoom(zoom);
+    },
     setVpt: (vpt) => set({ vpt }),
     setCanvasOffset: (offset) => set({ canvasOffset: offset }),
     setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
@@ -1037,6 +1141,31 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
     setShowOnboarding: (show) => set({ showOnboarding: show }),
+    toggleSuggestionSidebar: () => set((state) => ({ showSuggestionSidebar: !state.showSuggestionSidebar })),
+    dismissSuggestion: (id) => set((state) => ({
+        layoutSuggestions: state.layoutSuggestions.filter((suggestion) => suggestion.id !== id),
+    })),
+    refreshLayoutSuggestions: () => set((state) => ({
+        layoutSuggestions: getSuggestedLayouts(state.canvasObjects),
+    })),
+    applySuggestion: (id) => {
+        const suggestion = get().layoutSuggestions.find((entry) => entry.id === id);
+        if (!suggestion) return;
+        const nextObjects = applySuggestionToObjects(get().canvasObjects, suggestion);
+        const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
+        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        set({
+            ...nextState,
+            layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects).filter((entry) => entry.id !== id),
+        });
+        get().requestLayerSync();
+        get().saveState();
+    },
+    updateAccessibilitySettings: (settings) => {
+        const manager = AccessibilityManager.getInstance();
+        manager.updateSettings(settings);
+        set({ accessibilitySettings: manager.getSettings() });
+    },
     resetViewCanvas: () => {
         const { canvas } = get();
         if (!canvas) return;
@@ -1115,7 +1244,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
     setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
-    setQuickBarPinned: (pinned) => set({ quickBarPinned: pinned }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
@@ -1152,8 +1280,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         ) {
             const normalizedWidth = Math.max(1, Math.round(nextWidth));
             const normalizedHeight = Math.max(1, Math.round(nextHeight));
-            canvas.setWidth(normalizedWidth);
-            canvas.setHeight(normalizedHeight);
+            canvas.setDimensions({ width: normalizedWidth, height: normalizedHeight });
             useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
             useCanvasStore.getState().clearPendingSize();
         }
@@ -1507,21 +1634,57 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     takeSnapshot: () => {
+        historySnapshotManager.pushSnapshot(get().canvasObjects);
         useHistoryStore.getState().takeSnapshot();
     },
 
     clearHistory: () => {
+        historySnapshotManager.clear();
         useHistoryStore.getState().clearHistory();
         // Trigger memory cleanup when history is cleared
         MemoryManager.getInstance().performCleanup();
     },
 
     undo: async () => {
-        await useHistoryStore.getState().undo();
+        get().acquireSyncLock('undo');
+        try {
+            const snapshot = historySnapshotManager.undo();
+            if (snapshot) {
+                const nextState = buildLayerStateFromSerializedObjects(snapshot, get().layersById);
+                set({
+                    ...nextState,
+                    selectedObjectId: null,
+                    selectedLayerIds: [],
+                    layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
+                });
+                get().requestLayerSync({ force: true });
+                return;
+            }
+            await useHistoryStore.getState().undo();
+        } finally {
+            get().releaseSyncLock();
+        }
     },
 
     redo: async () => {
-        await useHistoryStore.getState().redo();
+        get().acquireSyncLock('redo');
+        try {
+            const snapshot = historySnapshotManager.redo();
+            if (snapshot) {
+                const nextState = buildLayerStateFromSerializedObjects(snapshot, get().layersById);
+                set({
+                    ...nextState,
+                    selectedObjectId: null,
+                    selectedLayerIds: [],
+                    layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
+                });
+                get().requestLayerSync({ force: true });
+                return;
+            }
+            await useHistoryStore.getState().redo();
+        } finally {
+            get().releaseSyncLock();
+        }
     },
 
     // --- THEME ACTIONS (Delegated to theme store) ---
@@ -1575,6 +1738,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 acquireSyncLock,
                 releaseSyncLock,
             });
+        }
+        // Sync UI vars after applying canvas theme
+        const { applyThemeFromTokens } = useUiThemeStore.getState();
+        if (typeof applyThemeFromTokens === 'function') {
+            applyThemeFromTokens(theme);
         }
     },
 
@@ -1912,6 +2080,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             if (activeTheme) {
                 get().applyTheme(activeTheme);
+                const { applyThemeFromTokens } = useUiThemeStore.getState();
+                if (typeof applyThemeFromTokens === 'function') {
+                    applyThemeFromTokens(activeTheme);
+                }
             } else {
                 useThemeStore.getState().setThemeData(null);
                 useThemeStore.getState().setActiveBrandCollectionId(null);
@@ -2021,7 +2193,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const existingProject = projects.find(p => p.name === projectName);
 
             if (existingProject) {
-                await db.updateProject(existingProject.id!, jsonPayload, thumbnail);
+                await db.updateProject(existingProject.id!, projectName, jsonPayload, thumbnail);
             }
         } catch (error) {
             console.error('Failed to update project:', error);
@@ -2137,11 +2309,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             bleedPx: state.bleedPx,
             isPreviewMode: state.isPreviewMode,
             projectName: state.projectName,
-            quickBarPinned: state.quickBarPinned,
             activeTool: state.activeTool,
             brushSize: state.brushSize,
             snapEnabled: state.snapEnabled,
             gridEnabled: state.gridEnabled,
+            showSafeZones: state.showSafeZones,
+            showSuggestionSidebar: state.showSuggestionSidebar,
+            accessibilitySettings: state.accessibilitySettings,
             autoSaveStatus: state.autoSaveStatus,
             saveStatus: state.saveStatus,
             pages: state.pages,

@@ -166,8 +166,10 @@ export class HistorySnapshotManager {
 
       // Set canvas properties from the snapshot
       canvas.backgroundColor = snapshot.canvasState.backgroundColor;
-      canvas.setWidth(snapshot.canvasState.width);
-      canvas.setHeight(snapshot.canvasState.height);
+      canvas.setDimensions({
+        width: snapshot.canvasState.width,
+        height: snapshot.canvasState.height,
+      });
 
       // Set viewport transform
       if (snapshot.canvasState.viewportTransform) {

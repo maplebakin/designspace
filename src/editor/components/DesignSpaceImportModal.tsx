@@ -44,7 +44,7 @@ const CategorySwatches: React.FC<{
   const config = CATEGORY_CONFIG[category];
   return (
     <div className="flex items-center gap-3">
-      <div className="flex items-center gap-1.5 text-slate-400 min-w-[90px]">
+      <div className="flex items-center gap-1.5 text-[color:var(--ui-panel-text)] min-w-[90px]">
         {config.icon}
         <span className="text-[10px] uppercase tracking-wider">{config.label}</span>
       </div>
@@ -79,7 +79,7 @@ const ImportedPaletteCard: React.FC<{
   return (
     <div className="rounded-lg border border-[color:var(--ui-border)] bg-black/20 overflow-hidden">
       <div className="flex items-center justify-between p-3 border-b border-[color:var(--ui-border)]">
-        <span className="text-sm font-medium text-slate-200">
+        <span className="text-sm font-medium text-[color:var(--ui-text)]">
           {result.palette.name}
         </span>
         <button
@@ -255,10 +255,10 @@ export const DesignSpaceImportModal: React.FC<DesignSpaceImportModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-slate-100">
+      <div className="bg-[color:var(--ui-panel)] rounded-lg shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col border border-[color:var(--ui-border)] backdrop-blur-[var(--ui-blur)] text-[color:var(--ui-text)]">
         {/* Header */}
         <header className="flex items-center justify-between p-4 border-b border-[color:var(--ui-border)]">
-          <h2 className="text-[11px] uppercase tracking-widest text-slate-100">
+          <h2 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">
             Import Palettes
           </h2>
           <button
@@ -296,7 +296,7 @@ export const DesignSpaceImportModal: React.FC<DesignSpaceImportModalProps> = ({
                 {isLoading ? 'Processing...' : 'Select Palette JSON Files'}
               </span>
             </button>
-            <p className="text-[10px] text-slate-500 text-center">
+            <p className="text-[10px] text-[color:var(--ui-panel-text)]/60 text-center">
               Colors are auto-organized into Brand, Headers, Surfaces, Neutrals, Accents
             </p>
           </div>
@@ -319,7 +319,7 @@ export const DesignSpaceImportModal: React.FC<DesignSpaceImportModalProps> = ({
           {pendingImports.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wider text-slate-400">
+                <span className="text-xs uppercase tracking-wider text-[color:var(--ui-panel-text)]">
                   {pendingImports.length} Palette{pendingImports.length > 1 ? 's' : ''} Ready
                 </span>
                 {pendingCount > 1 && (
@@ -347,7 +347,7 @@ export const DesignSpaceImportModal: React.FC<DesignSpaceImportModalProps> = ({
 
           {/* Empty State */}
           {pendingImports.length === 0 && !error && (
-            <div className="text-center py-8 text-slate-500">
+            <div className="text-center py-8 text-[color:var(--ui-panel-text)]/60">
               <Palette className="w-10 h-10 mx-auto mb-3 opacity-30" />
               <p className="text-sm">Import palette JSON files to get started</p>
             </div>

@@ -96,8 +96,7 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
 
   canvas.discardActiveObject();
   canvas.clear();
-  canvas.setWidth(width);
-  canvas.setHeight(height);
+  canvas.setDimensions({ width, height });
   canvas.backgroundColor = '#FDFBF7';
 
   const header = new fabric.IText('GAME TITLE', {

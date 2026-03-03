@@ -62,12 +62,11 @@ import { PageBorderPopover } from './PageBorderPopover';
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
 
-type NavId = 'shapes' | 'insert' | 'layers' | 'assets';
+type NavId = 'shapes' | 'insert' | 'assets';
 
 const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ReactElement; description: string }> = [
   { id: 'shapes', label: 'Shapes', icon: <Square />, description: 'Quick geometric primitives' },
   { id: 'insert', label: 'Insert', icon: <Type />, description: 'Text, placeholders, and media tools' },
-  { id: 'layers', label: 'Layers', icon: <Layers />, description: 'Order, visibility, and locking' },
   { id: 'assets', label: 'Assets', icon: <ImageIcon />, description: 'Library and imports' },
 ];
 
@@ -104,7 +103,7 @@ const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
         <div className="relative">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
             >
                 <FileText className="icon-muted w-4 h-4 stroke-[1.5]" />
                 <span>File</span>
@@ -123,7 +122,7 @@ const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
                         <li>
                             <button
                                 onClick={() => { setProjectPresetsOpen(true); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 New Project
                             </button>
@@ -131,7 +130,7 @@ const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
                         <li>
                             <button
                                 onClick={handleOpenFile}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 Open File
                             </button>
@@ -139,7 +138,7 @@ const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
                         <li>
                             <button
                                 onClick={() => { downloadProjectFile(); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 Save Project
                             </button>
@@ -147,7 +146,7 @@ const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
                         <li className="border-t border-white/10 mt-1 pt-1">
                             <button
                                 onClick={() => { onImportDesignSpace(); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-slate-200 hover:bg-white/10"
+                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 Import to DesignSpace
                             </button>
@@ -175,14 +174,14 @@ const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
           className={`w-full rounded-xl border px-3 py-2 text-left transition-all duration-200 ${
             isActive
               ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/15 text-white'
-              : 'border-transparent bg-white/5 text-slate-300 hover:border-white/10 hover:bg-white/10'
+              : 'border-transparent bg-white/5 text-[color:var(--ui-panel-text)] hover:border-white/10 hover:bg-white/10'
           }`}
         >
           <div className="flex items-center gap-2">
-            {React.cloneElement(item.icon, { className: `${NAV_ICON} shrink-0` })}
+            {React.cloneElement(item.icon as React.ReactElement<any>, { className: `${NAV_ICON} shrink-0` })}
             <span className="text-[11px] uppercase tracking-widest">{item.label}</span>
           </div>
-          <p className="mt-1 text-[9px] uppercase tracking-widest text-slate-400">{item.description}</p>
+          <p className="mt-1 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{item.description}</p>
         </button>
       );
     })}
@@ -199,7 +198,7 @@ const ShapesPanel: React.FC = () => {
 
   return (
     <div className="p-4 space-y-3">
-      <h3 className="text-[10px] uppercase tracking-widest text-slate-300">Shapes</h3>
+      <h3 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Shapes</h3>
       <div className="grid grid-cols-1 gap-2">
         <button onClick={() => handleAddShape(objectFactories.addRectangle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
           <Square className={ICON_SMALL} /><span>Rectangle</span>
@@ -365,7 +364,11 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     if (selectedObjectId) setRightTab('properties');
   }, [selectedObjectId]);
 
-  const handleSelectNav = (id: NavId) => {
+  const handleSelectNav = (id: NavId | 'layers') => {
+    if (id === 'layers') {
+      setRightTab('layers');
+      return;
+    }
     setActiveNav((prev) => (prev === id ? null : id));
   };
 
@@ -376,8 +379,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         return <ShapesPanel />;
       case 'insert':
         return <Inserter />;
-      case 'layers':
-        return <LayersPanel />;
       case 'assets':
         return <AssetLibrary />;
       default:
@@ -441,7 +442,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 </div>
               )}
               {activeToast.details && expandedToastId === activeToast.id && (
-                <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-white/15 bg-black/20 p-2 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+                <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-white/15 bg-black/20 p-2 text-[10px] leading-relaxed text-[color:var(--ui-text)] whitespace-pre-wrap">
 {activeToast.details}
                 </pre>
               )}
@@ -450,7 +451,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
 
       <header className="toolbar-section justify-between bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
         <div className="min-w-[22rem] flex items-center gap-3">
-          <h1 className="font-semibold uppercase tracking-widest text-xs text-slate-200">DSGN Studio</h1>
+          <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)]">DSGN Studio</h1>
           <FileDropdown onImportDesignSpace={() => setIsDesignSpaceImportOpen(true)} />
           <SaveStatusBadge status={saveStatus} />
         </div>
@@ -462,8 +463,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       disabled={!canUndo}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canUndo
-                            ? 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
-                            : 'text-slate-500 cursor-not-allowed'
+                            ? 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)]/60 cursor-not-allowed'
                       }`}
                   >
                       <Undo2 className="w-4 h-4 stroke-[1.5]" />
@@ -475,8 +476,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       disabled={!canRedo}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canRedo
-                            ? 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
-                            : 'text-slate-500 cursor-not-allowed'
+                            ? 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)]/60 cursor-not-allowed'
                       }`}
                   >
                       <Redo2 className="w-4 h-4 stroke-[1.5]" />
@@ -490,7 +491,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'select'
                             ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <MousePointer2 className="w-4 h-4 stroke-[1.5]" />
@@ -502,7 +503,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'erase'
                             ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Eraser className="w-4 h-4 stroke-[1.5]" />
@@ -514,7 +515,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'pan'
                             ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Hand className="w-4 h-4 stroke-[1.5]" />
@@ -526,7 +527,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'textbox'
                             ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Type className="w-4 h-4 stroke-[1.5]" />
@@ -539,7 +540,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         snapEnabled
                           ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
-                          : 'text-slate-400 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                          : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Magnet className="w-4 h-4 stroke-[1.5]" />
@@ -551,7 +552,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         gridEnabled
                           ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
-                          : 'text-slate-400 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                          : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Grid className="w-4 h-4 stroke-[1.5]" />
@@ -563,12 +564,12 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   <button
                       onClick={() => {
                           setActiveTool('draw');
-                          setBrushColor(themeData?.brand?.primary?.value || '#1f2933');
+                          setBrushColor((themeData as { brand?: { primary?: { value?: string } } } | null)?.brand?.primary?.value || '#1f2933');
                       }}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'draw'
                             ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
                       }`}
                   >
                       <Pencil className="w-4 h-4 stroke-[1.5]" />
@@ -581,7 +582,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   trigger={
                     <Tooltip content="Canvas Fill" side="bottom">
                       <button
-                          className="rounded-lg p-2 text-slate-300 transition-all duration-200 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95"
+                          className="rounded-lg p-2 text-[color:var(--ui-panel-text)] transition-all duration-200 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95"
                       >
                           <PaintBucket className="w-4 h-4 stroke-[1.5]" />
                       </button>
@@ -592,7 +593,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                         className="absolute left-1/2 top-full z-30 mt-3 w-40 -translate-x-1/2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-3 shadow-[0_16px_30px_rgba(0,0,0,0.4)] backdrop-blur-[var(--ui-blur)]"
                     >
                         <div className="flex items-center justify-between">
-                            <span className="text-[10px] uppercase tracking-widest text-slate-300">Canvas</span>
+                            <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Canvas</span>
                                 <input
                                 type="color"
                                 value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
@@ -616,7 +617,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                         tokenRole: 'surfaces.surface-plain',
                     });
                 }}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
             >
                 <Square className="icon-muted w-4 h-4 stroke-[1.5]" />
                 <span>Insert Placeholder</span>
@@ -627,7 +628,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             {onBackToDashboard ? (
               <button
                 onClick={onBackToDashboard}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
               >
                 <Home className={ICON_SMALL} />
                 <span>Projects</span>
@@ -638,7 +639,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             <Tooltip content="Quick Open (⌘K)" side="bottom">
               <button
                 onClick={() => setProjectQuickOpenOpen(true)}
-                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
+                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
                 aria-label="Quick Open Projects"
               >
                 <Search className={ICON_SMALL} />
@@ -647,7 +648,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             <Tooltip content="Keyboard Shortcuts (⌘⇧/)" side="bottom">
               <button
                 onClick={() => setShowHelpModal(true)}
-                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
+                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
                 aria-label="Keyboard Shortcuts"
               >
                 <Keyboard className={ICON_SMALL} />
@@ -657,7 +658,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               <Tooltip content="Download (⌘E)" side="bottom">
                 <button
                   onClick={() => setShowExportModal(true)}
-                  className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-slate-200 hover:bg-white/10 transition-all duration-300 ease-in-out"
+                  className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
                   aria-label="Download"
                 >
                   <Download className={ICON_SMALL} />
@@ -669,8 +670,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
       <div className="flex-1 flex overflow-hidden">
         <aside className="w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex flex-col">
           <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
-            <p className="text-[10px] uppercase tracking-widest text-slate-300">Workspace</p>
-            <p className="text-[9px] uppercase tracking-widest text-slate-500 mt-1">Choose a panel to work faster</p>
+            <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Workspace</p>
+            <p className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60 mt-1">Choose a panel to work faster</p>
           </div>
           <div className="flex-1 min-h-0 flex overflow-hidden">
             <div className="w-[150px] border-r border-[color:var(--border-subtle)] overflow-y-auto">
@@ -687,7 +688,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   </div>
                 </div>
               ) : (
-                <div className="p-4 text-[10px] uppercase tracking-widest text-slate-400">Select Shapes, Insert, Layers, or Assets.</div>
+                <div className="p-4 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Select Shapes, Insert, or Assets.</div>
               )}
             </div>
           </div>
@@ -707,7 +708,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'layers'
                     ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
@@ -718,7 +719,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'properties'
                     ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -729,7 +730,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'settings'
                     ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
                 }`}
               >
                 <Frame className="w-3.5 h-3.5" />
@@ -747,17 +748,26 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               {rightTab === 'settings' && (
                 <div className="h-full overflow-y-auto p-4 space-y-4">
                   <div>
-                    <p className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">Page Border</p>
+                    <p className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Page Border</p>
                     <PageBorderPopover />
                   </div>
                   <div className="border-t border-[color:var(--ui-border)] pt-4">
-                    <button
-                      onClick={() => setIsSettingsModalOpen(true)}
-                      className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-slate-200 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
-                    >
-                      <SlidersHorizontal className="w-3.5 h-3.5" />
-                      Vibe Settings
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setIsBrandModalOpen(true)}
+                        className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Brand
+                      </button>
+                      <button
+                        onClick={() => setIsSettingsModalOpen(true)}
+                        className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        Vibe Settings
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

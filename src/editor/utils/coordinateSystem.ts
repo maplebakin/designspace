@@ -1,10 +1,17 @@
 /**
  * CoordinateSystem - Centralized unit scale management
- * Implements Task 4.1: Centralized Unit Scale Management from the roadmap
  */
 
 import { UnitMode, unitScale as unitScaleMap } from './units';
 import { useEditorStore } from '../state/editorStore';
+
+export type CoordinateSystemState = {
+  mode: UnitMode;
+  scale: number;
+  zoom: number;
+  unitZoom: number;
+  locked: boolean;
+};
 
 export class CoordinateSystem {
   private mode: UnitMode = 'px';
@@ -39,11 +46,11 @@ export class CoordinateSystem {
     if (this.lockCounter > 0) {
       throw new Error('Cannot change unit mode while locked');
     }
-    
+
     if (!(newMode in unitScaleMap)) {
       throw new Error(`Invalid unit mode: ${newMode}`);
     }
-    
+
     this.mode = newMode;
     this.scale = unitScaleMap[newMode];
     this.recalculate();
@@ -63,7 +70,7 @@ export class CoordinateSystem {
   private recalculate(): void {
     // Update unitZoom atomically
     const unitZoom = this.zoom * this.scale;
-    
+
     useEditorStore.setState({
       unitScale: this.scale,
       unitZoom,
@@ -76,14 +83,32 @@ export class CoordinateSystem {
    * Convert a value from canvas units to the current unit system
    */
   toCanvas(value: number): number {
-    return value * this.scale;
+    return this.toFabricUnits(value);
   }
 
   /**
    * Convert a value from the current unit system to canvas units
    */
   fromCanvas(value: number): number {
-    return value / this.scale;
+    return this.fromFabricUnits(value);
+  }
+
+  toFabricUnits(value: number, unitMode: UnitMode = this.mode): number {
+    return value * unitScaleMap[unitMode];
+  }
+
+  fromFabricUnits(value: number, unitMode: UnitMode = this.mode): number {
+    return value / unitScaleMap[unitMode];
+  }
+
+  getState(): CoordinateSystemState {
+    return {
+      mode: this.mode,
+      scale: this.scale,
+      zoom: this.zoom,
+      unitZoom: this.zoom * this.scale,
+      locked: this.isLocked(),
+    };
   }
 
   /**

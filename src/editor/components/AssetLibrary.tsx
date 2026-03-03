@@ -284,13 +284,13 @@ const AssetLibrary: React.FC = () => {
         
         {/* Search and filter */}
         <div className="relative mb-3">
-          <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
           <input
             type="text"
             placeholder="Search assets..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-[color:var(--ui-text)] placeholder:text-[color:var(--ui-panel-text)]/60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
           />
         </div>
         
@@ -303,7 +303,7 @@ const AssetLibrary: React.FC = () => {
               className={`px-2 py-1 text-xs rounded-lg transition-colors ${
                 selectedCategory === category.id
                   ? 'bg-[color:var(--brand-primary)] text-white'
-                  : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                  : 'bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'
               }`}
             >
               {category.name}
@@ -315,7 +315,7 @@ const AssetLibrary: React.FC = () => {
       {/* Assets grid */}
       <div className="flex-1 overflow-y-auto">
         {filteredAssets.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+          <div className="flex items-center justify-center h-full text-[color:var(--ui-panel-text)]/60 text-sm">
             No assets found
           </div>
         ) : (
@@ -332,7 +332,7 @@ const AssetLibrary: React.FC = () => {
                   <div className="w-8 h-8 flex items-center justify-center text-[color:var(--brand-primary)] mb-2">
                     <IconComponent className="w-5 h-5" />
                   </div>
-                  <span className="text-xs text-slate-300 group-hover:text-white truncate w-full text-center">
+                  <span className="text-xs text-[color:var(--ui-panel-text)] group-hover:text-white truncate w-full text-center">
                     {asset.name}
                   </span>
                 </button>

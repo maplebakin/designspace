@@ -12,6 +12,8 @@ import * as fabric from 'fabric';
 import { SAFE_MARGIN_PX } from '../utils/units';
 import { resolveThemeValue } from '../utils/themeResolver';
 import { loadImageFromFile, loadSvgFromFile, extractFileMetadata } from '../services/assetLoader';
+import { toSerializableObject } from '../utils/serialization';
+import { withManifestZIndex, ZIndexLayer } from '../fabric/zIndexManifest';
 
 const INSERT_ICON = 'icon-muted w-4 h-4 stroke-[1.5]';
 
@@ -147,11 +149,12 @@ const UploadsDropdown: React.FC = () => {
             tags: metadata.tags,
         });
 
-        // Add to canvas
-        canvas.add(result.asset);
         canvas.centerObject(result.asset);
-        canvas.setActiveObject(result.asset);
-        canvas.requestRenderAll();
+        const serialized = withManifestZIndex(
+            toSerializableObject(result.asset),
+            ZIndexLayer.Content
+        );
+        useEditorStore.getState().addObject(serialized, { save: true, select: true });
 
         if (imageInputRef.current) imageInputRef.current.value = '';
     };
@@ -328,7 +331,7 @@ const LayoutsDropdown: React.FC = () => {
         <div className="relative">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
+                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
             >
                 Layouts
                 <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
@@ -339,7 +342,7 @@ const LayoutsDropdown: React.FC = () => {
                         <li>
                             <button
                                 onClick={() => handleGenerateGrid(1, 3)}
-                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
                                     <LayoutGrid className={INSERT_ICON} />
@@ -350,7 +353,7 @@ const LayoutsDropdown: React.FC = () => {
                         <li>
                             <button
                                 onClick={() => handleGenerateGrid(1, 7)}
-                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
                                     <LayoutGrid className={INSERT_ICON} />
@@ -368,7 +371,7 @@ const LayoutsDropdown: React.FC = () => {
                                     setIsOpen(false);
                                     setShowCustomGrid(false);
                                 }}
-                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
                                     <LayoutGrid className={INSERT_ICON} />
@@ -379,7 +382,7 @@ const LayoutsDropdown: React.FC = () => {
                         <li>
                             <button
                                 onClick={() => setShowCustomGrid((prev) => !prev)}
-                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10"
+                                className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-[color:var(--ui-text)] hover:bg-white/10"
                             >
                                 <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">
                                     <LayoutGrid className={INSERT_ICON} />
@@ -389,32 +392,32 @@ const LayoutsDropdown: React.FC = () => {
                         </li>
                     </ul>
                     {showCustomGrid && (
-                        <div className="mt-2 rounded-md border border-[color:var(--border-subtle)] bg-black/40 p-3 text-xs uppercase tracking-widest text-slate-300 space-y-3">
+                        <div className="mt-2 rounded-md border border-[color:var(--border-subtle)] bg-black/40 p-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)] space-y-3">
                             <div className="flex items-center gap-2">
-                                <label className="w-16 text-[10px] text-slate-400">Rows</label>
+                                <label className="w-16 text-[10px] text-[color:var(--ui-panel-text)]">Rows</label>
                                 <input
                                     type="number"
                                     min={1}
                                     max={12}
                                     value={rows}
                                     onChange={handleNumberInput(setRows)}
-                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-[color:var(--ui-text)] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
                                 />
                             </div>
                             <div className="flex items-center gap-2">
-                                <label className="w-16 text-[10px] text-slate-400">Columns</label>
+                                <label className="w-16 text-[10px] text-[color:var(--ui-panel-text)]">Columns</label>
                                 <input
                                     type="number"
                                     min={1}
                                     max={12}
                                     value={cols}
                                     onChange={handleNumberInput(setCols)}
-                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-slate-100 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+                                    className="w-full rounded-md bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-[color:var(--ui-text)] focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
                                 />
                             </div>
                             <button
                                 onClick={() => handleGenerateGrid(rows, cols)}
-                                className="w-full rounded-md bg-white/10 px-3 py-2 text-[10px] uppercase tracking-widest text-slate-200 hover:bg-white/20"
+                                className="w-full rounded-md bg-white/10 px-3 py-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/20"
                             >
                                 Generate
                             </button>
@@ -445,7 +448,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
         <div className="relative">
             <button 
                 onClick={() => setIsOpen(!isOpen)}
-                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
+                className="group w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] bg-white/5 rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10"
             >
                 {label}
                 <ChevronDown className={`w-4 h-4 stroke-[1.5] text-[color:var(--muted-icon)] transition-all ${isOpen ? 'rotate-180' : ''}`} />
@@ -455,7 +458,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, items }) => {
                     <ul className="space-y-1">
                         {items.map(item => (
                              <li key={item.label}>
-                                <button onClick={() => { item.onClick(); setIsOpen(false); }} className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-slate-200 hover:bg-white/10">
+                                <button onClick={() => { item.onClick(); setIsOpen(false); }} className="group w-full flex items-center gap-3 px-3 py-2 text-left text-xs uppercase tracking-widest rounded-md text-[color:var(--ui-text)] hover:bg-white/10">
                                     <span className="text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)]">{item.icon}</span>
                                     <span>{item.label}</span>
                                 </button>
@@ -488,11 +491,11 @@ const TabButton: React.FC<TabButtonProps> = ({ label, icon, isActive, onClick, d
     <button
         onClick={onClick}
         disabled={disabled}
-        className={`flex-1 flex justify-center items-center gap-2 p-3 text-[11px] uppercase tracking-widest transition-all disabled:text-slate-500 ${
-            isActive ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)]' : 'text-slate-300 hover:bg-white/5'
+        className={`flex-1 flex justify-center items-center gap-2 p-3 text-[11px] uppercase tracking-widest transition-all disabled:text-[color:var(--ui-panel-text)]/60 ${
+            isActive ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)] hover:bg-white/5'
         }`}
     >
-        {React.cloneElement(icon as React.ReactElement, { className: 'w-4 h-4 stroke-[1.5]' })}
+        {React.cloneElement(icon as React.ReactElement<any>, { className: 'w-4 h-4 stroke-[1.5]' })}
         <span>{label}</span>
     </button>
 )

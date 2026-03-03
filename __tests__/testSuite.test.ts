@@ -17,6 +17,10 @@ import {
   validateExportOptions,
 } from '../src/editor/services/exportService';
 import { formatInches, convertDimensions } from '../src/editor/utils/units';
+import { FrameScheduler, TaskPriority } from '../src/editor/utils/frameScheduler';
+import { enforceSerializedZOrder, ZIndexLayer } from '../src/editor/fabric/zIndexManifest';
+import { HistorySnapshotManager } from '../src/editor/history/historySnapshotManager';
+import { applySuggestionToObjects, generateSuggestions } from '../src/editor/utils/aiLayoutSuggestions';
 
 vi.mock('../src/editor/state/editorStore', () => ({
   useEditorStore: { setState: vi.fn() },
@@ -128,5 +132,63 @@ describe('units + coordinate system', () => {
     expect(() => cs.setMode('cm')).toThrow();
     cs.unlock();
     expect(() => cs.setMode('cm')).not.toThrow();
+  });
+});
+
+describe('frame scheduler', () => {
+  it('runs higher priority tasks first', () => {
+    const scheduler = new FrameScheduler();
+    const order: string[] = [];
+    const originalRAF = globalThis.requestAnimationFrame;
+    let rafCallback: FrameRequestCallback | null = null;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      rafCallback = callback;
+      return 1;
+    }) as typeof requestAnimationFrame;
+
+    scheduler.scheduleTask(() => order.push('low'), TaskPriority.Low);
+    scheduler.scheduleTask(() => order.push('high'), TaskPriority.High);
+    rafCallback?.(0);
+
+    expect(order).toEqual(['high', 'low']);
+    globalThis.requestAnimationFrame = originalRAF;
+  });
+});
+
+describe('z-index manifest', () => {
+  it('sorts serialized objects by manifest z-index', () => {
+    const ordered = enforceSerializedZOrder([
+      { id: 'content', type: 'rect', zIndex: ZIndexLayer.Content },
+      { id: 'guide', type: 'line', isGuide: true },
+      { id: 'paper', type: 'rect', isDocumentPaper: true },
+    ] as any);
+
+    expect(ordered.map((entry) => entry.id)).toEqual(['paper', 'content', 'guide']);
+  });
+});
+
+describe('history snapshot manager', () => {
+  it('supports push, undo, and redo', () => {
+    const manager = new HistorySnapshotManager();
+    manager.pushSnapshot([{ id: 'one', type: 'rect' }] as any);
+    manager.pushSnapshot([{ id: 'two', type: 'rect' }] as any);
+
+    expect(manager.undo()?.[0]?.id).toBe('one');
+    expect(manager.redo()?.[0]?.id).toBe('two');
+  });
+});
+
+describe('ai layout suggestions', () => {
+  it('generates and applies suggestion patches', () => {
+    const objects = [
+      { id: 'a', type: 'rect', left: 20, top: 20, width: 100, height: 100 },
+      { id: 'b', type: 'rect', left: 40, top: 40, width: 100, height: 100 },
+    ] as any;
+
+    const suggestions = generateSuggestions(objects, { width: 400, height: 400 });
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    const updated = applySuggestionToObjects(objects, suggestions[0]);
+    expect(updated).not.toEqual(objects);
   });
 });

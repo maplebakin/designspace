@@ -84,6 +84,19 @@ const parseColor = (value: string) => {
   return null;
 };
 
+const hexToRgb = (hex: string): string => {
+  const clean = hex.trim().replace('#', '');
+  const normalized = clean.length === 3
+    ? clean.split('').map((channel) => `${channel}${channel}`).join('')
+    : clean;
+  if (normalized.length !== 6) return '31, 41, 55';
+  const r = parseInt(normalized.substring(0, 2), 16);
+  const g = parseInt(normalized.substring(2, 4), 16);
+  const b = parseInt(normalized.substring(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return '31, 41, 55';
+  return `${r}, ${g}, ${b}`;
+};
+
 const blendColors = (foreground: { r: number; g: number; b: number; a: number }, background: { r: number; g: number; b: number; a: number }) => {
   const alpha = foreground.a + background.a * (1 - foreground.a);
   if (alpha === 0) {
@@ -124,11 +137,17 @@ const mapThemeToVars = (theme: ApocapaletteTheme): UiThemeVars => {
     || resolveTokenValue(theme, 'glass.glass-surface')
     || 'rgba(20, 8, 8, 0.8)';
   const uiAccent = resolveTokenValue(theme, 'brand.primary') || '#A133FF';
-  const uiText = resolveTokenValue(theme, 'typography.text-body') || '#E2E8F0';
+  const uiText =
+    resolveTokenValue(theme, 'typography.body')
+    || resolveTokenValue(theme, 'typography.heading')
+    || '#E2E8F0';
   const uiBorder = resolveTokenValue(theme, 'borders.border-subtle') || 'rgba(148, 163, 184, 0.35)';
   const uiBlur = normalizeBlur(resolveTokenValue(theme, 'glass.glass-blur'));
   const rulerFace = resolveTokenValue(theme, 'surfaces.header-background') || uiPanel;
-  const rulerTick = resolveTokenValue(theme, 'typography.text-hint') || uiText;
+  const rulerTick =
+    resolveTokenValue(theme, 'typography.body')
+    || resolveTokenValue(theme, 'typography.heading')
+    || uiText;
   const panelText = pickReadableTextColor(uiPanel, uiBg);
   const panelOpaque = resolveOpaquePanel(uiPanel, uiBg);
 
@@ -154,10 +173,12 @@ const applyCssVars = (vars: UiThemeVars) => {
   });
   const panelText = vars['--ui-panel-text'] || vars['--ui-text'];
   const panelOpaque = vars['--ui-panel-opaque'] || vars['--ui-panel'];
+  const primaryColor = vars['--ui-accent'];
   root.style.setProperty('--ui-panel-text', panelText);
   root.style.setProperty('--ui-panel-opaque', panelOpaque);
-  root.style.setProperty('--brand-primary', vars['--ui-accent']);
-  root.style.setProperty('--brand-accent', vars['--ui-accent']);
+  root.style.setProperty('--brand-primary', primaryColor);
+  root.style.setProperty('--brand-primary-rgb', hexToRgb(primaryColor));
+  root.style.setProperty('--brand-accent', primaryColor);
   root.style.setProperty('--border-subtle', vars['--ui-border']);
   root.style.setProperty('--muted-icon', vars['--ui-panel-text']);
 };

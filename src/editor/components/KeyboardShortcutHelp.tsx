@@ -56,10 +56,10 @@ const KeyDisplay: React.FC<{ keys: string[] }> = ({ keys }) => {
     <div className="flex items-center gap-1">
       {keys.map((key, idx) => (
         <React.Fragment key={idx}>
-          <kbd className="px-2 py-1 text-xs rounded bg-white/10 border border-white/20 text-slate-200">
+          <kbd className="px-2 py-1 text-xs rounded bg-white/10 border border-white/20 text-[color:var(--ui-text)]">
             {key}
           </kbd>
-          {idx < keys.length - 1 && <span className="text-slate-500">+</span>}
+          {idx < keys.length - 1 && <span className="text-[color:var(--ui-panel-text)]/60">+</span>}
         </React.Fragment>
       ))}
     </div>
@@ -120,7 +120,7 @@ export const KeyboardShortcutHelp: React.FC = () => {
         aria-labelledby="keyboard-shortcuts-title"
       >
         <div className="flex items-center justify-between mb-6">
-          <h2 id="keyboard-shortcuts-title" className="text-xl font-semibold text-slate-200">Keyboard Shortcuts</h2>
+          <h2 id="keyboard-shortcuts-title" className="text-xl font-semibold text-[color:var(--ui-text)]">Keyboard Shortcuts</h2>
           <button
             onClick={() => setShowHelpModal(false)}
             className="p-1 rounded-lg hover:bg-white/10 transition-colors focus:outline-none focus:ring-2 focus:ring-[color:var(--brand-primary)]"
@@ -131,7 +131,7 @@ export const KeyboardShortcutHelp: React.FC = () => {
               }
             }}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-[color:var(--ui-panel-text)]" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
             </svg>
           </button>
@@ -140,14 +140,14 @@ export const KeyboardShortcutHelp: React.FC = () => {
         <div className="space-y-6">
           {Object.entries(groupedShortcuts).map(([category, items]) => (
             <div key={category}>
-              <h3 className="text-sm font-medium text-slate-300 uppercase tracking-widest mb-3">{category}</h3>
+              <h3 className="text-sm font-medium text-[color:var(--ui-panel-text)] uppercase tracking-widest mb-3">{category}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {items.map((shortcut, idx) => (
                   <div
                     key={idx}
                     className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10"
                   >
-                    <span className="text-slate-300">{shortcut.action}</span>
+                    <span className="text-[color:var(--ui-panel-text)]">{shortcut.action}</span>
                     <KeyDisplay keys={shortcut.keys} />
                   </div>
                 ))}
@@ -157,7 +157,7 @@ export const KeyboardShortcutHelp: React.FC = () => {
         </div>
 
         <div className="mt-8 pt-6 border-t border-white/10 text-center">
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-[color:var(--ui-panel-text)]/60">
             Press <kbd className="px-2 py-1 text-xs rounded bg-white/10 border border-white/20">ESC</kbd> to close
           </p>
         </div>

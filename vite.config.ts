@@ -2,9 +2,25 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const DEV_PORT = Number(process.env.DESIGN_SPACE_DEV_PORT ?? 5174)
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // Prevent duplicate React instances across mixed import paths in dev.
+    dedupe: ['react', 'react-dom'],
+  },
+  server: {
+    host: 'localhost',
+    port: DEV_PORT,
+    strictPort: true,
+    hmr: {
+      host: 'localhost',
+      port: DEV_PORT,
+      clientPort: DEV_PORT,
+    },
+  },
   build: {
     chunkSizeWarningLimit: 1000,
     rollupOptions: {

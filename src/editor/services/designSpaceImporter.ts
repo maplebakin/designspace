@@ -397,60 +397,67 @@ function buildApocapaletteTheme(
 
   // Build brand section
   if (byCategory.brand?.length) {
-    theme.brand = {};
+    const brand = theme.brand ?? {};
     byCategory.brand.forEach((c, i) => {
       const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : `color${i + 1}`;
-      theme.brand[role] = { value: c.value };
+      brand[role] = { value: c.value };
     });
+    theme.brand = brand;
   }
 
   // Build surfaces section
   if (byCategory.surfaces?.length) {
-    theme.surfaces = {};
+    const surfaces = theme.surfaces ?? {};
     byCategory.surfaces.forEach((c) => {
       const key = c.key.toLowerCase().includes('background') ? 'background' : c.role.replace(/\s+/g, '-');
-      theme.surfaces[key] = { value: c.value };
+      surfaces[key] = { value: c.value };
     });
+    theme.surfaces = surfaces;
   }
 
   // Build headers/typography section
   if (byCategory.headers?.length) {
-    theme.typography = theme.typography || {};
+    const typography = theme.typography ?? {};
     byCategory.headers.forEach((c) => {
       const key = c.role.replace(/\s+/g, '-');
-      theme.typography[key] = { value: c.value };
+      typography[key] = { value: c.value };
     });
+    theme.typography = typography;
   }
 
   // Build neutrals section
   if (byCategory.neutrals?.length) {
-    theme.neutrals = {};
+    const neutrals = theme.neutrals ?? {};
     byCategory.neutrals.forEach((c, i) => {
-      theme.neutrals[`neutral${i + 1}`] = { value: c.value };
+      neutrals[`neutral${i + 1}`] = { value: c.value };
     });
+    theme.neutrals = neutrals;
   }
 
   // Build accents section
   if (byCategory.accents?.length) {
-    theme.accents = {};
+    const accents = theme.accents ?? {};
     byCategory.accents.forEach((c, i) => {
       const role = i === 0 ? 'accent' : `accent${i + 1}`;
-      theme.accents[role] = { value: c.value };
+      accents[role] = { value: c.value };
     });
+    theme.accents = accents;
     // Also add to brand.accent if not present
-    if (!theme.brand) theme.brand = {};
-    if (!theme.brand.accent && byCategory.accents[0]) {
-      theme.brand.accent = { value: byCategory.accents[0].value };
+    const brand = theme.brand ?? {};
+    if (!brand.accent && byCategory.accents[0]) {
+      brand.accent = { value: byCategory.accents[0].value };
     }
+    theme.brand = brand;
   }
 
   // Build semantic section
   if (byCategory.semantic?.length) {
-    theme.semantic = {};
+    const semantic = theme.semantic ?? {};
     byCategory.semantic.forEach((c) => {
       const key = c.role.replace(/\s+/g, '-');
-      theme.semantic[key] = { value: c.value };
+      semantic[key] = { value: c.value };
     });
+    theme.semantic = semantic;
   }
 
   // Store mode if provided

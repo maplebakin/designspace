@@ -6,6 +6,14 @@ import { useThemeStore } from '../state/useThemeStore';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
+import { toSerializableObject } from '../utils/serialization';
+import { renderCanvasToPngBlob } from '../utils/renderToPng';
+import {
+    listTemplates,
+    saveTemplate,
+    deleteTemplate,
+} from '../services/templateService';
+import type { TemplateRecord } from '../db';
 
 type TemplateThumbnailProps = {
     name: string;
@@ -37,6 +45,19 @@ const hashString = (value: string) => {
 };
 
 const isExternalUrl = (value: string) => /^https?:\/\//i.test(value);
+
+const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+        if (typeof reader.result === 'string') {
+            resolve(reader.result);
+            return;
+        }
+        reject(new Error('Failed to convert blob to data URL.'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read blob.'));
+    reader.readAsDataURL(blob);
+});
 
 const DynamicSvgThumbnail: React.FC<TemplateThumbnailProps> = ({ name, themeData }) => {
     const label = name.toUpperCase();
@@ -161,36 +182,48 @@ const blankPresets: BlankPreset[] = [
 
 export const TemplateBrowser: React.FC = () => {
     const {
-        templates,
-        userTemplates,
         loadTemplate,
         setToastMessage,
-        saveCurrentAsTemplate,
         canvas,
         requestLayerSync,
         setUnitMode,
         setCanvasBackgroundColor,
+        unitMode,
     } = useEditorStore(
         (state) => ({
-            templates: state.templates,
-            userTemplates: state.userTemplates,
             loadTemplate: state.loadTemplate,
             setToastMessage: state.setToastMessage,
-            saveCurrentAsTemplate: state.saveCurrentAsTemplate,
             canvas: state.canvas,
             requestLayerSync: state.requestLayerSync,
             setUnitMode: state.setUnitMode,
             setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+            unitMode: state.unitMode,
         }),
         shallow
     );
-    const { themeData } = useThemeStore(
-        (state) => ({ themeData: state.themeData }),
+    const { themeData, activeBrandCollectionId } = useThemeStore(
+        (state) => ({
+            themeData: state.themeData,
+            activeBrandCollectionId: state.activeBrandCollectionId,
+        }),
         shallow
     );
+    const [myTemplates, setMyTemplates] = React.useState<TemplateRecord[]>([]);
 
-    // Placeholder templates (Witchy vibe)
-    const predefinedTemplates: Template[] = [
+    const normalizeUnitMode = (value?: string): 'in' | 'px' | undefined =>
+        value === 'in' || value === 'px' ? value : undefined;
+
+    const toEditorTemplate = (template: TemplateRecord): Template => ({
+        id: String(template.id ?? ''),
+        name: template.name,
+        canvasData: JSON.stringify(template.canvasData ?? { objects: [] }),
+        defaultThemeId: template.defaultThemeId ?? '',
+        thumbnail: template.thumbnail,
+        canvasSize: template.canvasSize,
+        unitMode: normalizeUnitMode(template.unitMode),
+    });
+
+    const communityTemplates: Template[] = [
         {
             id: 'daily-ritual',
             name: 'Daily Ritual',
@@ -371,11 +404,18 @@ export const TemplateBrowser: React.FC = () => {
         },
     ];
 
+    const refreshMyTemplates = React.useCallback(async () => {
+        try {
+            const records = await listTemplates();
+            setMyTemplates(records);
+        } catch {
+            setToastMessage('Failed to load saved templates.');
+        }
+    }, [setToastMessage]);
+
     React.useEffect(() => {
-        // In a real app, you might fetch templates from a backend
-        // For now, we'll use predefined ones
-        useEditorStore.getState().setTemplates(predefinedTemplates);
-    }, []);
+        void refreshMyTemplates();
+    }, [refreshMyTemplates]);
 
     const handleLoadTemplate = (template: Template) => {
         const confirmLoad = window.confirm(
@@ -385,6 +425,86 @@ export const TemplateBrowser: React.FC = () => {
             loadTemplate(template);
         } else {
             setToastMessage('Template loading cancelled.');
+        }
+    };
+
+    const handleLoadMyTemplate = (template: TemplateRecord) => {
+        handleLoadTemplate(toEditorTemplate(template));
+    };
+
+    const handleSaveAsTemplate = async () => {
+        if (!canvas) {
+            setToastMessage('Canvas not ready.');
+            return;
+        }
+
+        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const canvasData = {
+            objects: serializedObjects,
+            background: canvas.backgroundColor || undefined,
+        };
+        const templateName = `Template ${new Date().toISOString()}`;
+
+        try {
+            const thumbnailBlob = await renderCanvasToPngBlob(canvas, {
+                scale: 0.2,
+                includeBackground: true,
+                backgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+            });
+            const thumbnail = await blobToDataUrl(thumbnailBlob);
+            await saveTemplate(
+                templateName,
+                canvasData,
+                {
+                    width: Math.round(canvas.getWidth()),
+                    height: Math.round(canvas.getHeight()),
+                },
+                thumbnail,
+                {
+                    unitMode,
+                    defaultThemeId: activeBrandCollectionId || undefined,
+                }
+            );
+            await refreshMyTemplates();
+            setToastMessage(`Saved template: ${templateName}`);
+        } catch {
+            try {
+                const fallbackThumbnail = canvas.toDataURL({ multiplier: 0.1 });
+                await saveTemplate(
+                    templateName,
+                    canvasData,
+                    {
+                        width: Math.round(canvas.getWidth()),
+                        height: Math.round(canvas.getHeight()),
+                    },
+                    fallbackThumbnail,
+                    {
+                        unitMode,
+                        defaultThemeId: activeBrandCollectionId || undefined,
+                    }
+                );
+                await refreshMyTemplates();
+                setToastMessage(`Saved template: ${templateName}`);
+            } catch {
+                setToastMessage('Failed to save template.');
+            }
+        }
+    };
+
+    const handleDeleteMyTemplate = async (template: TemplateRecord) => {
+        const templateId = template.id;
+        if (typeof templateId !== 'number') {
+            setToastMessage('Unable to delete template.');
+            return;
+        }
+        const shouldDelete = window.confirm(`Delete template "${template.name}"?`);
+        if (!shouldDelete) return;
+        try {
+            await deleteTemplate(templateId);
+            setMyTemplates((current) => current.filter((item) => item.id !== templateId));
+            setToastMessage(`Deleted template: ${template.name}`);
+        } catch {
+            setToastMessage('Failed to delete template.');
         }
     };
 
@@ -436,49 +556,72 @@ export const TemplateBrowser: React.FC = () => {
             </div>
             <div className="px-4">
                 <button
-                    onClick={() => saveCurrentAsTemplate()}
+                    onClick={() => void handleSaveAsTemplate()}
                     className="w-full mb-4 text-left px-4 py-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]"
                 >
                     Save as Template
                 </button>
             </div>
-            {userTemplates.length > 0 && (
-                <div className="px-4">
-                    <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Your Templates</h3>
+            <div className="px-4">
+                <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">My Templates</h3>
+                {myTemplates.length === 0 ? (
+                    <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 mb-4">
+                        No saved templates yet.
+                    </p>
+                ) : (
                     <div className="grid grid-cols-2 gap-2">
-                        {userTemplates.map((template) => {
-                            const thumbnailSrc =
-                                template.thumbnail || (template as { thumbnailUrl?: string }).thumbnailUrl;
+                        {myTemplates.map((template) => {
                             const safeThumbnailSrc =
-                                thumbnailSrc && !isExternalUrl(thumbnailSrc) ? thumbnailSrc : null;
+                                template.thumbnail && !isExternalUrl(template.thumbnail)
+                                    ? template.thumbnail
+                                    : null;
 
                             return (
-                            <button
-                                key={template.id}
-                                onClick={() => handleLoadTemplate(template)}
-                                className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
-                            >
-                                <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">
-                                    {safeThumbnailSrc ? (
-                                        <img
-                                            src={safeThumbnailSrc}
-                                            alt={template.name}
-                                            className="w-full h-full object-cover"
-                                        />
-                                    ) : (
-                                        <DynamicSvgThumbnail name={template.name} themeData={themeData} />
-                                    )}
+                                <div
+                                    key={template.id}
+                                    className="p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
+                                >
+                                    <button
+                                        onClick={() => handleLoadMyTemplate(template)}
+                                        className="w-full text-left"
+                                    >
+                                        <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">
+                                            {safeThumbnailSrc ? (
+                                                <img
+                                                    src={safeThumbnailSrc}
+                                                    alt={template.name}
+                                                    className="w-full h-full object-cover"
+                                                />
+                                            ) : (
+                                                <DynamicSvgThumbnail name={template.name} themeData={themeData} />
+                                            )}
+                                        </div>
+                                        <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+                                            {template.name}
+                                        </span>
+                                    </button>
+                                    <button
+                                        onClick={() => void handleDeleteMyTemplate(template)}
+                                        className="mt-2 w-full text-[9px] uppercase tracking-widest text-red-300 hover:text-red-200 border border-red-300/40 rounded-md px-2 py-1"
+                                    >
+                                        Delete
+                                    </button>
                                 </div>
-                                <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{template.name}</span>
-                            </button>
-                        )})}
+                            );
+                        })}
                     </div>
-                </div>
-            )}
+                )}
+            </div>
+            <div className="px-4">
+                <div className="h-px w-full bg-white/10" />
+            </div>
             <div className="px-4">
                 <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Community Templates</h3>
+                <p className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 mb-3">
+                    Built-in starter layouts
+                </p>
                 <div className="grid grid-cols-2 gap-2">
-                    {templates.map((template) => {
+                    {communityTemplates.map((template) => {
                         const thumbnailSrc =
                             template.thumbnail || (template as { thumbnailUrl?: string }).thumbnailUrl;
                         const safeThumbnailSrc =
@@ -503,7 +646,7 @@ export const TemplateBrowser: React.FC = () => {
                             </div>
                             <span className="text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">{template.name}</span>
                             {/* Optionally show theme info or description */}
-                            {/* <p className="text-[10px] uppercase tracking-widest text-slate-500">{template.defaultThemeId}</p> */}
+                            {/* <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60">{template.defaultThemeId}</p> */}
                         </button>
                     )})}
                 </div>

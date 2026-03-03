@@ -269,7 +269,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           <Grid3X3 className="w-5 h-5 text-[color:var(--brand-primary)]" />
           <div>
             <h2 className="text-lg font-bold uppercase tracking-wider">Vision Board</h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[color:var(--ui-panel-text)]">
               {sortedItems.length} items · {extractedColors.length} colors extracted
             </p>
           </div>
@@ -351,7 +351,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
       {showColorPalette && extractedColors.length > 0 && (
         <div className="p-3 border-b border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/50">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-slate-400 mr-2">Extracted Colors:</span>
+            <span className="text-xs text-[color:var(--ui-panel-text)] mr-2">Extracted Colors:</span>
             {extractedColors.map((color) => (
               <button
                 key={color}
@@ -410,8 +410,8 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="text-center">
               <Grid3X3 className="mx-auto h-16 w-16 mb-4 opacity-20" />
-              <h3 className="text-lg font-medium text-slate-400">Your vision board is empty</h3>
-              <p className="text-sm text-slate-500 mt-1 max-w-xs">
+              <h3 className="text-lg font-medium text-[color:var(--ui-panel-text)]">Your vision board is empty</h3>
+              <p className="text-sm text-[color:var(--ui-panel-text)]/60 mt-1 max-w-xs">
                 Pin designs, add images, or collect colors to build your mood board.
               </p>
               <button

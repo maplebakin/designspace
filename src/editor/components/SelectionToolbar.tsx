@@ -34,7 +34,7 @@ const ToolbarButton = ({ label, disabled, onClick, children }: ToolbarButtonProp
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-400/20 text-indigo-100 transition-all duration-200 hover:border-indigo-300 hover:text-indigo-200 hover:bg-indigo-500/10 hover:scale-110 active:scale-95 disabled:cursor-not-allowed disabled:border-slate-700/50 disabled:text-slate-500/70 disabled:hover:scale-100 disabled:hover:bg-transparent"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-400/20 text-indigo-100 transition-all duration-200 hover:border-indigo-300 hover:text-indigo-200 hover:bg-indigo-500/10 hover:scale-110 active:scale-95 disabled:cursor-not-allowed disabled:border-[color:var(--ui-border)] disabled:text-[color:var(--ui-panel-text)]/60 disabled:hover:scale-100 disabled:hover:bg-transparent"
     >
       {children}
     </button>
@@ -107,7 +107,7 @@ export const SelectionToolbar: React.FC = () => {
   // Single object toolbar - compact quick actions
   if (isSingleObject) {
     return (
-      <div className="pointer-events-auto absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-indigo-500/30 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-slate-950/90 px-3 py-2 text-xs uppercase tracking-widest text-indigo-100 shadow-[0_12px_30px_rgba(15,23,42,0.7)] backdrop-blur-md">
+      <div className="pointer-events-auto absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-indigo-500/30 bg-[color:var(--ui-panel-opaque)] px-3 py-2 text-xs uppercase tracking-widest text-indigo-100 shadow-[0_12px_30px_rgba(0,0,0,0.45)] backdrop-blur-md">
         <ToolbarButton label="Duplicate (⌘D)" onClick={handleDuplicate}>
           <CopyPlus className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
@@ -132,7 +132,7 @@ export const SelectionToolbar: React.FC = () => {
 
   // Multi-selection toolbar - alignment and distribution
   return (
-    <div className="pointer-events-auto absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-indigo-500/30 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-slate-950/90 px-3 py-2 text-xs uppercase tracking-widest text-indigo-100 shadow-[0_12px_30px_rgba(15,23,42,0.7)] backdrop-blur-md">
+    <div className="pointer-events-auto absolute left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-indigo-500/30 bg-[color:var(--ui-panel-opaque)] px-3 py-2 text-xs uppercase tracking-widest text-indigo-100 shadow-[0_12px_30px_rgba(0,0,0,0.45)] backdrop-blur-md">
       {/* Quick Actions */}
       <ToolbarButton label="Duplicate (⌘D)" onClick={handleDuplicate}>
         <CopyPlus className="h-4 w-4 stroke-[1.5]" />

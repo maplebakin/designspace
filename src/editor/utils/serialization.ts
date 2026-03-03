@@ -1,4 +1,5 @@
 import * as fabric from 'fabric';
+import { frameScheduler, TaskPriority } from './frameScheduler';
 
 // Filter interface for serialization
 interface SerializedFilter {
@@ -22,6 +23,8 @@ const CUSTOM_PROPS = [
   'name',
   'isPageBorder',
   'borderSettings',
+  'zIndex',
+  '__zIndex',
 ] as const;
 
 export const toSerializableObject = (obj: fabric.Object) => {
@@ -94,6 +97,8 @@ export const toSerializableObject = (obj: fabric.Object) => {
     name: target.name ?? undefined,
     isPageBorder: target.isPageBorder ?? false,
     borderSettings: target.borderSettings ?? undefined,
+    zIndex: target.zIndex ?? target.__zIndex ?? undefined,
+    __zIndex: target.__zIndex ?? target.zIndex ?? undefined,
     shadow: shadowData,
     filters: filtersData,
     adjustments: obj.type === 'image' ? adjustmentsData : undefined,
@@ -228,10 +233,10 @@ export const captureCanvasStateAsync = (
   options: CaptureCanvasOptions = {}
 ): Promise<CapturedCanvasState> => {
   return new Promise((resolve) => {
-    requestAnimationFrame(() => {
+    frameScheduler.scheduleTask(() => {
       const result = captureCanvasState(canvas, options);
       resolve(result);
-    });
+    }, TaskPriority.Low);
   });
 };
 

@@ -143,7 +143,7 @@ export const ProjectQuickOpenModal: React.FC = () => {
       >
         <div className="border-b border-[color:var(--ui-border)] p-4">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
             <input
               autoFocus
               type="text"
@@ -151,17 +151,17 @@ export const ProjectQuickOpenModal: React.FC = () => {
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Quick Open projects..."
-              className="w-full rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none transition-all duration-200 focus:border-[color:var(--brand-primary)]"
+              className="w-full rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-[color:var(--ui-text)] outline-none transition-all duration-200 focus:border-[color:var(--brand-primary)]"
               aria-label="Search recent projects"
             />
           </div>
-          <p className="mt-2 text-[10px] uppercase tracking-widest text-slate-400">Enter to open · Esc to close · Cmd/Ctrl+K</p>
+          <p className="mt-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Enter to open · Esc to close · Cmd/Ctrl+K</p>
         </div>
         <div className="max-h-[420px] overflow-y-auto p-2">
           {isLoading ? (
-            <div className="px-3 py-8 text-center text-xs uppercase tracking-widest text-slate-400">Loading projects...</div>
+            <div className="px-3 py-8 text-center text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">Loading projects...</div>
           ) : filteredProjects.length === 0 ? (
-            <div className="px-3 py-8 text-center text-xs uppercase tracking-widest text-slate-400">No matching projects</div>
+            <div className="px-3 py-8 text-center text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">No matching projects</div>
           ) : (
             filteredProjects.map((project, index) => {
               const isSelected = index === selectedIndex;
@@ -180,12 +180,12 @@ export const ProjectQuickOpenModal: React.FC = () => {
                     <img src={project.thumbnail} alt="" className="h-10 w-14 rounded-md object-cover" />
                   ) : (
                     <div className="flex h-10 w-14 items-center justify-center rounded-md bg-white/5">
-                      <FileText className="h-4 w-4 text-slate-500" />
+                      <FileText className="h-4 w-4 text-[color:var(--ui-panel-text)]/60" />
                     </div>
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs uppercase tracking-widest text-slate-100">{project.name}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-widest text-slate-400">{formatDate(project.lastModified)}</div>
+                    <div className="truncate text-xs uppercase tracking-widest text-[color:var(--ui-text)]">{project.name}</div>
+                    <div className="mt-1 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{formatDate(project.lastModified)}</div>
                   </div>
                 </button>
               );

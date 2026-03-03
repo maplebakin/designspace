@@ -122,7 +122,7 @@ export const CanvasSettingsPopover: React.FC = () => {
       <div className="relative">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="group flex items-center gap-2 px-3 py-2 bg-white/5 text-slate-200 rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+          className="group flex items-center gap-2 px-3 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
         >
           <span>{currentSize}</span>
           <ChevronDown className={`icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
@@ -131,13 +131,13 @@ export const CanvasSettingsPopover: React.FC = () => {
           <PopoverSurface className="absolute left-0 mt-2 w-72 z-20">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-[11px] uppercase tracking-widest text-slate-200">Canvas Size</h3>
+                <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">Canvas Size</h3>
                 <button
                   onClick={() => {
                     rotateCanvas();
                     fitToViewport();
                   }}
-                  className="flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] hover:text-slate-100 transition-all duration-200"
+                  className="flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] hover:text-[color:var(--ui-text)] transition-all duration-200"
                   title="Rotate canvas (swap width/height)"
                 >
                   <RotateCw className="w-3.5 h-3.5" />
@@ -155,8 +155,8 @@ export const CanvasSettingsPopover: React.FC = () => {
                         : 'bg-white/5 border-transparent hover:border-[color:var(--brand-primary)]'
                     }`}
                   >
-                    <span className={`text-xs uppercase tracking-widest ${preset.name === 'US Letter' ? 'text-[color:var(--brand-primary)]' : 'text-slate-200'}`}>{preset.name}</span>
-                    <p className="text-[10px] uppercase tracking-widest text-slate-300">{preset.description}</p>
+                    <span className={`text-xs uppercase tracking-widest ${preset.name === 'US Letter' ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-text)]'}`}>{preset.name}</span>
+                    <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{preset.description}</p>
                   </button>
                 ))}
               </div>
@@ -165,32 +165,32 @@ export const CanvasSettingsPopover: React.FC = () => {
                   <div className="space-y-2">
                     <div className="flex gap-2">
                       <div className="flex-1">
-                        <label className="text-[9px] uppercase tracking-widest text-slate-400 block mb-1">Width (in)</label>
+                        <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] block mb-1">Width (in)</label>
                         <input
                           type="number"
                           step="0.1"
                           min="1"
                           value={customWidth}
                           onChange={(event) => setCustomWidth(event.target.value)}
-                          className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-slate-200 focus:border-[color:var(--brand-primary)] outline-none"
+                          className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-[color:var(--ui-text)] focus:border-[color:var(--brand-primary)] outline-none"
                         />
                       </div>
                       <div className="flex-1">
-                        <label className="text-[9px] uppercase tracking-widest text-slate-400 block mb-1">Height (in)</label>
+                        <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] block mb-1">Height (in)</label>
                         <input
                           type="number"
                           step="0.1"
                           min="1"
                           value={customHeight}
                           onChange={(event) => setCustomHeight(event.target.value)}
-                          className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-slate-200 focus:border-[color:var(--brand-primary)] outline-none"
+                          className="w-full px-2 py-1.5 text-xs bg-black/30 border border-white/10 rounded-lg text-[color:var(--ui-text)] focus:border-[color:var(--brand-primary)] outline-none"
                         />
                       </div>
                     </div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => setShowCustomSize(false)}
-                        className="flex-1 px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg hover:bg-white/10"
+                        className="flex-1 px-3 py-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/5 rounded-lg hover:bg-white/10"
                       >
                         Cancel
                       </button>
@@ -205,7 +205,7 @@ export const CanvasSettingsPopover: React.FC = () => {
                 ) : (
                   <button
                     onClick={() => setShowCustomSize(true)}
-                    className="w-full flex items-center justify-center gap-2 px-3 py-2 text-[10px] uppercase tracking-widest text-slate-300 bg-white/5 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] hover:text-slate-100 transition-all duration-200"
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/5 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] hover:text-[color:var(--ui-text)] transition-all duration-200"
                   >
                     <Settings2 className="w-3.5 h-3.5" />
                     Custom Size
@@ -216,16 +216,16 @@ export const CanvasSettingsPopover: React.FC = () => {
                     setProjectPresetsOpen(true);
                     setIsOpen(false);
                   }}
-                  className="w-full px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-200 transition-colors"
+                  className="w-full px-3 py-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] transition-colors"
                 >
                   More Presets...
                 </button>
               </div>
               <hr className="border-t border-white/10" />
               <div className="space-y-2">
-                <h4 className="text-[10px] uppercase tracking-widest text-slate-200">Background</h4>
+                <h4 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">Background</h4>
                 <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-                  <span className="text-[10px] uppercase tracking-widest text-slate-200">Fill Color</span>
+                  <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">Fill Color</span>
                   <input
                     type="color"
                     value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
@@ -239,10 +239,10 @@ export const CanvasSettingsPopover: React.FC = () => {
                 onClick={() => {
                   toggleShowGuides();
                 }}
-                className="w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-slate-200 rounded-lg hover:bg-white/10"
+                className="w-full flex items-center justify-between px-3 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] rounded-lg hover:bg-white/10"
               >
                 <span>Show Bleed/Safety Guides</span>
-                <div className={`w-5 h-5 flex items-center justify-center rounded-sm border-2 ${showGuides ? 'bg-[color:var(--brand-primary)] border-[color:var(--brand-primary)]' : 'border-slate-500'}`}>
+                <div className={`w-5 h-5 flex items-center justify-center rounded-sm border-2 ${showGuides ? 'bg-[color:var(--brand-primary)] border-[color:var(--brand-primary)]' : 'border-[color:var(--ui-border)]'}`}>
                   {showGuides && <Check className="w-4 h-4 text-white" />}
                 </div>
               </button>
@@ -253,23 +253,23 @@ export const CanvasSettingsPopover: React.FC = () => {
       {pendingResize && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
           <div className="w-full max-w-xl rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-5 shadow-[0_20px_40px_rgba(0,0,0,0.45)]">
-            <h3 className="text-xs uppercase tracking-widest text-slate-100">Resize Canvas</h3>
-            <p className="mt-2 text-[11px] uppercase tracking-widest text-slate-300">
+            <h3 className="text-xs uppercase tracking-widest text-[color:var(--ui-text)]">Resize Canvas</h3>
+            <p className="mt-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
               {pendingResize.label}: {pendingResize.width} × {pendingResize.height} px
             </p>
-            <p className="mt-2 text-[11px] text-slate-400">
+            <p className="mt-2 text-[11px] text-[color:var(--ui-panel-text)]">
               Choose how existing content should be handled.
             </p>
             <div className="mt-4 grid gap-2">
               <button
                 onClick={() => applyResizeChoice('keep', pendingResize.width, pendingResize.height)}
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-left text-[11px] uppercase tracking-widest text-slate-200 hover:border-[color:var(--brand-primary)]"
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-left text-[11px] uppercase tracking-widest text-[color:var(--ui-text)] hover:border-[color:var(--brand-primary)]"
               >
                 Resize canvas only
               </button>
               <button
                 onClick={() => applyResizeChoice('scale', pendingResize.width, pendingResize.height)}
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-left text-[11px] uppercase tracking-widest text-slate-200 hover:border-[color:var(--brand-primary)]"
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-left text-[11px] uppercase tracking-widest text-[color:var(--ui-text)] hover:border-[color:var(--brand-primary)]"
               >
                 Resize and scale content
               </button>
@@ -283,7 +283,7 @@ export const CanvasSettingsPopover: React.FC = () => {
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => setPendingResize(null)}
-                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-300 hover:bg-white/10"
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
               >
                 Cancel
               </button>

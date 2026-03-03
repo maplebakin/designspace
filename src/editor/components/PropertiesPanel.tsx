@@ -57,13 +57,13 @@ const VisionPaletteSection: React.FC<VisionPaletteProps> = ({ onColorSelect, dis
         <SectionHeader title="Vision Palette" icon={<Palette className="w-4 h-4" />} />
         <button
           onClick={clearVisionPalette}
-          className="text-[9px] uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
+          className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60 hover:text-[color:var(--ui-panel-text)] transition-colors"
           title="Clear palette"
         >
           Clear
         </button>
       </div>
-      <p className="text-[10px] text-slate-500">Colors from your vision board</p>
+      <p className="text-[10px] text-[color:var(--ui-panel-text)]/60">Colors from your vision board</p>
       <div className="flex flex-wrap gap-2">
         {visionPalette.map((color, idx) => (
           <button
@@ -126,8 +126,8 @@ const CanvasEmptyState: React.FC = () => {
             <Layout className="w-5 h-5 text-[color:var(--brand-primary)]" />
           </div>
           <div>
-            <h4 className="text-xs font-medium text-slate-200">Canvas Settings</h4>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest">
+            <h4 className="text-xs font-medium text-[color:var(--ui-text)]">Canvas Settings</h4>
+            <p className="text-[10px] text-[color:var(--ui-panel-text)] uppercase tracking-widest">
               {canvasWidth} × {canvasHeight} px
             </p>
           </div>
@@ -150,7 +150,7 @@ const CanvasEmptyState: React.FC = () => {
               className={`flex items-center justify-center gap-2 h-8 rounded-lg border text-[10px] uppercase tracking-widest transition-all duration-200 ${
                 gridEnabled
                   ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
-                  : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                  : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'
               }`}
             >
               <Grid3X3 className="w-3.5 h-3.5" />
@@ -161,7 +161,7 @@ const CanvasEmptyState: React.FC = () => {
               className={`flex items-center justify-center gap-2 h-8 rounded-lg border text-[10px] uppercase tracking-widest transition-all duration-200 ${
                 snapEnabled
                   ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
-                  : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                  : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'
               }`}
             >
               <Move className="w-3.5 h-3.5" />
@@ -174,10 +174,10 @@ const CanvasEmptyState: React.FC = () => {
       {/* Quick Actions */}
       <div className="rounded-xl border border-dashed border-white/10 p-4 text-center">
         <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-3">
-          <Maximize2 className="w-5 h-5 text-slate-500" />
+          <Maximize2 className="w-5 h-5 text-[color:var(--ui-panel-text)]/60" />
         </div>
-        <p className="text-[11px] text-slate-400 mb-1">No object selected</p>
-        <p className="text-[10px] text-slate-500">
+        <p className="text-[11px] text-[color:var(--ui-panel-text)] mb-1">No object selected</p>
+        <p className="text-[10px] text-[color:var(--ui-panel-text)]/60">
           Click an object on the canvas to edit its properties
         </p>
       </div>
@@ -342,7 +342,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             aria-label="Fill color"
           />
           {fillKindLabel && (
-            <span className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-slate-300">
+            <span className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
               {fillKindLabel}
             </span>
           )}
@@ -351,7 +351,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
 
       <div className="space-y-2">
         <ControlRow label="Fill Opacity">
-          <span className="text-[10px] text-slate-300">
+          <span className="text-[10px] text-[color:var(--ui-panel-text)]">
             {fillIsString ? `${Math.round(fillOpacity * 100)}%` : '—'}
           </span>
         </ControlRow>
@@ -378,7 +378,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
 
       <div className="space-y-2">
         <ControlRow label="Stroke Width">
-          <span className="text-[10px] text-slate-300">
+          <span className="text-[10px] text-[color:var(--ui-panel-text)]">
             {Math.round(strokeWidthValue)}px
           </span>
         </ControlRow>
@@ -412,7 +412,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             <button
               type="button"
               onClick={() => onUpdate({ fill: applyFillAlpha(fillValue, fillOpacity), tokenRole: null })}
-              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${!isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${!isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'}`}
             >
               Solid
             </button>
@@ -430,7 +430,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                 });
                 onUpdate({ fill: grad, tokenRole: null });
               }}
-              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+              className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'}`}
             >
               Gradient
             </button>
@@ -479,9 +479,9 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       </div>
 
       <details className="group">
-        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] transition-colors">
           Drop Shadow
-          <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+          <span className="text-[9px] text-[color:var(--ui-panel-text)]/60 group-open:hidden">+ Expand</span>
         </summary>
         <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
           <ControlRow label="Color">
@@ -492,16 +492,16 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             />
           </ControlRow>
           <div className="space-y-2">
-            <ControlRow label="Blur"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.blur || 0)}px</span></ControlRow>
+            <ControlRow label="Blur"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.blur || 0)}px</span></ControlRow>
             <ControlSlider min={0} max={40} value={currentShadow?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: val, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <ControlRow label="Offset X"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetX || 0)}</span></ControlRow>
+              <ControlRow label="Offset X"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetX || 0)}</span></ControlRow>
               <ControlSlider min={-30} max={30} value={currentShadow?.offsetX || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: val, offsetY: currentShadow?.offsetY || 0 }) })} />
             </div>
             <div className="space-y-2">
-              <ControlRow label="Offset Y"><span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetY || 0)}</span></ControlRow>
+              <ControlRow label="Offset Y"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetY || 0)}</span></ControlRow>
               <ControlSlider min={-30} max={30} value={currentShadow?.offsetY || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: val }) })} />
             </div>
           </div>
@@ -511,7 +511,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       {/* Opacity Slider */}
       <div className="space-y-2">
         <ControlRow label="Opacity">
-          <span className="text-[10px] text-slate-300">
+          <span className="text-[10px] text-[color:var(--ui-panel-text)]">
             {Math.round(((object as any).opacity ?? 1) * 100)}%
           </span>
         </ControlRow>
@@ -527,7 +527,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       {isRect && (
         <div className="space-y-2">
           <ControlRow label="Corner Radius">
-            <span className="text-[10px] text-slate-300">
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">
               {isCornerRadiusLinked ? `${rectCornerRadiusPx}px` : `${rectCornerRadiusXPx}px × ${rectCornerRadiusYPx}px`}
             </span>
           </ControlRow>
@@ -535,7 +535,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             <button
               type="button"
               onClick={() => setIsCornerRadiusLinked((prev) => !prev)}
-              className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-slate-300 hover:bg-white/10"
+              className="h-6 px-2 inline-flex items-center rounded-full border border-white/15 bg-white/5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
             >
               {isCornerRadiusLinked ? 'Linked' : 'Independent'}
             </button>
@@ -551,7 +551,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             <div className="space-y-3">
               <div className="space-y-1">
                 <ControlRow label="Radius X">
-                  <span className="text-[10px] text-slate-300">{rectCornerRadiusXPx}px</span>
+                  <span className="text-[10px] text-[color:var(--ui-panel-text)]">{rectCornerRadiusXPx}px</span>
                 </ControlRow>
                 <ControlSlider
                   min={0}
@@ -562,7 +562,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
               </div>
               <div className="space-y-1">
                 <ControlRow label="Radius Y">
-                  <span className="text-[10px] text-slate-300">{rectCornerRadiusYPx}px</span>
+                  <span className="text-[10px] text-[color:var(--ui-panel-text)]">{rectCornerRadiusYPx}px</span>
                 </ControlRow>
                 <ControlSlider
                   min={0}
@@ -664,7 +664,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
       {/* Opacity Slider */}
       <div className="space-y-2">
         <ControlRow label="Opacity">
-          <span className="text-[10px] text-slate-300">
+          <span className="text-[10px] text-[color:var(--ui-panel-text)]">
             {Math.round(((object as any).opacity ?? 1) * 100)}%
           </span>
         </ControlRow>
@@ -690,7 +690,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               setTextShadow({ color: '#00FFFF', blur: 10, offsetX: 0, offsetY: 0 });
               setTextStroke({ color: '#00FFFF', width: 0 });
             }}
-            className="h-8 text-[9px] uppercase tracking-widest text-slate-400 bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+            className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
             Neon
           </button>
@@ -699,7 +699,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               onUpdate({ fill: 'transparent' });
               setTextStroke({ color: '#FFFFFF', width: 2 });
             }}
-            className="h-8 text-[9px] uppercase tracking-widest text-slate-400 bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+            className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
             Outline
           </button>
@@ -708,7 +708,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               setTextShadow({ color: 'rgba(0,0,0,0.5)', blur: 2, offsetX: 1, offsetY: 1 });
               setTextStroke({ color: '', width: 0 });
             }}
-            className="h-8 text-[9px] uppercase tracking-widest text-slate-400 bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+            className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
             Elevated
           </button>
@@ -717,7 +717,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
         {/* Line Height */}
         <div className="space-y-2">
           <ControlRow label="Line Height">
-            <span className="text-[10px] text-slate-300">{currentLineHeight.toFixed(2)}</span>
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">{currentLineHeight.toFixed(2)}</span>
           </ControlRow>
           <ControlSlider
             min={0.5}
@@ -731,7 +731,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
         {/* Letter Spacing */}
         <div className="space-y-2">
           <ControlRow label="Letter Spacing">
-            <span className="text-[10px] text-slate-300">{Math.round(currentCharSpacing)}</span>
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentCharSpacing)}</span>
           </ControlRow>
           <ControlSlider
             min={-100}
@@ -743,9 +743,9 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
 
         {/* Shadow Controls */}
         <details className="group">
-          <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+          <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] transition-colors">
             Shadow
-            <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+            <span className="text-[9px] text-[color:var(--ui-panel-text)]/60 group-open:hidden">+ Expand</span>
           </summary>
           <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
             <ControlRow label="Color">
@@ -757,7 +757,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             </ControlRow>
             <div className="space-y-2">
               <ControlRow label="Blur">
-                <span className="text-[10px] text-slate-300">{Math.round(currentShadow?.blur || 0)}px</span>
+                <span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.blur || 0)}px</span>
               </ControlRow>
               <ControlSlider
                 min={0}
@@ -769,7 +769,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <ControlRow label="Offset X">
-                  <span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetX || 0)}</span>
+                  <span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetX || 0)}</span>
                 </ControlRow>
                 <ControlSlider
                   min={-20}
@@ -780,7 +780,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               </div>
               <div className="space-y-2">
                 <ControlRow label="Offset Y">
-                  <span className="text-[10px] text-slate-300">{Math.round(currentShadow?.offsetY || 0)}</span>
+                  <span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetY || 0)}</span>
                 </ControlRow>
                 <ControlSlider
                   min={-20}
@@ -795,9 +795,9 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
 
         {/* Stroke Controls */}
         <details className="group">
-          <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+          <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] transition-colors">
             Stroke
-            <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+            <span className="text-[9px] text-[color:var(--ui-panel-text)]/60 group-open:hidden">+ Expand</span>
           </summary>
           <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
             <ControlRow label="Color">
@@ -809,7 +809,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             </ControlRow>
             <div className="space-y-2">
               <ControlRow label="Width">
-                <span className="text-[10px] text-slate-300">{Math.round(currentStrokeWidth)}px</span>
+                <span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentStrokeWidth)}px</span>
               </ControlRow>
               <ControlSlider
                 min={0}
@@ -860,7 +860,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
       {/* Opacity Slider */}
       <div className="space-y-2">
         <ControlRow label="Opacity">
-          <span className="text-[10px] text-slate-300">
+          <span className="text-[10px] text-[color:var(--ui-panel-text)]">
             {Math.round(((object as any).opacity ?? 1) * 100)}%
           </span>
         </ControlRow>
@@ -874,9 +874,9 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
       </div>
 
       <details className="group">
-        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors">
+        <summary className="flex items-center justify-between cursor-pointer text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-panel-text)] transition-colors">
           Drop Shadow
-          <span className="text-[9px] text-slate-500 group-open:hidden">+ Expand</span>
+          <span className="text-[9px] text-[color:var(--ui-panel-text)]/60 group-open:hidden">+ Expand</span>
         </summary>
         <div className="mt-3 space-y-3 pl-2 border-l border-white/10">
           <ControlRow label="Color">
@@ -887,7 +887,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
             />
           </ControlRow>
           <div className="space-y-2">
-            <ControlRow label="Blur"><span className="text-[10px] text-slate-300">{Math.round((object.shadow as any)?.blur || 0)}px</span></ControlRow>
+            <ControlRow label="Blur"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round((object.shadow as any)?.blur || 0)}px</span></ControlRow>
             <ControlSlider min={0} max={40} value={(object.shadow as any)?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: ((object.shadow as any)?.color as string) || '#000000', blur: val, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })} />
           </div>
         </div>
@@ -896,7 +896,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
       <div className="space-y-4">
         <div className="space-y-2">
           <ControlRow label="Brightness">
-            <span className="text-[10px] text-slate-300">
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">
               {Math.round(currentAdjustments.brightness * 100)}%
             </span>
           </ControlRow>
@@ -911,7 +911,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
 
         <div className="space-y-2">
           <ControlRow label="Contrast">
-            <span className="text-[10px] text-slate-300">
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">
               {Math.round(currentAdjustments.contrast * 100)}%
             </span>
           </ControlRow>
@@ -926,7 +926,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
 
         <div className="space-y-2">
           <ControlRow label="Saturation">
-            <span className="text-[10px] text-slate-300">
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">
               {Math.round(currentAdjustments.saturation * 100)}%
             </span>
           </ControlRow>
@@ -987,7 +987,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
       {/* Position */}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
             <MoveHorizontal className="w-3 h-3" /> X
           </label>
           <ControlInput
@@ -998,7 +998,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
           />
         </div>
         <div className="space-y-1">
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
             <MoveVertical className="w-3 h-3" /> Y
           </label>
           <ControlInput
@@ -1013,7 +1013,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
       {/* Size */}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
             <Scaling className="w-3 h-3" /> W
           </label>
           <ControlInput
@@ -1025,7 +1025,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
           />
         </div>
         <div className="space-y-1">
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-400">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
             <Scaling className="w-3 h-3" /> H
           </label>
           <ControlInput
@@ -1050,7 +1050,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
               onChange={(e) => handleRotationChange(Number(e.target.value))}
               className="w-16"
             />
-            <span className="text-[10px] text-slate-400">°</span>
+            <span className="text-[10px] text-[color:var(--ui-panel-text)]">°</span>
           </div>
         </ControlRow>
         <div className="flex gap-1">
@@ -1061,7 +1061,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
               className={`flex-1 h-6 text-[9px] rounded border transition-all duration-200 ${
                 angle === preset
                   ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
-                  : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
+                  : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'
               }`}
             >
               {preset}°
@@ -1208,7 +1208,7 @@ export const PropertiesPanel: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[color:var(--border-subtle)] px-4 py-3">
-        <span className="text-[11px] uppercase tracking-widest text-slate-300 font-medium">
+        <span className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] font-medium">
           Properties
         </span>
         {selectedObject && (
