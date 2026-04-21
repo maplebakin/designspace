@@ -553,6 +553,7 @@ interface EditorState {
   showCanvasSettingsPanel: boolean;
   showSuggestionSidebar: boolean;
   accessibilitySettings: AccessibilitySettings;
+  pendingViewportFit: boolean;
 
   toastMessage: string | null;
   toast: ToastPayload | null;
@@ -645,6 +646,7 @@ interface EditorState {
   setShowOnboarding: (show: boolean) => void;
   toggleCanvasSettingsPanel: () => void;
   toggleSuggestionSidebar: () => void;
+  clearPendingViewportFit: () => void;
   dismissSuggestion: (id: string) => void;
   refreshLayoutSuggestions: () => void;
   applySuggestion: (id: string) => void;
@@ -772,6 +774,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         showCanvasSettingsPanel: false,
         showSuggestionSidebar: true,
         accessibilitySettings: AccessibilityManager.getInstance().getSettings(),
+        pendingViewportFit: false,
 
         toastMessage: null,
         toast: null,
@@ -1251,6 +1254,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     setProjectPresetsOpen: (open) => set({ isProjectPresetsOpen: open }),
     setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
+    clearPendingViewportFit: () => set({ pendingViewportFit: false }),
     setProjectName: (name) => set({ projectName: name }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
@@ -1406,6 +1410,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             isDirty: false,
             isProjectPresetsOpen: false,
             showOnboarding: shouldHideOnboarding ? false : get().showOnboarding,
+            pendingViewportFit: shouldHideOnboarding,
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
         });

@@ -53,6 +53,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     showOnboarding,
     setShowOnboarding,
     setUnitMode,
+    pendingViewportFit,
+    clearPendingViewportFit,
     setLayerSyncHandler,
     showGuides,
     markHistoryDirty,
@@ -80,6 +82,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       showOnboarding: state.showOnboarding,
       setShowOnboarding: state.setShowOnboarding,
       setUnitMode: state.setUnitMode,
+      pendingViewportFit: state.pendingViewportFit,
+      clearPendingViewportFit: state.clearPendingViewportFit,
       setLayerSyncHandler: state.setLayerSyncHandler,
       showGuides: state.showGuides,
       markHistoryDirty: state.markHistoryDirty,
@@ -189,6 +193,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       updateViewportState(fabricCanvas);
     }, TaskPriority.High);
   }, [fabricCanvas, updateViewportState]);
+
+  useEffect(() => {
+    if (!pendingViewportFit || !fabricCanvas || !containerRef.current) return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.width < 20 || rect.height < 20) return;
+
+        frameScheduler.scheduleTask(() => {
+          fitCanvasToViewport(rect.width, rect.height);
+          updateViewportState(fabricCanvas);
+          clearPendingViewportFit();
+        }, TaskPriority.High);
+      });
+    });
+  }, [pendingViewportFit, fabricCanvas, clearPendingViewportFit, updateViewportState]);
 
   const scheduleUpdate = useCallback((
     targetCanvas?: fabric.Canvas | null,
