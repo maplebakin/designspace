@@ -71,6 +71,9 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
       width,
       height,
       fill: backgroundColor,
+      excludeFromExport: true,
+      isGuide: true,
+      isDocumentPaper: true,
       selectable: false,
       evented: false,
       hasControls: false,
@@ -78,14 +81,6 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
       hoverCursor: 'default',
       perPixelTargetFind: false,
     });
-
-    // Set custom properties
-    (documentPaper as any).excludeFromExport = true;
-    (documentPaper as any).isGuide = true; // Mark as guide so it's excluded from object operations
-
-    // Custom properties
-    (documentPaper as any).isDocumentPaper = true;
-
     guideRegistry.register(documentPaper, 'document-paper');
     assignZIndex(documentPaper, CanvasLayer.DOCUMENT_PAPER);
     canvas.add(documentPaper);
@@ -116,6 +111,7 @@ export const addSafeMarginGuides = (canvas: fabric.Canvas) => {
     stroke: 'rgba(0, 255, 255, 0.7)', // Soft cyan glow
     strokeWidth: 1,
     strokeDashArray: GUIDE_DASH_ARRAY,
+    isGuide: true,
     selectable: false,
     evented: false,
     hasControls: false,

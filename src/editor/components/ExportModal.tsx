@@ -10,10 +10,10 @@ interface ExportModalProps {
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => {
-  const isDev = import.meta.env.DEV;
-  const { canvas } = useEditorStore(
+  const { canvas, projectName } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
+      projectName: state.projectName,
     }),
     shallow
   );
@@ -23,7 +23,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   );
 
   const [includeBackground, setIncludeBackground] = useState(true);
-  const fileName = 'design-space-export';
+  const fileName = projectName;
   const handleExport = async (format: AdvancedExportFormat) => {
     if (!canvas) return;
     const background = canvasBackgroundColor || (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
@@ -36,7 +36,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     onClose();
   };
 
-  if (!isOpen || !isDev) return null;
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">

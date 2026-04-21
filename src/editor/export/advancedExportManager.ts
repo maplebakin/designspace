@@ -4,6 +4,8 @@ import { renderCanvasToPngBlob } from '../utils/renderToPng';
 import { serializeToSVG } from '../utils/serializeToSVG';
 import { coordinateSystem } from '../utils/coordinateSystem';
 import { pluginManager } from '../utils/pluginArchitecture';
+import { useCanvasStore } from '../state/useCanvasStore';
+import { sanitizeExportBaseName } from '../utils/exportFileName';
 
 export type AdvancedExportFormat = 'png' | 'svg' | 'pdf';
 
@@ -34,21 +36,22 @@ export class AdvancedExportManager {
     options: AdvancedExportOptions = {}
   ): Promise<void> {
     pluginManager.emitHook('onExport', { format, options });
+    const fileName = sanitizeExportBaseName(options.fileName);
 
     if (format === 'png') {
       const blob = await this.exportPng(canvas, options);
-      triggerDownload(blob, `${options.fileName ?? 'design-space-export'}.png`);
+      triggerDownload(blob, `${fileName}.png`);
       return;
     }
 
     if (format === 'svg') {
       const blob = this.exportSvg(canvas, options);
-      triggerDownload(blob, `${options.fileName ?? 'design-space-export'}.svg`);
+      triggerDownload(blob, `${fileName}.svg`);
       return;
     }
 
     const blob = await this.exportPdf(canvas, options);
-    triggerDownload(blob, `${options.fileName ?? 'design-space-export'}.pdf`);
+    triggerDownload(blob, `${fileName}.pdf`);
   }
 
   async exportPng(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
@@ -63,9 +66,10 @@ export class AdvancedExportManager {
 
   exportSvg(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Blob {
     const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
-    const svg = serializeToSVG(canvas.getObjects(), {
-      width: options.pageSize?.width ?? canvas.getWidth(),
-      height: options.pageSize?.height ?? canvas.getHeight(),
+    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
+    const svg = serializeToSVG(canvas, {
+      width: options.pageSize?.width ?? documentWidth,
+      height: options.pageSize?.height ?? documentHeight,
       includeBackground: options.includeBackground ?? true,
       backgroundColor: background,
     });
@@ -75,8 +79,9 @@ export class AdvancedExportManager {
   async exportPdf(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
     const blob = await this.exportPng(canvas, options);
     const imageUrl = URL.createObjectURL(blob);
-    const pageWidth = options.pageSize?.width ?? canvas.getWidth();
-    const pageHeight = options.pageSize?.height ?? canvas.getHeight();
+    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
+    const pageWidth = options.pageSize?.width ?? documentWidth;
+    const pageHeight = options.pageSize?.height ?? documentHeight;
     const widthInches = coordinateSystem.fromFabricUnits(pageWidth, 'in');
     const heightInches = coordinateSystem.fromFabricUnits(pageHeight, 'in');
     const doc = new jsPDF({

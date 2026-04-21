@@ -1,287 +1,131 @@
 import * as fabric from 'fabric';
 
-const DEFAULT_FONT_STACK = "'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
-
 interface SerializeToSVGOptions {
   width: number;
   height: number;
   includeBackground?: boolean;
   backgroundColor?: string | null;
-  fontFamily?: string;
 }
 
-const formatNumber = (value: number) => {
-  if (!Number.isFinite(value)) return '0';
-  return Number(value.toFixed(3)).toString();
+const getClonedViewportTransform = (canvas: fabric.Canvas): fabric.TMat2D => {
+  const fallback: fabric.TMat2D = [1, 0, 0, 1, 0, 0];
+  return canvas.viewportTransform
+    ? ([...canvas.viewportTransform] as fabric.TMat2D)
+    : fallback;
 };
 
-const escapeXml = (value: string) =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+const getExportExcludedObjects = (canvas: fabric.Canvas) =>
+  canvas.getObjects().filter((object) =>
+    (object as any).excludeFromExport || (object as any).isGuide || (object as any).isSmartGuide
+  );
 
-const getEditorFontStack = () => {
-  if (typeof window === 'undefined') return DEFAULT_FONT_STACK;
-  const raw = window
-    .getComputedStyle(document.documentElement)
-    .getPropertyValue('--font-ui')
-    .trim();
-  return raw.length > 0 ? raw : DEFAULT_FONT_STACK;
-};
+const getCanvasImageObjects = (objects: fabric.Object[]): fabric.Image[] =>
+  objects.flatMap((object) => {
+    if (object.type === 'group' || object.type === 'activeSelection') {
+      return getCanvasImageObjects((object as fabric.Group).getObjects());
+    }
+    return object.type === 'image' ? [object as fabric.Image] : [];
+  });
 
-const buildFontFamily = (fontFamily: string | undefined, fallbackStack: string) => {
-  if (!fontFamily) return fallbackStack;
-  const normalized = fontFamily.trim();
-  if (
-    normalized.includes('system-ui') ||
-    normalized.includes('-apple-system') ||
-    normalized.includes('BlinkMacSystemFont')
-  ) {
-    return normalized;
+const getImageSrc = (image: fabric.Image) => {
+  const anyImage = image as any;
+  if (typeof anyImage.getSrc === 'function') {
+    const src = anyImage.getSrc();
+    return typeof src === 'string' ? src : '';
   }
-  return `${normalized}, ${fallbackStack}`;
+  const element = anyImage.getElement?.() || anyImage._element;
+  return typeof element?.src === 'string' ? element.src : '';
 };
 
-const shouldSkipObject = (object: fabric.Object) =>
-  !object.visible || (object as any).isGuide || (object as any).isSmartGuide;
+const shouldInlineImageSrc = (src: string) =>
+  !!src && !src.startsWith('data:') && !/^https?:\/\//i.test(src) && !src.startsWith('//');
 
-const getFill = (object: fabric.Object) =>
-  typeof (object as any).fill === 'string' ? ((object as any).fill as string) : 'none';
-
-const getStroke = (object: fabric.Object) =>
-  typeof (object as any).stroke === 'string' ? ((object as any).stroke as string) : 'none';
-
-const buildStyleAttributes = (object: fabric.Object) => {
-  const attrs: string[] = [];
-  const fill = getFill(object);
-  const stroke = getStroke(object);
-  const strokeWidth = (object as any).strokeWidth ?? 0;
-  const strokeDashArray = (object as any).strokeDashArray as number[] | undefined;
-
-  attrs.push(`fill="${escapeXml(fill)}"`);
-  if (stroke !== 'none') {
-    attrs.push(`stroke="${escapeXml(stroke)}"`);
-    attrs.push(`stroke-width="${formatNumber(strokeWidth)}"`);
-    if (strokeDashArray && strokeDashArray.length > 0) {
-      attrs.push(`stroke-dasharray="${strokeDashArray.map(formatNumber).join(' ')}"`);
-    }
-    if ((object as any).strokeLineCap) {
-      attrs.push(`stroke-linecap="${(object as any).strokeLineCap}"`);
-    }
-    if ((object as any).strokeLineJoin) {
-      attrs.push(`stroke-linejoin="${(object as any).strokeLineJoin}"`);
-    }
-    if ((object as any).strokeUniform) {
-      attrs.push('vector-effect="non-scaling-stroke"');
-    }
+const getInlineImageDataUrl = (image: fabric.Image) => {
+  const anyImage = image as any;
+  if (typeof anyImage.svgDataUrl === 'string' && anyImage.svgDataUrl.startsWith('data:')) {
+    return anyImage.svgDataUrl;
   }
-  const opacity = typeof object.opacity === 'number' ? object.opacity : 1;
-  if (opacity < 1) {
-    attrs.push(`opacity="${formatNumber(opacity)}"`);
+  const element = anyImage.getElement?.() || anyImage._element;
+  if (!element || typeof document === 'undefined') {
+    return '';
   }
-  return attrs.join(' ');
+  const width = element.naturalWidth || element.width;
+  const height = element.naturalHeight || element.height;
+  if (!width || !height) {
+    return '';
+  }
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return '';
+    }
+    context.drawImage(element, 0, 0);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return '';
+  }
 };
 
-const matrixToSvg = (matrix: fabric.TMat2D) =>
-  `matrix(${matrix.map(formatNumber).join(' ')})`;
-
-const getRelativeMatrix = (object: fabric.Object, parentMatrix?: fabric.TMat2D) => {
-  const ownMatrix = object.calcTransformMatrix() as fabric.TMat2D;
-  if (!parentMatrix) return ownMatrix;
-  const inverseParent = fabric.util.invertTransform(parentMatrix);
-  return fabric.util.multiplyTransformMatrices(inverseParent, ownMatrix) as fabric.TMat2D;
-};
-
-const polygonToPath = (points: { x: number; y: number }[], pathOffset: fabric.Point) =>
-  points
-    .map((point, index) => {
-      const command = index === 0 ? 'M' : 'L';
-      const x = formatNumber(point.x - pathOffset.x);
-      const y = formatNumber(point.y - pathOffset.y);
-      return `${command}${x} ${y}`;
+export const serializeToSVG = (canvas: fabric.Canvas, options: SerializeToSVGOptions) => {
+  const originalZoom = canvas.getZoom();
+  const originalVpt = getClonedViewportTransform(canvas);
+  const originalBackgroundColor = canvas.backgroundColor;
+  const nextBackgroundColor = options.includeBackground
+    ? options.backgroundColor ?? originalBackgroundColor
+    : '';
+  const hiddenObjects = getExportExcludedObjects(canvas).map((object) => ({
+    object,
+    visible: object.visible,
+  }));
+  const inlinedImages = getCanvasImageObjects(canvas.getObjects())
+    .map((image) => {
+      const src = getImageSrc(image);
+      if (!shouldInlineImageSrc(src)) {
+        return null;
+      }
+      const dataUrl = getInlineImageDataUrl(image);
+      if (!dataUrl) {
+        return null;
+      }
+      const anyImage = image as any;
+      const hadOwnGetSrc = Object.prototype.hasOwnProperty.call(anyImage, 'getSrc');
+      const originalGetSrc = anyImage.getSrc;
+      anyImage.getSrc = () => dataUrl;
+      return { image: anyImage, hadOwnGetSrc, originalGetSrc };
     })
-    .join(' ')
-    .concat(' Z');
+    .filter((entry): entry is { image: any; hadOwnGetSrc: boolean; originalGetSrc: any } => !!entry);
 
-const pathCommandsToString = (commands: any[][]) =>
-  commands
-    .map((segment) =>
-      segment
-        .map((part, index) => {
-          if (index === 0) return String(part);
-          return formatNumber(Number(part));
-        })
-        .join(' ')
-    )
-    .join(' ');
+  canvas.setZoom(1);
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  canvas.backgroundColor = nextBackgroundColor;
+  hiddenObjects.forEach(({ object }) => object.set('visible', false));
+  canvas.renderAll();
 
-const serializeText = (object: fabric.Object, fontStack: string) => {
-  const text = String((object as any).text ?? '');
-  if (!text.trim()) return '';
-  const lines = text.split(/\r?\n/);
-  const fontFamily = buildFontFamily((object as any).fontFamily, fontStack);
-  const fontSize = Number((object as any).fontSize ?? 16);
-  const fontWeight = (object as any).fontWeight || 'normal';
-  const fontStyle = (object as any).fontStyle || 'normal';
-  const textAlign = (object as any).textAlign || 'left';
-  const textAnchor = textAlign === 'center' ? 'middle' : textAlign === 'right' ? 'end' : 'start';
-  const width = Number(object.width ?? 0);
-  const height = Number(object.height ?? lines.length * fontSize);
-  const lineHeight = Number((object as any).lineHeight ?? 1.16);
-  const letterSpacing = (object as any).charSpacing
-    ? (Number((object as any).charSpacing) / 1000) * fontSize
-    : 0;
-  const baseX =
-    textAnchor === 'middle' ? 0 : textAnchor === 'end' ? width / 2 : -width / 2;
-  const startY = -height / 2 + fontSize;
-
-  const attrs = [
-    `x="${formatNumber(baseX)}"`,
-    `y="${formatNumber(startY)}"`,
-    `font-family="${escapeXml(fontFamily)}"`,
-    `font-size="${formatNumber(fontSize)}"`,
-    `font-weight="${escapeXml(String(fontWeight))}"`,
-    `font-style="${escapeXml(String(fontStyle))}"`,
-    `text-anchor="${textAnchor}"`,
-    `dominant-baseline="alphabetic"`,
-  ];
-  if (letterSpacing) {
-    attrs.push(`letter-spacing="${formatNumber(letterSpacing)}"`);
+  try {
+    return canvas.toSVG({
+      suppressPreamble: false,
+      viewBox: {
+        x: 0,
+        y: 0,
+        width: options.width,
+        height: options.height,
+      },
+    });
+  } finally {
+    inlinedImages.forEach(({ image, hadOwnGetSrc, originalGetSrc }) => {
+      if (hadOwnGetSrc) {
+        image.getSrc = originalGetSrc;
+        return;
+      }
+      delete image.getSrc;
+    });
+    hiddenObjects.forEach(({ object, visible }) => object.set('visible', visible));
+    canvas.setZoom(originalZoom);
+    canvas.setViewportTransform(originalVpt);
+    canvas.backgroundColor = originalBackgroundColor;
+    canvas.renderAll();
   }
-  const fill = getFill(object);
-  attrs.push(`fill="${escapeXml(fill)}"`);
-
-  const tspans = lines
-    .map((line, index) => {
-      const dy = index === 0 ? 0 : fontSize * lineHeight;
-      return `<tspan x="${formatNumber(baseX)}" dy="${formatNumber(dy)}">${escapeXml(
-        line
-      )}</tspan>`;
-    })
-    .join('');
-
-  return `<text ${attrs.join(' ')}>${tspans}</text>`;
-};
-
-const serializeObject = (
-  object: fabric.Object,
-  fontStack: string,
-  parentMatrix?: fabric.TMat2D
-): string => {
-  if (shouldSkipObject(object)) return '';
-
-  if (object.type === 'group' || object.type === 'activeSelection') {
-    const group = object as fabric.Group;
-    const relativeMatrix = getRelativeMatrix(group, parentMatrix);
-    const groupMatrix = group.calcTransformMatrix() as fabric.TMat2D;
-    const opacity =
-      typeof group.opacity === 'number' && group.opacity < 1
-        ? ` opacity="${formatNumber(group.opacity)}"`
-        : '';
-    const children = group
-      .getObjects()
-      .map((child) => serializeObject(child, fontStack, groupMatrix))
-      .join('');
-    return `<g transform="${matrixToSvg(relativeMatrix)}"${opacity}>${children}</g>`;
-  }
-
-  const relativeMatrix = getRelativeMatrix(object, parentMatrix);
-  const transformAttr = `transform="${matrixToSvg(relativeMatrix)}"`;
-  const styleAttrs = buildStyleAttributes(object);
-
-  if (object.type === 'rect') {
-    const rect = object as fabric.Rect;
-    const width = Number(rect.width ?? 0);
-    const height = Number(rect.height ?? 0);
-    const rx = Number((rect as any).rx ?? 0);
-    const ry = Number((rect as any).ry ?? 0);
-    return `<rect ${transformAttr} x="${formatNumber(-width / 2)}" y="${formatNumber(
-      -height / 2
-    )}" width="${formatNumber(width)}" height="${formatNumber(height)}" rx="${formatNumber(
-      rx
-    )}" ry="${formatNumber(ry)}" ${styleAttrs} />`;
-  }
-
-  if (object.type === 'circle') {
-    const circle = object as fabric.Circle;
-    const radius = Number(circle.radius ?? 0);
-    return `<circle ${transformAttr} cx="0" cy="0" r="${formatNumber(radius)}" ${styleAttrs} />`;
-  }
-
-  if (object.type === 'triangle') {
-    const triangle = object as fabric.Triangle;
-    const width = Number(triangle.width ?? 0);
-    const height = Number(triangle.height ?? 0);
-    const points = [
-      { x: 0, y: -height / 2 },
-      { x: width / 2, y: height / 2 },
-      { x: -width / 2, y: height / 2 },
-    ];
-    const d = points
-      .map((point, index) => `${index === 0 ? 'M' : 'L'}${formatNumber(point.x)} ${formatNumber(point.y)}`)
-      .join(' ')
-      .concat(' Z');
-    return `<path ${transformAttr} d="${d}" ${styleAttrs} />`;
-  }
-
-  if (object.type === 'polygon') {
-    const polygon = object as fabric.Polygon;
-    const points = polygon.get('points') || [];
-    const pathOffset = polygon.pathOffset || new fabric.Point(0, 0);
-    const d = polygonToPath(points, pathOffset);
-    return `<path ${transformAttr} d="${d}" ${styleAttrs} />`;
-  }
-
-  if (object.type === 'path') {
-    const pathObject = object as fabric.Path;
-    const d = pathCommandsToString(pathObject.path || []);
-    return `<path ${transformAttr} d="${d}" ${styleAttrs} />`;
-  }
-
-  if (object.type === 'i-text' || object.type === 'textbox' || object.type === 'text') {
-    const textMarkup = serializeText(object, fontStack);
-    if (!textMarkup) return '';
-    return `<g ${transformAttr}>${textMarkup}</g>`;
-  }
-
-  if (object.type === 'image') {
-    const image = object as fabric.Image;
-    const element = (image as any).getElement?.() || (image as any)._element;
-    const src = typeof (image as any).getSrc === 'function' ? (image as any).getSrc() : element?.src;
-    if (!src || typeof src !== 'string') return '';
-    const width = Number(image.width ?? 0);
-    const height = Number(image.height ?? 0);
-    return `<image ${transformAttr} x="${formatNumber(-width / 2)}" y="${formatNumber(
-      -height / 2
-    )}" width="${formatNumber(width)}" height="${formatNumber(height)}" href="${escapeXml(
-      src
-    )}" preserveAspectRatio="none" />`;
-  }
-
-  return '';
-};
-
-export const serializeToSVG = (objects: fabric.Object[], options: SerializeToSVGOptions) => {
-  const fontStack = options.fontFamily || getEditorFontStack();
-  const content = objects.map((obj) => serializeObject(obj, fontStack)).join('');
-  const background =
-    options.includeBackground && options.backgroundColor
-      ? `<rect width="${formatNumber(options.width)}" height="${formatNumber(
-          options.height
-        )}" fill="${escapeXml(options.backgroundColor)}" />`
-      : '';
-
-  return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${formatNumber(
-      options.width
-    )}" height="${formatNumber(options.height)}" viewBox="0 0 ${formatNumber(
-      options.width
-    )} ${formatNumber(options.height)}" style="font-family:${escapeXml(fontStack)}">`,
-    background,
-    content,
-    '</svg>',
-  ].join('');
 };

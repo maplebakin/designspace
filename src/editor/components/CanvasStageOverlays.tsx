@@ -4,6 +4,8 @@ import { PRINT_DPI } from '../utils/units';
 import { CanvasSettingsPanel } from './CanvasSettingsPanel';
 import { SuggestionSidebar } from './SuggestionSidebar';
 import { AccessibilityPanel } from './AccessibilityPanel';
+import { useEditorStore } from '../state/editorStore';
+import type { UnitMode } from '../utils/units';
 
 type SizePreset = {
   id: string;
@@ -28,7 +30,7 @@ const SIZE_PRESETS: SizePreset[] = [
 ];
 
 type CanvasSizePickerProps = {
-  onSelect: (width: number, height: number) => void;
+  onSelect: (width: number, height: number, unitMode: UnitMode) => void;
   onDismiss: () => void;
 };
 
@@ -49,7 +51,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
     }
     const widthPx = customUnit === 'in' ? Math.round(width * PRINT_DPI) : Math.round(width);
     const heightPx = customUnit === 'in' ? Math.round(height * PRINT_DPI) : Math.round(height);
-    onSelect(widthPx, heightPx);
+    onSelect(widthPx, heightPx, customUnit);
   };
 
   const getPreviewAspect = (preset: SizePreset) => {
@@ -80,7 +82,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                 return (
                   <button
                     key={preset.id}
-                    onClick={() => onSelect(preset.width, preset.height)}
+                    onClick={() => onSelect(preset.width, preset.height, 'in')}
                     className={`group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all duration-200 ${
                       preset.recommended
                         ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/10 hover:bg-[color:var(--brand-primary)]/20'
@@ -118,7 +120,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                 return (
                   <button
                     key={preset.id}
-                    onClick={() => onSelect(preset.width, preset.height)}
+                    onClick={() => onSelect(preset.width, preset.height, 'px')}
                     className="group flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 transition-all duration-200 hover:border-[color:var(--brand-primary)]/50 hover:bg-white/10"
                   >
                     <div
@@ -261,20 +263,37 @@ export const CanvasSyncErrorOverlay: React.FC<CanvasSyncErrorOverlayProps> = ({
   );
 };
 
-export const CanvasStagePanels: React.FC = () => (
-  <>
-    <div className="pointer-events-none absolute left-4 top-4 z-30 w-64">
-      <div className="pointer-events-auto">
-        <CanvasSettingsPanel />
+export const CanvasStagePanels: React.FC = () => {
+  const showSuggestionSidebar = useEditorStore((state) => state.showSuggestionSidebar);
+  const toggleSuggestionSidebar = useEditorStore((state) => state.toggleSuggestionSidebar);
+
+  return (
+    <>
+      <div className="pointer-events-none absolute left-4 top-4 z-30 w-64">
+        <div className="pointer-events-auto">
+          <CanvasSettingsPanel />
+        </div>
       </div>
-    </div>
-    <div className="pointer-events-none absolute right-4 top-4 z-30 flex w-72 flex-col gap-3">
-      <div className="pointer-events-auto">
-        <SuggestionSidebar />
-      </div>
-      <div className="pointer-events-auto">
-        <AccessibilityPanel />
-      </div>
-    </div>
-  </>
-);
+      {showSuggestionSidebar ? (
+        <div className="pointer-events-none absolute right-4 top-4 z-30 flex w-72 flex-col gap-3">
+          <div className="pointer-events-auto">
+            <SuggestionSidebar />
+          </div>
+          <div className="pointer-events-auto">
+            <AccessibilityPanel />
+          </div>
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute right-4 top-4 z-30">
+          <button
+            type="button"
+            onClick={toggleSuggestionSidebar}
+            className="pointer-events-auto rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-3 py-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] shadow-lg backdrop-blur-[var(--ui-blur)] hover:bg-[color:var(--ui-panel)]"
+          >
+            Show Panels
+          </button>
+        </div>
+      )}
+    </>
+  );
+};

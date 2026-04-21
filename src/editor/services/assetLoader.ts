@@ -297,11 +297,20 @@ export async function loadImageFromFile(
     }
 
     const { url: blobUrl, id } = createTrackedBlobUrl(file, 'image', options.id);
+    const dataUrl = await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+    });
 
     try {
         const result = await loadFabricImage(blobUrl, { ...options, id });
 
         if (result.success) {
+            if (dataUrl) {
+                (result.asset as any).svgDataUrl = dataUrl;
+            }
             return {
                 ...result,
                 blobUrl

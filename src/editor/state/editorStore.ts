@@ -15,7 +15,7 @@ import {
     distributeVertically,
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
-import { resizeCanvas, centerDocumentInViewport } from '../fabric/canvasUtils';
+import { resizeCanvas, centerDocumentInViewport, fitCanvasToViewport } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
@@ -634,7 +634,7 @@ interface EditorState {
   dismissToast: () => void;
   setToastMessage: (message: string | null) => void;
   setUnitMode: (mode: UnitMode) => void;
-  setCanvasBackgroundColor: (color: string) => void;
+  setCanvasBackgroundColor: (color: string, options?: { save?: boolean }) => void;
   setZoom: (zoom: number) => void;
   setVpt: (vpt: number[]) => void;
   setCanvasOffset: (offset: { x: number; y: number }) => void;
@@ -1117,12 +1117,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setUnitMode: (mode) => {
         coordinateSystem.setMode(mode);
     },
-    setCanvasBackgroundColor: (color) => {
+    setCanvasBackgroundColor: (color, options) => {
         const { canvas, saveState } = get();
         if (canvas) {
             canvas.backgroundColor = color;
             canvas.requestRenderAll();
-            saveState();
+            if (options?.save !== false) {
+                saveState();
+            }
         }
         // Delegate to theme store (single source of truth)
         useThemeStore.getState().setCanvasBackgroundColor(color);
@@ -1338,12 +1340,32 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     createProject: (options) => {
         const {
             canvas,
+            pages,
+            isDirty,
             requestLayerSync,
             setLayers,
             setSelectedLayerIds,
             setSelectedObjectId,
             setUnitMode,
         } = get();
+        const canResetExistingPages = options?.source === 'project-presets-modal-confirmed'
+            || options?.source === 'load-project-file'
+            || options?.source === 'load-project-db';
+        const hasExistingPageContent = pages.some((page) =>
+            Array.isArray(page?.canvasData?.objects)
+            && page.canvasData.objects.some((object: any) =>
+                object
+                && !object.isGuide
+                && !object.isDocumentPaper
+                && !object.isPageBorder
+                && !object.isSafeZoneOverlay
+                && !object.isPersistentGuide
+                && !object.excludeFromExport
+            )
+        );
+        if ((hasExistingPageContent || isDirty) && !canResetExistingPages) {
+            return;
+        }
         const nextWidth = options?.canvasSize?.width ?? DEFAULT_CANVAS_SIZE.width;
         const nextHeight = options?.canvasSize?.height ?? DEFAULT_CANVAS_SIZE.height;
         const nextUnitMode = options?.unitMode ?? 'in';
@@ -1351,6 +1373,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const nextProjectName = normalizedName && normalizedName.length > 0
             ? normalizedName
             : 'Untitled Project';
+        const shouldHideOnboarding = options?.source === 'project-presets-modal-confirmed';
 
         if (canvas) {
             canvas.discardActiveObject();
@@ -1363,6 +1386,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setUnitMode(nextUnitMode);
 
             requestLayerSync();
+
+            requestAnimationFrame(() => {
+                const viewportWidth = canvas.getWidth();
+                const viewportHeight = canvas.getHeight();
+                if (viewportWidth > 0 && viewportHeight > 0) {
+                    fitCanvasToViewport(viewportWidth, viewportHeight);
+                }
+            });
         }
 
         useHistoryStore.getState().resetHistory();
@@ -1385,6 +1416,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             activePageIndex: 0,
             isDirty: false,
             isProjectPresetsOpen: false,
+            showOnboarding: shouldHideOnboarding ? false : get().showOnboarding,
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
         });
@@ -1932,11 +1964,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     exportCanvas: async (options) => {
-        if (!import.meta.env.DEV) {
-            showError('Export is disabled in deployed builds.');
-            return;
-        }
-
         const { canvas, canvasReadyState } = get();
         if (!canvas) {
             showError(ErrorMessages.CANVAS_NOT_READY);
@@ -2204,7 +2231,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setAutoSaveStatus: (status) => set({ autoSaveStatus: status, saveStatus: deriveSaveStatus(status) }),
     setDirty: (dirty) => set({ isDirty: dirty }),
     setShowHelpModal: (show) => set({ showHelpModal: show }),
-    setShowExportModal: (show) => set({ showExportModal: import.meta.env.DEV ? show : false }),
+    setShowExportModal: (show) => set({ showExportModal: show }),
     setShowSafeZones: (show) => set({ showSafeZones: show }),
     // Stroke and Lock Actions
     setObjectStrokeColor: (color) => {

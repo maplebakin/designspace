@@ -12,18 +12,42 @@ type ProjectPresetsProps = {
 };
 
 export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied }) => {
-  const { canvas, createProject, setCanvasBackgroundColor } = useEditorStore(
+  const { canvas, canvasReadyState, createProject, setCanvasBackgroundColor, pages, isDirty } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
+      canvasReadyState: state.canvasReadyState,
       createProject: state.createProject,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+      pages: state.pages,
+      isDirty: state.isDirty,
     }),
     shallow
   );
+  const presetsReady = !!canvas && canvasReadyState === 'ready';
 
   const applyPreset = (preset: CanvasPreset) => {
-    if (!canvas) return;
-    if (canvas.getObjects().length > 0) {
+    if (!presetsReady || !canvas) return;
+    const hasUserCanvasObjects = canvas.getObjects().some((object) =>
+      !(object as any).isGuide
+      && !(object as any).isDocumentPaper
+      && !(object as any).isPageBorder
+      && !(object as any).isSafeZoneOverlay
+      && !(object as any).isPersistentGuide
+      && !(object as any).excludeFromExport
+    );
+    const hasUserPageContent = pages.some((page) =>
+      Array.isArray(page?.canvasData?.objects)
+      && page.canvasData.objects.some((object: any) =>
+        object
+        && !object.isGuide
+        && !object.isDocumentPaper
+        && !object.isPageBorder
+        && !object.isSafeZoneOverlay
+        && !object.isPersistentGuide
+        && !object.excludeFromExport
+      )
+    );
+    if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
       const proceed = window.confirm(confirmClearMessage);
       if (!proceed) return;
     }
@@ -31,9 +55,9 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     createProject({
       canvasSize: { width: preset.width, height: preset.height },
       unitMode: preset.unitMode,
-      source: 'project-presets-modal',
+      source: 'project-presets-modal-confirmed',
     });
-    setCanvasBackgroundColor('#ffffff');
+    setCanvasBackgroundColor('#ffffff', { save: false });
 
     // Fit canvas to viewport after resize
     requestAnimationFrame(() => {
@@ -50,12 +74,13 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
   const renderButton = (preset: CanvasPreset) => (
     <button
       key={`${preset.name}-${preset.width}-${preset.height}`}
+      disabled={!presetsReady}
       onClick={() => applyPreset(preset)}
       className={`w-full text-left px-3 py-3 rounded-2xl border transition-all duration-300 ease-in-out flex flex-col gap-1 ${
         preset.name === 'US Letter'
           ? 'bg-[color:var(--brand-primary)]/20 border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--brand-primary)]/30'
           : 'bg-white/5 border-white/10 hover:bg-white/10'
-      }`}
+      } ${!presetsReady ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
       <span className={`text-xs uppercase tracking-widest ${preset.name === 'US Letter' ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-text)]'}`}>{preset.name}</span>
       <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{preset.description}</span>

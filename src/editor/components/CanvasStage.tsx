@@ -52,6 +52,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     addImageAsset,
     showOnboarding,
     setShowOnboarding,
+    setUnitMode,
     setLayerSyncHandler,
     showGuides,
     markHistoryDirty,
@@ -78,6 +79,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       addImageAsset: state.addImageAsset,
       showOnboarding: state.showOnboarding,
       setShowOnboarding: state.setShowOnboarding,
+      setUnitMode: state.setUnitMode,
       setLayerSyncHandler: state.setLayerSyncHandler,
       showGuides: state.showGuides,
       markHistoryDirty: state.markHistoryDirty,
@@ -893,8 +895,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       />
       {showOnboarding && !isOverlayDismissed && (
         <CanvasSizePicker
-          onSelect={(width, height) => {
+          onSelect={(width, height, unitMode) => {
             resizeCanvas(width, height);
+            setUnitMode(unitMode);
             frameScheduler.scheduleTask(() => {
               if (containerRef.current) {
                 const rect = containerRef.current.getBoundingClientRect();
