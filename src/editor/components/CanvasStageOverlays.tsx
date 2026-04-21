@@ -264,16 +264,20 @@ export const CanvasSyncErrorOverlay: React.FC<CanvasSyncErrorOverlayProps> = ({
 };
 
 export const CanvasStagePanels: React.FC = () => {
+  const showCanvasSettingsPanel = useEditorStore((state) => state.showCanvasSettingsPanel);
+  const toggleCanvasSettingsPanel = useEditorStore((state) => state.toggleCanvasSettingsPanel);
   const showSuggestionSidebar = useEditorStore((state) => state.showSuggestionSidebar);
   const toggleSuggestionSidebar = useEditorStore((state) => state.toggleSuggestionSidebar);
 
   return (
     <>
-      <div className="pointer-events-none absolute left-4 top-4 z-30 w-64">
-        <div className="pointer-events-auto">
-          <CanvasSettingsPanel />
+      {showCanvasSettingsPanel ? (
+        <div className="pointer-events-none absolute left-4 top-4 z-30 w-64">
+          <div className="pointer-events-auto">
+            <CanvasSettingsPanel />
+          </div>
         </div>
-      </div>
+      ) : null}
       {showSuggestionSidebar ? (
         <div className="pointer-events-none absolute right-4 top-4 z-30 flex w-72 flex-col gap-3">
           <div className="pointer-events-auto">
@@ -287,7 +291,12 @@ export const CanvasStagePanels: React.FC = () => {
         <div className="pointer-events-none absolute right-4 top-4 z-30">
           <button
             type="button"
-            onClick={toggleSuggestionSidebar}
+            onClick={() => {
+              if (!showCanvasSettingsPanel) {
+                toggleCanvasSettingsPanel();
+              }
+              toggleSuggestionSidebar();
+            }}
             className="pointer-events-auto rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-3 py-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] shadow-lg backdrop-blur-[var(--ui-blur)] hover:bg-[color:var(--ui-panel)]"
           >
             Show Panels

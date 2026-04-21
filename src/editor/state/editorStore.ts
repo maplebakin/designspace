@@ -550,6 +550,7 @@ interface EditorState {
   showGuides: boolean;
   dirtyObjectsRef: Set<string> | null;
   layoutSuggestions: LayoutSuggestion[];
+  showCanvasSettingsPanel: boolean;
   showSuggestionSidebar: boolean;
   accessibilitySettings: AccessibilitySettings;
 
@@ -642,6 +643,7 @@ interface EditorState {
   setSnapEnabled: (enabled: boolean) => void;
   setGridEnabled: (enabled: boolean) => void;
   setShowOnboarding: (show: boolean) => void;
+  toggleCanvasSettingsPanel: () => void;
   toggleSuggestionSidebar: () => void;
   dismissSuggestion: (id: string) => void;
   refreshLayoutSuggestions: () => void;
@@ -767,6 +769,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         showGuides: true,
         dirtyObjectsRef: null,
         layoutSuggestions: [],
+        showCanvasSettingsPanel: false,
         showSuggestionSidebar: true,
         accessibilitySettings: AccessibilityManager.getInstance().getSettings(),
 
@@ -1144,6 +1147,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
     setShowOnboarding: (show) => set({ showOnboarding: show }),
+    toggleCanvasSettingsPanel: () => set((state) => ({ showCanvasSettingsPanel: !state.showCanvasSettingsPanel })),
     toggleSuggestionSidebar: () => set((state) => ({ showSuggestionSidebar: !state.showSuggestionSidebar })),
     dismissSuggestion: (id) => set((state) => ({
         layoutSuggestions: state.layoutSuggestions.filter((suggestion) => suggestion.id !== id),
@@ -2334,6 +2338,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             snapEnabled: state.snapEnabled,
             gridEnabled: state.gridEnabled,
             showSafeZones: state.showSafeZones,
+            showCanvasSettingsPanel: state.showCanvasSettingsPanel,
             showSuggestionSidebar: state.showSuggestionSidebar,
             accessibilitySettings: state.accessibilitySettings,
             autoSaveStatus: state.autoSaveStatus,
