@@ -44,6 +44,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
       source: 'project-presets-modal-confirmed',
     });
     setCanvasBackgroundColor('#ffffff', { save: false });
+    onPresetApplied?.();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const stageContainer = document.querySelector('.workspace > div');
@@ -55,8 +56,6 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
         }
       });
     });
-
-    onPresetApplied?.();
   };
 
   const renderButton = (preset: CanvasPreset) => (
