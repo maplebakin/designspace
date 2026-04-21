@@ -18,6 +18,7 @@ import { groupObjects, ungroupObjects } from '../fabric/grouping';
 import { resizeCanvas, centerDocumentInViewport, fitCanvasToViewport } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
+import { isUserObject } from '../utils/objectUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { applyAssetRefCounts, hydrateCanvasDataWithAssets, prepareCanvasDataForPersistence } from './useHistoryStore';
 import { useHistoryStore } from './useHistoryStore';
@@ -258,21 +259,21 @@ const buildLayerStateFromSerializedObjects = (
     objects: SerializedFabricObject[],
     layersById: Record<string, fabric.Object> = {}
 ) => {
-    const orderedObjects = enforceSerializedZOrder(objects);
-    const nextLayers = orderedObjects
-        .filter((obj) => !obj.isGuide)
+    const userObjects = enforceSerializedZOrder(objects)
+        .filter(isUserObject);
+    const nextLayers = userObjects
         .map(buildLayerFromSerializedObject)
         .filter((layer) => layer.id);
 
     const nextById: Record<string, fabric.Object> = {};
     Object.entries(layersById).forEach(([id, value]) => {
-        if (orderedObjects.some((obj) => obj.id === id)) {
+        if (userObjects.some((obj) => obj.id === id)) {
             nextById[id] = value;
         }
     });
 
     return {
-        canvasObjects: orderedObjects,
+        canvasObjects: userObjects,
         layers: nextLayers,
         layersById: nextById,
     };
@@ -502,7 +503,7 @@ const buildLayerStateFromObjects = (
     const nextCanvasObjects: SerializedFabricObject[] = [];
 
     objects.forEach((obj) => {
-        if ((obj as any).isGuide) return;
+        if (!isUserObject(obj)) return;
         ensureObjectId(obj, canvas ?? undefined);
         const serialized = toSerializableObject(obj) as SerializedFabricObject;
         nextCanvasObjects.push(serialized);
@@ -1353,15 +1354,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             || options?.source === 'load-project-db';
         const hasExistingPageContent = pages.some((page) =>
             Array.isArray(page?.canvasData?.objects)
-            && page.canvasData.objects.some((object: any) =>
-                object
-                && !object.isGuide
-                && !object.isDocumentPaper
-                && !object.isPageBorder
-                && !object.isSafeZoneOverlay
-                && !object.isPersistentGuide
-                && !object.excludeFromExport
-            )
+            && page.canvasData.objects.some(isUserObject)
         );
         if ((hasExistingPageContent || isDirty) && !canResetExistingPages) {
             return;

@@ -1,6 +1,7 @@
 import * as fabric from 'fabric';
 import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 import { enforceSerializedZOrder, enforceZOrder } from '../fabric/zIndexManifest';
+import { isUserObject } from '../utils/objectUtils';
 import { toSerializableObject } from '../utils/serialization';
 import type { SerializedFabricObject } from './editorStore';
 
@@ -14,12 +15,7 @@ type LayerSyncResult = {
 };
 
 const isStoreManagedObject = (obj: fabric.Object) => {
-  const target = obj as any;
-  return !target.isGuide
-    && !target.isDocumentPaper
-    && !target.isSafeZoneOverlay
-    && !target.isPersistentGuide
-    && !target.excludeFromSync;
+  return isUserObject(obj) && !(obj as any).excludeFromSync;
 };
 
 const serializeForComparison = (obj: fabric.Object) => {
@@ -47,7 +43,9 @@ export const syncCanvasLayers = async (
   canvas: fabric.Canvas,
   options: LayerSyncOptions = {}
 ): Promise<LayerSyncResult> => {
-  const desiredObjects = enforceSerializedZOrder(canvasObjects);
+  const desiredObjects = enforceSerializedZOrder(
+    canvasObjects.filter((obj) => isUserObject(obj) && !(obj as any).excludeFromSync)
+  );
   const currentObjects = canvas.getObjects().filter(isStoreManagedObject);
   const currentById = new Map<string, fabric.Object>();
   let changed = false;

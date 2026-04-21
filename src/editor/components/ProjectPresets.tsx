@@ -2,6 +2,7 @@ import React from 'react';
 import { shallow } from 'zustand/shallow';
 import { fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
+import { isUserObject } from '../utils/objectUtils';
 import { PROJECT_PRESET_GROUPS, type CanvasPreset } from '../config/canvasPresets';
 
 const confirmClearMessage =
@@ -27,25 +28,10 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
 
   const applyPreset = (preset: CanvasPreset) => {
     if (!presetsReady || !canvas) return;
-    const hasUserCanvasObjects = canvas.getObjects().some((object) =>
-      !(object as any).isGuide
-      && !(object as any).isDocumentPaper
-      && !(object as any).isPageBorder
-      && !(object as any).isSafeZoneOverlay
-      && !(object as any).isPersistentGuide
-      && !(object as any).excludeFromExport
-    );
+    const hasUserCanvasObjects = canvas.getObjects().some(isUserObject);
     const hasUserPageContent = pages.some((page) =>
       Array.isArray(page?.canvasData?.objects)
-      && page.canvasData.objects.some((object: any) =>
-        object
-        && !object.isGuide
-        && !object.isDocumentPaper
-        && !object.isPageBorder
-        && !object.isSafeZoneOverlay
-        && !object.isPersistentGuide
-        && !object.excludeFromExport
-      )
+      && page.canvasData.objects.some(isUserObject)
     );
     if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
       const proceed = window.confirm(confirmClearMessage);

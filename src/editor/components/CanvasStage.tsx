@@ -541,6 +541,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
         selectable: false,
         evented: false,
+        isGuide: true,
         isSafeZoneOverlay: true,
       });
       overlays.push(topOverlay);
@@ -554,6 +555,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
         selectable: false,
         evented: false,
+        isGuide: true,
         isSafeZoneOverlay: true,
       });
       overlays.push(bottomOverlay);
@@ -567,6 +569,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
         selectable: false,
         evented: false,
+        isGuide: true,
         isSafeZoneOverlay: true,
       });
       overlays.push(leftOverlay);
@@ -580,6 +583,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         fill: 'rgba(255, 0, 0, 0.2)', // Semi-transparent red
         selectable: false,
         evented: false,
+        isGuide: true,
         isSafeZoneOverlay: true,
       });
       overlays.push(rightOverlay);

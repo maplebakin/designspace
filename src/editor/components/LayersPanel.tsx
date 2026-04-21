@@ -3,8 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { sanityCheckCanvas, useEditorStore, Layer } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
-import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, MousePointer2, Pencil, Eraser, Hand, Search, CheckSquare, XSquare } from 'lucide-react';
+import { Eye, EyeOff, ChevronUp, ChevronDown, Trash2, Lock, Unlock, Droplet, Plus, Square, Circle, Triangle, Star, Type, Image as ImageIcon, Search, CheckSquare, XSquare } from 'lucide-react';
 import * as fabric from 'fabric';
+import { isUserObject } from '../utils/objectUtils';
 import * as objectFactories from '../fabric/objectFactories';
 import { loadImageFromFile } from '../services/assetLoader';
 import { Tooltip } from './Tooltip';
@@ -21,11 +22,6 @@ export const LayersPanel: React.FC = () => {
     toggleObjectLock,
     toggleColorLock,
     saveState,
-    activeTool,
-    setActiveTool,
-    brushSize,
-    setBrushSize,
-    setBrushColor,
     setSelectedObjectId,
   } = useEditorStore(
     (state) => ({
@@ -39,19 +35,13 @@ export const LayersPanel: React.FC = () => {
       toggleObjectLock: state.toggleObjectLock,
       toggleColorLock: state.toggleColorLock,
       saveState: state.saveState,
-      activeTool: state.activeTool,
-      setActiveTool: state.setActiveTool,
-      brushSize: state.brushSize,
-      setBrushSize: state.setBrushSize,
-      setBrushColor: state.setBrushColor,
       setSelectedObjectId: state.setSelectedObjectId,
     }),
     shallow
   );
-  const { themeData, brushColor } = useThemeStore(
+  const { themeData } = useThemeStore(
     (state) => ({
       themeData: state.themeData,
-      brushColor: state.brushColor,
     }),
     shallow
   );
@@ -122,11 +112,11 @@ export const LayersPanel: React.FC = () => {
     if (orderedObjects.length === 0) return;
 
     const allObjects = canvas.getObjects();
-    const nonGuideCount = allObjects.filter((obj) => !(obj as any).isGuide).length;
+    const nonGuideCount = allObjects.filter(isUserObject).length;
     if (orderedObjects.length !== nonGuideCount) return;
     let reorderIndex = 0;
     const nextObjects = allObjects.map((obj) => {
-      if ((obj as any).isGuide) return obj;
+      if (!isUserObject(obj)) return obj;
       const nextObject = orderedObjects[reorderIndex];
       reorderIndex += 1;
       return nextObject || obj;
@@ -346,92 +336,17 @@ export const LayersPanel: React.FC = () => {
 
   return (
     <div className="h-full p-4 text-[color:var(--ui-panel-text)] transition-all duration-300 ease-in-out">
-      <div className="mb-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Tools</h3>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
-            <input
-              type="text"
-              placeholder="Search layers..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-[color:var(--ui-text)] placeholder:text-[color:var(--ui-panel-text)]/60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
-            />
-          </div>
+      <div className="mb-4 flex items-center justify-between">
+        <div className="relative flex-1 mr-2">
+          <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
+          <input
+            type="text"
+            placeholder="Search layers..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-8 py-1.5 text-xs text-[color:var(--ui-text)] placeholder:text-[color:var(--ui-panel-text)]/60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+          />
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => setActiveTool('select')}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
-              activeTool === 'select'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
-                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
-            }`}
-          >
-            <MousePointer2 className="icon-muted h-4 w-4 stroke-[1.5]" />
-            Select
-          </button>
-          <button
-            onClick={() => setActiveTool('draw')}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
-              activeTool === 'draw'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
-                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
-            }`}
-          >
-            <Pencil className="icon-muted h-4 w-4 stroke-[1.5]" />
-            Pencil
-          </button>
-          <button
-            onClick={() => setActiveTool('erase')}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
-              activeTool === 'erase'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
-                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
-            }`}
-          >
-            <Eraser className="icon-muted h-4 w-4 stroke-[1.5]" />
-            Erase
-          </button>
-          <button
-            onClick={() => setActiveTool('pan')}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out ${
-              activeTool === 'pan'
-                ? 'border-[color:var(--brand-primary)] bg-white/15 text-[color:var(--ui-panel-text)]'
-                : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]'
-            }`}
-          >
-            <Hand className="icon-muted h-4 w-4 stroke-[1.5]" />
-            Hand
-          </button>
-        </div>
-        {(activeTool === 'draw' || activeTool === 'erase') && (
-          <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Brush Size</span>
-              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{brushSize}px</span>
-            </div>
-            <input
-              type="range"
-              min="2"
-              max="40"
-              value={brushSize}
-              onChange={(e) => setBrushSize(Number(e.target.value))}
-              className="w-full accent-[color:var(--brand-primary)]"
-            />
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Brush Color</span>
-              <input
-                type="color"
-                value={brushColor}
-                onChange={(e) => setBrushColor(e.target.value)}
-                className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
-                aria-label="Brush color"
-              />
-            </div>
-          </div>
-        )}
       </div>
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -456,7 +371,7 @@ export const LayersPanel: React.FC = () => {
                     canvas.setActiveObject(selection);
                     canvas.requestRenderAll();
                   }}
-                  className="p-1.5 rounded-lg text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 transition-all duration-200"
+                  className="ui-button-icon p-1.5 rounded-lg text-[color:var(--ui-panel-text)] transition-all duration-200"
                 >
                   <CheckSquare className="h-3.5 w-3.5 stroke-[1.5]" />
                 </button>
@@ -468,7 +383,7 @@ export const LayersPanel: React.FC = () => {
                     canvas.discardActiveObject();
                     canvas.requestRenderAll();
                   }}
-                  className="p-1.5 rounded-lg text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 transition-all duration-200"
+                  className="ui-button-icon p-1.5 rounded-lg text-[color:var(--ui-panel-text)] transition-all duration-200"
                 >
                   <XSquare className="h-3.5 w-3.5 stroke-[1.5]" />
                 </button>
@@ -478,52 +393,52 @@ export const LayersPanel: React.FC = () => {
           <div className="relative" ref={menuRef}>
           <button
             onClick={() => setIsMenuOpen((prev) => !prev)}
-            className="rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-1 text-[color:var(--ui-accent)] transition-all duration-300 ease-in-out hover:shadow-[0_0_12px_var(--ui-accent)]"
+            className="ui-button-icon rounded-full p-1 transition-all duration-300 ease-in-out"
             aria-label="New Layer"
             title="New Layer"
           >
             <Plus className="h-4 w-4 stroke-[1.5]" />
           </button>
           {isMenuOpen && (
-            <div className="absolute right-0 mt-2 w-40 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-2 text-[color:var(--ui-accent)] shadow-[0_16px_30px_rgba(0,0,0,0.35)]">
+            <div className="ui-dropdown-surface absolute right-0 mt-2 w-44 rounded-xl p-2">
               <button
                 onClick={() => handleAddShape(objectFactories.addRectangle)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <Square className="h-4 w-4 stroke-[1.5]" />
                 Rectangle
               </button>
               <button
                 onClick={() => handleAddShape(objectFactories.addCircle)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <Circle className="h-4 w-4 stroke-[1.5]" />
                 Circle
               </button>
               <button
                 onClick={() => handleAddShape(objectFactories.addTriangle)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <Triangle className="h-4 w-4 stroke-[1.5]" />
                 Triangle
               </button>
               <button
                 onClick={() => handleAddShape(objectFactories.addStar)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <Star className="h-4 w-4 stroke-[1.5]" />
                 Star
               </button>
               <button
                 onClick={handleAddText}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <Type className="h-4 w-4 stroke-[1.5]" />
                 Add Text
               </button>
               <button
                 onClick={handleAddImage}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs uppercase tracking-widest transition-all duration-300 ease-in-out hover:bg-white/10"
+                className="ui-menu-item text-xs uppercase tracking-widest"
               >
                 <ImageIcon className="h-4 w-4 stroke-[1.5]" />
                 Add Image
