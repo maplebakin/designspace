@@ -1383,19 +1383,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setUnitMode(nextUnitMode);
 
             requestLayerSync();
-
-            requestAnimationFrame(() => {
-                canvas.requestRenderAll();
-                requestAnimationFrame(() => {
-                    const canvasElement = (canvas as any).lowerCanvasEl as HTMLCanvasElement | undefined;
-                    const viewportRect = canvasElement?.parentElement?.getBoundingClientRect();
-                    const viewportWidth = viewportRect?.width ?? canvas.getWidth();
-                    const viewportHeight = viewportRect?.height ?? canvas.getHeight();
-                    if (viewportWidth > 0 && viewportHeight > 0) {
-                        fitCanvasToViewport(viewportWidth, viewportHeight);
-                    }
-                });
-            });
         }
 
         useHistoryStore.getState().resetHistory();

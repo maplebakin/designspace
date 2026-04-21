@@ -1,5 +1,6 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
+import { fitCanvasToViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
 import { isUserObject } from '../utils/objectUtils';
 import { PROJECT_PRESET_GROUPS, type CanvasPreset } from '../config/canvasPresets';
@@ -43,6 +44,17 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
       source: 'project-presets-modal-confirmed',
     });
     setCanvasBackgroundColor('#ffffff', { save: false });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const stageContainer = document.querySelector('.workspace > div');
+        if (stageContainer instanceof HTMLElement) {
+          const rect = stageContainer.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            fitCanvasToViewport(rect.width, rect.height);
+          }
+        }
+      });
+    });
 
     onPresetApplied?.();
   };
