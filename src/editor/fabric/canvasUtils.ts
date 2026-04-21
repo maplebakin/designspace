@@ -373,7 +373,6 @@ export const centerDocumentInViewport = (
   // Apply viewport transform
   const vpt: fabric.TMat2D = [zoom, 0, 0, zoom, offsetX, offsetY];
   canvas.setViewportTransform(vpt);
-  canvas.setZoom(zoom);
 
   setZoom(zoom);
   setVpt([...vpt]);
