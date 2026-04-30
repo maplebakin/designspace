@@ -15,7 +15,7 @@ import {
     distributeVertically,
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
-import { resizeCanvas, centerDocumentInViewport, fitCanvasToViewport } from '../fabric/canvasUtils';
+import { resizeCanvas, centerDocumentInViewport } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
 import { isUserObject } from '../utils/objectUtils';
@@ -825,7 +825,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             currentBackground ?? (canvas?.backgroundColor ? String(canvas.backgroundColor) : null);
         useThemeStore.getState().setCanvasBackgroundColor(nextBackground);
         set({ canvas });
-        if (!canvas) return;
+        if (!canvas) {
+            return;
+        }
 
         // Only apply theme if canvas is ready (not during initialization)
         const { canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
@@ -865,7 +867,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     removeSelectedObject: () => {
         const { canvas, setSelectedObjectId, setSelectedLayerIds, requestLayerSync, saveState } = get();
-        if (!canvas) return;
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
         const activeObject = canvas.getActiveObject();
         if (!activeObject) return;
 
@@ -885,7 +890,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     alignSelectedObjects: (direction) => {
         const { canvas, startBatch, endBatch } = get();
-        if (!canvas) return;
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
         startBatch();
         switch (direction) {
             case 'left':
@@ -913,7 +921,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     distributeSelectedObjects: (direction) => {
         const { canvas } = get();
-        if (!canvas) return;
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
         if (direction === 'horizontal') {
             distributeHorizontally(canvas);
         } else {
@@ -922,13 +933,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     groupSelectedObjects: () => {
         const { canvas, syncCanvasToStore } = get();
-        if (!canvas) return;
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
         groupObjects(canvas);
         syncCanvasToStore(canvas);
     },
     ungroupSelectedObjects: () => {
         const { canvas, syncCanvasToStore } = get();
-        if (!canvas) return;
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
         ungroupObjects(canvas);
         syncCanvasToStore(canvas);
     },
@@ -1993,8 +2010,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     // Project Persistence Actions
     saveProject: async (name) => {
-        const { canvas, unitMode } = get();
-        if (!canvas) return;
+        const { canvas, projectName, unitMode } = get();
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
+        const safeName = name.trim() || projectName?.trim() || 'Untitled Project';
         const { themeData } = useThemeStore.getState();
 
         try {
@@ -2002,6 +2023,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const exportData = await buildExportCanvasData(canvas);
 
             const payload = {
+                projectName: safeName,
                 pages: get().pages,
                 activePageIndex: get().activePageIndex,
                 canvasData: exportData.canvasData,
@@ -2026,7 +2048,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             // Import and use the database
             const { db } = await import('../db');
-            await db.saveProject(name, jsonPayload, thumbnail);
+            await db.saveProject(safeName, jsonPayload, thumbnail);
+            set({
+                projectName: safeName,
+                isDirty: false,
+                autoSaveStatus: 'saved',
+                saveStatus: 'saved',
+                toastMessage: `Saved to library: ${safeName}`,
+            });
         } catch (error) {
             console.error('Failed to save project:', error);
             set({ toastMessage: 'Failed to save project.' });
@@ -2049,7 +2078,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 resetViewCanvas,
                 setShowOnboarding,
             } = get();
-            if (!canvas) return;
+            if (!canvas) {
+                set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+                return;
+            }
 
             const parsed = JSON.parse(result.canvasData);
             const rawPages = Array.isArray(parsed.pages) ? parsed.pages : null;
