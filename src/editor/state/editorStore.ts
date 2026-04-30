@@ -573,6 +573,7 @@ interface EditorState {
   imageAssets: Record<string, string>;
   assetRefCount: Map<string, number>;
   projectName: string;
+  currentLibraryProjectId: string | null;
   pages: ProjectPage[];
   activePageIndex: number;
   isDirty: boolean;
@@ -794,6 +795,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         imageAssets: {},
         assetRefCount: new Map(),
         projectName: 'Untitled Project',
+        currentLibraryProjectId: null,
         pages: [{ id: uuidv4(), name: 'Page 1', canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE }, thumbnail: undefined }],
         activePageIndex: 0,
         isDirty: false,
@@ -1417,6 +1419,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         set({
             projectName: nextProjectName,
+            currentLibraryProjectId: null,
             pages: [{
                 id: uuidv4(),
                 name: 'Page 1',
@@ -2010,7 +2013,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     // Project Persistence Actions
     saveProject: async (name) => {
-        const { canvas, projectName, unitMode } = get();
+        const { canvas, currentLibraryProjectId, projectName, unitMode } = get();
         if (!canvas) {
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
@@ -2048,13 +2051,29 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             // Import and use the database
             const { db } = await import('../db');
-            await db.saveProject(safeName, jsonPayload, thumbnail);
+            let nextLibraryProjectId = currentLibraryProjectId;
+            let didUpdateExistingProject = false;
+            if (nextLibraryProjectId) {
+                const existingProject = await db.loadProject(nextLibraryProjectId);
+                if (existingProject) {
+                    await db.updateProject(nextLibraryProjectId, safeName, jsonPayload, thumbnail);
+                    didUpdateExistingProject = true;
+                } else {
+                    nextLibraryProjectId = null;
+                }
+            }
+            if (!nextLibraryProjectId) {
+                nextLibraryProjectId = await db.saveProject(safeName, jsonPayload, thumbnail);
+            }
             set({
+                currentLibraryProjectId: nextLibraryProjectId,
                 projectName: safeName,
                 isDirty: false,
                 autoSaveStatus: 'saved',
                 saveStatus: 'saved',
-                toastMessage: `Saved to library: ${safeName}`,
+                toastMessage: didUpdateExistingProject
+                    ? `Updated library project: ${safeName}`
+                    : `Saved to library: ${safeName}`,
             });
         } catch (error) {
             console.error('Failed to save project:', error);
@@ -2146,6 +2165,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: "Page 1", canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
+                currentLibraryProjectId: projectId,
                 imageAssets: nextAssets,
                 projectName: result.project.name,
                 isProjectPresetsOpen: false,
@@ -2362,6 +2382,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             bleedPx: state.bleedPx,
             isPreviewMode: state.isPreviewMode,
             projectName: state.projectName,
+            currentLibraryProjectId: state.currentLibraryProjectId,
             activeTool: state.activeTool,
             brushSize: state.brushSize,
             snapEnabled: state.snapEnabled,
