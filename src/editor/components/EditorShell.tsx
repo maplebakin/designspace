@@ -337,6 +337,78 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           y: canvasRect.top + control.y,
         };
       },
+      domLayers: () => {
+        const canvas = useEditorStore.getState().canvas;
+        if (!canvas) return null;
+        const lowerCanvas = canvas.getElement() as HTMLCanvasElement | null;
+        const upperCanvas = canvas.upperCanvasEl as HTMLCanvasElement | null;
+        const wrapper = lowerCanvas?.parentElement ?? null;
+        const stage = wrapper?.parentElement ?? null;
+        const toRect = (el: Element | null) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, width: r.width, height: r.height };
+        };
+        return {
+          stageRect: toRect(stage),
+          fabricWrapperRect: toRect(wrapper),
+          lowerCanvasRect: toRect(lowerCanvas),
+          upperCanvasRect: toRect(upperCanvas),
+          canvasCssSize: lowerCanvas
+            ? { width: lowerCanvas.style.width, height: lowerCanvas.style.height }
+            : null,
+          canvasAttributeSize: lowerCanvas
+            ? { width: lowerCanvas.width, height: lowerCanvas.height }
+            : null,
+          fabricInternalSize: {
+            width: canvas.getWidth(),
+            height: canvas.getHeight(),
+          },
+        };
+      },
+      workspaceLayout: () => {
+        const canvas = useEditorStore.getState().canvas;
+        const toRect = (el: Element | null) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, width: r.width, height: r.height };
+        };
+        const editorShellRect = toRect(document.querySelector('[data-testid="editor-shell"]'));
+        const headerRect = toRect(document.querySelector('[data-testid="editor-toolbar"]'));
+        const leftPanelRect = toRect(document.querySelector('[data-testid="left-panel"]'));
+        const rightPanelRect = toRect(document.querySelector('[data-testid="right-panel"]'));
+        const workspaceRect = toRect(document.querySelector('[data-testid="canvas-workspace"]'));
+        const canvasEl = canvas?.getElement() ?? null;
+        const canvasRect = toRect(canvasEl);
+        const vpt = canvas?.viewportTransform ?? null;
+        const { width: docW, height: docH } = useCanvasStore.getState();
+        const rulerInset = 24;
+        const intendedViewportRect = workspaceRect ? {
+          left: workspaceRect.left + rulerInset,
+          top: workspaceRect.top + rulerInset,
+          width: workspaceRect.width - rulerInset,
+          height: workspaceRect.height - rulerInset,
+        } : null;
+        const paperScreenCenter = (canvasRect && vpt) ? {
+          x: canvasRect.left + vpt[4] + docW * vpt[0] / 2,
+          y: canvasRect.top + vpt[5] + docH * vpt[3] / 2,
+        } : null;
+        const intendedWorkspaceCenter = intendedViewportRect ? {
+          x: intendedViewportRect.left + intendedViewportRect.width / 2,
+          y: intendedViewportRect.top + intendedViewportRect.height / 2,
+        } : null;
+        return {
+          editorShellRect,
+          headerRect,
+          leftPanelRect,
+          rightPanelRect,
+          workspaceRect,
+          intendedViewportRect,
+          canvasElementRect: canvasRect,
+          paperScreenCenter,
+          intendedWorkspaceCenter,
+        };
+      },
     };
     return () => {
       delete (window as any).__DESIGN_SPACE_QA__;
@@ -698,7 +770,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           </div>
         </aside>
 
-        <main className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
+        <main data-testid="canvas-workspace" className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
             <SelectionToolbar />
             <CanvasStage onSelectNav={handleSelectNav} />

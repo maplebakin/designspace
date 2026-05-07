@@ -28,6 +28,11 @@ let safeMarginGuides: fabric.Line[] = [];
 let bleedGuides: fabric.Object[] = []; // Changed to fabric.Object[]
 let documentPaper: fabric.Rect | null = null;
 
+// Rulers (CanvasRuler.tsx, RULER_SIZE=24) permanently overlay the top-left of the canvas.
+// All centering calculations use this inset so the document appears visually centered
+// in the ruler-excluded area rather than in the full canvas element.
+export const CANVAS_RULER_INSET = 24;
+
 const GUIDE_DASH_ARRAY = [6, 4];
 const BLEED_STROKE_DASHED = 'rgba(239, 68, 68, 0.85)';
 const BLEED_DASH_ARRAY = [4, 4];
@@ -374,13 +379,15 @@ export const centerDocumentInViewport = (
   const viewWidth = containerWidth ?? canvas.getWidth();
   const viewHeight = containerHeight ?? canvas.getHeight();
 
-  // Calculate document center
-  const docCenterX = documentWidth / 2;
-  const docCenterY = documentHeight / 2;
+  // Rulers permanently cover CANVAS_RULER_INSET px at the top and left of the canvas.
+  // Center within the visible (ruler-excluded) area so the document appears visually
+  // centered to the user, not just centered in the raw canvas element.
+  const inset = CANVAS_RULER_INSET;
+  const effectiveWidth = viewWidth - inset;
+  const effectiveHeight = viewHeight - inset;
 
-  // Calculate offset to center the document
-  const offsetX = (viewWidth / 2) - (docCenterX * zoom);
-  const offsetY = (viewHeight / 2) - (docCenterY * zoom);
+  const offsetX = inset + (effectiveWidth / 2) - (documentWidth / 2) * zoom;
+  const offsetY = inset + (effectiveHeight / 2) - (documentHeight / 2) * zoom;
 
   // Apply viewport transform
   const vpt: fabric.TMat2D = [zoom, 0, 0, zoom, offsetX, offsetY];
@@ -438,17 +445,21 @@ export const fitCanvasToViewport = (containerWidth: number, containerHeight: num
   // Get document dimensions from the store (not from canvas element)
   const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
 
-  // Add padding around the canvas (48px on each side)
+  // Compute zoom against the ruler-excluded area so the document fits within what's visible.
+  const inset = CANVAS_RULER_INSET;
+  const effectiveWidth = containerWidth - inset;
+  const effectiveHeight = containerHeight - inset;
+
   const padding = 96;
-  const availableWidth = containerWidth - padding;
-  const availableHeight = containerHeight - padding;
+  const availableWidth = effectiveWidth - padding;
+  const availableHeight = effectiveHeight - padding;
 
   // Calculate zoom to fit the document in the viewport
   const scaleX = availableWidth / documentWidth;
   const scaleY = availableHeight / documentHeight;
   const zoom = Math.min(scaleX, scaleY, 1); // Don't zoom in past 100%
 
-  // Use the common centering function
+  // Use the common centering function (also applies ruler inset internally)
   centerDocumentInViewport(canvas, zoom, containerWidth, containerHeight);
 };
 

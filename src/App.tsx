@@ -10,7 +10,6 @@ import { injectAccessibilityStyles } from './utils/accessibility';
 import { migrateFromLocalStorage } from './editor/services/templateService';
 import { useThemeStore } from './editor/state/useThemeStore';
 import { pluginManager, PluginManagerContext } from './editor/utils/pluginArchitecture';
-import { samplePlugin } from './editor/plugins/samplePlugin';
 import { pwaOfflineManager } from './editor/offline/pwaOfflineManager';
 import { getValidationWarnings } from './utils/validateFunctionalityWarnings';
 
@@ -98,18 +97,10 @@ function App() {
   }, [isDirty]);
 
   useEffect(() => {
-    if (import.meta.env.DEV) {
-      void manager.registerPlugin(samplePlugin);
-    }
     if (!import.meta.env.DEV) {
       void pwaOfflineManager.registerServiceWorker();
     }
-    return () => {
-      if (import.meta.env.DEV) {
-        void manager.unregisterPlugin(samplePlugin.metadata.id);
-      }
-    };
-  }, [manager]);
+  }, []);
 
   useEffect(() => {
     if (!projectName) return;

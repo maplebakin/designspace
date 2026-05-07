@@ -81,6 +81,34 @@ const controlPoint = async (page: Page, objectId: string, key: string) =>
     { objectId, key }
   ) as Promise<{ x: number; y: number } | null>;
 
+type DomLayers = {
+  stageRect: { left: number; top: number; width: number; height: number } | null;
+  fabricWrapperRect: { left: number; top: number; width: number; height: number } | null;
+  lowerCanvasRect: { left: number; top: number; width: number; height: number } | null;
+  upperCanvasRect: { left: number; top: number; width: number; height: number } | null;
+  canvasCssSize: { width: string; height: string } | null;
+  canvasAttributeSize: { width: number; height: number } | null;
+  fabricInternalSize: { width: number; height: number };
+};
+
+const domLayers = async (page: Page): Promise<DomLayers> =>
+  page.evaluate(() => (window as any).__DESIGN_SPACE_QA__.domLayers());
+
+type WorkspaceLayout = {
+  editorShellRect: { left: number; top: number; width: number; height: number } | null;
+  headerRect: { left: number; top: number; width: number; height: number } | null;
+  leftPanelRect: { left: number; top: number; width: number; height: number } | null;
+  rightPanelRect: { left: number; top: number; width: number; height: number } | null;
+  workspaceRect: { left: number; top: number; width: number; height: number } | null;
+  intendedViewportRect: { left: number; top: number; width: number; height: number } | null;
+  canvasElementRect: { left: number; top: number; width: number; height: number } | null;
+  paperScreenCenter: { x: number; y: number } | null;
+  intendedWorkspaceCenter: { x: number; y: number } | null;
+};
+
+const workspaceLayout = async (page: Page): Promise<WorkspaceLayout> =>
+  page.evaluate(() => (window as any).__DESIGN_SPACE_QA__.workspaceLayout());
+
 const openBlankEditor = async (page: Page) => {
   await page.goto('/');
   await page.getByTestId('dashboard-new-project').click();
@@ -755,9 +783,13 @@ test.describe('dashboard project rename', () => {
     const containerW = canvasBox!.width;
     const containerH = canvasBox!.height;
 
-    // Expected centered offsets
-    const expectedTx = containerW / 2 - (zoom * docW) / 2;
-    const expectedTy = containerH / 2 - (zoom * docH) / 2;
+    // Rulers (24px each) permanently overlay the top-left of the canvas.
+    // The centering formula targets the ruler-excluded area:
+    //   tx = rulerInset + (containerW - rulerInset)/2 - zoom*docW/2
+    //      = (containerW + rulerInset)/2 - zoom*docW/2
+    const rulerInset = 24;
+    const expectedTx = (containerW + rulerInset) / 2 - (zoom * docW) / 2;
+    const expectedTy = (containerH + rulerInset) / 2 - (zoom * docH) / 2;
 
     // Allow ±20px tolerance for subpixel rounding and layout settling
     expect(tx).toBeCloseTo(expectedTx, -1);
@@ -792,13 +824,102 @@ test.describe('dashboard project rename', () => {
     const paperCanvasCenterX = vpt[4] + documentSize.width * zoom / 2;
     const paperCanvasCenterY = vpt[5] + documentSize.height * zoom / 2;
 
-    // Canvas element center in canvas-element-local pixels:
-    const canvasCenterX = canvasElementRect.width / 2;
-    const canvasCenterY = canvasElementRect.height / 2;
+    // Ruler-adjusted canvas center: rulers cover 24px at top and left, so the intended
+    // viewport center is offset by half the ruler size from the raw canvas center.
+    const rulerInset = 24;
+    const intendedCenterX = (canvasElementRect.width + rulerInset) / 2;
+    const intendedCenterY = (canvasElementRect.height + rulerInset) / 2;
 
-    // Paper must be centered within the canvas stage (within 2px)
-    expect(paperCanvasCenterX).toBeCloseTo(canvasCenterX, 0);
-    expect(paperCanvasCenterY).toBeCloseTo(canvasCenterY, 0);
+    // Paper must be centered within the ruler-excluded viewport (within 2px)
+    expect(paperCanvasCenterX).toBeCloseTo(intendedCenterX, 0);
+    expect(paperCanvasCenterY).toBeCloseTo(intendedCenterY, 0);
+
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('document screen center matches the intended workspace viewport center', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const layout = await workspaceLayout(page);
+    expect(layout).not.toBeNull();
+
+    const { paperScreenCenter, intendedWorkspaceCenter, workspaceRect, canvasElementRect } = layout;
+
+    // QA helper must be reachable and return all expected fields
+    expect(paperScreenCenter).not.toBeNull();
+    expect(intendedWorkspaceCenter).not.toBeNull();
+    expect(workspaceRect).not.toBeNull();
+    expect(canvasElementRect).not.toBeNull();
+
+    // Canvas workspace element must match the ruler-excluded viewport dimensions
+    // (left panel + right panel + header + bottom strip are all excluded by layout)
+    expect(workspaceRect!.width).toBeGreaterThan(200);
+    expect(workspaceRect!.height).toBeGreaterThan(200);
+
+    // Document paper center must be within 4px of the intended workspace center
+    // (ruler-excluded area: starts at ruler_inset=24 within the canvas element)
+    expect(Math.abs(paperScreenCenter!.x - intendedWorkspaceCenter!.x)).toBeLessThanOrEqual(4);
+    expect(Math.abs(paperScreenCenter!.y - intendedWorkspaceCenter!.y)).toBeLessThanOrEqual(4);
+
+    expect(fatalConsole).toEqual([]);
+  });
+});
+
+test.describe('canvas DOM layer alignment', () => {
+  test('lower-canvas and upper-canvas bounding boxes match within 1px', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const layers = await domLayers(page);
+    expect(layers).not.toBeNull();
+    const { lowerCanvasRect, upperCanvasRect } = layers;
+    expect(lowerCanvasRect).not.toBeNull();
+    expect(upperCanvasRect).not.toBeNull();
+
+    expect(Math.abs(lowerCanvasRect!.left - upperCanvasRect!.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lowerCanvasRect!.top - upperCanvasRect!.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lowerCanvasRect!.width - upperCanvasRect!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(lowerCanvasRect!.height - upperCanvasRect!.height)).toBeLessThanOrEqual(1);
+
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('fabric wrapper and lower-canvas rects align within 1px', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const layers = await domLayers(page);
+    expect(layers).not.toBeNull();
+    const { fabricWrapperRect, lowerCanvasRect } = layers;
+    expect(fabricWrapperRect).not.toBeNull();
+    expect(lowerCanvasRect).not.toBeNull();
+
+    expect(Math.abs(fabricWrapperRect!.left - lowerCanvasRect!.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(fabricWrapperRect!.top - lowerCanvasRect!.top)).toBeLessThanOrEqual(1);
+    expect(Math.abs(fabricWrapperRect!.width - lowerCanvasRect!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(fabricWrapperRect!.height - lowerCanvasRect!.height)).toBeLessThanOrEqual(1);
+
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('canvas element fills the workspace stage — no offset gap', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const layers = await domLayers(page);
+    expect(layers).not.toBeNull();
+    const { stageRect, lowerCanvasRect } = layers;
+    expect(stageRect).not.toBeNull();
+    expect(lowerCanvasRect).not.toBeNull();
+
+    // Canvas must be at least as wide/tall as the stage
+    expect(lowerCanvasRect!.width).toBeGreaterThanOrEqual(stageRect!.width - 2);
+    expect(lowerCanvasRect!.height).toBeGreaterThanOrEqual(stageRect!.height - 2);
+
+    // Canvas top-left must coincide with stage top-left (within 2px)
+    expect(Math.abs(lowerCanvasRect!.left - stageRect!.left)).toBeLessThanOrEqual(2);
+    expect(Math.abs(lowerCanvasRect!.top - stageRect!.top)).toBeLessThanOrEqual(2);
 
     expect(fatalConsole).toEqual([]);
   });

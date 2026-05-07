@@ -1,8 +1,6 @@
 import { useRef, useCallback } from 'react';
 import * as fabric from 'fabric';
-import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
-import { useThemeStore } from '../state/useThemeStore';
-import { resolveThemeValue } from '../utils/themeResolver';
+import { useEditorStore } from '../state/editorStore';
 
 /**
  * Custom hook for atomic canvas lifecycle management.
@@ -39,11 +37,6 @@ export const useCanvasLifecycle = (
     acquireSyncLock: state.acquireSyncLock,
     releaseSyncLock: state.releaseSyncLock,
   }));
-  const { canvasBackgroundColor, themeData } = useThemeStore((state) => ({
-    canvasBackgroundColor: state.canvasBackgroundColor,
-    themeData: state.themeData,
-  }));
-
 
   const initializeCanvas = useCallback(async (
     setupHandlers: (canvas: fabric.Canvas, abortSignal: AbortSignal) => (() => void) | null
@@ -160,10 +153,7 @@ export const useCanvasLifecycle = (
       const canvas = new fabric.Canvas(finalCanvasElement, {
         width,
         height,
-        backgroundColor:
-          canvasBackgroundColor
-          || resolveThemeValue(themeData, 'surfaces.page-background')
-          || DEFAULT_CANVAS_BACKGROUND,
+        backgroundColor: '',
         selection: true,
         controlsAboveOverlay: true,
         stopContextMenu: true,
@@ -235,8 +225,6 @@ export const useCanvasLifecycle = (
   }, [
     canvasRef,
     containerRef,
-    canvasBackgroundColor,
-    themeData,
     setCanvas,
     setCanvasReadyState,
     acquireSyncLock,
