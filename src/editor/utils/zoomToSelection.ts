@@ -1,5 +1,6 @@
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { isActiveSelection } from './typeGuards';
 
 /**
  * Zooms the canvas to fit the selected objects with specified padding.
@@ -16,7 +17,7 @@ export const zoomToSelection = (canvas: fabric.Canvas, padding: number = 50) => 
 
   let objectsToConsider: fabric.Object[] = [];
 
-  if (activeObject.type === 'activeSelection') {
+  if (isActiveSelection(activeObject)) {
     // If it's a group selection, get all objects in the selection
     objectsToConsider = (activeObject as fabric.ActiveSelection).getObjects();
   } else {

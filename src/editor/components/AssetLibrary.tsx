@@ -188,11 +188,12 @@ const AssetLibrary: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   
-  const { canvas, requestLayerSync, saveState } = useEditorStore(
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       requestLayerSync: state.requestLayerSync,
       saveState: state.saveState,
+      syncCanvasToStore: state.syncCanvasToStore,
     }),
     shallow
   );
@@ -259,14 +260,16 @@ const AssetLibrary: React.FC = () => {
 
     // Create and add the object
     createObjectFromData(assetData).then(obj => {
-      if (obj) {
-        canvas.add(obj);
-        canvas.setActiveObject(obj);
-        canvas.requestRenderAll();
-        requestLayerSync();
-        saveState();
-      }
-    });
+        if (obj) {
+          canvas.add(obj);
+          useEditorStore.getState().selectObjectById((obj as any).id);
+          syncCanvasToStore(canvas);
+          canvas.requestRenderAll();
+          requestLayerSync();
+          saveState();
+          document.getElementById('editor-shell')?.focus();
+        }
+      });
   };
 
   // Categories for filtering
@@ -325,6 +328,7 @@ const AssetLibrary: React.FC = () => {
               return (
                 <button
                   key={asset.id}
+                  data-testid={`asset-library-item-${asset.id}`}
                   onClick={() => injectAsset(asset.data)}
                   className="flex flex-col items-center justify-center p-3 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition-colors group"
                   title={asset.name}

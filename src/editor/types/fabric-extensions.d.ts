@@ -144,6 +144,16 @@ interface FixedTextboxProps extends CustomObjectProps {
   __fixedHeight?: number;
   /** Original font size before auto-sizing */
   originalFontSize?: number;
+  /** Selection grouping identifier used by older object paths */
+  selectionId?: string;
+  /** Pattern source used by image/pattern fills */
+  patternSourceUrl?: string | null;
+  /** Pattern zoom multiplier */
+  patternZoom?: number;
+  /** Pattern horizontal offset */
+  patternOffsetX?: number;
+  /** Pattern vertical offset */
+  patternOffsetY?: number;
 }
 
 // ============================================================================
@@ -152,6 +162,7 @@ interface FixedTextboxProps extends CustomObjectProps {
 
 declare module 'fabric' {
   // Base object extensions
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
   interface FabricObject extends CustomObjectProps {}
 
   // Image extensions
@@ -181,12 +192,21 @@ declare module 'fabric' {
     ry?: number;
   }
 
-  interface Circle extends CustomObjectProps {}
-  interface Triangle extends CustomObjectProps {}
-  interface Polygon extends CustomObjectProps {}
-  interface Group extends CustomObjectProps {}
-  interface Line extends CustomObjectProps {}
-  interface ActiveSelection extends CustomObjectProps {}
+  interface StaticCanvas {
+    bringObjectToFront(object: FabricObject): boolean;
+    bringObjectForward(object: FabricObject, intersecting?: boolean): boolean;
+    sendObjectBackwards(object: FabricObject, intersecting?: boolean): boolean;
+    sendObjectToBack(object: FabricObject): boolean;
+    moveObjectTo(object: FabricObject, index: number): boolean;
+  }
+
+  interface Canvas {
+    bringObjectToFront(object: FabricObject): boolean;
+    bringObjectForward(object: FabricObject, intersecting?: boolean): boolean;
+    sendObjectBackwards(object: FabricObject, intersecting?: boolean): boolean;
+    sendObjectToBack(object: FabricObject): boolean;
+    moveObjectTo(object: FabricObject, index: number): boolean;
+  }
 
   // Filter constructors
   namespace filters {

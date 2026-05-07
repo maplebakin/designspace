@@ -2,7 +2,14 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
-import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import {
+  getPendingInsertionCandidateIds,
+  getPendingLayerSyncSelectionIds,
+  setPendingInsertionCandidateIds,
+  setPendingLayerSyncSelectionIds,
+  useEditorStore,
+  DEFAULT_CANVAS_BACKGROUND,
+} from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { initFabricSerialization } from '../fabric/initFabricCanvas';
 import { resizeCanvas, updateGuides, fitCanvasToViewport, updateDocumentPaper, clearDocumentPaper } from '../fabric/canvasUtils';
@@ -17,6 +24,7 @@ import { coordinateSystem } from '../utils/coordinateSystem';
 import { syncCanvasLayers } from '../state/layerSyncHandler';
 import { CanvasSizePicker, CanvasStagePanels, CanvasSyncErrorOverlay } from './CanvasStageOverlays';
 import { useCanvasStageInteractions } from '../hooks/useCanvasStageInteractions';
+import { isUserObject } from '../utils/objectUtils';
 
 initFabricSerialization();
 
@@ -37,6 +45,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     canvas: fabricCanvas,
     canvasObjects,
     selectedObjectId,
+    selectedLayerIds,
     setSelectedObjectId,
     syncCanvasToStore,
     setSelectedLayerIds,
@@ -52,7 +61,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     addImageAsset,
     showOnboarding,
     setShowOnboarding,
-    setUnitMode,
     pendingViewportFit,
     clearPendingViewportFit,
     setLayerSyncHandler,
@@ -61,11 +69,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     unitScale,
     setDirtyObjectsRef,
     showSafeZones,
+    createProject,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       canvasObjects: state.canvasObjects,
       selectedObjectId: state.selectedObjectId,
+      selectedLayerIds: state.selectedLayerIds,
       setSelectedObjectId: state.setSelectedObjectId,
       syncCanvasToStore: state.syncCanvasToStore,
       setSelectedLayerIds: state.setSelectedLayerIds,
@@ -81,7 +91,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       addImageAsset: state.addImageAsset,
       showOnboarding: state.showOnboarding,
       setShowOnboarding: state.setShowOnboarding,
-      setUnitMode: state.setUnitMode,
       pendingViewportFit: state.pendingViewportFit,
       clearPendingViewportFit: state.clearPendingViewportFit,
       setLayerSyncHandler: state.setLayerSyncHandler,
@@ -90,6 +99,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       unitScale: state.unitScale,
       setDirtyObjectsRef: state.setDirtyObjectsRef,
       showSafeZones: state.showSafeZones,
+      createProject: state.createProject,
     }),
     shallow
   );
@@ -189,27 +199,52 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
 
     didInitialViewportFitRef.current = true;
     frameScheduler.scheduleTask(() => {
+      fabricCanvas.setDimensions({ width: rect.width, height: rect.height });
+      fabricCanvas.calcOffset();
       fitCanvasToViewport(rect.width, rect.height);
       updateViewportState(fabricCanvas);
     }, TaskPriority.High);
   }, [fabricCanvas, updateViewportState]);
 
   useEffect(() => {
-    if (!pendingViewportFit || !fabricCanvas || !containerRef.current) return;
+    const pendingInsertionSelection = getPendingInsertionCandidateIds() ?? getPendingLayerSyncSelectionIds();
+    if (
+      !fabricCanvas
+      || !pendingInsertionSelection
+      || pendingInsertionSelection.length === 0
+      || selectedObjectId
+      || selectedLayerIds.length > 0
+      || fabricCanvas.getActiveObject()
+    ) {
+      return;
+    }
+    const selectableIds = new Set(pendingInsertionSelection);
+    const latestSelectable = [...canvasObjects].reverse().find((object) =>
+      object.id
+      && selectableIds.has(object.id)
+      && isUserObject(object)
+      && object.visible !== false
+      && object.selectable !== false
+    );
+    if (latestSelectable?.id) {
+      useEditorStore.getState().selectObjectById(latestSelectable.id);
+      setPendingInsertionCandidateIds(null);
+    }
+  }, [canvasObjects, fabricCanvas, selectedLayerIds.length, selectedObjectId]);
 
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (!containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        if (rect.width < 20 || rect.height < 20) return;
-
-        frameScheduler.scheduleTask(() => {
-          fitCanvasToViewport(rect.width, rect.height);
-          updateViewportState(fabricCanvas);
-          clearPendingViewportFit();
-        }, TaskPriority.High);
-      });
-    });
+  useEffect(() => {
+    if (!pendingViewportFit || !fabricCanvas || !containerRef.current) {
+      return;
+    }
+    const rect = containerRef.current.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) return;
+    frameScheduler.scheduleTask(() => {
+      fabricCanvas.setDimensions({ width: rect.width, height: rect.height });
+      fabricCanvas.calcOffset();
+      fitCanvasToViewport(rect.width, rect.height);
+      updateViewportState(fabricCanvas);
+      clearPendingViewportFit();
+    }, TaskPriority.High);
   }, [pendingViewportFit, fabricCanvas, clearPendingViewportFit, updateViewportState]);
 
   const scheduleUpdate = useCallback((
@@ -251,7 +286,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   ) => {
     canvas.add(obj);
     if (options?.activate ?? true) {
-      canvas.setActiveObject(obj);
+      const id = (obj as any).id;
+      if (typeof id === 'string' && id.trim().length > 0) {
+        useEditorStore.getState().selectObjectById(id);
+      } else {
+        canvas.setActiveObject(obj);
+        useEditorStore.getState().syncSelectionFromCanvas(canvas);
+      }
     }
     scheduleUpdate(canvas, options);
   }, [scheduleUpdate]);
@@ -362,6 +403,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     }
     void syncCanvasLayers(canvasObjects, fabricCanvas, { selectedObjectId }).then(({ layersById: nextLayersById }) => {
       useEditorStore.setState({ layersById: nextLayersById });
+      const { selectedLayerIds, selectObjectsByIds, clearSelection } = useEditorStore.getState();
+      if (selectedLayerIds.length > 0) {
+        selectObjectsByIds(selectedLayerIds);
+      } else {
+        clearSelection();
+      }
       updateGuides(fabricCanvas, showGuides);
       fabricCanvas.calcOffset();
       fabricCanvas.requestRenderAll();
@@ -404,22 +451,6 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   useEffect(() => {
     snapEnabledRef.current = snapEnabled;
   }, [snapEnabled]);
-
-  useEffect(() => {
-    if (!fabricCanvas) return;
-    if (!selectedObjectId) {
-      fabricCanvas.discardActiveObject();
-      fabricCanvas.requestRenderAll();
-      return;
-    }
-    const targetObject = fabricCanvas
-      .getObjects()
-      .find((obj) => (obj as any).id === selectedObjectId);
-    if (targetObject && fabricCanvas.getActiveObject() !== targetObject) {
-      fabricCanvas.setActiveObject(targetObject);
-      fabricCanvas.requestRenderAll();
-    }
-  }, [fabricCanvas, selectedObjectId]);
 
   useEffect(() => {
     const win = window as unknown as { __forceCanvasRerender?: () => void };
@@ -547,9 +578,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         return;
       }
 
-      // Calculate safe zone dimensions
-      const canvasWidth = fabricCanvas.getWidth();
-      const canvasHeight = fabricCanvas.getHeight();
+      // Calculate safe zone dimensions from the document, not the viewport canvas.
+      const canvasWidth = docWidth;
+      const canvasHeight = docHeight;
 
       // Create four rectangles for the safe zone borders
       const overlays = [];
@@ -626,7 +657,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         fabricCanvas.renderAll();
       }
     };
-  }, [fabricCanvas, showSafeZones, bleedPx]);
+  }, [fabricCanvas, showSafeZones, bleedPx, docWidth, docHeight]);
 
   // Document Paper Cleanup - Clears paper rect when canvas is disposed
   useEffect(() => {
@@ -688,10 +719,32 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     // Register layer sync handler BEFORE setting canvas in store.
     setLayerSyncHandler(() => {
       frameScheduler.scheduleTask(() => {
-        void syncCanvasLayers(useEditorStore.getState().canvasObjects, canvas, {
-          selectedObjectId: useEditorStore.getState().selectedObjectId,
-        }).then(({ layersById: nextLayersById }) => {
-          useEditorStore.setState({ layersById: nextLayersById });
+        const state = useEditorStore.getState();
+        const pendingSelectionIds = getPendingInsertionCandidateIds() ?? getPendingLayerSyncSelectionIds();
+        const requestedSelectionIds = [...(pendingSelectionIds ?? state.pendingLayerSyncSelectionIds ?? state.selectedLayerIds)];
+        void syncCanvasLayers(state.canvasObjects, canvas, {
+          selectedObjectId: state.selectedObjectId,
+        }).then(({ layersById: nextLayersById, selectOnInsertIds }) => {
+          const resolvedSelectionIds = selectOnInsertIds.length > 0 ? selectOnInsertIds : requestedSelectionIds;
+          const strippedCanvasObjects = selectOnInsertIds.length > 0
+            ? useEditorStore.getState().canvasObjects.map((object) => {
+              if (!(object as any).__selectOnInsert) return object;
+              const { __selectOnInsert: _selectOnInsert, ...rest } = object as any;
+              return rest;
+            })
+            : useEditorStore.getState().canvasObjects;
+          useEditorStore.setState({
+            layersById: nextLayersById,
+            canvasObjects: strippedCanvasObjects,
+            pendingLayerSyncSelectionIds: pendingSelectionIds ? null : useEditorStore.getState().pendingLayerSyncSelectionIds,
+          });
+          if (pendingSelectionIds) {
+            setPendingLayerSyncSelectionIds(null);
+          }
+          const { selectObjectsByIds } = useEditorStore.getState();
+          if (resolvedSelectionIds.length > 0) {
+            selectObjectsByIds(resolvedSelectionIds);
+          }
           updateViewportState(canvas);
         });
       }, TaskPriority.High);
@@ -710,6 +763,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
         onHistoryDirty: markHistoryDirty,
         onSelectedObjectId: setSelectedObjectId,
         onSelectedLayerIds: setSelectedLayerIds,
+        onSelectionChange: (selectionCanvas) => useEditorStore.getState().syncSelectionFromCanvas(selectionCanvas),
         onZoom: setZoom,
         onViewportChange: scheduleViewportUpdate,
       },
@@ -880,6 +934,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const handleHearthUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await handleImageUpload(e.target.files?.[0]);
     if (uploadInputRef.current) uploadInputRef.current.value = '';
+    uploadInputRef.current?.blur();
+    document.getElementById('editor-shell')?.focus();
   };
 
   const handleDismissOverlay = () => {
@@ -891,18 +947,20 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
 
   return (
     <div
+      data-testid="canvas-stage"
       className="workspace relative w-full h-full flex items-center justify-center overflow-hidden"
       onClick={handleDismissOverlay}
     >
       <div
         ref={containerRef}
+        data-testid="canvas-container"
         className="w-full h-full overflow-hidden bg-transparent"
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onDragLeave={handleDragLeave}
         onContextMenu={showContextMenu}
       >
-        <canvas id="design-canvas" ref={canvasRef} />
+        <canvas id="design-canvas" data-testid="design-canvas" ref={canvasRef} />
         {contextMenu && (
           <ContextMenu
             x={contextMenu.x}
@@ -922,21 +980,20 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       {showOnboarding && !isOverlayDismissed && (
         <CanvasSizePicker
           onSelect={(width, height, unitMode) => {
-            resizeCanvas(width, height);
-            setUnitMode(unitMode);
-            frameScheduler.scheduleTask(() => {
-              if (containerRef.current) {
-                const rect = containerRef.current.getBoundingClientRect();
-                fitCanvasToViewport(rect.width, rect.height);
-              }
-            }, TaskPriority.High);
+            createProject({
+              canvasSize: { width, height },
+              unitMode,
+              source: 'project-presets-modal-confirmed',
+            });
             setIsOverlayDismissed(true);
-            setShowOnboarding(false);
           }}
           onDismiss={() => {
-            // Default to US Letter and fit to viewport
             if (containerRef.current) {
               const rect = containerRef.current.getBoundingClientRect();
+              if (fabricCanvas) {
+                fabricCanvas.setDimensions({ width: rect.width, height: rect.height });
+                fabricCanvas.calcOffset();
+              }
               fitCanvasToViewport(rect.width, rect.height);
             }
             setIsOverlayDismissed(true);

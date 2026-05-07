@@ -1,6 +1,17 @@
 
 import * as fabric from 'fabric';
+import { useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { v4 as uuidv4 } from 'uuid';
+
+const commitBlueprintInsertion = (canvas: fabric.Canvas) => {
+  const { clearSelection, syncCanvasToStore, requestLayerSync, saveState } = useEditorStore.getState();
+  clearSelection();
+  canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
+  requestLayerSync({ force: true });
+  saveState({ force: true });
+};
 
 /**
  * Loads a 'Daily Planner' template onto the canvas.
@@ -10,11 +21,11 @@ import { v4 as uuidv4 } from 'uuid';
  */
 export const loadDailyPlannerTemplate = (canvas: fabric.Canvas, palette: string[]) => {
   // Clear the canvas first
+  useEditorStore.getState().clearSelection();
   canvas.clear();
 
   // Get canvas dimensions
-  const canvasWidth = canvas.getWidth();
-  const canvasHeight = canvas.getHeight();
+  const { width: canvasWidth, height: canvasHeight } = useCanvasStore.getState();
 
   const ink = palette[0] || '#1f2933';
   const accent = palette[4] || ink;
@@ -84,8 +95,7 @@ export const loadDailyPlannerTemplate = (canvas: fabric.Canvas, palette: string[
   // Add all objects to the canvas
   canvas.add(headerText, taskBox1, taskBox2, decorativeCircle);
 
-  // Render all changes
-  canvas.requestRenderAll();
+  commitBlueprintInsertion(canvas);
 };
 
 export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]) => {
@@ -94,10 +104,11 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
   const ink = '#0f0f0f';
   const accent = palette[6] || '#1d1b1b';
 
-  canvas.discardActiveObject();
+  useEditorStore.getState().clearSelection();
   canvas.clear();
   canvas.setDimensions({ width, height });
-  canvas.backgroundColor = '#FDFBF7';
+  useCanvasStore.getState().setCanvasSize(width, height);
+  useEditorStore.getState().setCanvasBackgroundColor('#FDFBF7', { save: false });
 
   const header = new fabric.IText('GAME TITLE', {
     id: uuidv4(),
@@ -253,5 +264,5 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
     dpadVertical,
     ...buttonGroup
   );
-  canvas.requestRenderAll();
+  commitBlueprintInsertion(canvas);
 };

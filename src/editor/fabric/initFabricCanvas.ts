@@ -12,7 +12,11 @@ type FabricReviver = NonNullable<Parameters<fabric.Canvas['loadFromJSON']>[1]>;
 export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => {
   if (!(instance instanceof fabric.Object)) return;
   const target = instance as any;
-  if (target.id == null) target.id = serialized?.id ?? null;
+  if (serialized?.id != null) {
+    target.id = serialized.id;
+  } else if (target.id == null) {
+    target.id = null;
+  }
   if (target.tokenRole === undefined) target.tokenRole = serialized?.tokenRole ?? null;
   if (target.colorLocked === undefined) target.colorLocked = serialized?.colorLocked ?? false;
   if (target.isPlaceholder === undefined) target.isPlaceholder = serialized?.isPlaceholder ?? false;

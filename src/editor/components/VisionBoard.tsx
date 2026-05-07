@@ -11,7 +11,8 @@ import {
   Grid3X3,
 } from 'lucide-react';
 import { useVisionBoardStore, useExtractedColors, useSortedItems, VisionItem } from '../state/visionBoardStore';
-import { useEditorStore } from '../state/editorStore';
+import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
+import { useThemeStore } from '../state/useThemeStore';
 import { captureCanvasState } from '../utils/serialization';
 import { BoardItem } from './BoardItem';
 
@@ -61,6 +62,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
 
   const sortedItems = useSortedItems();
   const extractedColors = useExtractedColors();
+  const canvasBackgroundColor = useThemeStore((state) => state.canvasBackgroundColor);
 
   // Editor Store - for loading states and pinning current design
   const { canvas, setToastMessage } = useEditorStore(
@@ -80,22 +82,21 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
         const data = JSON.parse(item.canvasData);
         const objects = data.objects || [];
 
-        // Clear current canvas
+        const { clearSelection, setCanvasBackgroundColor, syncCanvasToStore, saveState } = useEditorStore.getState();
+        clearSelection();
         canvas.clear();
-
-        // Set background if present
-        if (data.background) {
-          canvas.backgroundColor = data.background;
-        }
+        setCanvasBackgroundColor(typeof data.background === 'string' ? data.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
+        canvas.backgroundColor = 'transparent';
 
         // Load objects using fabric's loadFromJSON approach
         if (objects.length > 0) {
           canvas.loadFromJSON(
-            { objects, background: data.background },
+            { objects },
             () => {
+              canvas.backgroundColor = 'transparent';
               canvas.requestRenderAll();
-              useEditorStore.getState().syncCanvasToStore();
-              useEditorStore.getState().saveState();
+              syncCanvasToStore();
+              saveState();
               setToastMessage(`Loaded: ${item.label || 'Design state'}`);
             }
           );
@@ -131,6 +132,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
     const state = captureCanvasState(canvas, {
       thumbnailMaxSize: 400,
       thumbnailFormat: 'png',
+      backgroundColor: canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND,
     });
 
     addItem({
@@ -148,7 +150,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
     });
 
     setToastMessage('Design pinned to vision board');
-  }, [canvas, addItem, setToastMessage]);
+  }, [canvas, canvasBackgroundColor, addItem, setToastMessage]);
 
   // Handle adding a color
   const handleAddColor = useCallback(

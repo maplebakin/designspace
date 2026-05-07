@@ -151,7 +151,7 @@ export const ProjectQuickOpenModal: React.FC = () => {
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Quick Open projects..."
-              className="w-full rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-[color:var(--ui-text)] outline-none transition-all duration-200 focus:border-[color:var(--brand-primary)]"
+              className="ui-input-surface w-full rounded-lg py-2 pl-9 pr-3 text-sm"
               aria-label="Search recent projects"
             />
           </div>
@@ -172,14 +172,14 @@ export const ProjectQuickOpenModal: React.FC = () => {
                   onMouseEnter={() => setSelectedIndex(index)}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-all duration-150 ${
                     isSelected
-                      ? 'border border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/15'
-                      : 'border border-transparent hover:bg-white/10'
+                      ? 'border border-[color:var(--brand-primary)]/45 bg-[color:var(--brand-primary)]/12 shadow-[0_10px_22px_rgba(var(--brand-primary-rgb),0.12)]'
+                      : 'border border-transparent hover:bg-[color:var(--ui-hover-soft)]'
                   }`}
                 >
                   {project.thumbnail ? (
                     <img src={project.thumbnail} alt="" className="h-10 w-14 rounded-md object-cover" />
                   ) : (
-                    <div className="flex h-10 w-14 items-center justify-center rounded-md bg-white/5">
+                    <div className="flex h-10 w-14 items-center justify-center rounded-md bg-[color:var(--ui-surface-soft)]">
                       <FileText className="h-4 w-4 text-[color:var(--ui-panel-text)]/60" />
                     </div>
                   )}

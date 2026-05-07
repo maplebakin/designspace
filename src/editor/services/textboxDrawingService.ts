@@ -346,7 +346,7 @@ export function handleTextboxMouseUp(
 
   // Add to canvas
   canvas.add(textbox);
-  canvas.setActiveObject(textbox);
+  useEditorStore.getState().selectObjectById((textbox as any).id);
 
   // Enter editing mode after a brief delay (allows canvas to update)
   setTimeout(() => {

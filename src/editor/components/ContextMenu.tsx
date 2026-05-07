@@ -184,11 +184,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, onClose }) => {
   const handleToggleSelectionLock = () => {
     const targetId = selectedObjectId || ((activeObject as any)?.id as string | undefined);
     if (targetId && canvas) {
-      const obj = canvas.getObjects().find((o) => (o as any).id === targetId);
-      if (obj) {
-        canvas.setActiveObject(obj);
-      }
-      useEditorStore.getState().setSelectedObjectId(targetId);
+      useEditorStore.getState().selectObjectById(targetId);
       toggleObjectLock();
     }
     onClose();

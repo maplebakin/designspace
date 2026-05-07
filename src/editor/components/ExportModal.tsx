@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useEditorStore } from '../state/editorStore';
+import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { advancedExportManager, type AdvancedExportFormat } from '../export/advancedExportManager';
 
@@ -10,10 +10,13 @@ interface ExportModalProps {
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => {
-  const { canvas, projectName } = useEditorStore(
+  const { canvas, imageAssets, pages, projectName, syncActivePageFromCanvas } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
+      imageAssets: state.imageAssets,
+      pages: state.pages,
       projectName: state.projectName,
+      syncActivePageFromCanvas: state.syncActivePageFromCanvas,
     }),
     shallow
   );
@@ -26,12 +29,27 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const fileName = projectName;
   const handleExport = async (format: AdvancedExportFormat) => {
     if (!canvas) return;
-    const background = canvasBackgroundColor || (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
+    const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     await advancedExportManager.export(canvas, format, {
       includeBackground,
       backgroundColor: background,
       dpi: 300,
       fileName,
+    });
+    onClose();
+  };
+  const handleExportAllPagesPdf = async () => {
+    if (!canvas) return;
+    syncActivePageFromCanvas();
+    const nextPages = useEditorStore.getState().pages;
+    const nextImageAssets = useEditorStore.getState().imageAssets;
+    const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
+    await advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
+      includeBackground,
+      backgroundColor: background,
+      dpi: 300,
+      fileName,
+      imageAssets: Object.keys(nextImageAssets).length > 0 ? nextImageAssets : imageAssets,
     });
     onClose();
   };
@@ -83,11 +101,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           <div className="grid gap-3">
             <button
               type="button"
+              data-testid="export-png"
               onClick={() => void handleExport('png')}
               disabled={!canvas}
               className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
             >
               Download PNG (2x)
+            </button>
+            <button
+              type="button"
+              data-testid="export-jpeg"
+              onClick={() => void handleExport('jpeg')}
+              disabled={!canvas}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
+            >
+              Download JPEG
             </button>
             <button
               type="button"
@@ -104,6 +132,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
             >
               Download PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleExportAllPagesPdf()}
+              disabled={!canvas}
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
+            >
+              Download PDF (All Pages)
             </button>
           </div>
         </div>

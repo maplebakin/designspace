@@ -25,7 +25,6 @@ export const ThemeSidebar: React.FC = () => {
         selectedLayerIds,
         selectedObjectId,
         layersById,
-        canvas,
         setObjectThemedFill,
         setObjectFill,
         resetObjectToDefaultTheme
@@ -36,7 +35,6 @@ export const ThemeSidebar: React.FC = () => {
             selectedLayerIds: state.selectedLayerIds,
             selectedObjectId: state.selectedObjectId,
             layersById: state.layersById,
-            canvas: state.canvas,
             setObjectThemedFill: state.setObjectThemedFill,
             setObjectFill: state.setObjectFill,
             resetObjectToDefaultTheme: state.resetObjectToDefaultTheme,
@@ -72,7 +70,7 @@ export const ThemeSidebar: React.FC = () => {
     const selectedObject =
         (selectedObjectId && layersById[selectedObjectId])
             ? layersById[selectedObjectId]
-            : (canvas?.getActiveObject() ?? null);
+            : null;
 
     const hasObjectSelection = Boolean(selectedLayerIds.length > 0 || selectedObjectId || selectedObject);
 

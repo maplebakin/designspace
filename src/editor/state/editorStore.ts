@@ -15,10 +15,10 @@ import {
     distributeVertically,
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
-import { resizeCanvas, centerDocumentInViewport } from '../fabric/canvasUtils';
+import { resizeCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
 import { toSerializableObject } from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
-import { isUserObject } from '../utils/objectUtils';
+import { isPersistableCanvasObject, isUserObject } from '../utils/objectUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { applyAssetRefCounts, hydrateCanvasDataWithAssets, prepareCanvasDataForPersistence } from './useHistoryStore';
 import { useHistoryStore } from './useHistoryStore';
@@ -26,6 +26,7 @@ import { useCanvasStore } from './useCanvasStore';
 import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 import { unitScale as unitScaleMap, UnitMode } from '../utils/units';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
+import { advancedExportManager } from '../export/advancedExportManager';
 import { CanvasLayer, enforceSerializedZOrder, withManifestZIndex, ZIndexLayer } from '../fabric/zIndexManifest';
 import {
     useThemeStore,
@@ -40,12 +41,11 @@ import {
     applyAdjustments,
     resetAdjustmentsOnSelection,
 } from '../utils/imageAdjustments';
-import { isImage } from '../utils/typeGuards';
+import { isActiveSelection, isImage } from '../utils/typeGuards';
 import { showError, showInfo, ErrorMessages } from '../utils/errorHandling';
 import { coordinateSystem } from '../utils/coordinateSystem';
 import { type AccessibilitySettings, AccessibilityManager } from '../utils/accessibilityModes';
 import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
-import { historySnapshotManager } from '../history/historySnapshotManager';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
@@ -81,6 +81,74 @@ export type ToastInput = string | {
     details?: string;
     action?: ToastAction;
     durationMs?: number;
+};
+
+let pendingLayerSyncSelectionIds: string[] | null = null;
+let pendingInsertionCandidateIds: string[] | null = null;
+
+export const getPendingLayerSyncSelectionIds = () =>
+    pendingLayerSyncSelectionIds ? [...pendingLayerSyncSelectionIds] : null;
+
+export const setPendingLayerSyncSelectionIds = (ids: string[] | null) => {
+    pendingLayerSyncSelectionIds = ids ? [...ids] : null;
+};
+
+export const getPendingInsertionCandidateIds = () =>
+    pendingInsertionCandidateIds ? [...pendingInsertionCandidateIds] : null;
+
+export const setPendingInsertionCandidateIds = (ids: string[] | null) => {
+    pendingInsertionCandidateIds = ids ? [...ids] : null;
+};
+
+export const finalizeInsertionSelection = (ids: string | string[]) => {
+    const selectionIds = Array.isArray(ids) ? ids.filter(Boolean) : [ids].filter(Boolean);
+    if (selectionIds.length === 0) return;
+    setPendingLayerSyncSelectionIds(selectionIds);
+    setPendingInsertionCandidateIds(selectionIds);
+
+    let attempts = 0;
+    const selectWhenReady = () => {
+        const pendingIds = getPendingInsertionCandidateIds() ?? getPendingLayerSyncSelectionIds() ?? selectionIds;
+        if (!pendingIds || pendingIds.length === 0) return;
+
+        const { canvas, selectObjectById, selectObjectsByIds } = useEditorStore.getState();
+        const allReady = !!canvas && pendingIds.every((id) =>
+            canvas.getObjects().some((object) => (object as any).id === id)
+        );
+
+        if (allReady) {
+            if (pendingIds.length === 1) {
+                selectObjectById(pendingIds[0]);
+            } else {
+                selectObjectsByIds(pendingIds);
+            }
+            globalThis.setTimeout(() => {
+                const state = useEditorStore.getState();
+                const active = state.canvas?.getActiveObject();
+                const activeIds = isActiveSelection(active)
+                    ? (active as fabric.ActiveSelection).getObjects().map((object) => (object as any).id)
+                    : [(active as any)?.id].filter(Boolean);
+                const selectionStuck = pendingIds.every((id) =>
+                    activeIds.includes(id) || state.selectedLayerIds.includes(id)
+                );
+                if (selectionStuck) return;
+                setPendingLayerSyncSelectionIds(pendingIds);
+                setPendingInsertionCandidateIds(pendingIds);
+                attempts += 1;
+                if (attempts < 40) {
+                    globalThis.setTimeout(selectWhenReady, 25);
+                }
+            }, 25);
+            return;
+        }
+
+        attempts += 1;
+        if (attempts < 40) {
+            globalThis.setTimeout(selectWhenReady, 16);
+        }
+    };
+
+    globalThis.setTimeout(selectWhenReady, 0);
 };
 
 export const deriveSaveStatus = (status: AutoSaveStatus): SaveStatus => {
@@ -416,7 +484,7 @@ const resolveImageDataUrl = async (image: fabric.Image) => {
 const collectImageObjects = (objects: fabric.Object[]) => {
     const images: fabric.Image[] = [];
     const walk = (obj: fabric.Object) => {
-        if (obj.type === 'group' || obj.type === 'activeSelection') {
+        if (obj.type === 'group' || isActiveSelection(obj)) {
             (obj as fabric.Group).getObjects().forEach(walk);
             return;
         }
@@ -442,6 +510,69 @@ const replaceImageSources = (objects: any[], assets: Record<string, string>): an
     }
     return obj;
 });
+
+const getDocumentCanvasSize = () => {
+    const { width, height } = useCanvasStore.getState();
+    return {
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+    };
+};
+
+const getPageBackgroundColor = () => {
+    const themeBackground = useThemeStore.getState().canvasBackgroundColor;
+    if (themeBackground && themeBackground.toLowerCase() !== 'transparent') {
+        return themeBackground;
+    }
+    return DEFAULT_CANVAS_BACKGROUND;
+};
+
+const getSerializedPageBackground = () => {
+    const background = getPageBackgroundColor();
+    return background && background.toLowerCase() !== 'transparent'
+        ? background
+        : undefined;
+};
+
+const parseCanvasData = (canvasData: unknown) => {
+    if (typeof canvasData === 'string') {
+        return JSON.parse(canvasData);
+    }
+    return canvasData;
+};
+
+const normalizePageCanvasData = (canvasData: unknown) => {
+    const parsed = parseCanvasData(canvasData);
+    return parsed && typeof parsed === 'object'
+        ? parsed
+        : { objects: [], background: getSerializedPageBackground() };
+};
+
+const normalizePageSize = (
+    size: unknown,
+    fallback: { width: number; height: number } = DEFAULT_CANVAS_SIZE
+) => {
+    const candidate = size as { width?: unknown; height?: unknown } | null | undefined;
+    const width = typeof candidate?.width === 'number' && Number.isFinite(candidate.width)
+        ? Math.max(1, Math.round(candidate.width))
+        : fallback.width;
+    const height = typeof candidate?.height === 'number' && Number.isFinite(candidate.height)
+        ? Math.max(1, Math.round(candidate.height))
+        : fallback.height;
+    return { width, height };
+};
+
+const getInitialPageLoadData = (
+    rawPages: ProjectPage[] | null,
+    activePageIndex: number,
+    fallbackCanvasData: unknown
+) => {
+    if (rawPages && rawPages.length > 0) {
+        const safeIndex = Math.max(0, Math.min(activePageIndex, rawPages.length - 1));
+        return normalizePageCanvasData(rawPages[safeIndex]?.canvasData);
+    }
+    return normalizePageCanvasData(fallbackCanvasData || { objects: [], background: getSerializedPageBackground() });
+};
 
 const buildExportCanvasData = async (canvas: fabric.Canvas) => {
     const imageObjects = collectImageObjects(canvas.getObjects());
@@ -476,19 +607,12 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
         );
     }
 
-    const serializedObjects = canvas.getObjects().map(toSerializableObject);
+    const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
     const objectsWithAssets = replaceImageSources(serializedObjects, assets);
-    const themeBackground = useThemeStore.getState().canvasBackgroundColor;
-    const rawBackground =
-        themeBackground || (canvas.backgroundColor ? String(canvas.backgroundColor) : '');
-    const normalizedBackground =
-        rawBackground && rawBackground.toLowerCase() !== 'transparent'
-            ? rawBackground
-            : undefined;
     return {
         canvasData: {
             objects: objectsWithAssets,
-            background: normalizedBackground,
+            background: getSerializedPageBackground(),
         },
         assets,
     };
@@ -534,6 +658,48 @@ const resolveSelectedObject = (
     return canvas.getActiveObject() ?? null;
 };
 
+const getSelectableCanvasObjectsById = (canvas: fabric.Canvas | null, ids: string[]) => {
+    if (!canvas || ids.length === 0) return [];
+    const requestedIds = new Set(ids);
+    return canvas.getObjects().filter((obj) => {
+        const id = (obj as any).id;
+        return typeof id === 'string'
+            && requestedIds.has(id)
+            && isUserObject(obj)
+            && obj.visible !== false
+            && obj.selectable !== false;
+    });
+};
+
+const isSelectableSerializedObject = (object: SerializedFabricObject | null | undefined) =>
+    !!object
+    && isUserObject(object);
+
+const getSelectionIdsFromCanvas = (canvas: fabric.Canvas | null) => {
+    if (!canvas) {
+        return { selectedObjectId: null, selectedLayerIds: [] as string[] };
+    }
+    const activeObject = canvas.getActiveObject();
+    if (!activeObject) {
+        return { selectedObjectId: null, selectedLayerIds: [] as string[] };
+    }
+    if (isActiveSelection(activeObject)) {
+        const selectedLayerIds = (activeObject as fabric.ActiveSelection)
+            .getObjects()
+            .filter((obj) => isUserObject(obj) && obj.visible !== false)
+            .map((obj) => (obj as any).id)
+            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+        return { selectedObjectId: null, selectedLayerIds };
+    }
+    if (!isUserObject(activeObject) || activeObject.visible === false) {
+        return { selectedObjectId: null, selectedLayerIds: [] as string[] };
+    }
+    const id = (activeObject as any).id;
+    return typeof id === 'string' && id.trim().length > 0
+        ? { selectedObjectId: id, selectedLayerIds: [id] }
+        : { selectedObjectId: null, selectedLayerIds: [] as string[] };
+};
+
 // --- EDITOR STATE INTERFACE ---
 interface EditorState {
   canvas: fabric.Canvas | null;
@@ -547,6 +713,7 @@ interface EditorState {
   layers: Layer[];
   layersById: Record<string, fabric.Object>;
   selectedLayerIds: string[];
+  pendingLayerSyncSelectionIds: string[] | null;
   showGuides: boolean;
   dirtyObjectsRef: Set<string> | null;
   layoutSuggestions: LayoutSuggestion[];
@@ -603,6 +770,10 @@ interface EditorState {
   setSelectedObjectId: (id: string | null) => void;
   setLayers: (objects: fabric.Object[]) => void;
   syncCanvasToStore: (canvasOverride?: fabric.Canvas | null) => void;
+  selectObjectById: (id: string | null) => void;
+  selectObjectsByIds: (ids: string[]) => void;
+  clearSelection: () => void;
+  syncSelectionFromCanvas: (canvasOverride?: fabric.Canvas | null) => void;
   removeSelectedObject: () => void;
   alignSelectedObjects: (direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => void;
   distributeSelectedObjects: (direction: 'horizontal' | 'vertical') => void;
@@ -667,7 +838,7 @@ interface EditorState {
     canvasSize?: { width: number; height: number };
     unitMode?: UnitMode;
   }) => void;
-  switchToPage: (index: number) => Promise<void>;
+  switchToPage: (index: number, options?: { saveCurrent?: boolean }) => Promise<void>;
   addPage: () => Promise<void>;
   deletePage: (index: number) => Promise<void>;
   reorderPages: (from: number, to: number) => void;
@@ -678,6 +849,7 @@ interface EditorState {
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
   setProjectName: (name: string) => void;
+  renameCurrentProject: (newName: string) => Promise<void>;
   setActiveTool: (tool: EditorTool) => void;
   setBrushSize: (size: number) => void;
   setBrushColor: (color: string) => void;
@@ -756,10 +928,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setAssetRefCount: (assetRefCount) => set({ assetRefCount }),
             getDirtyObjectsRef: () => get().dirtyObjectsRef,
             requestLayerSync: () => get().requestLayerSync(),
+            syncCanvasToStore: () => {
+                const canvas = get().canvas;
+                if (canvas) get().syncCanvasToStore(canvas);
+            },
             setSelectedObjectId: (id) => set({ selectedObjectId: id }),
+            clearSelection: () => get().clearSelection(),
+            getBackground: () => getSerializedPageBackground(),
+            setBackground: (background) => useThemeStore.getState().setCanvasBackgroundColor(background),
             acquireSyncLock: (reason) => get().acquireSyncLock(reason),
             releaseSyncLock: () => get().releaseSyncLock(),
         });
+
+        const resetHistoryToCurrentCanvas = () => {
+            const history = useHistoryStore.getState();
+            history.resetHistory();
+            history.takeSnapshot();
+        };
 
         return ({
             canvas: null,
@@ -769,6 +954,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         layers: [],
         layersById: {},
         selectedLayerIds: [],
+        pendingLayerSyncSelectionIds: null,
         showGuides: true,
         dirtyObjectsRef: null,
         layoutSuggestions: [],
@@ -823,9 +1009,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     setCanvas: (canvas) => {
         const currentBackground = useThemeStore.getState().canvasBackgroundColor;
-        const nextBackground =
-            currentBackground ?? (canvas?.backgroundColor ? String(canvas.backgroundColor) : null);
-        useThemeStore.getState().setCanvasBackgroundColor(nextBackground);
+        useThemeStore.getState().setCanvasBackgroundColor(currentBackground ?? null);
         set({ canvas });
         if (!canvas) {
             return;
@@ -856,6 +1040,79 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setSelectedObjectId: (id) => set({ selectedObjectId: id }),
     setSelectedLayerIds: (ids) => set({ selectedLayerIds: ids }),
     setDirtyObjectsRef: (dirtyObjects) => set({ dirtyObjectsRef: dirtyObjects }),
+    clearSelection: () => {
+        const { canvas } = get();
+        if (canvas) {
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+        }
+        setPendingLayerSyncSelectionIds(null);
+        setPendingInsertionCandidateIds(null);
+        set({ selectedObjectId: null, selectedLayerIds: [], pendingLayerSyncSelectionIds: null });
+    },
+    selectObjectById: (id) => {
+        if (!id) {
+            get().clearSelection();
+            return;
+        }
+        const { canvas } = get();
+        const object = getSelectableCanvasObjectsById(canvas, [id])[0];
+        if (!canvas || !object) {
+            setPendingLayerSyncSelectionIds(null);
+            setPendingInsertionCandidateIds(null);
+            set({ selectedObjectId: null, selectedLayerIds: [], pendingLayerSyncSelectionIds: null });
+            return;
+        }
+        if (canvas.getActiveObject() !== object) {
+            canvas.discardActiveObject();
+            canvas.setActiveObject(object);
+        }
+        canvas.requestRenderAll();
+        setPendingLayerSyncSelectionIds(null);
+        setPendingInsertionCandidateIds(null);
+        set({ selectedObjectId: id, selectedLayerIds: [id], pendingLayerSyncSelectionIds: null });
+    },
+    selectObjectsByIds: (ids) => {
+        const uniqueIds = Array.from(new Set(ids.filter((id) => typeof id === 'string' && id.trim().length > 0)));
+        const { canvas } = get();
+        if (!canvas || uniqueIds.length === 0) {
+            get().clearSelection();
+            return;
+        }
+        const objects = getSelectableCanvasObjectsById(canvas, uniqueIds);
+        const selectedLayerIds = objects
+            .map((obj) => (obj as any).id)
+            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+
+        if (objects.length === 0) {
+            get().clearSelection();
+            return;
+        }
+
+        canvas.discardActiveObject();
+        if (objects.length === 1) {
+            canvas.setActiveObject(objects[0]);
+            setPendingLayerSyncSelectionIds(null);
+            setPendingInsertionCandidateIds(null);
+            set({ selectedObjectId: selectedLayerIds[0] ?? null, selectedLayerIds, pendingLayerSyncSelectionIds: null });
+        } else {
+            const selection = new fabric.ActiveSelection(objects, { canvas });
+            canvas.setActiveObject(selection);
+            setPendingLayerSyncSelectionIds(null);
+            setPendingInsertionCandidateIds(null);
+            set({ selectedObjectId: null, selectedLayerIds, pendingLayerSyncSelectionIds: null });
+        }
+        canvas.requestRenderAll();
+    },
+    syncSelectionFromCanvas: (canvasOverride) => {
+        const canvas = canvasOverride ?? get().canvas;
+        const selection = getSelectionIdsFromCanvas(canvas);
+        if (canvas && selection.selectedLayerIds.length === 0 && canvas.getActiveObject()) {
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+        }
+        set(selection);
+    },
     setLayers: (objects) => {
         const nextState = buildLayerStateFromObjects(objects, get().canvas);
         set(nextState);
@@ -868,7 +1125,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
     },
     removeSelectedObject: () => {
-        const { canvas, setSelectedObjectId, setSelectedLayerIds, requestLayerSync, saveState } = get();
+        const { canvas, clearSelection, requestLayerSync, saveState } = get();
         if (!canvas) {
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
@@ -876,17 +1133,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const activeObject = canvas.getActiveObject();
         if (!activeObject) return;
 
-        if (activeObject.type === 'activeSelection') {
+        if (isActiveSelection(activeObject)) {
             const selection = activeObject as fabric.ActiveSelection;
             selection.getObjects().forEach((obj) => canvas.remove(obj));
         } else {
             canvas.remove(activeObject);
         }
 
-        canvas.discardActiveObject();
-        canvas.requestRenderAll();
-        setSelectedObjectId(null);
-        setSelectedLayerIds([]);
+        clearSelection();
+        get().syncCanvasToStore(canvas);
         requestLayerSync();
         saveState();
     },
@@ -1027,19 +1282,36 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     setCanvasObjects: (objects) => {
         const nextState = buildLayerStateFromSerializedObjects(objects, get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
         set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
         get().requestLayerSync();
     },
     addObject: (object, options) => {
-        const nextObject = withManifestZIndex(object, object.zIndex as CanvasLayer | undefined);
+        const baseObject = withManifestZIndex(object, object.zIndex as CanvasLayer | undefined);
+        const shouldSelect = options?.select !== false && !!baseObject.id && isSelectableSerializedObject(baseObject);
+        const nextObject = {
+            ...baseObject,
+            ...(shouldSelect ? { __selectOnInsert: true } : {}),
+        } as SerializedFabricObject;
         const nextState = buildLayerStateFromSerializedObjects([...get().canvasObjects, nextObject], get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
-        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
-        if (options?.select !== false && nextObject.id) {
-            set({ selectedObjectId: nextObject.id, selectedLayerIds: [nextObject.id] });
+        set({
+            ...nextState,
+            layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
+            selectedObjectId: shouldSelect ? nextObject.id! : null,
+            selectedLayerIds: shouldSelect ? [nextObject.id!] : [],
+            pendingLayerSyncSelectionIds: shouldSelect ? [nextObject.id!] : [],
+        });
+        setPendingLayerSyncSelectionIds(shouldSelect ? [nextObject.id!] : null);
+        if (!shouldSelect) {
+            const { canvas } = get();
+            if (canvas?.getActiveObject()) {
+                canvas.discardActiveObject();
+                canvas.requestRenderAll();
+            }
         }
         get().requestLayerSync();
+        if (shouldSelect && nextObject.id) {
+            finalizeInsertionSelection(nextObject.id);
+        }
         if (options?.save !== false) {
             get().saveState();
         }
@@ -1053,16 +1325,34 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     ?? (index === 0 ? ZIndexLayer.Content : undefined)
             )
         );
-        const nextState = buildLayerStateFromSerializedObjects([...get().canvasObjects, ...nextObjects], get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
-        set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
-        if (options?.selectLast !== false) {
-            const lastObject = nextObjects[nextObjects.length - 1];
-            if (lastObject?.id) {
-                set({ selectedObjectId: lastObject.id, selectedLayerIds: [lastObject.id] });
+        const selectionCandidate = options?.selectLast !== false
+            ? [...nextObjects].reverse().find((object) => object.id && isSelectableSerializedObject(object))
+            : null;
+        const nextObjectsWithSelection = nextObjects.map((object) => (
+            selectionCandidate?.id && object.id === selectionCandidate.id
+                ? ({ ...object, __selectOnInsert: true } as SerializedFabricObject)
+                : object
+        ));
+        const nextState = buildLayerStateFromSerializedObjects([...get().canvasObjects, ...nextObjectsWithSelection], get().layersById);
+        set({
+            ...nextState,
+            layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
+            selectedObjectId: selectionCandidate?.id ?? null,
+            selectedLayerIds: selectionCandidate?.id ? [selectionCandidate.id] : [],
+            pendingLayerSyncSelectionIds: selectionCandidate?.id ? [selectionCandidate.id] : [],
+        });
+        setPendingLayerSyncSelectionIds(selectionCandidate?.id ? [selectionCandidate.id] : null);
+        if (!selectionCandidate?.id) {
+            const { canvas } = get();
+            if (canvas?.getActiveObject()) {
+                canvas.discardActiveObject();
+                canvas.requestRenderAll();
             }
         }
         get().requestLayerSync();
+        if (selectionCandidate?.id) {
+            finalizeInsertionSelection(selectionCandidate.id);
+        }
         if (options?.save !== false) {
             get().saveState();
         }
@@ -1074,7 +1364,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return withManifestZIndex(nextObject, nextObject.zIndex as CanvasLayer | undefined);
         });
         const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
         set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
         get().requestLayerSync();
         get().saveState();
@@ -1082,13 +1371,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     removeObject: (id, options) => {
         const nextObjects = get().canvasObjects.filter((object) => object.id !== id);
         const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
+        const selectionWasRemoved = get().selectedLayerIds.includes(id) || get().selectedObjectId === id;
         set({
             ...nextState,
             layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
             selectedObjectId: get().selectedObjectId === id ? null : get().selectedObjectId,
             selectedLayerIds: get().selectedLayerIds.filter((layerId) => layerId !== id),
         });
+        if (selectionWasRemoved) {
+            get().clearSelection();
+        }
         get().requestLayerSync();
         if (options?.save !== false) {
             get().saveState();
@@ -1145,15 +1437,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     setCanvasBackgroundColor: (color, options) => {
         const { canvas, saveState } = get();
+        // Delegate to theme store (single source of truth) before history reads background.
+        useThemeStore.getState().setCanvasBackgroundColor(color);
         if (canvas) {
-            canvas.backgroundColor = color;
+            canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();
             if (options?.save !== false) {
                 saveState();
             }
         }
-        // Delegate to theme store (single source of truth)
-        useThemeStore.getState().setCanvasBackgroundColor(color);
     },
     setZoom: (zoom) => {
         coordinateSystem.setZoom(zoom);
@@ -1182,7 +1474,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (!suggestion) return;
         const nextObjects = applySuggestionToObjects(get().canvasObjects, suggestion);
         const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
-        historySnapshotManager.pushSnapshot(nextState.canvasObjects);
         set({
             ...nextState,
             layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects).filter((entry) => entry.id !== id),
@@ -1198,8 +1489,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     resetViewCanvas: () => {
         const { canvas } = get();
         if (!canvas) return;
-        // Reset to 100% zoom and center the document
-        centerDocumentInViewport(canvas, 1);
+        fitCanvasToViewport(canvas.getWidth(), canvas.getHeight());
     },
     addAssetToLibrary: (asset) => {
         const normalized: StickerData = {
@@ -1275,6 +1565,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
     clearPendingViewportFit: () => set({ pendingViewportFit: false }),
     setProjectName: (name) => set({ projectName: name }),
+    renameCurrentProject: async (newName) => {
+        const safeName = newName.trim() || 'Untitled Project';
+        set({ projectName: safeName });
+        const { currentLibraryProjectId } = get();
+        if (currentLibraryProjectId) {
+            try {
+                const { db } = await import('../db');
+                await db.renameProject(currentLibraryProjectId, safeName);
+            } catch (error) {
+                console.error('[renameCurrentProject] Failed to persist name change:', error);
+            }
+        }
+    },
     setActiveTool: (tool) => set({ activeTool: tool }),
     setBrushSize: (size) => set({ brushSize: size }),
     setBrushColor: (color) => useThemeStore.getState().setBrushColor(color),
@@ -1286,18 +1589,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setToastMessage,
             resetViewCanvas,
             setLayers,
-            setSelectedLayerIds,
-            setSelectedObjectId,
+            clearSelection,
         } = get();
         if (!canvas) return;
         const { brandVault, themeData } = useThemeStore.getState();
 
         setLayers([]);
-        setSelectedLayerIds([]);
-        setSelectedObjectId(null);
+        clearSelection();
         canvas.clear();
+        const templateCanvasData = normalizePageCanvasData(template.canvasData);
         useThemeStore.getState().setCanvasBackgroundColor(
-            canvas.backgroundColor ? String(canvas.backgroundColor) : null
+            typeof (templateCanvasData as any)?.background === 'string'
+                ? (templateCanvasData as any).background
+                : null
         );
 
         const nextWidth = template.canvasSize?.width;
@@ -1322,10 +1626,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             ? brandVault.find((brand) => brand.id === template.defaultThemeId)
             : null;
 
-        canvas.loadFromJSON(template.canvasData, reviveCustomFabricProps).then(() => {
+        canvas.loadFromJSON(templateCanvasData, reviveCustomFabricProps).then(() => {
+            canvas.backgroundColor = 'transparent';
             resetViewCanvas();
             sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
+            clearSelection();
+            get().syncCanvasToStore(canvas);
             requestLayerSync();
+            get().saveState();
             setToastMessage(`Template loaded: ${template.name}`);
 
             if (template.defaultThemeId) {
@@ -1343,10 +1651,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { canvas, userTemplates, unitMode } = get();
         const { activeBrandCollectionId } = useThemeStore.getState();
         if (!canvas) return;
-        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+        const documentSize = getDocumentCanvasSize();
         const json = {
             objects: serializedObjects,
-            background: canvas.backgroundColor || undefined,
+            background: getSerializedPageBackground(),
         };
         const thumbnail = canvas.toDataURL({ multiplier: 0.1 });
         const newTemplate: Template = {
@@ -1356,8 +1665,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             defaultThemeId: activeBrandCollectionId || '',
             thumbnail,
             canvasSize: {
-                width: Math.round(canvas.getWidth()),
-                height: Math.round(canvas.getHeight()),
+                width: documentSize.width,
+                height: documentSize.height,
             },
             unitMode,
         };
@@ -1371,9 +1680,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             pages,
             isDirty,
             requestLayerSync,
-            setLayers,
-            setSelectedLayerIds,
-            setSelectedObjectId,
             setUnitMode,
         } = get();
         const canResetExistingPages = options?.source === 'project-presets-modal-confirmed'
@@ -1396,19 +1702,21 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const shouldHideOnboarding = options?.source === 'project-presets-modal-confirmed';
 
         if (canvas) {
-            canvas.discardActiveObject();
-            setLayers([]);
-            setSelectedLayerIds([]);
-            setSelectedObjectId(null);
+            get().clearSelection();
+            set({
+                canvasObjects: [],
+                layers: [],
+                layersById: {},
+                selectedObjectId: null,
+                selectedLayerIds: [],
+            });
             canvas.clear();
 
-            resizeCanvas(nextWidth, nextHeight);
+            resizeCanvas(nextWidth, nextHeight, { save: false, skipRender: true });
             setUnitMode(nextUnitMode);
 
-            requestLayerSync();
+            requestLayerSync({ force: true });
         }
-
-        useHistoryStore.getState().resetHistory();
 
         // Initialize default theme from theme store
         useThemeStore.getState().initializeDefaultTheme();
@@ -1434,6 +1742,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
         });
+        resetHistoryToCurrentCanvas();
 
     },
     startNewProject: (options) => {
@@ -1443,29 +1752,42 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     syncActivePageFromCanvas: () => {
         const { canvas, pages, activePageIndex, imageAssets } = get();
         if (!canvas || !pages[activePageIndex]) return;
-        const serializedObjects = canvas.getObjects().map(toSerializableObject);
-        const rawData = { objects: serializedObjects, background: canvas.backgroundColor || undefined };
+        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+        const rawData = { objects: serializedObjects, background: getSerializedPageBackground() };
         const prepared = prepareCanvasDataForPersistence(rawData, imageAssets);
+        const documentSize = getDocumentCanvasSize();
         const nextPages = [...pages];
         nextPages[activePageIndex] = {
           ...nextPages[activePageIndex],
           canvasData: prepared.canvasData,
-          canvasSize: { width: Math.round(canvas.getWidth()), height: Math.round(canvas.getHeight()) },
+          canvasSize: documentSize,
           thumbnail: canvas.toDataURL({ format: 'png', multiplier: 0.1, quality: 0.7 }),
         };
         set({ pages: nextPages, imageAssets: prepared.imageAssets });
     },
-    switchToPage: async (index) => {
+    switchToPage: async (index, options) => {
         const { canvas, pages } = get();
         if (!canvas || index < 0 || index >= pages.length) return;
-        get().syncActivePageFromCanvas();
+        if (options?.saveCurrent !== false) {
+            get().syncActivePageFromCanvas();
+        }
         const page = get().pages[index];
         const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
         await canvas.loadFromJSON(hydrated, reviveCustomFabricProps);
-        resizeCanvas(page.canvasSize.width, page.canvasSize.height);
+        const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
+        resizeCanvas(nextSize.width, nextSize.height, { save: false });
+        const pageBackground =
+            typeof (page.canvasData as any)?.background === 'string'
+                ? (page.canvasData as any).background
+                : null;
+        useThemeStore.getState().setCanvasBackgroundColor(pageBackground);
+        canvas.backgroundColor = 'transparent';
+        get().clearSelection();
+        get().syncCanvasToStore(canvas);
         set({ activePageIndex: index });
         get().requestLayerSync({ force: true });
         canvas.requestRenderAll();
+        resetHistoryToCurrentCanvas();
     },
     addPage: async () => {
         get().syncActivePageFromCanvas();
@@ -1482,8 +1804,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         let nextIndex = activePageIndex;
         if (activePageIndex >= nextPages.length) nextIndex = nextPages.length - 1;
         if (index < activePageIndex) nextIndex -= 1;
-        set({ pages: nextPages, activePageIndex: Math.max(0, nextIndex), isDirty: true });
-        await get().switchToPage(Math.max(0, nextIndex));
+        const safeNextIndex = Math.max(0, nextIndex);
+        set({ pages: nextPages, activePageIndex: safeNextIndex, isDirty: true });
+        await get().switchToPage(safeNextIndex, { saveCurrent: false });
     },
     reorderPages: (from, to) => {
         const { pages, activePageIndex } = get();
@@ -1531,10 +1854,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             assets: exportData.assets,
             activeTheme: fallbackTheme,
             lastUpdated: new Date().toISOString(),
-            canvasSize: {
-                width: Math.round(canvas.getWidth()),
-                height: Math.round(canvas.getHeight()),
-            },
+            canvasSize: getDocumentCanvasSize(),
             unitMode,
         };
 
@@ -1582,13 +1902,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     : 'in';
 
             const rawPages = Array.isArray(raw.pages) ? raw.pages : null;
+            const safeActivePageIndex = rawPages && rawPages.length > 0
+                ? Math.max(0, Math.min((raw.activePageIndex ?? 0) as number, rawPages.length - 1))
+                : 0;
             let canvasData = raw.canvasData;
             if (!canvasData && (!rawPages || rawPages.length === 0)) {
                 throw new Error('Missing canvas data');
             }
-            if (typeof canvasData === 'string') {
-                canvasData = JSON.parse(canvasData);
-            }
+            canvasData = getInitialPageLoadData(rawPages as ProjectPage[] | null, safeActivePageIndex, canvasData);
             const fileAssets =
                 raw.assets && typeof raw.assets === 'object'
                     ? (raw.assets as Record<string, string>)
@@ -1601,18 +1922,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             );
 
             const nextSize = raw.canvasSize;
-            const normalizedWidth =
-                nextSize
-                && typeof nextSize.width === 'number'
-                && Number.isFinite(nextSize.width)
-                    ? Math.max(1, Math.round(nextSize.width))
-                    : DEFAULT_CANVAS_SIZE.width;
-            const normalizedHeight =
-                nextSize
-                && typeof nextSize.height === 'number'
-                && Number.isFinite(nextSize.height)
-                    ? Math.max(1, Math.round(nextSize.height))
-                    : DEFAULT_CANVAS_SIZE.height;
+            const pageSize = rawPages && rawPages.length > 0
+                ? normalizePageSize((rawPages[safeActivePageIndex] as ProjectPage | undefined)?.canvasSize, normalizePageSize(nextSize))
+                : normalizePageSize(nextSize);
+            const normalizedWidth = pageSize.width;
+            const normalizedHeight = pageSize.height;
 
             get().createProject({
                 canvasSize: { width: normalizedWidth, height: normalizedHeight },
@@ -1628,7 +1942,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             sanityCheckCanvas(nextCanvas, activeTheme);
             requestLayerSync();
-            useHistoryStore.getState().resetHistory();
 
             const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
@@ -1636,11 +1949,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 isProjectPresetsOpen: false,
                 imageAssets: nextAssets,
                 pages: normalizedPages as any,
-                activePageIndex: Math.max(0, Math.min((raw.activePageIndex ?? 0) as number, normalizedPages.length - 1)),
+                activePageIndex: safeActivePageIndex,
                 isDirty: false,
             });
             useThemeStore.getState().setCanvasBackgroundColor(
-                nextCanvas.backgroundColor ? String(nextCanvas.backgroundColor) : null
+                typeof (migratedCanvasData as any)?.background === 'string'
+                    ? (migratedCanvasData as any).background
+                    : null
             );
 
             if (activeTheme) {
@@ -1656,6 +1971,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 useThemeStore.getState().setActiveBrandCollectionId(null);
             }
 
+            resetHistoryToCurrentCanvas();
+            set({ isDirty: false, autoSaveStatus: 'idle', saveStatus: 'saved' });
             setToastMessage(`Project loaded: ${projectName}`);
             } catch (error) {
             setToastMessage('Failed to load project file.');
@@ -1680,57 +1997,39 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     takeSnapshot: () => {
-        historySnapshotManager.pushSnapshot(get().canvasObjects);
         useHistoryStore.getState().takeSnapshot();
+        set({ isDirty: true });
+        get().setAutoSaveStatus('dirty');
+        const projectName = get().projectName;
+        if (projectName && projectName !== 'Untitled Project') {
+            get().triggerAutoSave();
+        }
     },
 
     clearHistory: () => {
-        historySnapshotManager.clear();
         useHistoryStore.getState().clearHistory();
         // Trigger memory cleanup when history is cleared
         MemoryManager.getInstance().performCleanup();
     },
 
     undo: async () => {
-        get().acquireSyncLock('undo');
-        try {
-            const snapshot = historySnapshotManager.undo();
-            if (snapshot) {
-                const nextState = buildLayerStateFromSerializedObjects(snapshot, get().layersById);
-                set({
-                    ...nextState,
-                    selectedObjectId: null,
-                    selectedLayerIds: [],
-                    layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
-                });
-                get().requestLayerSync({ force: true });
-                return;
-            }
-            await useHistoryStore.getState().undo();
-        } finally {
-            get().releaseSyncLock();
+        const history = useHistoryStore.getState();
+        if (!history.canUndo()) {
+            return;
         }
+        await history.undo();
+        set({ isDirty: true });
+        get().setAutoSaveStatus('dirty');
     },
 
     redo: async () => {
-        get().acquireSyncLock('redo');
-        try {
-            const snapshot = historySnapshotManager.redo();
-            if (snapshot) {
-                const nextState = buildLayerStateFromSerializedObjects(snapshot, get().layersById);
-                set({
-                    ...nextState,
-                    selectedObjectId: null,
-                    selectedLayerIds: [],
-                    layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects),
-                });
-                get().requestLayerSync({ force: true });
-                return;
-            }
-            await useHistoryStore.getState().redo();
-        } finally {
-            get().releaseSyncLock();
+        const history = useHistoryStore.getState();
+        if (!history.canRedo()) {
+            return;
         }
+        await history.redo();
+        set({ isDirty: true });
+        get().setAutoSaveStatus('dirty');
     },
 
     // --- THEME ACTIONS (Delegated to theme store) ---
@@ -1800,7 +2099,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     toggleMovementLock: (layerId) => {
-        const { canvas, requestLayerSync, saveState } = get();
+        const { canvas, requestLayerSync, saveState, syncCanvasToStore } = get();
         const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
         if (obj) {
             const isLocked = !obj.lockMovementX;
@@ -1812,27 +2111,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 lockScalingY: isLocked,
                 hasControls: !isLocked,
             });
+            syncCanvasToStore(canvas);
             requestLayerSync();
             saveState();
         }
     },
 
     toggleColorLock: (layerId) => {
-        const { canvas, requestLayerSync, saveState } = get();
+        const { canvas, requestLayerSync, saveState, syncCanvasToStore } = get();
         const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
         if (obj) {
             (obj as any).colorLocked = !(obj as any).colorLocked;
+            syncCanvasToStore(canvas);
             requestLayerSync();
             saveState();
         }
     },
 
     setObjectFill: (fill) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             selectedObject.set({ fill, tokenRole: null });
             canvas.requestRenderAll();
+            syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
@@ -1877,7 +2179,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     // Text Effects Actions
     setTextShadow: (shadowParams) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
 
         if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
@@ -1891,13 +2193,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             selectedObject.set({ shadow: newShadow });
             canvas?.requestRenderAll();
+            if (canvas) syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
     },
 
     setTextStroke: (strokeParams) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
 
         if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
@@ -1907,18 +2210,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             selectedObject.set(updates);
             canvas?.requestRenderAll();
+            if (canvas) syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
     },
 
     setTextCharSpacing: (spacing) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
 
         if (selectedObject && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
             selectedObject.set({ charSpacing: spacing });
             canvas?.requestRenderAll();
+            if (canvas) syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
@@ -1989,19 +2294,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         try {
-            // Handle SVG export separately
-            if (options.format === 'svg') {
-                const { downloadSvg } = await import('../fabric/exportUtils');
-                downloadSvg(canvas, 'design');
-                showInfo('SVG exported successfully');
-            } else {
-                // Dynamically import the export function to avoid circular dependencies
-                const { downloadExportedCanvas } = await import('../fabric/exportCanvas');
-                const exportOptions = {
-                    ...options,
-                    format: options.format as 'png' | 'jpeg',
-                };
-                await downloadExportedCanvas(canvas, exportOptions);
+            if (options.format === 'png' || options.format === 'svg' || options.format === 'jpeg') {
+                await advancedExportManager.export(canvas, options.format, {
+                    includeBackground: true,
+                    backgroundColor: getPageBackgroundColor(),
+                    dpi: Math.max(150, options.multiplier * 150),
+                    quality: options.quality,
+                    fileName: get().projectName || 'design',
+                });
                 showInfo(`${options.format.toUpperCase()} exported successfully`);
             }
         } catch (error) {
@@ -2033,10 +2333,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 assets: exportData.assets,
                 activeTheme: themeData,
                 lastUpdated: new Date().toISOString(),
-                canvasSize: {
-                    width: Math.round(canvas.getWidth()),
-                    height: Math.round(canvas.getHeight()),
-                },
+                canvasSize: getDocumentCanvasSize(),
                 unitMode,
             };
 
@@ -2104,12 +2401,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             const parsed = JSON.parse(result.canvasData);
             const rawPages = Array.isArray(parsed.pages) ? parsed.pages : null;
-            const rawCanvasData = parsed.canvasData;
+            const safeActivePageIndex = rawPages && rawPages.length > 0
+                ? Math.max(0, Math.min((parsed.activePageIndex ?? 0) as number, rawPages.length - 1))
+                : 0;
+            const rawCanvasData = getInitialPageLoadData(rawPages as ProjectPage[] | null, safeActivePageIndex, parsed.canvasData);
             const rawAssets = parsed.assets && typeof parsed.assets === 'object'
                 ? (parsed.assets as Record<string, string>)
                 : {};
             const activeTheme = parsed.activeTheme ?? null;
-            const canvasSize = parsed.canvasSize;
+            const canvasSize = rawPages && rawPages.length > 0
+                ? (rawPages[safeActivePageIndex] as ProjectPage | undefined)?.canvasSize
+                : parsed.canvasSize;
             const unitMode = parsed.unitMode;
 
             const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
@@ -2161,8 +2463,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 useThemeStore.getState().setActiveBrandCollectionId(null);
             }
 
-            useHistoryStore.getState().resetHistory();
-
             const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: "Page 1", canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
                 currentLibraryProjectId: projectId,
@@ -2170,15 +2470,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 projectName: result.project.name,
                 isProjectPresetsOpen: false,
                 pages: normalizedPages as any,
-                activePageIndex: Math.max(0, Math.min((parsed.activePageIndex ?? 0) as number, normalizedPages.length - 1)),
+                activePageIndex: safeActivePageIndex,
                 isDirty: false,
             });
 
             setShowOnboarding(false);
             useThemeStore.getState().setCanvasBackgroundColor(
-                nextCanvas.backgroundColor ? String(nextCanvas.backgroundColor) : null
+                typeof (migratedCanvasData as any)?.background === 'string'
+                    ? (migratedCanvasData as any).background
+                    : null
             );
 
+            resetHistoryToCurrentCanvas();
+            set({ isDirty: false, autoSaveStatus: 'idle', saveStatus: 'saved' });
             set({ toastMessage: `Loaded project: ${result.project.name}` });
             } catch (error) {
             console.error('Failed to load project:', error);
@@ -2242,10 +2546,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 assets: exportData.assets,
                 activeTheme: useThemeStore.getState().themeData,
                 lastUpdated: new Date().toISOString(),
-                canvasSize: {
-                    width: Math.round(canvas.getWidth()),
-                    height: Math.round(canvas.getHeight()),
-                },
+                canvasSize: getDocumentCanvasSize(),
                 unitMode: get().unitMode,
             };
 
@@ -2281,44 +2582,51 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setShowSafeZones: (show) => set({ showSafeZones: show }),
     // Stroke and Lock Actions
     setObjectStrokeColor: (color) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             selectedObject.set({ stroke: color });
             canvas.requestRenderAll();
+            syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
     },
 
     setObjectStrokeWidth: (width) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             selectedObject.set({ strokeWidth: width });
             canvas.requestRenderAll();
+            syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
     },
 
     toggleObjectLock: () => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore, clearSelection } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             const isCurrentlyLocked = selectedObject.lockMovementX;
+            const nextLocked = !isCurrentlyLocked;
             selectedObject.set({
-                lockMovementX: !isCurrentlyLocked,
-                lockMovementY: !isCurrentlyLocked,
-                lockRotation: !isCurrentlyLocked,
-                lockScalingX: !isCurrentlyLocked,
-                lockScalingY: !isCurrentlyLocked,
-                lockSkewingX: !isCurrentlyLocked,
-                lockSkewingY: !isCurrentlyLocked,
+                lockMovementX: nextLocked,
+                lockMovementY: nextLocked,
+                lockRotation: nextLocked,
+                lockScalingX: nextLocked,
+                lockScalingY: nextLocked,
+                lockSkewingX: nextLocked,
+                lockSkewingY: nextLocked,
                 hasControls: isCurrentlyLocked,
                 selectable: isCurrentlyLocked
             });
+            if (nextLocked) {
+                clearSelection();
+            }
             canvas.requestRenderAll();
+            syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
@@ -2326,11 +2634,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     // Text Formatting Actions
     setTextLineHeight: (lineHeight) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas && (selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
             (selectedObject as fabric.Textbox | fabric.IText).set({ lineHeight });
             canvas.requestRenderAll();
+            syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
         }
@@ -2388,7 +2697,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             snapEnabled: state.snapEnabled,
             gridEnabled: state.gridEnabled,
             showSafeZones: state.showSafeZones,
-            showCanvasSettingsPanel: state.showCanvasSettingsPanel,
             showSuggestionSidebar: state.showSuggestionSidebar,
             accessibilitySettings: state.accessibilitySettings,
             autoSaveStatus: state.autoSaveStatus,
@@ -2432,7 +2740,7 @@ export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: Apocapalette
                 changed = true;
             }
         }
-        if (obj.type === 'group' || obj.type === 'activeSelection') {
+        if (obj.type === 'group' || isActiveSelection(obj)) {
             (obj as fabric.Group).getObjects().forEach(walk);
         }
     };

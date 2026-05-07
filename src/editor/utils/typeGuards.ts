@@ -61,7 +61,7 @@ export function isGroup(obj: fabric.FabricObject | null | undefined): obj is fab
  */
 export function isActiveSelection(obj: fabric.FabricObject | null | undefined): obj is fabric.ActiveSelection {
   if (!obj) return false;
-  return obj.type === 'activeSelection';
+  return obj.type === 'activeSelection' || obj.type === 'activeselection';
 }
 
 /**

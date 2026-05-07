@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import * as fabric from 'fabric';
+import { isActiveSelection } from '../utils/typeGuards';
 import {
   Palette,
   Type,
@@ -1077,10 +1078,12 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
 export const PropertiesPanel: React.FC = () => {
   const {
     selectedObjectId,
+    selectedLayerIds,
     layersById,
     canvas,
     saveState,
     requestLayerSync,
+    syncCanvasToStore,
     setTextShadow,
     setTextStroke,
     setTextCharSpacing,
@@ -1091,10 +1094,12 @@ export const PropertiesPanel: React.FC = () => {
   } = useEditorStore(
     (state) => ({
       selectedObjectId: state.selectedObjectId,
+      selectedLayerIds: state.selectedLayerIds,
       layersById: state.layersById,
       canvas: state.canvas,
       saveState: state.saveState,
       requestLayerSync: state.requestLayerSync,
+      syncCanvasToStore: state.syncCanvasToStore,
       setTextShadow: state.setTextShadow,
       setTextStroke: state.setTextStroke,
       setTextCharSpacing: state.setTextCharSpacing,
@@ -1110,10 +1115,11 @@ export const PropertiesPanel: React.FC = () => {
     shallow
   );
 
+  const isMultiSelection = selectedLayerIds.length > 1 || isActiveSelection(canvas?.getActiveObject());
   const selectedObject =
-    selectedObjectId && layersById[selectedObjectId]
+    !isMultiSelection && selectedObjectId && layersById[selectedObjectId]
       ? layersById[selectedObjectId]
-      : canvas?.getActiveObject() ?? null;
+      : null;
   const hasSelection = !!selectedObject;
 
   const isText = selectedObject?.type === 'i-text' || selectedObject?.type === 'textbox';
@@ -1129,6 +1135,7 @@ export const PropertiesPanel: React.FC = () => {
     selectedObject.set(updates);
     selectedObject.setCoords();
     canvas.requestRenderAll();
+    syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
   };
@@ -1153,6 +1160,7 @@ export const PropertiesPanel: React.FC = () => {
     (rect as any).__baseRy = clampedVisibleRadius;
     rect.setCoords();
     canvas.requestRenderAll();
+    syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
   };
@@ -1177,6 +1185,7 @@ export const PropertiesPanel: React.FC = () => {
     (rect as any).__baseRy = maxVisibleRadiusY;
     rect.setCoords();
     canvas.requestRenderAll();
+    syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
   };
@@ -1216,6 +1225,11 @@ export const PropertiesPanel: React.FC = () => {
             {getObjectTypeLabel()}
           </span>
         )}
+        {!selectedObject && isMultiSelection && (
+          <span className="text-[10px] uppercase tracking-widest text-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 px-2 py-0.5 rounded-full">
+            {selectedLayerIds.length} selected
+          </span>
+        )}
       </div>
 
       <div className="border-b border-[color:var(--border-subtle)] px-4 py-3">
@@ -1223,42 +1237,42 @@ export const PropertiesPanel: React.FC = () => {
           <IconButton
             label="Align Left"
             onClick={() => alignSelectedObjects('left')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignHorizontalJustifyStart className="w-3.5 h-3.5" />
           </IconButton>
           <IconButton
             label="Align Center"
             onClick={() => alignSelectedObjects('center')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignHorizontalJustifyCenter className="w-3.5 h-3.5" />
           </IconButton>
           <IconButton
             label="Align Right"
             onClick={() => alignSelectedObjects('right')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignHorizontalJustifyEnd className="w-3.5 h-3.5" />
           </IconButton>
           <IconButton
             label="Align Top"
             onClick={() => alignSelectedObjects('top')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignVerticalJustifyStart className="w-3.5 h-3.5" />
           </IconButton>
           <IconButton
             label="Align Middle"
             onClick={() => alignSelectedObjects('middle')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignVerticalJustifyCenter className="w-3.5 h-3.5" />
           </IconButton>
           <IconButton
             label="Align Bottom"
             onClick={() => alignSelectedObjects('bottom')}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !isMultiSelection}
           >
             <AlignVerticalJustifyEnd className="w-3.5 h-3.5" />
           </IconButton>
@@ -1279,7 +1293,13 @@ export const PropertiesPanel: React.FC = () => {
 
         {/* Empty State or Object Properties */}
         {!selectedObject ? (
-          <CanvasEmptyState />
+          isMultiSelection ? (
+            <div className="rounded-lg border border-[color:var(--border-subtle)] bg-black/10 p-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+              Multiple layers selected
+            </div>
+          ) : (
+            <CanvasEmptyState />
+          )
         ) : (
           <>
             {isShape && (

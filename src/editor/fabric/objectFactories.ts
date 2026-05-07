@@ -12,7 +12,8 @@
  */
 
 import * as fabric from 'fabric';
-import { useEditorStore } from '../state/editorStore';
+import { finalizeInsertionSelection, useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { v4 as uuidv4 } from 'uuid';
 import { SAFE_MARGIN_PX, toCanvasUnits } from '../utils/units';
@@ -118,6 +119,9 @@ const insertFabricObject = (
     save: true,
     select: shouldActivate,
   });
+  if (shouldActivate && typeof (serialized as any).id === 'string') {
+    finalizeInsertionSelection((serialized as any).id);
+  }
 
   if (options.enterEditing && typeof (obj as any).enterEditing === 'function') {
     const objectId = (serialized as any).id;
@@ -482,8 +486,9 @@ export const generateGrid = (canvas: fabric.Canvas, rows: number, cols: number, 
     const tokenRole = options.tokenRole ?? DEFAULT_PLACEHOLDER_TOKEN_ROLE;
 
     const safeInset = bleedPx + SAFE_MARGIN_PX;
-    const safeWidth = canvas.getWidth() - safeInset * 2;
-    const safeHeight = canvas.getHeight() - safeInset * 2;
+    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
+    const safeWidth = documentWidth - safeInset * 2;
+    const safeHeight = documentHeight - safeInset * 2;
     if (safeWidth <= 0 || safeHeight <= 0) return;
 
     const cellWidth = (safeWidth - gutter * (cols - 1)) / cols;
@@ -526,8 +531,9 @@ export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
     const { bleedPx } = useEditorStore.getState();
     const gutter = convertLength(0.2);
     const safeInset = bleedPx + SAFE_MARGIN_PX;
-    const safeWidth = canvas.getWidth() - safeInset * 2;
-    const safeHeight = canvas.getHeight() - safeInset * 2;
+    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
+    const safeWidth = documentWidth - safeInset * 2;
+    const safeHeight = documentHeight - safeInset * 2;
     if (safeWidth <= 0 || safeHeight <= 0) return;
 
     const columnWidth = safeWidth - gutter;

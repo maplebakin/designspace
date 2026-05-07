@@ -10,6 +10,7 @@
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
+import { isActiveSelection } from '../utils/typeGuards';
 
 /**
  * Gets the document bounds for alignment.
@@ -28,7 +29,7 @@ const getDocumentBounds = () => {
 
 const getActiveSelection = (canvas: fabric.Canvas) => {
     const activeObject = canvas.getActiveObject();
-    if (!activeObject || activeObject.type !== 'activeSelection') {
+    if (!isActiveSelection(activeObject)) {
         return null;
     }
     return activeObject as fabric.ActiveSelection;
@@ -119,6 +120,7 @@ const alignMultipleObjects = (
 ) => {
     const objects = selection.getObjects();
     if (objects.length === 0) return;
+    canvas.discardActiveObject();
 
     // Align each object to the document bounds
     objects.forEach((object) => {
@@ -130,7 +132,7 @@ const alignMultipleObjects = (
         }
     });
 
-    selection.setCoords();
+    useEditorStore.getState().syncSelectionFromCanvas(canvas);
     finalizeAlignment(canvas);
 };
 
@@ -147,7 +149,7 @@ const alignObjects = (
     const activeObject = canvas.getActiveObject();
     if (!activeObject) return;
 
-    if (activeObject.type === 'activeSelection') {
+    if (isActiveSelection(activeObject)) {
         alignMultipleObjects(canvas, activeObject as fabric.ActiveSelection, direction);
     } else {
         alignSingleObject(canvas, activeObject, direction);
@@ -203,6 +205,7 @@ export const distributeHorizontally = (canvas: fabric.Canvas) => {
     if (selectedObjects.length < 3) {
         return;
     }
+    canvas.discardActiveObject();
 
     // Sort objects by their left position
     selectedObjects.sort((a, b) => (a.left || 0) - (b.left || 0));
@@ -233,8 +236,7 @@ export const distributeHorizontally = (canvas: fabric.Canvas) => {
         obj.setCoords(); // Update object's controls
     });
 
-    // Update the active selection's position and render
-    activeSelection.setCoords();
+    useEditorStore.getState().syncSelectionFromCanvas(canvas);
     finalizeAlignment(canvas);
 };
 
@@ -251,6 +253,7 @@ export const distributeVertically = (canvas: fabric.Canvas) => {
     if (selectedObjects.length < 3) {
         return;
     }
+    canvas.discardActiveObject();
 
     // Sort objects by their top position
     selectedObjects.sort((a, b) => (a.top || 0) - (b.top || 0));
@@ -281,7 +284,6 @@ export const distributeVertically = (canvas: fabric.Canvas) => {
         obj.setCoords(); // Update object's controls
     });
 
-    // Update the active selection's position and render
-    activeSelection.setCoords();
+    useEditorStore.getState().syncSelectionFromCanvas(canvas);
     finalizeAlignment(canvas);
 };

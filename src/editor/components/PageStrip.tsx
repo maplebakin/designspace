@@ -27,7 +27,7 @@ export const PageStrip: React.FC = () => {
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="h-24 border-t border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 backdrop-blur-[var(--ui-blur)] px-3 py-2 flex items-center gap-2 overflow-x-auto" ref={listRef}>
+    <div className="h-[72px] border-t border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 backdrop-blur-[var(--ui-blur)] px-3 py-1.5 flex items-center gap-2 overflow-x-auto" ref={listRef}>
       {pages.map((page: any, index: number) => (
         <button
           key={page.id}
@@ -41,36 +41,36 @@ export const PageStrip: React.FC = () => {
           }}
           onDragEnd={() => setDragIndex(null)}
           onClick={() => void switchToPage(index)}
-          className={`group relative shrink-0 w-28 h-20 rounded-lg border p-1 text-left transition-all ${
+          className={`group relative shrink-0 w-20 h-[56px] rounded-xl border p-1 text-left transition-all duration-200 ${
             activePageIndex === index
-              ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10'
-              : 'border-white/10 bg-white/5 hover:bg-white/10'
+              ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/14 shadow-[var(--ui-shadow-soft)]'
+              : 'border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/60 hover:bg-[color:var(--ui-surface-strong)]'
           }`}
         >
-          <div className="w-full h-12 rounded bg-black/20 overflow-hidden border border-white/10">
+          <div className="w-full h-8 rounded-md overflow-hidden border border-[color:var(--ui-border)]">
             {page.thumbnail ? (
               <img src={page.thumbnail} alt={page.name} className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full bg-black/20" />
+              <div className="w-full h-full" style={{ background: 'var(--warm-paper)' }} />
             )}
           </div>
-          <div className="mt-1 text-[9px] uppercase tracking-widest text-[color:var(--ui-text)]">Page {index + 1}</div>
+          <div className={`mt-1 text-[9px] uppercase tracking-widest ${activePageIndex === index ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)]'}`}>Page {index + 1}</div>
           {pages.length > 1 && (
             <span
               onClick={(e) => {
                 e.stopPropagation();
                 void deletePage(index);
               }}
-              className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-1 rounded bg-black/60 text-rose-300"
+              className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 w-[18px] h-[18px] rounded-full flex items-center justify-center bg-[rgba(74,56,45,0.7)] text-[#fbf7f2]"
             >
-              <Trash2 className="w-3 h-3" />
+              <Trash2 className="w-2.5 h-2.5" />
             </span>
           )}
         </button>
       ))}
       <button
         onClick={() => void addPage()}
-        className="shrink-0 w-10 h-20 rounded-lg border border-dashed border-white/20 hover:border-[color:var(--brand-primary)] text-[color:var(--ui-panel-text)] flex items-center justify-center"
+        className="shrink-0 w-8 h-[56px] rounded-xl border border-dashed border-[color:var(--ui-border)] hover:border-[color:var(--brand-primary)] hover:text-[color:var(--brand-primary)] text-[color:var(--ui-panel-text)] flex items-center justify-center transition-all duration-200"
         aria-label="Add page"
       >
         <Plus className="w-4 h-4" />

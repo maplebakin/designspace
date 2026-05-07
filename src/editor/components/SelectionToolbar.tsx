@@ -1,5 +1,6 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
+import * as fabric from 'fabric';
 import {
   AlignCenter,
   AlignCenterVertical,
@@ -17,6 +18,7 @@ import {
   ArrowDownToLine,
 } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
+import { isActiveSelection as isActiveSelectionObject } from '../utils/typeGuards';
 import { Tooltip } from './Tooltip';
 import { duplicateSelection, bringToFront, sendToBack } from '../services/clipboardService';
 
@@ -66,11 +68,16 @@ export const SelectionToolbar: React.FC = () => {
   );
 
   if (!canvas) return null;
-  const activeObject = selectedObjectId ? (canvas.getObjects().find((obj) => (obj as any).id === selectedObjectId) ?? canvas.getActiveObject()) : canvas.getActiveObject();
-  if (!activeObject) return null;
+  const selectedObjects = selectedLayerIds
+    .map((id) => canvas.getObjects().find((obj) => (obj as any).id === id))
+    .filter((obj): obj is fabric.Object => !!obj);
+  const activeObject = selectedObjects.length > 1
+    ? canvas.getActiveObject()
+    : (selectedObjectId ? selectedObjects[0] : canvas.getActiveObject());
+  if (!activeObject && selectedObjects.length === 0) return null;
 
-  const isActiveSelection = activeObject.type === 'activeSelection';
-  const isGroup = activeObject.type === 'group';
+  const isActiveSelection = isActiveSelectionObject(activeObject) || selectedObjects.length > 1;
+  const isGroup = activeObject?.type === 'group';
   const isSingleObject = !isActiveSelection;
   const selectionCount = selectedLayerIds.length;
   const canGroup = isActiveSelection && selectionCount > 1;

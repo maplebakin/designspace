@@ -1,4 +1,4 @@
-import { db, TemplateRecord } from '../db';
+import type { TemplateRecord } from '../db';
 
 export type TemplateCanvasSize = { width: number; height: number };
 
@@ -12,6 +12,11 @@ export type SaveTemplateOptions = {
 };
 
 const DEFAULT_CANVAS_SIZE: TemplateCanvasSize = { width: 2550, height: 3300 };
+
+const getDb = async () => {
+  const { db } = await import('../db');
+  return db;
+};
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -81,12 +86,14 @@ export const saveTemplate = async (
     updatedAt: toIsoTimestamp(options.updatedAt, now),
   };
 
+  const db = await getDb();
   const id = await db.templates.add(record);
   return { ...record, id };
 };
 
 export const listTemplates = async (category?: string): Promise<TemplateRecord[]> => {
   const normalizedCategory = category?.trim();
+  const db = await getDb();
   const records = normalizedCategory
     ? await db.templates.where('category').equals(normalizedCategory).toArray()
     : await db.templates.toArray();
@@ -94,9 +101,10 @@ export const listTemplates = async (category?: string): Promise<TemplateRecord[]
 };
 
 export const getTemplate = async (id: number): Promise<TemplateRecord | undefined> =>
-  db.templates.get(id);
+  (await getDb()).templates.get(id);
 
 export const deleteTemplate = async (id: number): Promise<void> => {
+  const db = await getDb();
   await db.templates.delete(id);
 };
 

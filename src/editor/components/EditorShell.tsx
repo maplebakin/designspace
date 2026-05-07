@@ -1,11 +1,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import * as fabric from 'fabric';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
-  ChevronDown,
-  FileText,
   Layers,
   MousePointer2,
   Pencil,
@@ -15,12 +12,6 @@ import {
   Magnet,
   Grid,
   SlidersHorizontal,
-  Square,
-  Circle,
-  Triangle,
-  Star,
-  Image as ImageIcon,
-  Search,
   Download,
   Home,
   Undo2,
@@ -28,10 +19,18 @@ import {
   Keyboard,
   Type,
   Frame,
+  Search,
+  FileText,
 } from 'lucide-react';
-import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore';
+import {
+  getPendingInsertionCandidateIds,
+  getPendingLayerSyncSelectionIds,
+  useEditorStore,
+  DEFAULT_CANVAS_BACKGROUND,
+} from '../state/editorStore';
 import { useCanUndo, useCanRedo } from '../state/useHistoryStore';
 import { useThemeStore } from '../state/useThemeStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { AssetLibrary } from './AssetLibrary';
 import { BrandModal } from './BrandModal';
 import { ExportModal } from './ExportModal';
@@ -40,12 +39,10 @@ import { CanvasStage } from './CanvasStage';
 import { CanvasRuler } from './CanvasRuler';
 import { StatusBar } from './StatusBar';
 import { Inserter } from './Inserter';
-import * as objectFactories from '../fabric/objectFactories';
 import { SettingsModal } from './SettingsModal';
 import { ProjectPresetsModal } from './ProjectPresetsModal';
 import { DesignSpaceImportModal } from './DesignSpaceImportModal';
 import { Popover } from './Popover';
-import { PopoverSurface } from './PopoverSurface';
 import { cleanupAssets } from '../services/assetLoader';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { SelectionToolbar } from './SelectionToolbar';
@@ -58,162 +55,78 @@ import { SaveStatusBadge } from './SaveStatusBadge';
 import { ProjectQuickOpenModal } from './ProjectQuickOpenModal';
 import { PageStrip } from './PageStrip';
 import { PageBorderPopover } from './PageBorderPopover';
+import { FileDropdown } from './FileDropdown';
+import { NavStrip, NAV_ITEMS, NavId } from './NavStrip';
+import { ShapesPanel } from './ShapesPanel';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
-const NAV_ICON = 'w-5 h-5 stroke-[1.5]';
+const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
+const CHROME_ICON_BUTTON = 'ui-button-soft group flex items-center justify-center rounded-full p-2';
+const TOOLBAR_GROUP = 'ui-toolbar-group flex items-center gap-1 rounded-full px-2 py-1.5';
+const TOOLBAR_GROUP_SPACED = 'ui-toolbar-group flex items-center gap-2 rounded-full px-3 py-1.5';
+const TOOL_BUTTON = 'ui-button-icon rounded-lg p-2 transition-all duration-200 hover:scale-105 active:scale-95';
+const PANEL_ACTION_BUTTON = 'ui-button-soft w-full flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] uppercase tracking-widest';
 
-type NavId = 'shapes' | 'insert' | 'assets';
-
-const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ReactElement; description: string }> = [
-  { id: 'shapes', label: 'Shapes', icon: <Square />, description: 'Quick geometric primitives' },
-  { id: 'insert', label: 'Insert', icon: <Type />, description: 'Text, placeholders, and media tools' },
-  { id: 'assets', label: 'Assets', icon: <ImageIcon />, description: 'Library and imports' },
-];
-
-interface FileDropdownProps {
-  onImportDesignSpace: () => void;
+interface ProjectNameEditorProps {
+  name: string;
+  onRename: (newName: string) => void;
 }
 
-const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const { downloadProjectFile, loadProjectFile, setProjectPresetsOpen } = useEditorStore(
-        (state) => ({
-            downloadProjectFile: state.downloadProjectFile,
-            loadProjectFile: state.loadProjectFile,
-            setProjectPresetsOpen: state.setProjectPresetsOpen,
-        }),
-        shallow
-    );
+const ProjectNameEditor: React.FC<ProjectNameEditorProps> = ({ name, onRename }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-    const handleOpenFile = () => {
-        fileInputRef.current?.click();
-        setIsOpen(false);
-    };
-
-    const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        await loadProjectFile(file);
-        event.target.value = '';
-        setIsOpen(false);
-    };
-
-    return (
-        <div className="relative">
-            <button
-                onClick={() => setIsOpen(!isOpen)}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
-            >
-                <FileText className="icon-muted w-4 h-4 stroke-[1.5]" />
-                <span>File</span>
-                <ChevronDown className={`icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
-            </button>
-            <input
-                ref={fileInputRef}
-                type="file"
-                accept=".apocaproject.json,.json"
-                onChange={handleFileChange}
-                className="hidden"
-            />
-            {isOpen && (
-                <PopoverSurface className="absolute left-0 mt-2 w-56 z-20">
-                    <ul>
-                        <li>
-                            <button
-                                onClick={() => { setProjectPresetsOpen(true); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
-                            >
-                                New Project
-                            </button>
-                        </li>
-                        <li>
-                            <button
-                                onClick={handleOpenFile}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
-                            >
-                                Open File
-                            </button>
-                        </li>
-                        <li>
-                            <button
-                                onClick={() => { downloadProjectFile(); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
-                            >
-                                Save Project
-                            </button>
-                        </li>
-                        <li className="border-t border-white/10 mt-1 pt-1">
-                            <button
-                                onClick={() => { onImportDesignSpace(); setIsOpen(false); }}
-                                className="w-full text-left px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10"
-                            >
-                                Import to DesignSpace
-                            </button>
-                        </li>
-                    </ul>
-                </PopoverSurface>
-            )}
-        </div>
-    );
-};
-
-interface NavStripProps {
-  activeNav: NavId | null;
-  onSelect: (id: NavId) => void;
-}
-
-const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
-  <div className="flex flex-col gap-2 p-3">
-    {NAV_ITEMS.map((item) => {
-      const isActive = activeNav === item.id;
-      return (
-        <button
-          key={item.id}
-          onClick={() => onSelect(item.id)}
-          className={`w-full rounded-xl border px-3 py-2 text-left transition-all duration-200 ${
-            isActive
-              ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/15 text-white'
-              : 'border-transparent bg-white/5 text-[color:var(--ui-panel-text)] hover:border-white/10 hover:bg-white/10'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {React.cloneElement(item.icon as React.ReactElement<any>, { className: `${NAV_ICON} shrink-0` })}
-            <span className="text-[11px] uppercase tracking-widest">{item.label}</span>
-          </div>
-          <p className="mt-1 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{item.description}</p>
-        </button>
-      );
-    })}
-  </div>
-);
-
-const ShapesPanel: React.FC = () => {
-  const handleAddShape = (factory: (canvas: fabric.Canvas) => void) => {
-    const canvas = useEditorStore.getState().canvas;
-    if (!canvas) return;
-    factory(canvas);
-    useEditorStore.getState().setActiveTool('select');
+  const beginEdit = () => {
+    setDraft(name);
+    setEditing(true);
   };
 
+  const commitEdit = () => {
+    const trimmed = draft.trim() || 'Untitled Project';
+    setEditing(false);
+    if (trimmed !== name) onRename(trimmed);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+  };
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        data-testid="project-name-input"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commitEdit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+        }}
+        aria-label="Project name"
+        className="max-w-[180px] rounded border border-[color:var(--brand-primary)]/50 bg-[color:var(--ui-bg)] px-2 py-0.5 text-[11px] uppercase tracking-widest text-[color:var(--ui-text)] outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
+      />
+    );
+  }
+
   return (
-    <div className="p-4 space-y-3">
-      <h3 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Shapes</h3>
-      <div className="grid grid-cols-1 gap-2">
-        <button onClick={() => handleAddShape(objectFactories.addRectangle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
-          <Square className={ICON_SMALL} /><span>Rectangle</span>
-        </button>
-        <button onClick={() => handleAddShape(objectFactories.addCircle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
-          <Circle className={ICON_SMALL} /><span>Circle</span>
-        </button>
-        <button onClick={() => handleAddShape(objectFactories.addTriangle)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
-          <Triangle className={ICON_SMALL} /><span>Triangle</span>
-        </button>
-        <button onClick={() => handleAddShape(objectFactories.addStar)} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:border-[color:var(--brand-primary)]">
-          <Star className={ICON_SMALL} /><span>Star</span>
-        </button>
-      </div>
-    </div>
+    <button
+      data-testid="project-name-display"
+      onClick={beginEdit}
+      title="Click to rename project"
+      className="group flex items-center gap-1.5 max-w-[180px] rounded px-2 py-0.5 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5 transition-colors"
+    >
+      <span className="truncate">{name}</span>
+      <Pencil className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" />
+    </button>
   );
 };
 
@@ -248,6 +161,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setShowHelpModal,
     undo,
     redo,
+    projectName,
+    renameCurrentProject,
   } = useEditorStore(
     (state) => ({
       toastMessage: state.toastMessage,
@@ -274,6 +189,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     setShowHelpModal: state.setShowHelpModal,
     undo: state.undo,
     redo: state.redo,
+    projectName: state.projectName,
+    renameCurrentProject: state.renameCurrentProject,
   }),
     shallow
   );
@@ -332,6 +249,101 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   }, [activeToast, expandedToastId]);
 
   useEffect(() => {
+    if (!import.meta.env.DEV || typeof window === 'undefined') return;
+    (window as any).__DESIGN_SPACE_QA__ = {
+      snapshot: () => {
+        const state = useEditorStore.getState();
+        const activeObject = state.canvas?.getActiveObject();
+        const canvasStore = useCanvasStore.getState();
+        const themeState = useThemeStore.getState();
+        return {
+          canvasReady: !!state.canvas && state.canvasReadyState === 'ready',
+          activeTool: state.activeTool,
+          selectedObjectId: state.selectedObjectId,
+          selectedLayerIds: state.selectedLayerIds,
+          pendingInsertionCandidateIds: getPendingInsertionCandidateIds(),
+          pendingLayerSyncSelectionIds: getPendingLayerSyncSelectionIds() ?? state.pendingLayerSyncSelectionIds,
+          activeObjectId: activeObject ? (activeObject as any).id ?? null : null,
+          activeObjectType: activeObject?.type ?? null,
+          documentSize: { width: canvasStore.width, height: canvasStore.height },
+          pageBackgroundColor: themeState.canvasBackgroundColor,
+          viewportTransform: state.canvas?.viewportTransform ?? null,
+          zoom: state.canvas?.getZoom() ?? null,
+          objects: state.canvas?.getObjects()
+            .filter((object) => {
+              const target = object as any;
+              return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper && !target.isSafeZoneOverlay;
+            })
+            .map((object) => ({
+              id: (object as any).id ?? null,
+              type: object.type,
+              left: object.left,
+              top: object.top,
+              width: object.width,
+              height: object.height,
+              scaleX: object.scaleX,
+              scaleY: object.scaleY,
+              visible: object.visible,
+              selectable: object.selectable,
+              evented: object.evented,
+              lockMovementX: object.lockMovementX,
+              lockMovementY: object.lockMovementY,
+              text: (object as any).text ?? null,
+              isEditing: (object as any).isEditing ?? false,
+            })) ?? [],
+          canvasObjects: state.canvasObjects,
+          layers: state.layers,
+        };
+      },
+      documentLayout: () => {
+        const canvas = useEditorStore.getState().canvas;
+        if (!canvas) return null;
+        const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+        const canvasEl = canvas.getElement();
+        const canvasRect = canvasEl?.getBoundingClientRect() ?? null;
+        const { width: docW, height: docH } = useCanvasStore.getState();
+        const paper = canvas.getObjects().find((o) => (o as any).isDocumentPaper);
+        const safeZones = canvas.getObjects().filter((o) => (o as any).isSafeZoneOverlay);
+        const paperBr = paper ? (() => { paper.setCoords(); return paper.getBoundingRect(); })() : null;
+        const safeZoneBrs = safeZones.map((o) => { o.setCoords(); return o.getBoundingRect(); });
+        return {
+          vpt,
+          zoom: vpt[0],
+          documentSize: { width: docW, height: docH },
+          canvasElementRect: canvasRect ? { left: canvasRect.left, top: canvasRect.top, width: canvasRect.width, height: canvasRect.height } : null,
+          paperInCanvas: paper ? { left: (paper as any).left, top: (paper as any).top, width: (paper as any).width, height: (paper as any).height } : null,
+          paperScreenBounds: paperBr ? { left: paperBr.left, top: paperBr.top, width: paperBr.width, height: paperBr.height } : null,
+          safeZoneCount: safeZones.length,
+          safeZoneScreenBounds: safeZoneBrs.map((br) => ({ left: br.left, top: br.top, width: br.width, height: br.height })),
+          expectedPaperScreen: canvasRect ? {
+            left: canvasRect.left + vpt[4],
+            top: canvasRect.top + vpt[5],
+            width: docW * vpt[0],
+            height: docH * vpt[3],
+          } : null,
+        };
+      },
+      controlPoint: (id: string, key: string) => {
+        const canvas = useEditorStore.getState().canvas;
+        const object = canvas?.getObjects().find((candidate) => (candidate as any).id === id);
+        if (!canvas || !object) return null;
+        object.setCoords();
+        const control = (object as any).oCoords?.[key];
+        if (!control || typeof control.x !== 'number' || typeof control.y !== 'number') return null;
+        const canvasRect = canvas.upperCanvasEl?.getBoundingClientRect?.()
+          ?? canvas.getElement().getBoundingClientRect();
+        return {
+          x: canvasRect.left + control.x,
+          y: canvasRect.top + control.y,
+        };
+      },
+    };
+    return () => {
+      delete (window as any).__DESIGN_SPACE_QA__;
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeTool !== 'draw' && activeTool !== 'pan' && activeTool !== 'select') {
       setIsFillPopoverOpen(false);
     }
@@ -387,7 +399,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   };
 
   return (
-    <div className="w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col">
+    <div data-testid="editor-shell" tabIndex={-1} className="w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col">
         <BrandModal isOpen={isBrandModalOpen} onClose={() => setIsBrandModalOpen(false)} />
         <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
@@ -397,15 +409,16 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         
         {activeToast && (
             <div
-              className={`fixed bottom-4 right-4 z-50 w-[22rem] rounded-lg border px-4 py-3 text-sm shadow-[0_0_24px_rgba(0,0,0,0.35)] ${
+              className={`fixed bottom-4 right-4 z-50 w-[22rem] rounded-2xl border px-4 py-3 text-sm backdrop-blur-[var(--ui-blur)] ${
                 activeToast.variant === 'error'
-                  ? 'border-rose-400/40 bg-rose-500/12 text-rose-100'
+                  ? 'border-[rgba(199,88,88,0.38)] bg-[rgba(199,88,88,0.12)] text-[#8b3535]'
                   : activeToast.variant === 'warning'
-                    ? 'border-amber-300/35 bg-amber-500/10 text-amber-100'
+                    ? 'border-[rgba(214,160,90,0.38)] bg-[rgba(214,160,90,0.12)] text-[#7a5420]'
                     : activeToast.variant === 'success'
-                      ? 'border-emerald-300/35 bg-emerald-500/10 text-emerald-100'
+                      ? 'border-[rgba(106,155,122,0.38)] bg-[rgba(106,155,122,0.12)] text-[#2e5e45]'
                       : 'border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)]'
               }`}
+              style={{ boxShadow: 'var(--popover-shadow)' }}
               role="status"
               aria-live={activeToast.variant === 'error' ? 'assertive' : 'polite'}
             >
@@ -449,21 +462,27 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             </div>
         )}
 
-      <header className="toolbar-section justify-between bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
+      <header data-testid="editor-toolbar" className="h-14 flex items-center justify-between px-5 shrink-0 bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
         <div className="min-w-[22rem] flex items-center gap-3">
-          <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)]">DSGN Studio</h1>
+          <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)] shrink-0">DSGN Studio</h1>
+          <span className="text-[color:var(--ui-border)] text-xs select-none shrink-0">/</span>
+          <ProjectNameEditor
+            name={projectName}
+            onRename={(n) => void renameCurrentProject(n)}
+          />
           <FileDropdown onImportDesignSpace={() => setIsDesignSpaceImportOpen(true)} />
           <SaveStatusBadge status={saveStatus} />
         </div>
         <div className="flex-1 flex justify-center items-center gap-4">
-            <div className="flex items-center gap-1 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-2 py-1.5">
+            <div className={TOOLBAR_GROUP}>
                 <Tooltip content="Undo (⌘Z)" side="bottom">
                   <button
+                      data-testid="toolbar-undo"
                       onClick={() => void undo()}
                       disabled={!canUndo}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canUndo
-                            ? 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? TOOL_BUTTON
                             : 'text-[color:var(--ui-panel-text)]/60 cursor-not-allowed'
                       }`}
                   >
@@ -472,11 +491,12 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 </Tooltip>
                 <Tooltip content="Redo (⌘⇧Z)" side="bottom">
                   <button
+                      data-testid="toolbar-redo"
                       onClick={() => void redo()}
                       disabled={!canRedo}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canRedo
-                            ? 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? TOOL_BUTTON
                             : 'text-[color:var(--ui-panel-text)]/60 cursor-not-allowed'
                       }`}
                   >
@@ -484,14 +504,14 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   </button>
                 </Tooltip>
             </div>
-            <div className="flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-3 py-1.5">
+            <div className={TOOLBAR_GROUP_SPACED}>
                 <Tooltip content="Select (V)" side="bottom">
                   <button
                       onClick={() => setActiveTool('select')}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'select'
-                            ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? `${TOOL_BUTTON} ui-button-active`
+                            : TOOL_BUTTON
                       }`}
                   >
                       <MousePointer2 className="w-4 h-4 stroke-[1.5]" />
@@ -502,8 +522,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       onClick={() => setActiveTool('erase')}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'erase'
-                            ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? `${TOOL_BUTTON} ui-button-active`
+                            : TOOL_BUTTON
                       }`}
                   >
                       <Eraser className="w-4 h-4 stroke-[1.5]" />
@@ -514,8 +534,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       onClick={() => setActiveTool('pan')}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'pan'
-                            ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? `${TOOL_BUTTON} ui-button-active`
+                            : TOOL_BUTTON
                       }`}
                   >
                       <Hand className="w-4 h-4 stroke-[1.5]" />
@@ -524,23 +544,24 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content="Text Box (T)" side="bottom">
                   <button
                       onClick={() => setActiveTool('textbox')}
+                      data-testid="tool-textbox"
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'textbox'
-                            ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? `${TOOL_BUTTON} ui-button-active`
+                            : TOOL_BUTTON
                       }`}
                   >
                       <Type className="w-4 h-4 stroke-[1.5]" />
                   </button>
                 </Tooltip>
-                <div className="w-px h-5 bg-white/10 mx-1" />
+                <div className="w-px h-5 bg-[color:var(--ui-border)]/70 mx-1" />
                 <Tooltip content={snapEnabled ? 'Snapping On' : 'Snapping Off'} side="bottom">
                   <button
                       onClick={() => setSnapEnabled(!snapEnabled)}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         snapEnabled
-                          ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
-                          : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                          ? `${TOOL_BUTTON} ui-button-active text-[color:var(--brand-primary)]`
+                          : TOOL_BUTTON
                       }`}
                   >
                       <Magnet className="w-4 h-4 stroke-[1.5]" />
@@ -551,15 +572,15 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       onClick={() => setGridEnabled(!gridEnabled)}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         gridEnabled
-                          ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)]'
-                          : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                          ? `${TOOL_BUTTON} ui-button-active text-[color:var(--brand-primary)]`
+                          : TOOL_BUTTON
                       }`}
                   >
                       <Grid className="w-4 h-4 stroke-[1.5]" />
                   </button>
                 </Tooltip>
             </div>
-            <div className="relative flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/5 px-3 py-1.5">
+            <div className={`relative ${TOOLBAR_GROUP_SPACED}`}>
                 <Tooltip content="Pencil (P)" side="bottom">
                   <button
                       onClick={() => {
@@ -568,8 +589,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       }}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'draw'
-                            ? 'bg-white/20 text-white shadow-[0_0_12px_rgba(255,255,255,0.3)]'
-                            : 'text-[color:var(--ui-panel-text)] hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95'
+                            ? `${TOOL_BUTTON} ui-button-active`
+                            : TOOL_BUTTON
                       }`}
                   >
                       <Pencil className="w-4 h-4 stroke-[1.5]" />
@@ -582,7 +603,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   trigger={
                     <Tooltip content="Canvas Fill" side="bottom">
                       <button
-                          className="rounded-lg p-2 text-[color:var(--ui-panel-text)] transition-all duration-200 hover:text-white hover:bg-white/10 hover:scale-105 active:scale-95"
+                          className={TOOL_BUTTON}
                       >
                           <PaintBucket className="w-4 h-4 stroke-[1.5]" />
                       </button>
@@ -601,34 +622,20 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                                   setCanvasBackgroundColor(e.target.value);
                                   setIsFillPopoverOpen(false);
                                 }}
-                                className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
+                                className="h-6 w-10 cursor-pointer rounded border border-[color:var(--ui-border)] bg-transparent"
                                 aria-label="Canvas background color"
                             />
                         </div>
                     </div>
                 </Popover>
             </div>
-            <button
-                onClick={() => {
-                    if (!canvas) return;
-                    objectFactories.addPlaceholder(canvas, {
-                        width: 400,
-                        height: 400,
-                        tokenRole: 'surfaces.surface-plain',
-                    });
-                }}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
-            >
-                <Square className="icon-muted w-4 h-4 stroke-[1.5]" />
-                <span>Insert Placeholder</span>
-            </button>
         </div>
         <div className="w-auto flex justify-end items-center gap-4">
             <CanvasSettingsPopover />
             {onBackToDashboard ? (
               <button
                 onClick={onBackToDashboard}
-                className="group flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-full border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-300 ease-in-out text-[11px] uppercase tracking-widest"
+                className={CHROME_BUTTON}
               >
                 <Home className={ICON_SMALL} />
                 <span>Projects</span>
@@ -639,7 +646,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             <Tooltip content="Quick Open (⌘K)" side="bottom">
               <button
                 onClick={() => setProjectQuickOpenOpen(true)}
-                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
+                className={CHROME_ICON_BUTTON}
                 aria-label="Quick Open Projects"
               >
                 <Search className={ICON_SMALL} />
@@ -648,47 +655,44 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             <Tooltip content="Keyboard Shortcuts (⌘⇧/)" side="bottom">
               <button
                 onClick={() => setShowHelpModal(true)}
-                className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
+                className={CHROME_ICON_BUTTON}
                 aria-label="Keyboard Shortcuts"
               >
                 <Keyboard className={ICON_SMALL} />
               </button>
             </Tooltip>
-            {import.meta.env.DEV && (
-              <Tooltip content="Download (⌘E)" side="bottom">
-                <button
-                  onClick={() => setShowExportModal(true)}
-                  className="group flex items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-white/5 p-2 text-[color:var(--ui-text)] hover:bg-white/10 transition-all duration-300 ease-in-out"
-                  aria-label="Download"
-                >
-                  <Download className={ICON_SMALL} />
-                </button>
-              </Tooltip>
-            )}
+            <Tooltip content="Export (⌘E)" side="bottom">
+              <button
+                onClick={() => setShowExportModal(true)}
+                className={CHROME_ICON_BUTTON}
+                aria-label="Export"
+              >
+                <Download className={ICON_SMALL} />
+              </button>
+            </Tooltip>
         </div>
       </header>
       <div className="flex-1 flex overflow-hidden">
-        <aside className="w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex flex-col">
-          <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
+        <aside data-testid="left-panel" className="editor-side-panel-left w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex-col">
+          <div className="px-4 py-2.5 border-b border-[color:var(--border-subtle)] shrink-0">
             <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Workspace</p>
-            <p className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60 mt-1">Choose a panel to work faster</p>
           </div>
           <div className="flex-1 min-h-0 flex overflow-hidden">
-            <div className="w-[150px] border-r border-[color:var(--border-subtle)] overflow-y-auto">
+            <div className="w-[88px] border-r border-[color:var(--border-subtle)] overflow-y-auto shrink-0">
               <NavStrip activeNav={activeNav} onSelect={handleSelectNav} />
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               {activeNav ? (
-                <div>
-                  <div className="px-4 py-3 border-b border-[color:var(--border-subtle)]">
+                <div className="flex flex-col h-full">
+                  <div className="px-3 py-2 border-b border-[color:var(--border-subtle)] shrink-0">
                     <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
                   </div>
-                  <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
+                  <div className="flex-1 overflow-y-auto">
                     {renderPanel()}
                   </div>
                 </div>
               ) : (
-                <div className="p-4 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Select Shapes, Insert, or Assets.</div>
+                <div className="p-3 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Select Shapes, Insert, or Assets.</div>
               )}
             </div>
           </div>
@@ -700,15 +704,16 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             <CanvasStage onSelectNav={handleSelectNav} />
         </main>
 
-        <aside className="bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] transition-all duration-300 ease-in-out overflow-hidden w-80 border-l border-[color:var(--ui-border)] flex flex-col">
+        <aside data-testid="right-panel" className="editor-side-panel-right bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] transition-all duration-300 ease-in-out overflow-hidden w-80 border-l border-[color:var(--ui-border)] flex-col">
             {/* Tab strip */}
             <div className="flex border-b border-[color:var(--ui-border)] shrink-0">
               <button
                 onClick={() => setRightTab('layers')}
+                data-testid="right-tab-layers"
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'layers'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
@@ -716,10 +721,11 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               </button>
               <button
                 onClick={() => setRightTab('properties')}
+                data-testid="right-tab-properties"
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'properties'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -729,8 +735,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 onClick={() => setRightTab('settings')}
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'settings'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-white/5'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5'
+                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
+                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
                 }`}
               >
                 <Frame className="w-3.5 h-3.5" />
@@ -755,14 +761,14 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => setIsBrandModalOpen(true)}
-                        className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
+                        className={PANEL_ACTION_BUTTON}
                       >
                         <FileText className="w-3.5 h-3.5" />
                         Brand
                       </button>
                       <button
                         onClick={() => setIsSettingsModalOpen(true)}
-                        className="w-full flex items-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-text)] rounded-lg border border-[color:var(--border-subtle)] hover:bg-white/10 transition-all duration-200 text-[11px] uppercase tracking-widest"
+                        className={PANEL_ACTION_BUTTON}
                       >
                         <SlidersHorizontal className="w-3.5 h-3.5" />
                         Vibe Settings

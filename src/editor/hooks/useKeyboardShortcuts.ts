@@ -42,7 +42,6 @@ export const useKeyboardShortcuts = () => {
       }
 
       if (isMeta && key === 'e') {
-        if (!import.meta.env.DEV) return;
         event.preventDefault();
         const { setShowExportModal } = useEditorStore.getState();
         setShowExportModal(true);
@@ -153,8 +152,7 @@ export const useKeyboardShortcuts = () => {
         // Escape to deselect
         if (key === 'escape') {
           event.preventDefault();
-          canvas.discardActiveObject();
-          canvas.requestRenderAll();
+          useEditorStore.getState().clearSelection();
           return;
         }
       }

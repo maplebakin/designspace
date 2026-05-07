@@ -1,5 +1,7 @@
 import * as fabric from 'fabric';
 import { frameScheduler, TaskPriority } from './frameScheduler';
+import { useCanvasStore } from '../state/useCanvasStore';
+import { isPersistableCanvasObject } from './objectUtils';
 
 // Filter interface for serialization
 interface SerializedFilter {
@@ -25,6 +27,16 @@ const CUSTOM_PROPS = [
   'borderSettings',
   'zIndex',
   '__zIndex',
+  'selectable',
+  'evented',
+  'hasControls',
+  'lockMovementX',
+  'lockMovementY',
+  'lockRotation',
+  'lockScalingX',
+  'lockScalingY',
+  'lockSkewingX',
+  'lockSkewingY',
 ] as const;
 
 export const toSerializableObject = (obj: fabric.Object) => {
@@ -99,6 +111,16 @@ export const toSerializableObject = (obj: fabric.Object) => {
     borderSettings: target.borderSettings ?? undefined,
     zIndex: target.zIndex ?? target.__zIndex ?? undefined,
     __zIndex: target.__zIndex ?? target.zIndex ?? undefined,
+    selectable: target.selectable,
+    evented: target.evented,
+    hasControls: target.hasControls,
+    lockMovementX: target.lockMovementX ?? false,
+    lockMovementY: target.lockMovementY ?? false,
+    lockRotation: target.lockRotation ?? false,
+    lockScalingX: target.lockScalingX ?? false,
+    lockScalingY: target.lockScalingY ?? false,
+    lockSkewingX: target.lockSkewingX ?? false,
+    lockSkewingY: target.lockSkewingY ?? false,
     shadow: shadowData,
     filters: filtersData,
     adjustments: obj.type === 'image' ? adjustmentsData : undefined,
@@ -119,6 +141,8 @@ export interface CaptureCanvasOptions {
   thumbnailQuality?: number;
   /** Whether to include the canvas background in thumbnail. Default: true */
   includeBackground?: boolean;
+  /** Authoritative page/document background to serialize. */
+  backgroundColor?: string | null;
 }
 
 /**
@@ -169,9 +193,7 @@ export const captureCanvasState = (
     includeBackground = true,
   } = options;
 
-  // Get canvas dimensions
-  const canvasWidth = canvas.getWidth();
-  const canvasHeight = canvas.getHeight();
+  const { width: canvasWidth, height: canvasHeight } = useCanvasStore.getState();
 
   // Calculate thumbnail scale to fit within max size
   const scale = Math.min(
@@ -182,34 +204,42 @@ export const captureCanvasState = (
 
   // Store current viewport transform to restore later
   const currentVpt = canvas.viewportTransform ? [...canvas.viewportTransform] : null;
+  const originalBackgroundColor = canvas.backgroundColor;
+  let thumbnail = '';
 
-  // Reset viewport for clean capture
-  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  try {
+    canvas.backgroundColor = includeBackground
+      ? options.backgroundColor ?? originalBackgroundColor
+      : '';
 
-  // Generate thumbnail with multiplier for lower resolution
-  const thumbnail = canvas.toDataURL({
-    format: thumbnailFormat,
-    quality: thumbnailQuality,
-    multiplier: scale,
-    enableRetinaScaling: false,
-    withoutTransform: true,
-    withoutShadow: false,
-  } as any);
+    // Reset viewport for clean capture
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
 
-  // Restore viewport transform
-  if (currentVpt) {
-    canvas.setViewportTransform(currentVpt as fabric.TMat2D);
+    // Generate thumbnail with multiplier for lower resolution
+    thumbnail = canvas.toDataURL({
+      format: thumbnailFormat,
+      quality: thumbnailQuality,
+      multiplier: scale,
+      enableRetinaScaling: false,
+      withoutTransform: true,
+      withoutShadow: false,
+    } as any);
+  } finally {
+    if (currentVpt) {
+      canvas.setViewportTransform(currentVpt as fabric.TMat2D);
+    }
+    canvas.backgroundColor = originalBackgroundColor;
   }
 
   // Serialize all objects (excluding guides and temporary objects)
   const objects = canvas.getObjects()
-    .filter(obj => !(obj as any).isGuide && !(obj as any).isTemporary)
+    .filter(obj => isPersistableCanvasObject(obj) && !(obj as any).isTemporary)
     .map(toSerializableObject);
 
   // Build full canvas data
   const canvasData = JSON.stringify({
     objects,
-    background: includeBackground ? (canvas.backgroundColor || undefined) : undefined,
+    background: includeBackground ? (options.backgroundColor || undefined) : undefined,
     version: '1.0',
   });
 

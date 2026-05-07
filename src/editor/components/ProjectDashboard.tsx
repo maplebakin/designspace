@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { Sparkles, FolderOpen, Plus, ChevronDown, ChevronUp } from 'lucide-react';
+import { Sparkles, FolderOpen, Plus, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { DEFAULT_CANVAS_SIZE } from '../state/editorStore';
 
 interface ProjectItem {
   id: string;
@@ -20,19 +21,30 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   const [allProjects, setAllProjects] = useState<ProjectItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const {
     getAllProjects,
     loadProject,
-    setProjectPresetsOpen,
     loadProjectFile,
     setToastMessage,
+    renameProject,
+    currentLibraryProjectId,
+    setProjectName,
+    createProject,
+    setShowOnboarding,
   } = useEditorStore((state) => ({
     getAllProjects: state.getAllProjects,
     loadProject: state.loadProject,
-    setProjectPresetsOpen: state.setProjectPresetsOpen,
     loadProjectFile: state.loadProjectFile,
     setToastMessage: state.setToastMessage,
+    renameProject: state.renameProject,
+    currentLibraryProjectId: state.currentLibraryProjectId,
+    setProjectName: state.setProjectName,
+    createProject: state.createProject,
+    setShowOnboarding: state.setShowOnboarding,
   }), shallow);
 
   useEffect(() => {
@@ -49,6 +61,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     };
     void run();
   }, [getAllProjects]);
+
+  useEffect(() => {
+    if (editingProjectId) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [editingProjectId]);
 
   const displayedProjects = useMemo(() => {
     if (showAll) return allProjects;
@@ -89,23 +108,46 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   const openProjectPresetsInEditor = async () => {
+    createProject({
+      canvasSize: DEFAULT_CANVAS_SIZE,
+      unitMode: 'in',
+      source: 'project-presets-modal-confirmed',
+    });
+    setShowOnboarding(true);
     await onProjectOpen?.();
-    const canvasReady = await waitForEditorCanvas();
-    if (!canvasReady) {
-      setToastMessage('Editor is still initializing. Please try again.');
-      return;
+  };
+
+  const startRename = (projectId: string, currentName: string) => {
+    setEditingProjectId(projectId);
+    setEditDraft(currentName);
+  };
+
+  const cancelRename = () => {
+    setEditingProjectId(null);
+    setEditDraft('');
+  };
+
+  const commitRename = async (projectId: string) => {
+    const safeName = editDraft.trim() || 'Untitled Project';
+    const original = allProjects.find((p) => p.id === projectId)?.name;
+    setEditingProjectId(null);
+    setEditDraft('');
+    if (safeName === original) return;
+    setAllProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, name: safeName } : p)));
+    await renameProject(projectId, safeName);
+    if (currentLibraryProjectId === projectId) {
+      setProjectName(safeName);
     }
-    setProjectPresetsOpen(true);
   };
 
   return (
-    <div className="min-h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex items-center justify-center p-6">
-      <div className="w-full max-w-5xl rounded-[2rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/88 backdrop-blur-[var(--ui-blur)] p-10 shadow-[0_26px_62px_rgba(74,56,45,0.22)]">
+    <div className="min-h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex items-center justify-center p-6" style={{ background: 'var(--bg-warm-radial)' }}>
+      <div className="w-full max-w-[880px] rounded-[2rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] p-10" style={{ boxShadow: 'var(--hero-shadow)' }}>
         <div className="text-center mb-8">
-          <div className="mx-auto w-14 h-14 rounded-2xl bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] flex items-center justify-center mb-3">
-            <Sparkles className="w-6 h-6" />
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] flex items-center justify-center mb-3.5">
+            <Sparkles className="w-6 h-6 stroke-[1.5]" />
           </div>
-          <h1 className="text-4xl font-semibold tracking-[0.02em]">Design Space</h1>
+          <h1 className="text-4xl font-semibold tracking-[0.02em]" style={{ fontFamily: 'var(--font-display)' }}>Design Space</h1>
           <p className="text-[color:var(--ui-panel-text)]/70 mt-3 text-sm">Multi-page design studio</p>
         </div>
 
@@ -114,13 +156,17 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
             onClick={() => {
               void openProjectPresetsInEditor();
             }}
-            className="ui-button-soft h-12 rounded-xl uppercase tracking-widest text-xs flex items-center justify-center gap-2 border-[color:var(--brand-primary)]/35 bg-[color:var(--brand-primary)]/14 hover:bg-[color:var(--brand-primary)]/20"
+            data-testid="dashboard-new-project"
+            className="h-12 rounded-xl text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all duration-200 border border-[color:var(--brand-primary)]/35 bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)] hover:bg-[color:var(--brand-primary)]/22"
+            style={{ fontFamily: 'var(--font-ui)' }}
           >
-            <Plus className="w-4 h-4" /> New Project
+            <Plus className="w-4 h-4 stroke-[1.5]" /> New Project
           </button>
 
-          <label className="ui-button-soft h-12 rounded-xl uppercase tracking-widest text-xs flex items-center justify-center gap-2 cursor-pointer">
-            <FolderOpen className="w-4 h-4" /> Open Project
+          <label className="h-12 rounded-xl text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-[color:var(--ui-panel-text)] hover:bg-[color:var(--ui-surface-strong)] hover:text-[color:var(--ui-text)]"
+            style={{ fontFamily: 'var(--font-ui)', boxShadow: 'var(--ui-shadow-soft)' }}
+          >
+            <FolderOpen className="w-4 h-4 stroke-[1.5]" /> Open Project
             <input
               type="file"
               accept=".apocaproject.json,.json"
@@ -156,21 +202,68 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
           ) : (
             <div className="space-y-3">
               {displayedProjects.map((project) => (
-                <button
+                <div
                   key={project.id}
-                  onClick={() => {
-                    void openProjectInEditor(() => loadProject(project.id));
-                  }}
-                  className="ui-card-soft w-full text-left rounded-2xl px-5 py-4 transition-all duration-200 hover:bg-[color:var(--ui-surface-strong)] hover:-translate-y-[1px]"
+                  data-testid="dashboard-project-card"
+                  className="w-full rounded-2xl px-4 py-3 transition-all duration-200 group border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/60 hover:bg-[color:var(--ui-surface-strong)] cursor-default"
+                  style={{ boxShadow: 'var(--ui-shadow-soft)' }}
                 >
-                  <div className="text-sm text-[color:var(--ui-text)]">{project.name}</div>
-                  <div className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60">{formatDate(project.lastModified)}</div>
-                </button>
+                  {editingProjectId === project.id ? (
+                    <div className="flex items-center gap-3">
+                      <div className="w-14 h-14 rounded-xl shrink-0 border border-[color:var(--ui-border)] overflow-hidden flex items-center justify-center bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)] text-lg font-semibold">
+                        {project.thumbnail ? (
+                          <img src={project.thumbnail} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          project.name.charAt(0).toUpperCase()
+                        )}
+                      </div>
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); void commitRename(project.id); }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                        }}
+                        onBlur={() => void commitRename(project.id)}
+                        data-testid="dashboard-rename-input"
+                        className="flex-1 bg-transparent text-sm text-[color:var(--ui-text)] outline-none border-b border-[color:var(--brand-primary)]/50 pb-0.5"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <div className="w-14 h-14 rounded-xl shrink-0 border border-[color:var(--ui-border)] overflow-hidden flex items-center justify-center bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)] text-lg font-semibold">
+                        {project.thumbnail ? (
+                          <img src={project.thumbnail} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          project.name.charAt(0).toUpperCase()
+                        )}
+                      </div>
+                      <button
+                        className="flex-1 text-left min-w-0"
+                        onClick={() => void openProjectInEditor(() => loadProject(project.id))}
+                      >
+                        <div className="text-sm text-[color:var(--ui-text)] truncate font-medium">{project.name}</div>
+                        <div className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60 mt-1">{formatDate(project.lastModified)}</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); startRename(project.id, project.name); }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-[color:var(--ui-hover-strong)] text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] transition-all duration-150 shrink-0"
+                        title="Rename project"
+                        data-testid={`rename-project-${project.id}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5 stroke-[1.5]" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
               {hasMoreProjects && (
                 <button
                   onClick={() => setShowAll(!showAll)}
-                  className="w-full flex items-center justify-center gap-2 py-3 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] transition-colors"
+                  className="w-full flex items-center justify-center gap-1.5 py-3 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] transition-colors duration-200"
                 >
                   {showAll ? (
                     <>

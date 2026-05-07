@@ -22,6 +22,7 @@ import { SAFE_MARGIN_PX } from '../utils/units';
 import { guideRegistry } from './guideRegistry';
 import { refitPageBorder } from '../services/pageBorderService';
 import { CanvasLayer, assignZIndex } from './zIndexManifest';
+import { isUserObject } from '../utils/objectUtils';
 
 let safeMarginGuides: fabric.Line[] = [];
 let bleedGuides: fabric.Object[] = []; // Changed to fabric.Object[]
@@ -56,13 +57,23 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
   const { width, height } = useCanvasStore.getState();
 
   if (documentPaper) {
-    // Update existing paper
+    // Update existing paper dimensions and color
     documentPaper.set({
+      left: 0,
+      top: 0,
       width,
       height,
       fill: backgroundColor,
     });
     documentPaper.setCoords();
+    // Re-add via canvas.add() if it was stripped from the canvas (e.g. by canvas.clear()).
+    // Using sendObjectToBack on a removed object bypasses _onObjectAdded, leaving
+    // documentPaper.canvas=undefined and skipping proper coord initialisation.
+    if (!canvas.getObjects().includes(documentPaper)) {
+      guideRegistry.register(documentPaper, 'document-paper');
+      assignZIndex(documentPaper, CanvasLayer.DOCUMENT_PAPER);
+      canvas.add(documentPaper);
+    }
   } else {
     // Create new paper rectangle
     documentPaper = new fabric.Rect({
@@ -254,14 +265,14 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
  * resizeCanvas(2480, 3508);
  * ```
  */
-export const resizeCanvas = (width: number, height: number): void => {
+export const resizeCanvas = (width: number, height: number, options: { save?: boolean; skipRender?: boolean } = {}): void => {
   const { canvas, saveState, setZoom, setVpt } = useEditorStore.getState();
   if (!canvas) return;
 
   // Store document dimensions in the canvas store
   useCanvasStore.getState().setCanvasSize(width, height);
 
-  const hasObjects = canvas.getObjects().some((obj) => !(obj as any).isGuide);
+  const hasObjects = canvas.getObjects().some(isUserObject);
 
   // Reset viewport and zoom for a clean start
   const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
@@ -277,18 +288,22 @@ export const resizeCanvas = (width: number, height: number): void => {
   refitPageBorder(canvas);
 
   if (!hasObjects) {
-    canvas.requestRenderAll();
+    if (!options.skipRender) canvas.requestRenderAll();
     updateGuides(canvas, useEditorStore.getState().showGuides);
-    saveState();
+    if (options.save !== false) {
+      saveState();
+    }
     return;
   }
 
-  canvas.requestRenderAll();
+  if (!options.skipRender) canvas.requestRenderAll();
   updateGuides(canvas, useEditorStore.getState().showGuides);
-  saveState();
+  if (options.save !== false) {
+    saveState();
+  }
 };
 
-const isDesignObject = (obj: fabric.Object) => !(obj as any).isGuide;
+const isDesignObject = (obj: fabric.Object) => isUserObject(obj);
 
 export const resizeCanvasOnly = (width: number, height: number): void => {
   resizeCanvas(width, height);
@@ -299,16 +314,13 @@ export const clearAndResizeCanvas = (width: number, height: number): void => {
   const {
     canvas,
     setLayers,
-    setSelectedLayerIds,
-    setSelectedObjectId,
+    clearSelection,
     requestLayerSync,
   } = useEditorStore.getState();
   if (!canvas) return;
 
-  canvas.discardActiveObject();
+  clearSelection();
   setLayers([]);
-  setSelectedLayerIds([]);
-  setSelectedObjectId(null);
   canvas.clear();
   requestLayerSync();
   resizeCanvas(width, height);
@@ -327,7 +339,7 @@ export const resizeCanvasAndScaleContent = (width: number, height: number): void
   const scaleX = width / currentWidth;
   const scaleY = height / currentHeight;
 
-  canvas.discardActiveObject();
+  useEditorStore.getState().clearSelection();
   canvas.getObjects().forEach((obj) => {
     if (!isDesignObject(obj)) return;
     obj.set({

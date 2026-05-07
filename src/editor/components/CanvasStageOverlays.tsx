@@ -65,7 +65,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
-      <div className="pointer-events-auto flex max-w-2xl flex-col gap-6 rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-8 py-7 shadow-[0_25px_70px_rgba(0,0,0,0.5)] backdrop-blur-[var(--ui-blur)]">
+      <div className="pointer-events-auto flex max-w-2xl flex-col gap-6 rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-8 py-7 backdrop-blur-[var(--ui-blur)]" style={{ boxShadow: 'var(--modal-shadow)' }}>
         <div className="space-y-1 text-center">
           <h2 className="text-lg font-medium text-[color:var(--ui-panel-text)]">New Canvas</h2>
           <p className="text-xs text-[color:var(--ui-panel-text)]/60">Choose a size to get started</p>
@@ -82,11 +82,12 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                 return (
                   <button
                     key={preset.id}
+                    data-testid={`project-preset-${preset.id}`}
                     onClick={() => onSelect(preset.width, preset.height, 'in')}
                     className={`group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all duration-200 ${
                       preset.recommended
                         ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/10 hover:bg-[color:var(--brand-primary)]/20'
-                        : 'border-white/10 bg-white/5 hover:border-[color:var(--brand-primary)]/50 hover:bg-white/10'
+                        : 'border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-strong)]'
                     }`}
                   >
                     {preset.recommended && (
@@ -120,8 +121,9 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                 return (
                   <button
                     key={preset.id}
+                    data-testid={`project-preset-${preset.id}`}
                     onClick={() => onSelect(preset.width, preset.height, 'px')}
-                    className="group flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 transition-all duration-200 hover:border-[color:var(--brand-primary)]/50 hover:bg-white/10"
+                    className="group flex flex-col items-center gap-2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-3 transition-all duration-200 hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-strong)]"
                   >
                     <div
                       className="rounded-sm border border-[color:var(--ui-panel-text)]/20 bg-white/90"
@@ -136,7 +138,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
               })}
             </div>
           </div>
-          <div className="border-t border-white/10 pt-2">
+          <div className="border-t border-[color:var(--ui-border)] pt-2">
             {showCustom ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
@@ -148,7 +150,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                       min="1"
                       value={customWidth}
                       onChange={(event) => setCustomWidth(event.target.value)}
-                      className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
+                      className="w-full rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
                     />
                   </div>
                   <div className="flex-1 space-y-1">
@@ -159,7 +161,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                       min="1"
                       value={customHeight}
                       onChange={(event) => setCustomHeight(event.target.value)}
-                      className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
+                      className="w-full rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
                     />
                   </div>
                   <div className="space-y-1">
@@ -167,7 +169,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                     <select
                       value={customUnit}
                       onChange={(event) => setCustomUnit(event.target.value as 'in' | 'px')}
-                      className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
+                      className="rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2 text-sm text-[color:var(--ui-panel-text)] outline-none focus:border-[color:var(--brand-primary)]"
                     >
                       <option value="in">inches</option>
                       <option value="px">pixels</option>
@@ -177,7 +179,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                 <div className="flex gap-2">
                   <button
                     onClick={() => setShowCustom(false)}
-                    className="flex-1 rounded-lg bg-white/5 px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-colors hover:bg-white/10"
+                    className="flex-1 rounded-lg bg-[color:var(--ui-surface-soft)] px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-colors hover:bg-[color:var(--ui-surface-strong)]"
                   >
                     Cancel
                   </button>
@@ -192,7 +194,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
             ) : (
               <button
                 onClick={() => setShowCustom(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-all hover:border-[color:var(--brand-primary)]/50 hover:bg-white/5 hover:text-[color:var(--ui-panel-text)]"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[color:var(--ui-border)] px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-all hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-soft)] hover:text-[color:var(--ui-panel-text)]"
               >
                 <Settings2 className="h-4 w-4" />
                 Custom Size
@@ -280,7 +282,7 @@ export const CanvasStagePanels: React.FC = () => {
         </div>
       ) : null}
       {showSuggestionSidebar ? (
-        <div className="pointer-events-none absolute right-4 top-4 z-30 flex w-72 flex-col gap-3">
+        <div className="pointer-events-none absolute right-4 top-4 z-30 hidden w-72 flex-col gap-3 md:flex">
           <div className="pointer-events-auto">
             <SuggestionSidebar />
           </div>
@@ -289,8 +291,8 @@ export const CanvasStagePanels: React.FC = () => {
           </div>
         </div>
       ) : hasCanvasContent ? (
-        <div className="pointer-events-none absolute inset-0 z-30">
-          <div className="pointer-events-none absolute right-4 top-4">
+        <div className="pointer-events-none absolute inset-0 z-30 hidden md:block">
+          <div className="pointer-events-none absolute left-4 top-4">
             <button
               type="button"
               onClick={() => {

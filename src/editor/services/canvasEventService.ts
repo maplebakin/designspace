@@ -5,6 +5,7 @@ import { updateGuides, fitCanvasToViewport, centerDocumentInViewport } from '../
 import { useEditorStore } from '../state/editorStore';
 import { drawSmartDistanceIndicators, clearSmartGuides } from '../utils/smartGuides';
 import { frameScheduler, TaskPriority } from '../utils/frameScheduler';
+import { isActiveSelection } from '../utils/typeGuards';
 import {
     handleTextboxMouseDown,
     handleTextboxMouseMove,
@@ -32,6 +33,7 @@ export interface CanvasEventCallbacks {
     onHistoryDirty?: () => void;
     onSelectedObjectId?: (id: string | null) => void;
     onSelectedLayerIds?: (ids: string[]) => void;
+    onSelectionChange?: (canvas: fabric.Canvas) => void;
     onZoom?: (zoom: number) => void;
     onViewportChange?: (canvas: fabric.Canvas) => void;
 }
@@ -126,7 +128,7 @@ export function registerObjectEventHandlers(
     options: CanvasEventHandlerOptions
 ): EventHandlerCleanup {
     const { canvas, abortSignal, callbacks, refs } = options;
-    const { onUpdate, onHistoryDirty } = callbacks;
+    const { onUpdate, onHistoryDirty, onSelectionChange } = callbacks;
 
     const markDirtyObject = (target?: fabric.Object) => {
         if (!target || (target as any).isGuide) return;
@@ -155,6 +157,7 @@ export function registerObjectEventHandlers(
         const target = event?.target as fabric.Object | undefined;
 
         if (target && !(target as any).isGuide) {
+            onSelectionChange?.(canvas);
             onHistoryDirty?.();
             onUpdate?.(canvas, { persist: true });
         }
@@ -215,6 +218,7 @@ export function registerObjectEventHandlers(
         const target = event.target as fabric.Object | undefined;
         if (!target) return;
         if ((target as any).isGuide) return;
+        if ((target as any).__layerSyncing) return;
 
         ensureObjectId(target, canvas);
         if (target.type === 'image') {
@@ -261,11 +265,15 @@ export function registerSelectionEventHandlers(
     options: CanvasEventHandlerOptions
 ): EventHandlerCleanup {
     const { canvas, callbacks } = options;
-    const { onSelectedObjectId, onSelectedLayerIds } = callbacks;
+    const { onSelectedObjectId, onSelectedLayerIds, onSelectionChange } = callbacks;
 
     const applySelectionState = () => {
+        if (onSelectionChange) {
+            onSelectionChange(canvas);
+            return;
+        }
         const activeObject = canvas.getActiveObject();
-        const activeId = activeObject && activeObject.type !== 'activeSelection'
+        const activeId = activeObject && !isActiveSelection(activeObject)
             ? (activeObject as any).id
             : null;
         onSelectedObjectId?.(typeof activeId === 'string' && activeId.trim().length > 0 ? activeId : null);
@@ -275,7 +283,7 @@ export function registerSelectionEventHandlers(
             return;
         }
 
-        if (activeObject.type === 'activeSelection') {
+        if (isActiveSelection(activeObject)) {
             const ids = (activeObject as fabric.ActiveSelection)
                 .getObjects()
                 .map((obj) => (obj as any).id)
@@ -293,6 +301,10 @@ export function registerSelectionEventHandlers(
     };
 
     const handleSelectionCreated = (event?: { selected?: fabric.Object[] }) => {
+        if (onSelectionChange) {
+            onSelectionChange(canvas);
+            return;
+        }
         const selected = event?.selected;
         if (Array.isArray(selected) && selected.length > 1) {
             onSelectedObjectId?.(null);
@@ -306,6 +318,10 @@ export function registerSelectionEventHandlers(
     };
 
     const handleSelectionUpdated = (event?: { selected?: fabric.Object[] }) => {
+        if (onSelectionChange) {
+            onSelectionChange(canvas);
+            return;
+        }
         const selected = event?.selected;
         if (Array.isArray(selected) && selected.length > 1) {
             onSelectedObjectId?.(null);
@@ -319,6 +335,10 @@ export function registerSelectionEventHandlers(
     };
 
     const handleSelectionCleared = () => {
+        if (onSelectionChange) {
+            onSelectionChange(canvas);
+            return;
+        }
         onSelectedObjectId?.(null);
         onSelectedLayerIds?.([]);
     };

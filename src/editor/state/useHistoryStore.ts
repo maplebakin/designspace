@@ -3,13 +3,13 @@ import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
 import * as fabric from 'fabric';
 import { assetBlobRegistry, revokeTrackedBlobUrl } from '../services/assetLoader';
-import { ensureObjectId } from '../fabric/initFabricCanvas';
+import { ensureObjectId, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 import { toSerializableObject } from '../utils/serialization';
 import { recordDiff, ObjectDiff, SerializedObject } from '../utils/diffSaver';
+import { isPersistableCanvasObject } from '../utils/objectUtils';
 
 // --- CONSTANTS ---
 const MAX_HISTORY_SIZE = 50;
-const SNAPSHOT_THROTTLE_MS = 2000;
 const SAVE_STATE_DEBOUNCE_MS = 300;
 
 // --- TYPES ---
@@ -31,7 +31,11 @@ type HistoryContext = {
   setAssetRefCount: (counts: Map<string, number>) => void;
   getDirtyObjectsRef: () => Set<string> | null;
   requestLayerSync: () => void;
+  syncCanvasToStore?: () => void;
   setSelectedObjectId: (id: string | null) => void;
+  clearSelection?: () => void;
+  getBackground?: () => string | undefined;
+  setBackground?: (background: string | null) => void;
   acquireSyncLock?: (reason: HistorySyncReason) => void;
   releaseSyncLock?: () => void;
 };
@@ -361,13 +365,12 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
       // Clear dirty flag
       get().consumeHistoryDirty();
 
-      canvas.getObjects().forEach((obj) => {
-        if ((obj as any).isGuide) return;
+      canvas.getObjects().filter(isPersistableCanvasObject).forEach((obj) => {
         ensureObjectId(obj, canvas);
       });
 
-      const rawObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
-      const background = canvas.backgroundColor || undefined;
+      const rawObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject) as SerializedObject[];
+      const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
       const { canvasData: historyCanvasData, imageAssets: nextAssets } =
         prepareCanvasDataForPersistence({ objects: rawObjects, background }, _context.getImageAssets());
       const historyObjects = (getCanvasObjects(historyCanvasData) || []) as SerializedObject[];
@@ -377,10 +380,18 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         snapshot = { type: 'full', data: historyCanvasData };
       } else {
         const diff = recordDiff(lastHistorySnapshot.objects, historyObjects, _context.getDirtyObjectsRef());
-        if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
+        const backgroundChanged = lastHistorySnapshot.background !== historyCanvasData.background;
+        if (
+          diff.added.length === 0
+          && diff.removed.length === 0
+          && diff.changed.length === 0
+          && !backgroundChanged
+        ) {
           return;
         }
-        snapshot = { type: 'diff', data: diff };
+        snapshot = backgroundChanged
+          ? { type: 'full', data: historyCanvasData }
+          : { type: 'diff', data: diff };
       }
 
       const pushResult = get().pushSnapshot(JSON.stringify(snapshot), options);
@@ -455,13 +466,9 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
 
       // --- History Operations ---
 
-      pushSnapshot: (snapshot, options = {}) => {
-        const { _snapshots, _lastSnapshotAt, historyIndex } = get();
+      pushSnapshot: (snapshot, _options = {}) => {
+        const { _snapshots, historyIndex } = get();
         const now = Date.now();
-
-        if (!options.force && now - _lastSnapshotAt < SNAPSHOT_THROTTLE_MS) {
-          return { pushed: false, dropped: [] };
-        }
 
         const dropped: string[] = _snapshots.slice(historyIndex + 1);
         const trimmed = _snapshots.slice(0, historyIndex + 1);
@@ -539,13 +546,12 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         const canvas = _context.getCanvas();
         if (!canvas) return;
 
-        canvas.getObjects().forEach((obj) => {
-          if ((obj as any).isGuide) return;
+        canvas.getObjects().filter(isPersistableCanvasObject).forEach((obj) => {
           ensureObjectId(obj, canvas);
         });
 
-        const rawObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
-        const background = canvas.backgroundColor || undefined;
+        const rawObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject) as SerializedObject[];
+        const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
         const { canvasData: historyCanvasData, imageAssets: nextAssets } =
           prepareCanvasDataForPersistence({ objects: rawObjects, background }, _context.getImageAssets());
         const historyObjects = (getCanvasObjects(historyCanvasData) || []) as SerializedObject[];
@@ -610,33 +616,39 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         _context.acquireSyncLock?.('undo');
 
         try {
-          const snapshotStr = get().undoSnapshot();
-          if (!snapshotStr) {
+          const currentSnapshotStr = get().getSnapshot(get().historyIndex);
+          const targetSnapshotStr = get().undoSnapshot();
+          if (!currentSnapshotStr || !targetSnapshotStr) {
             return;
           }
 
-          const snapshot = parseHistorySnapshot(snapshotStr);
+          const snapshot = parseHistorySnapshot(currentSnapshotStr);
           if (!snapshot) return;
 
           const imageAssets = _context.getImageAssets();
 
           if (snapshot.type === 'full') {
-            const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
-            const historyObjects = (getCanvasObjects(snapshot.data) || []) as SerializedObject[];
-            await new Promise<void>((resolve) => {
-              canvas.loadFromJSON(hydratedState, () => {
-                canvas.requestRenderAll();
-                set({
-                  lastHistorySnapshot: {
-                    objects: historyObjects,
-                    background: snapshot.data?.background,
-                  },
-                });
-                _context.setSelectedObjectId(null);
-                _context.requestLayerSync();
-                resolve();
-              });
+            const targetSnapshot = parseHistorySnapshot(targetSnapshotStr);
+            if (!targetSnapshot || targetSnapshot.type !== 'full') return;
+            const hydratedState = hydrateCanvasDataWithAssets(targetSnapshot.data, imageAssets);
+            const historyObjects = (getCanvasObjects(targetSnapshot.data) || []) as SerializedObject[];
+            await canvas.loadFromJSON(hydratedState, reviveCustomFabricProps);
+            _context.setBackground?.(typeof targetSnapshot.data?.background === 'string' ? targetSnapshot.data.background : null);
+            canvas.backgroundColor = 'transparent';
+            canvas.requestRenderAll();
+            set({
+              lastHistorySnapshot: {
+                objects: historyObjects,
+                background: targetSnapshot.data?.background,
+              },
             });
+            if (_context.clearSelection) {
+              _context.clearSelection();
+            } else {
+              _context.setSelectedObjectId(null);
+            }
+            _context.syncCanvasToStore?.();
+            _context.requestLayerSync();
             return;
           }
 
@@ -660,8 +672,8 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               }
             }
 
-            const rawObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
-            const background = canvas.backgroundColor || undefined;
+            const rawObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject) as SerializedObject[];
+            const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({ objects: rawObjects, background }, imageAssets);
             const historyObjects = (getCanvasObjects(historyCanvasData) || []) as SerializedObject[];
@@ -669,7 +681,12 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               lastHistorySnapshot: { objects: historyObjects, background: historyCanvasData.background },
             });
             _context.setImageAssets(nextAssets);
-            _context.setSelectedObjectId(null);
+            if (_context.clearSelection) {
+              _context.clearSelection();
+            } else {
+              _context.setSelectedObjectId(null);
+            }
+            _context.syncCanvasToStore?.();
             _context.requestLayerSync();
             canvas.requestRenderAll();
           }
@@ -700,20 +717,23 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
           if (snapshot.type === 'full') {
             const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
             const historyObjects = (getCanvasObjects(snapshot.data) || []) as SerializedObject[];
-            await new Promise<void>((resolve) => {
-              canvas.loadFromJSON(hydratedState, () => {
-                canvas.requestRenderAll();
-                set({
-                  lastHistorySnapshot: {
-                    objects: historyObjects,
-                    background: snapshot.data?.background,
-                  },
-                });
-                _context.setSelectedObjectId(null);
-                _context.requestLayerSync();
-                resolve();
-              });
+            await canvas.loadFromJSON(hydratedState, reviveCustomFabricProps);
+            _context.setBackground?.(typeof snapshot.data?.background === 'string' ? snapshot.data.background : null);
+            canvas.backgroundColor = 'transparent';
+            canvas.requestRenderAll();
+            set({
+              lastHistorySnapshot: {
+                objects: historyObjects,
+                background: snapshot.data?.background,
+              },
             });
+            if (_context.clearSelection) {
+              _context.clearSelection();
+            } else {
+              _context.setSelectedObjectId(null);
+            }
+            _context.syncCanvasToStore?.();
+            _context.requestLayerSync();
             return;
           }
 
@@ -737,8 +757,8 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               }
             }
 
-            const rawObjects = canvas.getObjects().map(toSerializableObject) as SerializedObject[];
-            const background = canvas.backgroundColor || undefined;
+            const rawObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject) as SerializedObject[];
+            const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({ objects: rawObjects, background }, imageAssets);
             const historyObjects = (getCanvasObjects(historyCanvasData) || []) as SerializedObject[];
@@ -746,7 +766,12 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               lastHistorySnapshot: { objects: historyObjects, background: historyCanvasData.background },
             });
             _context.setImageAssets(nextAssets);
-            _context.setSelectedObjectId(null);
+            if (_context.clearSelection) {
+              _context.clearSelection();
+            } else {
+              _context.setSelectedObjectId(null);
+            }
+            _context.syncCanvasToStore?.();
             _context.requestLayerSync();
             canvas.requestRenderAll();
           }

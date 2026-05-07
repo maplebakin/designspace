@@ -1,5 +1,5 @@
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -9,18 +9,33 @@
   /* Typography */
   --font-ui: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'Space Grotesk', var(--font-ui);
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* Cozy warmth palette */
-  --warm-cream: #f4eee5;
-  --warm-ivory: #fbf7f2;
-  --warm-taupe: #b89f8c;
-  --warm-sage: #8fa28d;
-  --warm-rose: #c4969a;
-  --warm-ink: #463a34;
-  --warm-shadow: 0 16px 38px rgba(56, 40, 33, 0.18);
+  --warm-cream:      #f4eee5;
+  --warm-ivory:      #fbf7f2;
+  --warm-paper:      #efe5d9;
+  --warm-taupe:      #b89f8c;
+  --warm-sage:       #8fa28d;
+  --warm-rose:       #c4969a;
+  --warm-rose-dusty: #b8878f;
+  --warm-rose-blush: #c59aa0;
+  --warm-ink:        #463a34;
+  --warm-ink-soft:   #4a3f38;
+  --warm-ink-forest: #405046;
+  --warm-ink-plum:   #4d3f3f;
 
-  /* Control Heights - Consistent 32px for all inputs */
-  --control-height: 32px;
+  /* Semantic status */
+  --semantic-error:   #c75858;
+  --semantic-warning: #d6a05a;
+  --semantic-success: #6a9b7a;
+  --semantic-info:    #b8878f;
+
+  /* Background */
+  --bg-warm-radial: radial-gradient(circle at 20% 10%, #fff8ef 0%, #fbf7f2 35%, #efe6dc 100%);
+
+  /* Control Heights */
+  --control-height:    32px;
   --control-height-sm: 28px;
   --control-height-lg: 40px;
 
@@ -39,16 +54,38 @@
 
   /* Toolbar Styles */
   --toolbar-orient-gap: 0.75rem;
-  --toolbar-padding: 0.75rem 1.25rem;
+  --toolbar-padding: 0.5rem 1.25rem;
   --toolbar-font: var(--font-ui);
   --toolbar-compact-gap: 0.35rem;
   --toolbar-compact-padding: 0.35rem 0.8rem;
   --toolbar-shadow: 0 12px 28px rgba(56, 40, 33, 0.14);
 
   /* Transitions */
-  --transition-fast: 150ms ease-out;
+  --transition-fast:   150ms ease-out;
   --transition-normal: 200ms ease-out;
-  --transition-slow: 300ms ease-in-out;
+  --transition-slow:   300ms ease-in-out;
+
+  /* Shared UI Surfaces */
+  --ui-surface-soft:   rgba(255, 251, 246, 0.78);
+  --ui-surface-strong: rgba(255, 253, 249, 0.94);
+  --ui-surface-muted:  rgba(250, 243, 235, 0.82);
+  --ui-hover-soft:     rgba(160, 125, 106, 0.08);
+  --ui-hover-strong:   rgba(160, 125, 106, 0.14);
+  --ui-active-soft:    rgba(184, 135, 143, 0.14);
+  --ui-shadow-soft:    0 12px 28px rgba(74, 56, 45, 0.10);
+  --ui-shadow-strong:  0 18px 42px rgba(74, 56, 45, 0.16);
+  --warm-shadow:       0 16px 38px rgba(56, 40, 33, 0.18);
+  --modal-shadow:      0 28px 70px rgba(74, 56, 45, 0.26);
+  --hero-shadow:       0 26px 62px rgba(74, 56, 45, 0.22);
+
+  /* Radii */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  20px;
+  --radius-3xl:  32px;
+  --radius-pill: 9999px;
 }
 
 /* Base Typography */
@@ -56,7 +93,7 @@ body {
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: radial-gradient(circle at 20% 10%, #fff8ef 0%, var(--warm-ivory) 35%, #efe6dc 100%);
+  background: var(--bg-warm-radial);
   color: var(--warm-ink);
 }
 
@@ -88,6 +125,164 @@ body {
   box-shadow: var(--popover-shadow);
   font-family: var(--popover-font);
   gap: var(--popover-gap);
+}
+
+.ui-card-soft {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-panel-text);
+  box-shadow: var(--ui-shadow-soft);
+  backdrop-filter: blur(var(--ui-blur));
+}
+
+.ui-card-elevated {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-strong);
+  color: var(--ui-panel-text);
+  box-shadow: var(--ui-shadow-strong);
+  backdrop-filter: blur(var(--ui-blur));
+}
+
+.ui-button-soft {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-panel-text);
+  box-shadow: var(--ui-shadow-soft);
+  transition:
+    background var(--transition-normal),
+    border-color var(--transition-normal),
+    color var(--transition-normal),
+    box-shadow var(--transition-normal),
+    transform var(--transition-fast);
+}
+
+.ui-button-soft:hover:not(:disabled),
+.ui-button-soft:focus-visible {
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
+  box-shadow: var(--ui-shadow-strong);
+}
+
+.editor-side-panel-left,
+.editor-side-panel-right {
+  display: flex;
+}
+
+@media (max-width: 1023px) {
+  .editor-side-panel-left {
+    display: none;
+  }
+}
+
+@media (max-width: 1279px) {
+  .editor-side-panel-right {
+    display: none;
+  }
+}
+
+.ui-button-soft:focus-visible,
+.ui-input-surface:focus-visible,
+.ui-menu-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(var(--brand-primary-rgb, 184, 135, 143), 0.18);
+}
+
+.ui-button-soft:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-button-soft:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.ui-button-icon {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-panel-text);
+  transition:
+    background var(--transition-normal),
+    color var(--transition-normal),
+    border-color var(--transition-normal),
+    box-shadow var(--transition-normal),
+    transform var(--transition-fast);
+}
+
+.ui-button-icon:hover:not(:disabled),
+.ui-button-icon:focus-visible {
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
+  box-shadow: var(--ui-shadow-soft);
+}
+
+.ui-button-icon:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ui-button-active {
+  border-color: rgba(var(--brand-primary-rgb, 184, 135, 143), 0.28);
+  background: rgba(var(--brand-primary-rgb, 184, 135, 143), 0.14);
+  color: var(--ui-text);
+  box-shadow: 0 12px 26px rgba(var(--brand-primary-rgb, 184, 135, 143), 0.14);
+}
+
+.ui-toolbar-group {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
+  box-shadow: var(--ui-shadow-soft);
+}
+
+.ui-input-surface {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition:
+    border-color var(--transition-normal),
+    box-shadow var(--transition-normal),
+    background var(--transition-normal);
+}
+
+.ui-input-surface::placeholder {
+  color: color-mix(in srgb, var(--ui-panel-text) 62%, transparent);
+}
+
+.ui-input-surface:focus {
+  outline: none;
+  border-color: rgba(var(--brand-primary-rgb, 184, 135, 143), 0.42);
+  box-shadow: 0 0 0 3px rgba(var(--brand-primary-rgb, 184, 135, 143), 0.16);
+}
+
+.ui-dropdown-surface {
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-strong);
+  color: var(--ui-panel-text);
+  box-shadow: var(--ui-shadow-strong);
+}
+
+.ui-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.9rem;
+  padding: 0.65rem 0.85rem;
+  color: var(--ui-panel-text);
+  transition:
+    background var(--transition-normal),
+    color var(--transition-normal),
+    transform var(--transition-fast);
+}
+
+.ui-menu-item:hover,
+.ui-menu-item:focus-visible {
+  background: var(--ui-hover-strong);
+  color: var(--ui-text);
+}
+
+.ui-menu-item:active {
+  transform: translateY(1px);
 }
 
 .toolbar-section {
@@ -261,12 +456,12 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(138, 110, 92, 0.25);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(138, 110, 92, 0.40);
 }
 
 /* Details/Summary for Collapsible Sections */
@@ -290,4 +485,31 @@ details[open] > summary::after {
 :focus-visible {
   outline: 2px solid rgba(196, 150, 154, 0.75);
   outline-offset: 2px;
+}
+
+/* Design Space typography utilities */
+.ds-eyebrow {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ui-panel-text);
+}
+
+.ds-eyebrow-xs {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ui-panel-text);
+}
+
+/* Frosted panel surface */
+.ds-panel {
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border);
+  color: var(--ui-panel-text);
+  backdrop-filter: blur(var(--ui-blur));
 }

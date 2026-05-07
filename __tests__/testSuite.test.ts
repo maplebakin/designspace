@@ -7,19 +7,10 @@ import {
   validateThemeFile,
   validateThemeFiles,
 } from '../src/editor/services/themeValidationService';
-import {
-  validateCanvas,
-  validateCanvasContent,
-  validateDataURL,
-  generateFileName,
-  formatFileSize,
-  calculateExportDimensions,
-  validateExportOptions,
-} from '../src/editor/services/exportService';
+import { sanitizeExportBaseName } from '../src/editor/utils/exportFileName';
 import { formatInches, convertDimensions } from '../src/editor/utils/units';
 import { FrameScheduler, TaskPriority } from '../src/editor/utils/frameScheduler';
 import { enforceSerializedZOrder, ZIndexLayer } from '../src/editor/fabric/zIndexManifest';
-import { HistorySnapshotManager } from '../src/editor/history/historySnapshotManager';
 import { applySuggestionToObjects, generateSuggestions } from '../src/editor/utils/aiLayoutSuggestions';
 
 vi.mock('../src/editor/state/editorStore', () => ({
@@ -74,40 +65,13 @@ describe('theme validation service', () => {
   });
 });
 
-describe('export service', () => {
-  const mockCanvas = {
-    getObjects: vi.fn(() => [{ id: 1 }]),
-    getWidth: vi.fn(() => 800),
-    getHeight: vi.fn(() => 600),
-  } as any;
-
-  it('validates canvas and content', () => {
-    expect(validateCanvas(mockCanvas).success).toBe(true);
-    expect(validateCanvasContent(mockCanvas).success).toBe(true);
-    expect(validateCanvas(null).success).toBe(false);
+describe('export file names', () => {
+  it('sanitizes export base names for downloads', () => {
+    expect(sanitizeExportBaseName('My Design!.png')).toBe('my-designpng');
   });
 
-  it('validates data urls', () => {
-    expect(validateDataURL('data:image/png;base64,AAAA').success).toBe(true);
-    expect(validateDataURL('bad').success).toBe(false);
-  });
-
-  it('generates filename with date stamp', () => {
-    const name = generateFileName('design', 'png');
-    expect(name).toMatch(/^design-\d{4}-\d{2}-\d{2}\.png$/);
-  });
-
-  it('formats file sizes with compact formatting', () => {
-    expect(formatFileSize(1024 * 1024)).toBe('1 MB');
-  });
-
-  it('calculates export dimensions', () => {
-    expect(calculateExportDimensions(mockCanvas, 2)).toEqual({ width: 1600, height: 1200 });
-  });
-
-  it('validates export options', () => {
-    expect(validateExportOptions({ format: 'png', multiplier: 2 }).success).toBe(true);
-    expect(validateExportOptions({ format: 'jpeg', quality: 101 }).success).toBe(false);
+  it('uses a stable fallback for empty names', () => {
+    expect(sanitizeExportBaseName('   ')).toBe('design-space');
   });
 });
 
@@ -164,17 +128,6 @@ describe('z-index manifest', () => {
     ] as any);
 
     expect(ordered.map((entry) => entry.id)).toEqual(['paper', 'content', 'guide']);
-  });
-});
-
-describe('history snapshot manager', () => {
-  it('supports push, undo, and redo', () => {
-    const manager = new HistorySnapshotManager();
-    manager.pushSnapshot([{ id: 'one', type: 'rect' }] as any);
-    manager.pushSnapshot([{ id: 'two', type: 'rect' }] as any);
-
-    expect(manager.undo()?.[0]?.id).toBe('one');
-    expect(manager.redo()?.[0]?.id).toBe('two');
   });
 });
 

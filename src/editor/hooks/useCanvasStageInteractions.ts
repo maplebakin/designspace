@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { loadImageFromFile, safeLoadImage } from '../services/assetLoader';
+import { isActiveSelection } from '../utils/typeGuards';
 
 type CanvasMutationOptions = { persist?: boolean; activate?: boolean };
 
@@ -220,7 +221,7 @@ export const useCanvasStageInteractions = ({
       if ((obj as any).isPlaceholder && obj.containsPoint(pointer)) {
         return obj;
       }
-      if (obj.type === 'group' || obj.type === 'activeSelection') {
+      if (obj.type === 'group' || isActiveSelection(obj)) {
         const children = (obj as fabric.Group).getObjects().slice().reverse();
         for (const child of children) {
           const found = findInObject(child);
@@ -245,7 +246,7 @@ export const useCanvasStageInteractions = ({
       if ((obj as any).isFrame && obj.containsPoint(pointer)) {
         return obj;
       }
-      if (obj.type === 'group' || obj.type === 'activeSelection') {
+      if (obj.type === 'group' || isActiveSelection(obj)) {
         const children = (obj as fabric.Group).getObjects().slice().reverse();
         for (const child of children) {
           const found = findInObject(child);
@@ -509,6 +510,7 @@ export const useCanvasStageInteractions = ({
     addObjectToCanvas(fabricCanvas, result.asset, { persist: true });
     fabricCanvas.centerObject(result.asset);
     scheduleUpdate(fabricCanvas, { persist: true });
+    window.requestAnimationFrame(() => document.getElementById('editor-shell')?.focus());
   }, [addImageAsset, addObjectToCanvas, fabricCanvas, scheduleUpdate, setShowOnboarding]);
 
   useEffect(() => () => {

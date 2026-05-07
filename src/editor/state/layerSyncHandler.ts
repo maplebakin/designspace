@@ -12,6 +12,7 @@ type LayerSyncOptions = {
 type LayerSyncResult = {
   layersById: Record<string, fabric.Object>;
   changed: boolean;
+  selectOnInsertIds: string[];
 };
 
 const isStoreManagedObject = (obj: fabric.Object) => {
@@ -38,11 +39,24 @@ const enlivenObject = async (serialized: SerializedFabricObject) => {
   return obj ?? null;
 };
 
+const layerSyncQueues = new WeakMap<fabric.Canvas, Promise<void>>();
+
 export const syncCanvasLayers = async (
   canvasObjects: SerializedFabricObject[],
   canvas: fabric.Canvas,
-  options: LayerSyncOptions = {}
+  _options: LayerSyncOptions = {}
 ): Promise<LayerSyncResult> => {
+  const previousSync = layerSyncQueues.get(canvas);
+  if (previousSync) {
+    await previousSync;
+  }
+  let releaseSync: () => void = () => {};
+  const currentSync = new Promise<void>((resolve) => {
+    releaseSync = resolve;
+  });
+  layerSyncQueues.set(canvas, currentSync);
+
+  try {
   const desiredObjects = enforceSerializedZOrder(
     canvasObjects.filter((obj) => isUserObject(obj) && !(obj as any).excludeFromSync)
   );
@@ -58,9 +72,13 @@ export const syncCanvasLayers = async (
   });
 
   const desiredIds = new Set<string>();
+  const selectOnInsertIds: string[] = [];
   for (const desired of desiredObjects) {
     if (!desired.id) continue;
     desiredIds.add(desired.id);
+    if ((desired as any).__selectOnInsert) {
+      selectOnInsertIds.push(desired.id);
+    }
   }
 
   for (const current of currentObjects) {
@@ -75,9 +93,16 @@ export const syncCanvasLayers = async (
     if (!desired.id) continue;
     const existing = currentById.get(desired.id);
     if (!existing) {
+      const liveExisting = canvas.getObjects().find((obj) => (obj as any).id === desired.id);
+      if (liveExisting) {
+        currentById.set(desired.id, liveExisting);
+        continue;
+      }
       const nextObject = await enlivenObject(desired);
       if (nextObject) {
+        (nextObject as any).__layerSyncing = true;
         canvas.add(nextObject);
+        delete (nextObject as any).__layerSyncing;
         changed = true;
       }
       continue;
@@ -87,7 +112,9 @@ export const syncCanvasLayers = async (
       const replacement = await enlivenObject(desired);
       if (replacement) {
         canvas.remove(existing);
+        (replacement as any).__layerSyncing = true;
         canvas.add(replacement);
+        delete (replacement as any).__layerSyncing;
         currentById.set(desired.id, replacement);
         changed = true;
       }
@@ -105,17 +132,15 @@ export const syncCanvasLayers = async (
     }
   });
 
-  if (options.selectedObjectId) {
-    const activeObject = layersById[options.selectedObjectId];
-    if (activeObject && canvas.getActiveObject() !== activeObject) {
-      canvas.setActiveObject(activeObject);
-      changed = true;
-    }
-  }
-
   if (changed) {
     canvas.requestRenderAll();
   }
 
-  return { layersById, changed };
+  return { layersById, changed, selectOnInsertIds };
+  } finally {
+    if (layerSyncQueues.get(canvas) === currentSync) {
+      layerSyncQueues.delete(canvas);
+    }
+    releaseSync();
+  }
 };

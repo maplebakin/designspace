@@ -5,14 +5,12 @@ import { useEditorStore } from '../state/editorStore';
 export const SuggestionSidebar: React.FC = () => {
   const {
     layoutSuggestions,
-    showSuggestionSidebar,
     toggleSuggestionSidebar,
     dismissSuggestion,
     applySuggestion,
   } = useEditorStore(
     (state) => ({
       layoutSuggestions: state.layoutSuggestions,
-      showSuggestionSidebar: state.showSuggestionSidebar,
       toggleSuggestionSidebar: state.toggleSuggestionSidebar,
       dismissSuggestion: state.dismissSuggestion,
       applySuggestion: state.applySuggestion,
@@ -32,45 +30,43 @@ export const SuggestionSidebar: React.FC = () => {
           onClick={toggleSuggestionSidebar}
           className="rounded-lg border border-white/10 px-2 py-1 text-[10px] uppercase tracking-widest"
         >
-          {showSuggestionSidebar ? 'Hide' : 'Show'}
+          Hide
         </button>
       </div>
-      {showSuggestionSidebar && (
-        <div className="space-y-3">
-          {layoutSuggestions.length === 0 && (
-            <p className="text-xs text-[color:var(--ui-panel-text)]/60">No layout suggestions right now.</p>
-          )}
-          {layoutSuggestions.map((suggestion) => (
-            <article key={suggestion.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-medium text-[color:var(--ui-text)]">{suggestion.name}</h4>
-                  <p className="mt-1 text-xs text-[color:var(--ui-panel-text)]/70">{suggestion.description}</p>
-                </div>
-                <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">
-                  {Math.round(suggestion.score * 100)}%
-                </span>
+      <div className="space-y-3">
+        {layoutSuggestions.length === 0 && (
+          <p className="text-xs text-[color:var(--ui-panel-text)]/60">No layout suggestions right now.</p>
+        )}
+        {layoutSuggestions.map((suggestion) => (
+          <article key={suggestion.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-medium text-[color:var(--ui-text)]">{suggestion.name}</h4>
+                <p className="mt-1 text-xs text-[color:var(--ui-panel-text)]/70">{suggestion.description}</p>
               </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => applySuggestion(suggestion.id)}
-                  className="rounded-lg bg-[color:var(--brand-primary)]/70 px-3 py-2 text-[10px] uppercase tracking-widest text-white"
-                >
-                  Apply
-                </button>
-                <button
-                  type="button"
-                  onClick={() => dismissSuggestion(suggestion.id)}
-                  className="rounded-lg border border-white/10 px-3 py-2 text-[10px] uppercase tracking-widest"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
+              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">
+                {Math.round(suggestion.score * 100)}%
+              </span>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => applySuggestion(suggestion.id)}
+                className="rounded-lg bg-[color:var(--brand-primary)]/70 px-3 py-2 text-[10px] uppercase tracking-widest text-white"
+              >
+                Apply
+              </button>
+              <button
+                type="button"
+                onClick={() => dismissSuggestion(suggestion.id)}
+                className="rounded-lg border border-white/10 px-3 py-2 text-[10px] uppercase tracking-widest"
+              >
+                Dismiss
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
     </aside>
   );
 };

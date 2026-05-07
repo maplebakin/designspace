@@ -1,6 +1,7 @@
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { useEditorStore } from '../state/editorStore';
+import { isActiveSelection } from '../utils/typeGuards';
 
 /**
  * Clipboard Service
@@ -29,7 +30,7 @@ export const copySelection = async (): Promise<boolean> => {
     // Clone the active object(s) and store in buffer
     const cloned = await activeObject.clone(['id', 'tokenRole', 'colorLocked', 'isPlaceholder', 'adjustments']);
 
-    if (activeObject.type === 'activeSelection') {
+    if (isActiveSelection(activeObject)) {
       // Multiple objects selected - store each one
       const selection = activeObject as fabric.ActiveSelection;
       const objects = selection.getObjects();
@@ -55,7 +56,7 @@ export const copySelection = async (): Promise<boolean> => {
  * Pastes objects from the clipboard buffer onto the canvas
  */
 export const pasteFromClipboard = async (): Promise<boolean> => {
-  const { canvas, requestLayerSync, saveState, setSelectedObjectId, setSelectedLayerIds } = useEditorStore.getState();
+  const { canvas, requestLayerSync, saveState, selectObjectById, selectObjectsByIds, syncCanvasToStore } = useEditorStore.getState();
   if (!canvas || !clipboardBuffer || clipboardBuffer.length === 0) return false;
 
   try {
@@ -80,16 +81,13 @@ export const pasteFromClipboard = async (): Promise<boolean> => {
 
     // Select the pasted objects
     if (pastedObjects.length === 1) {
-      canvas.setActiveObject(pastedObjects[0]);
-      setSelectedObjectId((pastedObjects[0] as any).id);
-      setSelectedLayerIds([(pastedObjects[0] as any).id]);
+      selectObjectById((pastedObjects[0] as any).id);
     } else if (pastedObjects.length > 1) {
-      const selection = new fabric.ActiveSelection(pastedObjects, { canvas });
-      canvas.setActiveObject(selection);
-      setSelectedLayerIds(pastedObjects.map((obj) => (obj as any).id));
+      selectObjectsByIds(pastedObjects.map((obj) => (obj as any).id));
     }
 
     canvas.requestRenderAll();
+    syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
 
@@ -122,34 +120,35 @@ export const duplicateSelection = async (): Promise<boolean> => {
  */
 const createObjectFromData = async (data: any): Promise<fabric.Object | null> => {
   try {
-    const type = data.type;
+    const type = typeof data.type === 'string' ? data.type.toLowerCase() : data.type;
+    const { type: _type, ...options } = data;
 
     switch (type) {
       case 'rect':
-        return new fabric.Rect(data);
+        return new fabric.Rect(options);
       case 'circle':
-        return new fabric.Circle(data);
+        return new fabric.Circle(options);
       case 'ellipse':
-        return new fabric.Ellipse(data);
+        return new fabric.Ellipse(options);
       case 'triangle':
-        return new fabric.Triangle(data);
+        return new fabric.Triangle(options);
       case 'polygon':
-        return new fabric.Polygon(data.points || [], data);
+        return new fabric.Polygon(data.points || [], options);
       case 'polyline':
-        return new fabric.Polyline(data.points || [], data);
+        return new fabric.Polyline(data.points || [], options);
       case 'line':
-        return new fabric.Line([data.x1 || 0, data.y1 || 0, data.x2 || 0, data.y2 || 0], data);
+        return new fabric.Line([data.x1 || 0, data.y1 || 0, data.x2 || 0, data.y2 || 0], options);
       case 'path':
-        return new fabric.Path(data.path, data);
+        return new fabric.Path(data.path, options);
       case 'text':
-        return new fabric.Text(data.text || '', data);
+        return new fabric.Text(data.text || '', options);
       case 'i-text':
-        return new fabric.IText(data.text || '', data);
+        return new fabric.IText(data.text || '', options);
       case 'textbox':
-        return new fabric.Textbox(data.text || '', data);
+        return new fabric.Textbox(data.text || '', options);
       case 'image':
         if (data.src) {
-          return await fabric.FabricImage.fromURL(data.src, { crossOrigin: 'anonymous', ...data });
+          return await fabric.FabricImage.fromURL(data.src, { crossOrigin: 'anonymous', ...options });
         }
         return null;
       case 'group': {
@@ -157,7 +156,7 @@ const createObjectFromData = async (data: any): Promise<fabric.Object | null> =>
           (data.objects || []).map((objData: any) => createObjectFromData(objData))
         );
         const validObjects = groupObjects.filter((obj): obj is fabric.Object => obj !== null);
-        return new fabric.Group(validObjects, data);
+        return new fabric.Group(validObjects, options);
       }
       default:
         console.warn(`[ClipboardService] Unknown object type: ${type}`);
@@ -173,13 +172,13 @@ const createObjectFromData = async (data: any): Promise<fabric.Object | null> =>
  * Brings the selected object(s) to the front of the canvas
  */
 export const bringToFront = (): void => {
-  const { canvas, requestLayerSync, saveState } = useEditorStore.getState();
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
   if (!canvas) return;
 
   const activeObject = canvas.getActiveObject();
   if (!activeObject) return;
 
-  if (activeObject.type === 'activeSelection') {
+  if (isActiveSelection(activeObject)) {
     const selection = activeObject as fabric.ActiveSelection;
     selection.getObjects().forEach((obj) => canvas.bringObjectToFront(obj));
   } else {
@@ -187,6 +186,7 @@ export const bringToFront = (): void => {
   }
 
   canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
   requestLayerSync();
   saveState();
 };
@@ -195,13 +195,13 @@ export const bringToFront = (): void => {
  * Sends the selected object(s) to the back of the canvas
  */
 export const sendToBack = (): void => {
-  const { canvas, requestLayerSync, saveState } = useEditorStore.getState();
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
   if (!canvas) return;
 
   const activeObject = canvas.getActiveObject();
   if (!activeObject) return;
 
-  if (activeObject.type === 'activeSelection') {
+  if (isActiveSelection(activeObject)) {
     const selection = activeObject as fabric.ActiveSelection;
     // Reverse order to maintain relative stacking
     [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectToBack(obj));
@@ -210,6 +210,7 @@ export const sendToBack = (): void => {
   }
 
   canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
   requestLayerSync();
   saveState();
 };
@@ -218,13 +219,13 @@ export const sendToBack = (): void => {
  * Brings the selected object(s) forward by one level
  */
 export const bringForward = (): void => {
-  const { canvas, requestLayerSync, saveState } = useEditorStore.getState();
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
   if (!canvas) return;
 
   const activeObject = canvas.getActiveObject();
   if (!activeObject) return;
 
-  if (activeObject.type === 'activeSelection') {
+  if (isActiveSelection(activeObject)) {
     const selection = activeObject as fabric.ActiveSelection;
     selection.getObjects().forEach((obj) => canvas.bringObjectForward(obj));
   } else {
@@ -232,6 +233,7 @@ export const bringForward = (): void => {
   }
 
   canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
   requestLayerSync();
   saveState();
 };
@@ -240,13 +242,13 @@ export const bringForward = (): void => {
  * Sends the selected object(s) backward by one level
  */
 export const sendBackward = (): void => {
-  const { canvas, requestLayerSync, saveState } = useEditorStore.getState();
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
   if (!canvas) return;
 
   const activeObject = canvas.getActiveObject();
   if (!activeObject) return;
 
-  if (activeObject.type === 'activeSelection') {
+  if (isActiveSelection(activeObject)) {
     const selection = activeObject as fabric.ActiveSelection;
     [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectBackwards(obj));
   } else {
@@ -254,6 +256,7 @@ export const sendBackward = (): void => {
   }
 
   canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
   requestLayerSync();
   saveState();
 };

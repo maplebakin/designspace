@@ -1,9 +1,11 @@
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { ensureObjectId } from './initFabricCanvas';
+import { isActiveSelection } from '../utils/typeGuards';
 
 export const groupObjects = (canvas: fabric.Canvas) => {
   const activeObject = canvas.getActiveObject();
-  if (!activeObject || activeObject.type !== 'activeSelection') {
+  if (!isActiveSelection(activeObject)) {
     return;
   }
 
@@ -18,9 +20,12 @@ export const groupObjects = (canvas: fabric.Canvas) => {
     originY: 'center',
   });
   canvas.add(group);
-  canvas.setActiveObject(group);
+  ensureObjectId(group, canvas);
+  useEditorStore.getState().selectObjectById((group as any).id);
 
   canvas.requestRenderAll();
+  useEditorStore.getState().syncCanvasToStore(canvas);
+  useEditorStore.getState().requestLayerSync();
   useEditorStore.getState().saveState();
 };
 
@@ -38,7 +43,9 @@ export const ungroupObjects = (canvas: fabric.Canvas) => {
     child.setCoords();
   });
 
-  canvas.discardActiveObject();
+  useEditorStore.getState().clearSelection();
   canvas.requestRenderAll();
+  useEditorStore.getState().syncCanvasToStore(canvas);
+  useEditorStore.getState().requestLayerSync();
   useEditorStore.getState().saveState();
 };

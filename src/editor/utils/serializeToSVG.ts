@@ -1,4 +1,5 @@
 import * as fabric from 'fabric';
+import { isActiveSelection } from './typeGuards';
 
 interface SerializeToSVGOptions {
   width: number;
@@ -21,7 +22,7 @@ const getExportExcludedObjects = (canvas: fabric.Canvas) =>
 
 const getCanvasImageObjects = (objects: fabric.Object[]): fabric.Image[] =>
   objects.flatMap((object) => {
-    if (object.type === 'group' || object.type === 'activeSelection') {
+    if (object.type === 'group' || isActiveSelection(object)) {
       return getCanvasImageObjects((object as fabric.Group).getObjects());
     }
     return object.type === 'image' ? [object as fabric.Image] : [];

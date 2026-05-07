@@ -1,6 +1,9 @@
 
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
+import { finalizeInsertionSelection, useEditorStore } from '../state/editorStore';
+import { toSerializableObject } from '../utils/serialization';
+import { withManifestZIndex, ZIndexLayer } from './zIndexManifest';
 
 const FRAME_DEFAULTS = {
   fill: '#f0f0f0',
@@ -24,6 +27,18 @@ const applyFrameProps = (shape: fabric.FabricObject, frameType: FrameType) => {
   });
 };
 
+const addFrameToStore = (canvas: fabric.Canvas, frame: fabric.Object) => {
+  canvas.centerObject(frame);
+  const serialized = withManifestZIndex(
+    toSerializableObject(frame),
+    ZIndexLayer.Content
+  );
+  useEditorStore.getState().addObject(serialized, { save: true, select: true });
+  if (typeof (serialized as any).id === 'string') {
+    finalizeInsertionSelection((serialized as any).id);
+  }
+};
+
 
 /**
  * Adds a circle frame to the canvas.
@@ -37,9 +52,7 @@ export const addCircleFrame = (canvas: fabric.Canvas) => {
   });
   (circle as any).id = uuidv4();
   applyFrameProps(circle, 'circle');
-  canvas.add(circle);
-  canvas.centerObject(circle);
-  canvas.requestRenderAll();
+  addFrameToStore(canvas, circle);
 };
 
 /**
@@ -62,9 +75,7 @@ export const addCircleFramePlaceholder = (canvas: fabric.Canvas) => {
   (circle as any).id = uuidv4();
   applyFrameProps(circle, 'circle');
   circle.set({ tokenRole: 'surfaces.surface-plain' });
-  canvas.add(circle);
-  canvas.centerObject(circle);
-  canvas.requestRenderAll();
+  addFrameToStore(canvas, circle);
   return circle;
 };
 
@@ -92,9 +103,7 @@ export const addHexagonFrame = (canvas: fabric.Canvas) => {
     });
     (hexagon as any).id = uuidv4();
     applyFrameProps(hexagon, 'hexagon');
-    canvas.add(hexagon);
-    canvas.centerObject(hexagon);
-    canvas.requestRenderAll();
+    addFrameToStore(canvas, hexagon);
 };
 
 /**
@@ -128,9 +137,7 @@ export const addHexagonFramePlaceholder = (canvas: fabric.Canvas) => {
     (hexagon as any).id = uuidv4();
     applyFrameProps(hexagon, 'hexagon');
     hexagon.set({ tokenRole: 'surfaces.surface-plain' });
-    canvas.add(hexagon);
-    canvas.centerObject(hexagon);
-    canvas.requestRenderAll();
+    addFrameToStore(canvas, hexagon);
     return hexagon;
 };
 
@@ -159,9 +166,7 @@ export const addStarFrame = (canvas: fabric.Canvas) => {
     });
     (star as any).id = uuidv4();
     applyFrameProps(star, 'star');
-    canvas.add(star);
-    canvas.centerObject(star);
-    canvas.requestRenderAll();
+    addFrameToStore(canvas, star);
 };
 
 /**
@@ -196,9 +201,7 @@ export const addStarFramePlaceholder = (canvas: fabric.Canvas) => {
     (star as any).id = uuidv4();
     applyFrameProps(star, 'star');
     star.set({ tokenRole: 'surfaces.surface-plain' });
-    canvas.add(star);
-    canvas.centerObject(star);
-    canvas.requestRenderAll();
+    addFrameToStore(canvas, star);
     return star;
 };
 
@@ -225,7 +228,5 @@ export const addBadgeFrame = (canvas: fabric.Canvas) => {
     });
     (badge as any).id = uuidv4();
     applyFrameProps(badge, 'badge');
-    canvas.add(badge);
-    canvas.centerObject(badge);
-    canvas.requestRenderAll();
+    addFrameToStore(canvas, badge);
 };

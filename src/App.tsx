@@ -14,11 +14,11 @@ import { samplePlugin } from './editor/plugins/samplePlugin';
 import { pwaOfflineManager } from './editor/offline/pwaOfflineManager';
 import { getValidationWarnings } from './utils/validateFunctionalityWarnings';
 
-type AppView = 'dashboard' | 'editor';
 const TEMPLATE_MIGRATION_FLAG_KEY = 'designspace-template-migration-v1';
+let templateMigrationStarted = false;
 
 function App() {
-  const [currentView, setCurrentView] = useState<AppView>('dashboard');
+  const [hasActiveSession, setHasActiveSession] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const isProgrammaticCloseRef = useRef(false);
 
@@ -29,6 +29,8 @@ function App() {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.localStorage) return;
     if (window.localStorage.getItem(TEMPLATE_MIGRATION_FLAG_KEY) === 'done') return;
+    if (templateMigrationStarted) return;
+    templateMigrationStarted = true;
 
     let cancelled = false;
     const runMigration = async () => {
@@ -48,7 +50,6 @@ function App() {
   }, []);
 
   const projectName = useEditorStore((state) => state.projectName);
-  const layersById = useEditorStore((state) => state.layersById);
   const isDirty = useEditorStore((state) => state.isDirty);
   const downloadProjectFile = useEditorStore((state) => state.downloadProjectFile);
   const canvasObjects = useEditorStore((state) => state.canvasObjects);
@@ -56,12 +57,6 @@ function App() {
   const themeData = useThemeStore((state) => state.themeData);
   const manager = useMemo(() => pluginManager, []);
   const previousObjectIdsRef = useRef<string[]>([]);
-
-  useEffect(() => {
-    if (projectName || Object.keys(layersById).length > 0) {
-      setCurrentView('editor');
-    }
-  }, [projectName, layersById]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -103,10 +98,16 @@ function App() {
   }, [isDirty]);
 
   useEffect(() => {
-    void manager.registerPlugin(samplePlugin);
-    void pwaOfflineManager.registerServiceWorker();
+    if (import.meta.env.DEV) {
+      void manager.registerPlugin(samplePlugin);
+    }
+    if (!import.meta.env.DEV) {
+      void pwaOfflineManager.registerServiceWorker();
+    }
     return () => {
-      void manager.unregisterPlugin(samplePlugin.metadata.id);
+      if (import.meta.env.DEV) {
+        void manager.unregisterPlugin(samplePlugin.metadata.id);
+      }
     };
   }, [manager]);
 
@@ -179,7 +180,11 @@ function App() {
   };
 
   const handleBackToDashboard = () => {
-    setCurrentView('dashboard');
+    setHasActiveSession(false);
+  };
+
+  const handleProjectOpen = () => {
+    setHasActiveSession(true);
   };
 
   return (
@@ -188,8 +193,8 @@ function App() {
         <PluginManagerContext.Provider value={manager}>
           <UIThemeProvider>
             <NetworkStatusIndicator />
-            {currentView === 'dashboard' ? (
-              <ProjectDashboard onProjectOpen={() => setCurrentView('editor')} />
+            {!hasActiveSession ? (
+              <ProjectDashboard onProjectOpen={handleProjectOpen} />
             ) : (
               <EditorShell onBackToDashboard={handleBackToDashboard} />
             )}
@@ -198,25 +203,25 @@ function App() {
               <div className="fixed inset-0 z-[120] bg-[rgba(58,40,32,0.52)] backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="w-full max-w-md rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] text-[color:var(--ui-text)] shadow-[0_28px_70px_rgba(74,56,45,0.26)] p-6">
                   <h2 className="text-lg font-semibold mb-2">Save project before closing?</h2>
-                  <p className="text-sm text-slate-400 mb-6">
+                  <p className="text-sm text-[color:var(--ui-panel-text)]/70 mb-6">
                     You have unsaved changes. Choose what to do before Design Space closes.
                   </p>
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={handleCancelClose}
-                      className="px-4 py-2 rounded-lg border border-[color:var(--ui-border)] bg-white/50 hover:bg-white/70 text-xs uppercase tracking-widest"
+                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={() => void handleDontSaveAndClose()}
-                      className="px-4 py-2 rounded-lg border border-rose-300/40 bg-rose-200/40 hover:bg-rose-200/55 text-rose-900 text-xs uppercase tracking-widest"
+                      className="ui-button-soft px-4 py-2 rounded-lg text-rose-900 text-xs uppercase tracking-widest border-rose-300/45 bg-rose-200/42 hover:bg-rose-200/55"
                     >
                       Don&apos;t Save
                     </button>
                     <button
                       onClick={() => void handleSaveAndClose()}
-                      className="px-4 py-2 rounded-lg border border-[color:var(--brand-primary)]/45 bg-[color:var(--brand-primary)]/30 hover:bg-[color:var(--brand-primary)]/40 text-xs uppercase tracking-widest"
+                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/16 hover:bg-[color:var(--brand-primary)]/24"
                     >
                       Save
                     </button>

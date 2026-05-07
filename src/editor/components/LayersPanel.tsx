@@ -22,7 +22,10 @@ export const LayersPanel: React.FC = () => {
     toggleObjectLock,
     toggleColorLock,
     saveState,
-    setSelectedObjectId,
+    selectObjectById,
+    selectObjectsByIds,
+    clearSelection,
+    syncSelectionFromCanvas,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
@@ -35,7 +38,10 @@ export const LayersPanel: React.FC = () => {
       toggleObjectLock: state.toggleObjectLock,
       toggleColorLock: state.toggleColorLock,
       saveState: state.saveState,
-      setSelectedObjectId: state.setSelectedObjectId,
+      selectObjectById: state.selectObjectById,
+      selectObjectsByIds: state.selectObjectsByIds,
+      clearSelection: state.clearSelection,
+      syncSelectionFromCanvas: state.syncSelectionFromCanvas,
     }),
     shallow
   );
@@ -71,20 +77,28 @@ export const LayersPanel: React.FC = () => {
     return layersById[id] || null;
   };
 
-  const handleSelectLayer = (id: string) => {
-    if (!canvas) return;
-    const object = findObjectById(id);
-    if (object) {
-      canvas.setActiveObject(object);
-      canvas.requestRenderAll();
+  const handleSelectLayer = (id: string, event: React.MouseEvent) => {
+    if (!canvas || !findObjectById(id)) return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      const nextIds = selectedLayerIds.includes(id)
+        ? selectedLayerIds.filter((selectedId) => selectedId !== id)
+        : [...selectedLayerIds, id];
+      selectObjectsByIds(nextIds);
+      return;
     }
+    selectObjectById(id);
   };
 
   const handleToggleVisibility = (id: string) => {
     const object = findObjectById(id);
     if (canvas && object) {
-      object.set('visible', !object.visible);
+      const nextVisible = !object.visible;
+      object.set('visible', nextVisible);
+      if (!nextVisible && selectedLayerIds.includes(id)) {
+        syncSelectionFromCanvas(canvas);
+      }
       canvas.requestRenderAll();
+      syncCanvasToStore(canvas);
       requestLayerSync();
       saveState();
     }
@@ -99,6 +113,7 @@ export const LayersPanel: React.FC = () => {
         canvas.sendObjectBackwards(object);
       }
       canvas.requestRenderAll();
+      syncCanvasToStore(canvas);
       requestLayerSync();
       saveState();
     }
@@ -173,8 +188,13 @@ export const LayersPanel: React.FC = () => {
     const object = findObjectById(id);
     if (canvas && object) {
       canvas.remove(object);
-      canvas.discardActiveObject();
+      if (selectedLayerIds.includes(id)) {
+        clearSelection();
+      } else {
+        syncSelectionFromCanvas(canvas);
+      }
       canvas.requestRenderAll();
+      syncCanvasToStore(canvas);
       requestLayerSync();
       saveState();
     }
@@ -184,9 +204,7 @@ export const LayersPanel: React.FC = () => {
       if (event?.shiftKey) {
         const object = findObjectById(id);
         if (canvas && object) {
-          canvas.setActiveObject(object);
-          setSelectedObjectId(id);
-          canvas.requestRenderAll();
+          selectObjectById(id);
           toggleObjectLock();
           requestLayerSync();
         }
@@ -325,9 +343,11 @@ export const LayersPanel: React.FC = () => {
 
     canvas.add(result.asset);
     canvas.centerObject(result.asset);
-    canvas.setActiveObject(result.asset);
+    selectObjectById(result.id);
     sanityCheckCanvas(canvas, themeData);
+    syncCanvasToStore(canvas);
     canvas.requestRenderAll();
+    requestLayerSync();
     saveState();
 
     if (imageInputRef.current) imageInputRef.current.value = '';
@@ -364,12 +384,7 @@ export const LayersPanel: React.FC = () => {
                 <button
                   onClick={() => {
                     if (!canvas) return;
-                    const allObjects = canvas.getObjects().filter((obj) => !(obj as any).isGuide);
-                    if (allObjects.length === 0) return;
-                    canvas.discardActiveObject();
-                    const selection = new fabric.ActiveSelection(allObjects, { canvas });
-                    canvas.setActiveObject(selection);
-                    canvas.requestRenderAll();
+                    selectObjectsByIds(layers.map((layer) => layer.id));
                   }}
                   className="ui-button-icon p-1.5 rounded-lg text-[color:var(--ui-panel-text)] transition-all duration-200"
                 >
@@ -379,9 +394,7 @@ export const LayersPanel: React.FC = () => {
               <Tooltip content="Deselect All" side="top">
                 <button
                   onClick={() => {
-                    if (!canvas) return;
-                    canvas.discardActiveObject();
-                    canvas.requestRenderAll();
+                    clearSelection();
                   }}
                   className="ui-button-icon p-1.5 rounded-lg text-[color:var(--ui-panel-text)] transition-all duration-200"
                 >
@@ -477,7 +490,9 @@ export const LayersPanel: React.FC = () => {
                   <li
                     key={layer.id || `layer-${index}`}
                     draggable
-                    onClick={() => handleSelectLayer(layer.id)}
+                    data-testid="layer-item"
+                    data-layer-id={layer.id}
+                    onClick={(event) => handleSelectLayer(layer.id, event)}
                     onDragStart={handleDragStart(layer.id)}
                     onDragOver={handleDragOver(layer.id)}
                     onDrop={handleDrop(layer.id)}
@@ -516,6 +531,7 @@ export const LayersPanel: React.FC = () => {
                       <Tooltip content={layer.visible ? 'Hide' : 'Show'} side="top">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleToggleVisibility(layer.id); }}
+                          data-testid="layer-toggle-visibility"
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           {layer.visible
@@ -527,6 +543,7 @@ export const LayersPanel: React.FC = () => {
                       <Tooltip content={layer.movementLocked ? 'Unlock Position (Shift: Toggle Selection Lock)' : 'Lock Position (Shift: Toggle Selection Lock)'} side="top">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleToggleMovementLock(layer.id, e); }}
+                          data-testid="layer-toggle-lock"
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           {layer.movementLocked

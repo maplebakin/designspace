@@ -1,12 +1,14 @@
 
 import React from 'react';
 import { shallow } from 'zustand/shallow';
-import { useEditorStore, Template } from '../state/editorStore';
+import { DEFAULT_CANVAS_BACKGROUND, useEditorStore, Template } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { resizeCanvas } from '../fabric/canvasUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
 import { toSerializableObject } from '../utils/serialization';
+import { isPersistableCanvasObject, isUserObject } from '../utils/objectUtils';
 import { renderCanvasToPngBlob } from '../utils/renderToPng';
 import {
     listTemplates,
@@ -45,6 +47,13 @@ const hashString = (value: string) => {
 };
 
 const isExternalUrl = (value: string) => /^https?:\/\//i.test(value);
+
+const toTestSlug = (value: string) =>
+    value
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
 
 const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -201,10 +210,11 @@ export const TemplateBrowser: React.FC = () => {
         }),
         shallow
     );
-    const { themeData, activeBrandCollectionId } = useThemeStore(
+    const { themeData, activeBrandCollectionId, canvasBackgroundColor } = useThemeStore(
         (state) => ({
             themeData: state.themeData,
             activeBrandCollectionId: state.activeBrandCollectionId,
+            canvasBackgroundColor: state.canvasBackgroundColor,
         }),
         shallow
     );
@@ -438,10 +448,11 @@ export const TemplateBrowser: React.FC = () => {
             return;
         }
 
-        const serializedObjects = canvas.getObjects().map(toSerializableObject);
+        const pageBackground = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
+        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
         const canvasData = {
             objects: serializedObjects,
-            background: canvas.backgroundColor || undefined,
+            background: pageBackground,
         };
         const templateName = `Template ${new Date().toISOString()}`;
 
@@ -449,15 +460,16 @@ export const TemplateBrowser: React.FC = () => {
             const thumbnailBlob = await renderCanvasToPngBlob(canvas, {
                 scale: 0.2,
                 includeBackground: true,
-                backgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+                backgroundColor: pageBackground,
             });
             const thumbnail = await blobToDataUrl(thumbnailBlob);
+            const { width, height } = useCanvasStore.getState();
             await saveTemplate(
                 templateName,
                 canvasData,
                 {
-                    width: Math.round(canvas.getWidth()),
-                    height: Math.round(canvas.getHeight()),
+                    width: Math.max(1, Math.round(width)),
+                    height: Math.max(1, Math.round(height)),
                 },
                 thumbnail,
                 {
@@ -470,12 +482,13 @@ export const TemplateBrowser: React.FC = () => {
         } catch {
             try {
                 const fallbackThumbnail = canvas.toDataURL({ multiplier: 0.1 });
+                const { width, height } = useCanvasStore.getState();
                 await saveTemplate(
                     templateName,
                     canvasData,
                     {
-                        width: Math.round(canvas.getWidth()),
-                        height: Math.round(canvas.getHeight()),
+                        width: Math.max(1, Math.round(width)),
+                        height: Math.max(1, Math.round(height)),
                     },
                     fallbackThumbnail,
                     {
@@ -510,7 +523,7 @@ export const TemplateBrowser: React.FC = () => {
 
     const handleBlankPreset = (preset: BlankPreset) => {
         if (!canvas) return;
-        const hasContent = canvas.getObjects().some((obj) => !(obj as any).isGuide);
+        const hasContent = canvas.getObjects().some(isUserObject);
         if (hasContent) {
             const proceed = window.confirm(
                 'Starting a new blank canvas will clear your current design. Continue?'
@@ -521,16 +534,15 @@ export const TemplateBrowser: React.FC = () => {
             }
         }
 
-        canvas.discardActiveObject();
+        useEditorStore.getState().clearSelection();
         canvas.clear();
         requestLayerSync();
         setUnitMode(preset.unit);
 
         const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
         const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
-        canvas.backgroundColor = '#ffffff';
-        canvas.requestRenderAll();
         setCanvasBackgroundColor('#ffffff');
+        canvas.requestRenderAll();
         resizeCanvas(widthPx, heightPx);
         setToastMessage(`Blank canvas: ${preset.name}`);
     };
@@ -582,6 +594,7 @@ export const TemplateBrowser: React.FC = () => {
                                     className="p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
                                 >
                                     <button
+                                        data-testid={`template-my-${toTestSlug(template.name)}`}
                                         onClick={() => handleLoadMyTemplate(template)}
                                         className="w-full text-left"
                                     >
@@ -630,6 +643,7 @@ export const TemplateBrowser: React.FC = () => {
                         return (
                         <button 
                             key={template.id}
+                            data-testid={`template-community-${template.id}`}
                             onClick={() => handleLoadTemplate(template)}
                             className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
                         >

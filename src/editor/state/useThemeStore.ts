@@ -8,6 +8,7 @@ import type { ApocapaletteTheme } from '../types/apocapalette';
 import type { BrandKit } from '../db';
 import { useUiThemeStore } from './uiThemeStore';
 import { importThemeJson, type SimpleThemeJson, type ColorCategory } from '../services/designSpaceImporter';
+import { isActiveSelection } from '../utils/typeGuards';
 
 // --- INTERFACES ---
 
@@ -530,7 +531,7 @@ export const applyThemeToCanvas = (
                 }
             }
 
-            if (obj.type === 'group' || obj.type === 'activeSelection') {
+            if (obj.type === 'group' || isActiveSelection(obj)) {
                 const groupObjects = (obj as fabric.Group).getObjects();
                 groupObjects.forEach(applyThemeToObject);
             }

@@ -14,6 +14,7 @@ import { ChevronDown, Check, RotateCw, Settings2 } from 'lucide-react';
 import { PopoverSurface } from './PopoverSurface';
 import { PRINT_DPI } from '../utils/units';
 import { CANVAS_SETTINGS_PRESETS, type CanvasPreset } from '../config/canvasPresets';
+import { isUserObject } from '../utils/objectUtils';
 
 type PendingResize = {
   width: number;
@@ -73,7 +74,7 @@ export const CanvasSettingsPopover: React.FC = () => {
 
   const hasDesignObjects = () => {
     if (!canvas) return false;
-    return canvas.getObjects().some((obj) => !(obj as any).isGuide);
+    return canvas.getObjects().some(isUserObject);
   };
 
   const applyResizeChoice = (choice: ResizeChoice, width: number, height: number) => {
@@ -128,7 +129,7 @@ export const CanvasSettingsPopover: React.FC = () => {
           <ChevronDown className={`icon-muted w-4 h-4 stroke-[1.5] transition-all duration-300 ease-in-out ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
-          <PopoverSurface className="absolute left-0 mt-2 w-72 z-20">
+          <PopoverSurface className="absolute right-0 mt-2 w-72 z-20">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">Canvas Size</h3>

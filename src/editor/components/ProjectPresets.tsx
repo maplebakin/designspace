@@ -51,6 +51,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
       key={`${preset.name}-${preset.width}-${preset.height}`}
       disabled={!presetsReady}
       onClick={() => applyPreset(preset)}
+      data-testid={`project-preset-${preset.id}`}
       className={`w-full text-left px-3 py-3 rounded-2xl border transition-all duration-300 ease-in-out flex flex-col gap-1 ${
         preset.name === 'US Letter'
           ? 'bg-[color:var(--brand-primary)]/20 border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--brand-primary)]/30'

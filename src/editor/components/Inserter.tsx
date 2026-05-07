@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useEditorStore } from '../state/editorStore';
+import { finalizeInsertionSelection, useEditorStore } from '../state/editorStore';
+import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import * as objectFactories from '../fabric/objectFactories';
 import { MaskFrame } from './MaskFrame';
@@ -62,9 +63,13 @@ const DesignTab: React.FC = () => {
         shallow
     );
 
-    const handleAddItem = (factory: (canvas: fabric.Canvas) => void) => {
+    const handleAddItem = (factory: (canvas: fabric.Canvas) => fabric.Object | void) => {
         if (canvas) {
-            factory(canvas);
+            const inserted = factory(canvas);
+            const insertedId = inserted ? (inserted as any).id : null;
+            if (typeof insertedId === 'string') {
+                finalizeInsertionSelection(insertedId);
+            }
             // Automatically switch to selection tool after inserting a shape
             setActiveTool('select');
         } else {
@@ -155,6 +160,8 @@ const UploadsDropdown: React.FC = () => {
             ZIndexLayer.Content
         );
         useEditorStore.getState().addObject(serialized, { save: true, select: true });
+        imageInputRef.current?.blur();
+        window.requestAnimationFrame(() => document.getElementById('editor-shell')?.focus());
 
         if (imageInputRef.current) imageInputRef.current.value = '';
     };
@@ -191,9 +198,9 @@ const UploadsDropdown: React.FC = () => {
 
     return (
         <div>
-            <input type="file" accept="image/png, image/jpeg" ref={imageInputRef} onChange={handleImageFileChange} className="hidden" />
-            <input type="file" accept=".svg" ref={svgInputRef} onChange={handleSvgFileChange} className="hidden" />
-            <input type="file" accept=".pdf" ref={pdfInputRef} onChange={handlePdfFileChange} className="hidden" />
+            <input data-testid="insert-upload-image-input" type="file" accept="image/png, image/jpeg" ref={imageInputRef} onChange={handleImageFileChange} className="hidden" />
+            <input data-testid="insert-upload-svg-input" type="file" accept=".svg" ref={svgInputRef} onChange={handleSvgFileChange} className="hidden" />
+            <input data-testid="insert-upload-pdf-input" type="file" accept=".pdf" ref={pdfInputRef} onChange={handlePdfFileChange} className="hidden" />
             <Dropdown
                 label="Uploads"
                 items={[
@@ -217,6 +224,10 @@ const LayoutsDropdown: React.FC = () => {
     );
     const { themeData } = useThemeStore(
         (state) => ({ themeData: state.themeData }),
+        shallow
+    );
+    const { width: documentWidth, height: documentHeight } = useCanvasStore(
+        (state) => ({ width: state.width, height: state.height }),
         shallow
     );
     const [isOpen, setIsOpen] = useState(false);
@@ -253,8 +264,8 @@ const LayoutsDropdown: React.FC = () => {
         if (gridRows <= 0 || gridCols <= 0) return;
 
         const safeInset = bleedPx + SAFE_MARGIN_PX;
-        const safeWidth = canvas.getWidth() - safeInset * 2;
-        const safeHeight = canvas.getHeight() - safeInset * 2;
+        const safeWidth = documentWidth - safeInset * 2;
+        const safeHeight = documentHeight - safeInset * 2;
         if (safeWidth <= 0 || safeHeight <= 0) return;
 
         const cellWidth = (safeWidth - gutter * (gridCols - 1)) / gridCols;
@@ -325,7 +336,7 @@ const LayoutsDropdown: React.FC = () => {
             canvas.off('after:render', draw);
             clearGhostGrid();
         };
-    }, [canvas, isOpen, showCustomGrid, rows, cols, themeData, bleedPx]);
+    }, [canvas, isOpen, showCustomGrid, rows, cols, themeData, bleedPx, documentWidth, documentHeight]);
 
     return (
         <div className="relative">
@@ -489,6 +500,7 @@ interface TabButtonProps {
 
 const TabButton: React.FC<TabButtonProps> = ({ label, icon, isActive, onClick, disabled }) => (
     <button
+        data-testid={`insert-tab-${label.toLowerCase()}`}
         onClick={onClick}
         disabled={disabled}
         className={`flex-1 flex justify-center items-center gap-2 p-3 text-[11px] uppercase tracking-widest transition-all disabled:text-[color:var(--ui-panel-text)]/60 ${

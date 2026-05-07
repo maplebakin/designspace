@@ -126,46 +126,46 @@ export const StatusBar: React.FC = () => {
         <span>Canvas: {dimensionLabel}</span>
         <span>Safe: {safeLabel}</span>
         {bleedWarning && (
-          <div className="flex items-center gap-1 text-rose-300" title="Background artwork should extend into the bleed">
+          <div className="flex items-center gap-1" style={{ color: 'var(--semantic-error)' }} title="Background artwork should extend into the bleed">
             <AlertTriangle className="w-4 h-4 stroke-[1.5]" />
             <span className="text-[10px] uppercase tracking-widest">Bleed</span>
           </div>
         )}
-        <div className="flex items-center rounded-full overflow-hidden border border-[color:var(--border-subtle)]">
+        <div className="flex items-center rounded-full overflow-hidden border border-[color:var(--border-subtle)] bg-[color:var(--ui-surface-soft)]">
           <button
             onClick={() => setUnitMode('px')}
-            className={`px-4 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'px' ? 'bg-white/10 text-[color:var(--ui-text)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'}`}
+            className={`px-3 py-1 text-[10px] uppercase tracking-widest transition-all duration-200 ${unitMode === 'px' ? 'bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'}`}
           >
             PX
           </button>
           <button
             onClick={() => setUnitMode('in')}
-            className={`px-4 py-1 text-[11px] uppercase tracking-widest transition-all duration-300 ease-in-out ${unitMode === 'in' ? 'bg-white/10 text-[color:var(--ui-text)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'}`}
+            className={`px-3 py-1 text-[10px] uppercase tracking-widest transition-all duration-200 ${unitMode === 'in' ? 'bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'}`}
           >
             IN
           </button>
         </div>
         <button
           onClick={() => setShowSafeZones(!showSafeZones)}
-          className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] uppercase tracking-widest transition-all duration-300 ease-in-out ${
+          className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] uppercase tracking-widest transition-all duration-200 ${
             showSafeZones
-              ? 'bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] border border-[color:var(--brand-primary)]/30'
-              : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] border border-transparent'
+              ? 'bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)] border border-[color:var(--brand-primary)]/28'
+              : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] border border-[color:var(--ui-border)]'
           }`}
           title={showSafeZones ? "Hide Safe Zones" : "Show Safe Zones"}
         >
-          <span>{showSafeZones ? "Safe Zones ✓" : "Safe Zones"}</span>
+          <span>Safe Zones</span>
         </button>
         <SaveStatusBadge status={saveStatus} compact />
       </div>
       <div className="flex items-center gap-3">
-        <div className="hidden md:flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/10 px-3 py-1 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] shadow-[0_0_24px_rgba(0,0,0,0.25)]">
+        <div className="hidden md:flex items-center gap-1 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] shadow-[var(--ui-shadow-soft)]">
           {zoomPresets.map((level) => (
             <button
               key={level}
               onClick={() => setZoomLevel(level)}
-              className={`rounded-full px-2 py-1 transition-all duration-300 ease-in-out ${
-                isZoomActive(level) ? 'bg-white/15 text-[color:var(--ui-text)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'
+              className={`rounded-full px-2.5 py-1 transition-all duration-200 ${
+                isZoomActive(level) ? 'bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)]'
               }`}
               aria-label={`Zoom ${Math.round(level * 100)}%`}
             >
@@ -173,29 +173,29 @@ export const StatusBar: React.FC = () => {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-white/10 px-2 py-1 shadow-[0_0_24px_rgba(0,0,0,0.25)]">
+        <div className="flex items-center gap-1 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-1 py-0.5 shadow-[var(--ui-shadow-soft)]">
           <button
             onClick={() => handleZoom(0.8)}
-            className="rounded-full p-2 text-[color:var(--ui-text)] transition-all duration-300 ease-in-out hover:bg-white/10"
+            className="rounded-full p-1.5 text-[color:var(--ui-panel-text)] transition-all duration-200 hover:text-[color:var(--brand-primary)] hover:bg-[color:var(--ui-hover-soft)]"
             aria-label="Zoom Out"
           >
-            <Minus className="icon-muted w-4 h-4 stroke-[1.5]" />
+            <Minus className="w-3.5 h-3.5 stroke-[1.5]" />
           </button>
-          <span className="text-sm font-semibold w-16 text-center text-[color:var(--ui-text)]">{Math.round(zoom * 100)}%</span>
+          <span className="font-mono text-xs w-12 text-center text-[color:var(--ui-text)]">{Math.round(zoom * 100)}%</span>
           <button
             onClick={() => handleZoom(1.25)}
-            className="rounded-full p-2 text-[color:var(--ui-text)] transition-all duration-300 ease-in-out hover:bg-white/10"
+            className="rounded-full p-1.5 text-[color:var(--ui-panel-text)] transition-all duration-200 hover:text-[color:var(--brand-primary)] hover:bg-[color:var(--ui-hover-soft)]"
             aria-label="Zoom In"
           >
-            <Plus className="icon-muted w-4 h-4 stroke-[1.5]" />
+            <Plus className="w-3.5 h-3.5 stroke-[1.5]" />
           </button>
         </div>
         <button
-          onClick={() => resetViewCanvas && resetViewCanvas()} // Use resetViewCanvas
-          className="flex items-center gap-2 p-2 rounded-full bg-white/10 shadow-[0_0_18px_var(--brand-accent)] transition-all duration-300 ease-in-out"
+          onClick={() => resetViewCanvas && resetViewCanvas()}
+          className="flex items-center gap-2 p-1.5 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] shadow-[var(--ui-shadow-soft)] text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] transition-all duration-200"
           aria-label="Fit to Screen"
         >
-          <Expand className="icon-muted w-4 h-4 stroke-[1.5]" />
+          <Expand className="w-3.5 h-3.5 stroke-[1.5]" />
         </button>
       </div>
     </footer>

@@ -5,6 +5,8 @@ interface RenderToPngOptions {
   scale?: number;
   includeBackground?: boolean;
   backgroundColor?: string | null;
+  format?: 'png' | 'jpeg';
+  quality?: number;
 }
 
 const getClonedViewportTransform = (canvas: fabric.Canvas): fabric.TMat2D => {
@@ -44,13 +46,13 @@ export const renderCanvasToPngBlob = async (
 
   try {
     const dataUrl = canvas.toDataURL({
-      format: 'png',
+      format: options.format ?? 'png',
       multiplier: scale,
       left: 0,
       top: 0,
       width,
       height,
-      quality: 1,
+      quality: options.quality ?? 1,
     });
     const response = await fetch(dataUrl);
     return await response.blob();
