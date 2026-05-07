@@ -409,6 +409,135 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           intendedWorkspaceCenter,
         };
       },
+      fabricObjectsAudit: () => {
+        const canvas = useEditorStore.getState().canvas;
+        if (!canvas) return null;
+        const { width: docW, height: docH } = useCanvasStore.getState();
+        const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+        const zoom = vpt[0];
+        const canvasEl = canvas.getElement() as HTMLCanvasElement;
+        const canvasRect = canvasEl.getBoundingClientRect();
+
+        // Enumerate all Fabric objects with screen bounds
+        const objects = canvas.getObjects().map((obj: any) => {
+          obj.setCoords();
+          const br = obj.getBoundingRect();
+          const screenLeft = canvasRect.left + br.left * zoom + vpt[4];
+          const screenTop = canvasRect.top + br.top * zoom + vpt[5];
+          const fillStr = typeof obj.fill === 'string' ? obj.fill : (obj.fill ? '[filler]' : 'none');
+          return {
+            id: obj.id ?? null,
+            type: obj.type,
+            isDocumentPaper: !!obj.isDocumentPaper,
+            isGuide: !!obj.isGuide,
+            isPageBorder: !!obj.isPageBorder,
+            isSafeZoneOverlay: !!obj.isSafeZoneOverlay,
+            isBleedZone: !!obj.isBleedZone,
+            fabricCoords: { left: obj.left, top: obj.top, width: obj.width, height: obj.height },
+            fill: fillStr,
+            stroke: obj.stroke ?? null,
+            opacity: obj.opacity,
+            visible: obj.visible,
+            canvasBr: { left: Math.round(br.left), top: Math.round(br.top), width: Math.round(br.width), height: Math.round(br.height) },
+            screenBounds: { left: Math.round(screenLeft), top: Math.round(screenTop), width: Math.round(br.width), height: Math.round(br.height) },
+          };
+        });
+
+        // Check DOM backgrounds for each layer in the canvas stack
+        const getLayerInfo = (el: Element | null) => {
+          if (!el) return null;
+          const s = window.getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return {
+            tag: el.tagName.toLowerCase(),
+            id: el.id || null,
+            testid: el.getAttribute('data-testid') || null,
+            className: (el as HTMLElement).className?.slice?.(0, 80) ?? '',
+            bg: s.backgroundColor,
+            bgImage: s.backgroundImage !== 'none' ? s.backgroundImage.slice(0, 80) : null,
+            rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
+          };
+        };
+
+        const lowerCanvas = canvasEl;
+        const fabricWrapper = lowerCanvas?.parentElement ?? null;
+        const canvasContainerDiv = fabricWrapper?.parentElement ?? null;
+        const canvasStageDiv = canvasContainerDiv?.parentElement ?? null;
+
+        // Sample pixel values from the lower canvas at key positions
+        const ctx = (canvasEl as HTMLCanvasElement).getContext('2d');
+        const samplePixel = (cx: number, cy: number) => {
+          if (!ctx) return null;
+          try {
+            const px = ctx.getImageData(Math.round(cx), Math.round(cy), 1, 1).data;
+            return { r: px[0], g: px[1], b: px[2], a: px[3] };
+          } catch { return null; }
+        };
+
+        // Compute where documentPaper should appear on the canvas element
+        const paperCanvasLeft = vpt[4];
+        const paperCanvasTop = vpt[5];
+        const paperCanvasW = docW * zoom;
+        const paperCanvasH = docH * zoom;
+
+        const pixelSamples = {
+          // Inside the expected document paper area (at center)
+          paperCenter: samplePixel(paperCanvasLeft + paperCanvasW / 2, paperCanvasTop + paperCanvasH / 2),
+          // 10px left of expected paper left edge
+          leftOfPaper: samplePixel(paperCanvasLeft - 10, paperCanvasTop + paperCanvasH / 2),
+          // At paper left edge
+          paperLeftEdge: samplePixel(paperCanvasLeft + 2, paperCanvasTop + paperCanvasH / 2),
+          // Far left of canvas (x=10)
+          farLeft: samplePixel(10, paperCanvasTop + paperCanvasH / 2),
+          // x=60 (between ruler edge at 24 and expected paper left)
+          midLeft: samplePixel(60, paperCanvasTop + paperCanvasH / 2),
+        };
+
+        // elementFromPoint samples at screen coordinates
+        const sampleDom = (sx: number, sy: number) => {
+          const el = document.elementFromPoint(sx, sy);
+          if (!el) return null;
+          return {
+            tag: el.tagName.toLowerCase(),
+            id: el.id || null,
+            testid: el.getAttribute('data-testid') || null,
+            className: (el as HTMLElement).className?.slice?.(0, 60) ?? '',
+          };
+        };
+
+        const domSamples = {
+          paperCenter: sampleDom(canvasRect.left + paperCanvasLeft + paperCanvasW / 2, canvasRect.top + paperCanvasTop + paperCanvasH / 2),
+          leftOfPaper: sampleDom(canvasRect.left + Math.max(0, paperCanvasLeft - 10), canvasRect.top + paperCanvasTop + paperCanvasH / 2),
+          farLeft: sampleDom(canvasRect.left + 10, canvasRect.top + 200),
+        };
+
+        return {
+          documentSize: { width: docW, height: docH },
+          canvasBackgroundColor: canvas.backgroundColor,
+          vpt,
+          zoom,
+          canvasElementRect: { left: Math.round(canvasRect.left), top: Math.round(canvasRect.top), width: Math.round(canvasRect.width), height: Math.round(canvasRect.height) },
+          expectedPaperScreen: {
+            left: Math.round(canvasRect.left + paperCanvasLeft),
+            top: Math.round(canvasRect.top + paperCanvasTop),
+            width: Math.round(paperCanvasW),
+            height: Math.round(paperCanvasH),
+          },
+          objectCount: objects.length,
+          documentPaperObjects: objects.filter((o) => o.isDocumentPaper),
+          pageBorderObjects: objects.filter((o) => o.isPageBorder),
+          guideObjects: objects.filter((o) => o.isGuide),
+          userObjects: objects.filter((o) => !o.isDocumentPaper && !o.isGuide && !o.isPageBorder),
+          domLayers: {
+            lowerCanvas: getLayerInfo(lowerCanvas),
+            fabricWrapper: getLayerInfo(fabricWrapper),
+            canvasContainerDiv: getLayerInfo(canvasContainerDiv),
+            canvasStageDiv: getLayerInfo(canvasStageDiv),
+          },
+          pixelSamples,
+          domSamples,
+        };
+      },
     };
     return () => {
       delete (window as any).__DESIGN_SPACE_QA__;
@@ -805,6 +934,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               </button>
               <button
                 onClick={() => setRightTab('settings')}
+                data-testid="right-tab-settings"
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
                   rightTab === 'settings'
                     ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'

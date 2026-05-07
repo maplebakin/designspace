@@ -1,4 +1,5 @@
 import * as fabric from 'fabric';
+import { useCanvasStore } from '../state/useCanvasStore';
 
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export type CornerStyle = 'bracket' | 'flourish' | 'diamond' | 'cross' | 'rounded' | 'leaf';
@@ -191,8 +192,11 @@ const placeBorderNearBottom = (canvas: fabric.Canvas, border: fabric.Object) => 
 };
 
 export const applyPageBorder = (canvas: fabric.Canvas, settings: PageBorderSettings) => {
-  const width = canvas.getWidth();
-  const height = canvas.getHeight();
+  // Use document dimensions, not canvas element size.
+  // canvas.getWidth()/getHeight() returns the viewport element size (e.g. 640×544),
+  // which is unrelated to the document. All page-border children live in document
+  // coordinate space, so they must be sized against the actual document dimensions.
+  const { width, height } = useCanvasStore.getState();
   const inset = Math.max(0, settings.inset);
   const children: fabric.Object[] = [];
 

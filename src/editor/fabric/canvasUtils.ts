@@ -62,10 +62,14 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
   const { width, height } = useCanvasStore.getState();
 
   if (documentPaper) {
-    // Update existing paper dimensions and color
+    // Update existing paper dimensions and color.
+    // Explicitly set originX/originY: Fabric 7's default is 'center', which would place the
+    // paper's center at (0,0) instead of its top-left corner, visually shifting it left by docW/2.
     documentPaper.set({
       left: 0,
       top: 0,
+      originX: 'left',
+      originY: 'top',
       width,
       height,
       fill: backgroundColor,
@@ -80,10 +84,14 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
       canvas.add(documentPaper);
     }
   } else {
-    // Create new paper rectangle
+    // Create new paper rectangle.
+    // originX/originY must be 'left'/'top': Fabric 7's default is 'center', which would place
+    // the paper's center at Fabric (0,0) and shift its left edge to -docW/2 visually.
     documentPaper = new fabric.Rect({
       left: 0,
       top: 0,
+      originX: 'left',
+      originY: 'top',
       width,
       height,
       fill: backgroundColor,
@@ -174,9 +182,11 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
   const bleedZoneRect = new fabric.Rect({
     left: 0,
     top: 0,
+    originX: 'left',
+    originY: 'top',
     width: width,
     height: height,
-    fill: 'rgba(204, 204, 204, 0.1)', // Light grey with alpha 0.1
+    fill: 'rgba(204, 204, 204, 0.1)',
     selectable: false,
     evented: false,
     hasControls: false,
@@ -184,7 +194,7 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
     hoverCursor: 'default',
     perPixelTargetFind: false,
     excludeFromExport: true,
-    isBleedZone: true, // Custom property for identification
+    isBleedZone: true,
   });
   guideRegistry.register(bleedZoneRect, 'bleed-zone'); // PHASE 3.1: Register with guide registry
   assignZIndex(bleedZoneRect, CanvasLayer.BLEED_ZONE); // Assign z-index

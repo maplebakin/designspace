@@ -924,3 +924,166 @@ test.describe('canvas DOM layer alignment', () => {
     expect(fatalConsole).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// White-rectangle diagnostic: fabricObjectsAudit assertions
+// ---------------------------------------------------------------------------
+
+type FabricAuditObject = {
+  id: string | null;
+  type: string;
+  isDocumentPaper: boolean;
+  isGuide: boolean;
+  isPageBorder: boolean;
+  isSafeZoneOverlay: boolean;
+  isBleedZone: boolean;
+  fabricCoords: { left: number; top: number; width: number; height: number };
+  fill: string;
+  stroke: string | null;
+  opacity: number;
+  visible: boolean;
+  canvasBr: { left: number; top: number; width: number; height: number };
+  screenBounds: { left: number; top: number; width: number; height: number };
+};
+
+type FabricAudit = {
+  documentSize: { width: number; height: number };
+  canvasBackgroundColor: string;
+  vpt: number[];
+  zoom: number;
+  canvasElementRect: { left: number; top: number; width: number; height: number };
+  expectedPaperScreen: { left: number; top: number; width: number; height: number };
+  objectCount: number;
+  documentPaperObjects: FabricAuditObject[];
+  pageBorderObjects: FabricAuditObject[];
+  guideObjects: FabricAuditObject[];
+  userObjects: FabricAuditObject[];
+  domLayers: {
+    lowerCanvas: { bg: string; rect: { left: number; top: number; width: number; height: number } } | null;
+    fabricWrapper: { bg: string; rect: { left: number; top: number; width: number; height: number } } | null;
+    canvasContainerDiv: { bg: string; rect: { left: number; top: number; width: number; height: number } } | null;
+    canvasStageDiv: { bg: string; rect: { left: number; top: number; width: number; height: number } } | null;
+  };
+  pixelSamples: {
+    paperCenter: { r: number; g: number; b: number; a: number } | null;
+    leftOfPaper: { r: number; g: number; b: number; a: number } | null;
+    paperLeftEdge: { r: number; g: number; b: number; a: number } | null;
+    farLeft: { r: number; g: number; b: number; a: number } | null;
+    midLeft: { r: number; g: number; b: number; a: number } | null;
+  };
+};
+
+const fabricObjectsAudit = async (page: Page): Promise<FabricAudit> =>
+  page.evaluate(() => (window as any).__DESIGN_SPACE_QA__.fabricObjectsAudit());
+
+test.describe('fabricObjectsAudit — white rectangle source', () => {
+  test('fresh project: exactly one documentPaper, transparent canvas background, no extra white sources', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const audit = await fabricObjectsAudit(page);
+    expect(audit).not.toBeNull();
+
+    // Exactly one documentPaper object
+    expect(audit.documentPaperObjects).toHaveLength(1);
+
+    // Canvas background is transparent (not a white fill source)
+    const bg = audit.canvasBackgroundColor;
+    const isTransparent = !bg || bg === '' || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)';
+    expect(isTransparent).toBe(true);
+
+    // No page border objects on a fresh project
+    expect(audit.pageBorderObjects).toHaveLength(0);
+
+    // documentPaper is at Fabric (0, 0)
+    const paper = audit.documentPaperObjects[0];
+    expect(paper.fabricCoords.left).toBe(0);
+    expect(paper.fabricCoords.top).toBe(0);
+
+    // documentPaper dimensions match document size
+    const { width: docW, height: docH } = audit.documentSize;
+    expect(paper.fabricCoords.width).toBe(docW);
+    expect(paper.fabricCoords.height).toBe(docH);
+
+    // documentPaper screen bounds match the expectedPaperScreen from VPT
+    const { expectedPaperScreen } = audit;
+    expect(Math.abs(paper.screenBounds.left - expectedPaperScreen.left)).toBeLessThanOrEqual(2);
+    expect(Math.abs(paper.screenBounds.top - expectedPaperScreen.top)).toBeLessThanOrEqual(2);
+
+    // farLeft pixel (x=10 on canvas element) must be transparent — no white rect left of paper
+    const farLeft = audit.pixelSamples.farLeft;
+    expect(farLeft).not.toBeNull();
+    expect(farLeft!.a).toBe(0);
+
+    // Paper center pixel should be opaque (paper renders a fill)
+    const paperCenter = audit.pixelSamples.paperCenter;
+    expect(paperCenter).not.toBeNull();
+    expect(paperCenter!.a).toBeGreaterThan(0);
+
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('page border uses document dimensions, not canvas element dimensions', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    // Open the Style tab and apply a page border with default settings
+    await page.getByTestId('right-tab-settings').click();
+    await expect(page.getByTestId('page-border-apply')).toBeVisible();
+    await page.getByTestId('page-border-apply').click();
+
+    // Wait for border to appear on canvas
+    await page.waitForFunction(() => {
+      const audit = (window as any).__DESIGN_SPACE_QA__.fabricObjectsAudit();
+      return audit?.pageBorderObjects?.length > 0;
+    });
+
+    const audit = await fabricObjectsAudit(page);
+    expect(audit.pageBorderObjects).toHaveLength(1);
+
+    const { width: docW, height: docH } = audit.documentSize;
+    const borderGroup = audit.pageBorderObjects[0];
+
+    // The page border group in Fabric space must cover nearly the full document.
+    // Default inset = 32px. For Instagram Square (1080×1080): ≈ 1016px wide.
+    // Canvas element is only ~640px — so this assertion proves correct dimension source.
+    expect(borderGroup.canvasBr.width).toBeGreaterThan(docW * 0.8);
+    expect(borderGroup.canvasBr.height).toBeGreaterThan(docH * 0.8);
+
+    // Border group screen bounds must align with document paper (within inset tolerance)
+    const { expectedPaperScreen, zoom } = audit;
+    const maxOffset = Math.ceil(40 * zoom) + 4;
+    expect(Math.abs(borderGroup.screenBounds.left - expectedPaperScreen.left)).toBeLessThanOrEqual(maxOffset);
+    expect(Math.abs(borderGroup.screenBounds.top - expectedPaperScreen.top)).toBeLessThanOrEqual(maxOffset);
+
+    // farLeft pixel must still be transparent — no stale white rect outside paper
+    const farLeft = audit.pixelSamples.farLeft;
+    expect(farLeft).not.toBeNull();
+    expect(farLeft!.a).toBe(0);
+
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('no stale white rectangle outside document bounds after project load', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const audit = await fabricObjectsAudit(page);
+    const { expectedPaperScreen, canvasElementRect, vpt } = audit;
+
+    // Paper must start to the right of canvas left edge (VPT tx > 0 means paper is inset)
+    expect(expectedPaperScreen.left).toBeGreaterThan(canvasElementRect.left + 20);
+
+    // midLeft pixel (x=60 on canvas element) is between ruler (24px) and paper left
+    // If paper hasn't been shifted to x=60 yet it should be transparent
+    const midLeft = audit.pixelSamples.midLeft;
+    if (midLeft !== null) {
+      const isInPaperRange = 60 >= vpt[4];
+      if (!isInPaperRange) {
+        expect(midLeft.a).toBeLessThan(200);
+      }
+    }
+
+    expect(fatalConsole).toEqual([]);
+  });
+});

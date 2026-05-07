@@ -169,7 +169,7 @@ export const PageBorderPopover: React.FC = () => {
       </div>
 
       <div className="mt-4 flex justify-end">
-        <button onClick={onApply} className="px-3 py-2 rounded-lg border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/25 hover:bg-[color:var(--brand-primary)]/35 text-[11px] uppercase tracking-widest">
+        <button onClick={onApply} data-testid="page-border-apply" className="px-3 py-2 rounded-lg border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/25 hover:bg-[color:var(--brand-primary)]/35 text-[11px] uppercase tracking-widest">
           Apply Border
         </button>
       </div>
