@@ -46,6 +46,15 @@ import { showError, showInfo, ErrorMessages } from '../utils/errorHandling';
 import { coordinateSystem } from '../utils/coordinateSystem';
 import { type AccessibilitySettings, AccessibilityManager } from '../utils/accessibilityModes';
 import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
+import {
+    extractProductProjectFields,
+    normalizeDesignSpaceProjectPayload,
+    type ProductAwareProjectPayload,
+    type ProductProjectFields,
+} from '../project/projectSchema';
+import { generateProjectFromRecipe } from '../recipes/generateProjectFromRecipe';
+import type { ProductRecipeId } from '../recipes/recipeRegistry';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
@@ -289,13 +298,13 @@ export interface SerializedFabricObject {
   [key: string]: any;
 }
 
-export type ProjectFilePayload = {
+export type ProjectFilePayload = Partial<ProductAwareProjectPayload<ProjectPage>> & {
   projectName: string;
   pages?: ProjectPage[];
   activePageIndex?: number;
   canvasData?: any;
   assets?: Record<string, string>;
-  activeTheme: ApocapaletteTheme | null;
+  activeTheme?: ApocapaletteTheme | null;
   lastUpdated: string;
   canvasSize?: { width: number; height: number };
   unitMode?: UnitMode;
@@ -597,16 +606,6 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
         }
     }
 
-    if (failedIds.length > 0) {
-        const preview = failedIds.slice(0, 3).join(', ');
-        const suffix = failedIds.length > 3 ? ` (+${failedIds.length - 3} more)` : '';
-        throw new Error(
-            `Export failed: ${failedIds.length} image(s) could not be encoded. ` +
-            `Ensure external assets allow CORS or replace them before exporting. ` +
-            `Failed IDs: ${preview}${suffix}`
-        );
-    }
-
     const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
     const objectsWithAssets = replaceImageSources(serializedObjects, assets);
     return {
@@ -615,8 +614,55 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
             background: getSerializedPageBackground(),
         },
         assets,
+        failedAssetIds: failedIds,
     };
 };
+
+const buildProjectFilePayload = (
+    legacyPayload: ProjectFilePayload,
+    productProjectFields: ProductProjectFields | null,
+    options: { projectId?: string; now?: string } = {}
+): ProductAwareProjectPayload<ProjectPage> => {
+    const currentPageSize = legacyPayload.canvasSize
+        ? {
+            ...(productProjectFields?.document.pageSize ?? {}),
+            width: legacyPayload.canvasSize.width,
+            height: legacyPayload.canvasSize.height,
+            unitMode: legacyPayload.unitMode ?? productProjectFields?.document.pageSize.unitMode,
+        }
+        : productProjectFields?.document.pageSize;
+    const basePayload = {
+        ...(productProjectFields ?? {}),
+        ...legacyPayload,
+        updatedAt: legacyPayload.lastUpdated,
+        metadata: {
+            ...(productProjectFields?.metadata ?? {}),
+            name: legacyPayload.projectName,
+            sourceApp: 'design-space' as const,
+        },
+        document: productProjectFields?.document
+            ? {
+                ...productProjectFields.document,
+                pageSize: currentPageSize,
+            }
+            : undefined,
+    };
+
+    return normalizeDesignSpaceProjectPayload<ProjectPage>(basePayload, {
+        projectName: legacyPayload.projectName,
+        projectId: options.projectId ?? productProjectFields?.projectId,
+        now: options.now ?? legacyPayload.lastUpdated,
+        canvasSize: legacyPayload.canvasSize,
+        unitMode: legacyPayload.unitMode,
+        activeTheme: legacyPayload.activeTheme,
+        defaultBackground: DEFAULT_CANVAS_BACKGROUND,
+    });
+};
+
+const getPayloadActiveTheme = (payload: ProductAwareProjectPayload<ProjectPage>) =>
+    payload.activeTheme && typeof payload.activeTheme === 'object'
+        ? (payload.activeTheme as ApocapaletteTheme)
+        : null;
 
 const buildLayerStateFromObjects = (
     objects: fabric.Object[],
@@ -740,6 +786,7 @@ interface EditorState {
   imageAssets: Record<string, string>;
   assetRefCount: Map<string, number>;
   projectName: string;
+  productProjectFields: ProductProjectFields | null;
   currentLibraryProjectId: string | null;
   pages: ProjectPage[];
   activePageIndex: number;
@@ -834,6 +881,7 @@ interface EditorState {
   loadTemplate: (template: Template) => void;
   saveCurrentAsTemplate: () => void;
   createProject: (options?: CreateProjectOptions) => void;
+  createProjectFromRecipe: (recipeId: ProductRecipeId | string) => Promise<void>;
   startNewProject: (options?: {
     canvasSize?: { width: number; height: number };
     unitMode?: UnitMode;
@@ -849,6 +897,7 @@ interface EditorState {
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
   setProjectName: (name: string) => void;
+  setProductProjectFields: (fields: ProductProjectFields | null) => void;
   renameCurrentProject: (newName: string) => Promise<void>;
   setActiveTool: (tool: EditorTool) => void;
   setBrushSize: (size: number) => void;
@@ -981,6 +1030,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         imageAssets: {},
         assetRefCount: new Map(),
         projectName: 'Untitled Project',
+        productProjectFields: null,
         currentLibraryProjectId: null,
         pages: [{ id: uuidv4(), name: 'Page 1', canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE }, thumbnail: undefined }],
         activePageIndex: 0,
@@ -1016,12 +1066,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         // Only apply theme if canvas is ready (not during initialization)
-        const { canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+        const { canvasReadyState, saveState, requestLayerSync, syncCanvasToStore, acquireSyncLock, releaseSyncLock } = get();
         const themeData = useThemeStore.getState().themeData;
         if (canvasReadyState === 'ready' && themeData) {
             applyThemeToCanvas(canvas, themeData, {
                 saveState,
                 requestLayerSync,
+                syncCanvasToStore,
                 acquireSyncLock,
                 releaseSyncLock,
             });
@@ -1125,7 +1176,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
     },
     removeSelectedObject: () => {
-        const { canvas, clearSelection, requestLayerSync, saveState } = get();
+        const { canvas, clearSelection, requestLayerSync, saveState, syncCanvasToStore } = get();
         if (!canvas) {
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
@@ -1141,9 +1192,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         clearSelection();
-        get().syncCanvasToStore(canvas);
-        requestLayerSync();
-        saveState();
+        commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync }, { render: false });
     },
     alignSelectedObjects: (direction) => {
         const { canvas, startBatch, endBatch } = get();
@@ -1565,6 +1614,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setProjectQuickOpenOpen: (open) => set({ isProjectQuickOpenOpen: open }),
     clearPendingViewportFit: () => set({ pendingViewportFit: false }),
     setProjectName: (name) => set({ projectName: name }),
+    setProductProjectFields: (fields) => set({ productProjectFields: fields }),
     renameCurrentProject: async (newName) => {
         const safeName = newName.trim() || 'Untitled Project';
         set({ projectName: safeName });
@@ -1614,8 +1664,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         ) {
             const normalizedWidth = Math.max(1, Math.round(nextWidth));
             const normalizedHeight = Math.max(1, Math.round(nextHeight));
-            canvas.setDimensions({ width: normalizedWidth, height: normalizedHeight });
-            useCanvasStore.getState().setCanvasSize(normalizedWidth, normalizedHeight);
+            resizeCanvas(normalizedWidth, normalizedHeight, {
+                save: false,
+                skipRender: true,
+            });
             useCanvasStore.getState().clearPendingSize();
         }
         if (template.unitMode) {
@@ -1631,9 +1683,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             resetViewCanvas();
             sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
             clearSelection();
-            get().syncCanvasToStore(canvas);
-            requestLayerSync();
-            get().saveState();
+            commitCanvasMutation(canvas, {
+                syncCanvasToStore: get().syncCanvasToStore,
+                saveState: get().saveState,
+                requestLayerSync,
+            });
             setToastMessage(`Template loaded: ${template.name}`);
 
             if (template.defaultThemeId) {
@@ -1716,6 +1770,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setUnitMode(nextUnitMode);
 
             requestLayerSync({ force: true });
+        } else {
+            useCanvasStore.getState().setCanvasSize(nextWidth, nextHeight);
         }
 
         // Initialize default theme from theme store
@@ -1727,6 +1783,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         set({
             projectName: nextProjectName,
+            productProjectFields: null,
             currentLibraryProjectId: null,
             pages: [{
                 id: uuidv4(),
@@ -1744,6 +1801,81 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         });
         resetHistoryToCurrentCanvas();
 
+    },
+    createProjectFromRecipe: async (recipeId) => {
+        const {
+            canvas,
+            clearSelection,
+            requestLayerSync,
+            resetViewCanvas,
+            setToastMessage,
+        } = get();
+        if (!canvas) {
+            setToastMessage('Editor canvas is not ready. Please try again.');
+            return;
+        }
+
+        const { themeData, activeBrandCollectionId, brandVault } = useThemeStore.getState();
+        const activeTheme = themeData
+            || brandVault.find((brand) => brand.id === activeBrandCollectionId)?.themeData
+            || null;
+
+        try {
+            const generatedProject = generateProjectFromRecipe(recipeId, {
+                theme: activeTheme,
+                themeId: activeBrandCollectionId ?? undefined,
+            });
+            const firstPage = generatedProject.pages[0];
+            if (!firstPage?.canvasData) {
+                throw new Error(`Recipe did not generate a usable first page: ${recipeId}`);
+            }
+
+            clearSelection();
+            canvas.clear();
+            resizeCanvas(generatedProject.document.pageSize.width, generatedProject.document.pageSize.height, {
+                save: false,
+                skipRender: true,
+            });
+            get().setUnitMode(generatedProject.document.pageSize.unitMode);
+            useCanvasStore.getState().clearPendingSize();
+            useThemeStore.getState().setThemeData(generatedProject.activeTheme as ApocapaletteTheme);
+            useThemeStore.getState().setActiveBrandCollectionId(activeBrandCollectionId ?? null);
+            useThemeStore.getState().setCanvasBackgroundColor(
+                typeof firstPage.canvasData.background === 'string'
+                    ? firstPage.canvasData.background
+                    : generatedProject.document.background?.value ?? null
+            );
+
+            await canvas.loadFromJSON(firstPage.canvasData, reviveCustomFabricProps);
+            canvas.backgroundColor = 'transparent';
+            get().syncCanvasToStore(canvas);
+            resetViewCanvas();
+            sanityCheckCanvas(canvas, generatedProject.activeTheme as ApocapaletteTheme | null);
+            clearSelection();
+
+            set({
+                projectName: generatedProject.projectName,
+                productProjectFields: extractProductProjectFields(generatedProject),
+                currentLibraryProjectId: null,
+                imageAssets: {},
+                assetRefCount: new Map(),
+                pages: generatedProject.pages as ProjectPage[],
+                activePageIndex: 0,
+                isDirty: true,
+                isProjectPresetsOpen: false,
+                showOnboarding: false,
+                pendingViewportFit: true,
+                autoSaveStatus: 'dirty',
+                saveStatus: 'unsaved',
+            });
+            requestLayerSync({ force: true });
+            canvas.requestRenderAll();
+            resetHistoryToCurrentCanvas();
+            setToastMessage(`Created project: ${generatedProject.productMetadata?.title ?? generatedProject.projectName}`);
+        } catch (error) {
+            console.error('[createProjectFromRecipe] Failed to generate recipe project:', error);
+            setToastMessage('Failed to create recipe project.');
+        }
     },
     startNewProject: (options) => {
         get().createProject(options);
@@ -1835,7 +1967,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             || null;
 
         get().syncActivePageFromCanvas();
-        let exportData: { canvasData: any; assets: Record<string, string> };
+        let exportData: { canvasData: any; assets: Record<string, string>; failedAssetIds: string[] };
         try {
             exportData = await buildExportCanvasData(canvas);
         } catch (error) {
@@ -1846,17 +1978,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return;
         }
 
-        const payload: ProjectFilePayload = {
+        const savedAt = new Date().toISOString();
+        const payload = buildProjectFilePayload({
             projectName: projectName || 'Untitled Project',
             pages: get().pages,
             activePageIndex: get().activePageIndex,
             canvasData: exportData.canvasData,
             assets: exportData.assets,
             activeTheme: fallbackTheme,
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: savedAt,
             canvasSize: getDocumentCanvasSize(),
             unitMode,
-        };
+        }, get().productProjectFields, { now: savedAt });
 
         const json = JSON.stringify(payload, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
@@ -1868,9 +2001,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
+        set({ productProjectFields: extractProductProjectFields(payload) });
         get().setAutoSaveStatus('saved');
         set({ isDirty: false });
-        setToastMessage(`Saved project: ${payload.projectName}`);
+        if (exportData.failedAssetIds.length > 0) {
+            setToastMessage(
+                `Saved project with ${exportData.failedAssetIds.length} linked image(s). Some images may require network access when reopened.`
+            );
+        } else {
+            setToastMessage(`Saved project: ${payload.projectName}`);
+        }
     },
 
     loadProjectFile: async (file) => {
@@ -1888,31 +2028,32 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const fallbackName = file.name
                 .replace(/\.apocaproject\.json$/i, '')
                 .replace(/\.json$/i, '');
-            const projectName =
-                typeof raw.projectName === 'string' && raw.projectName.trim().length > 0
-                    ? raw.projectName
-                    : (fallbackName || 'Untitled Project');
-            const activeTheme = raw.activeTheme && typeof raw.activeTheme === 'object'
-                ? (raw.activeTheme as ApocapaletteTheme)
-                : null;
-            const rawUnitMode = raw.unitMode;
+            const normalizedPayload = normalizeDesignSpaceProjectPayload<ProjectPage>(raw, {
+                projectName: fallbackName || 'Untitled Project',
+                defaultBackground: DEFAULT_CANVAS_BACKGROUND,
+            });
+            const projectName = normalizedPayload.projectName;
+            const activeTheme = getPayloadActiveTheme(normalizedPayload);
+            const rawUnitMode = normalizedPayload.unitMode;
             const normalizedUnitMode =
                 rawUnitMode === 'px' || rawUnitMode === 'in' || rawUnitMode === 'cm' || rawUnitMode === 'mm'
                     ? rawUnitMode
                     : 'in';
 
-            const rawPages = Array.isArray(raw.pages) ? raw.pages : null;
+            const rawPages = Array.isArray(normalizedPayload.pages) && normalizedPayload.pages.length > 0
+                ? normalizedPayload.pages
+                : null;
             const safeActivePageIndex = rawPages && rawPages.length > 0
-                ? Math.max(0, Math.min((raw.activePageIndex ?? 0) as number, rawPages.length - 1))
+                ? Math.max(0, Math.min((normalizedPayload.activePageIndex ?? 0) as number, rawPages.length - 1))
                 : 0;
-            let canvasData = raw.canvasData;
+            let canvasData = normalizedPayload.canvasData;
             if (!canvasData && (!rawPages || rawPages.length === 0)) {
                 throw new Error('Missing canvas data');
             }
             canvasData = getInitialPageLoadData(rawPages as ProjectPage[] | null, safeActivePageIndex, canvasData);
             const fileAssets =
-                raw.assets && typeof raw.assets === 'object'
-                    ? (raw.assets as Record<string, string>)
+                normalizedPayload.assets && typeof normalizedPayload.assets === 'object'
+                    ? normalizedPayload.assets
                     : {};
             const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
                 prepareCanvasDataForPersistence(canvasData || { objects: [] }, fileAssets);
@@ -1921,7 +2062,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 nextAssets
             );
 
-            const nextSize = raw.canvasSize;
+            const nextSize = normalizedPayload.canvasSize;
             const pageSize = rawPages && rawPages.length > 0
                 ? normalizePageSize((rawPages[safeActivePageIndex] as ProjectPage | undefined)?.canvasSize, normalizePageSize(nextSize))
                 : normalizePageSize(nextSize);
@@ -1938,6 +2079,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const nextCanvas = get().canvas;
             if (!nextCanvas) return;
             await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
 
             sanityCheckCanvas(nextCanvas, activeTheme);
@@ -1946,6 +2088,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
                 projectName,
+                productProjectFields: extractProductProjectFields(normalizedPayload),
                 isProjectPresetsOpen: false,
                 imageAssets: nextAssets,
                 pages: normalizedPages as any,
@@ -2038,12 +2181,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (result.success && result.collection) {
             set({ toastMessage: `Theme Imported: ${result.collection.name}` });
             // Apply theme to canvas
-            const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+            const { canvas, canvasReadyState, saveState, requestLayerSync, syncCanvasToStore, acquireSyncLock, releaseSyncLock } = get();
             const themeData = useThemeStore.getState().themeData;
             if (canvas && canvasReadyState === 'ready' && themeData) {
                 applyThemeToCanvas(canvas, themeData, {
                     saveState,
                     requestLayerSync,
+                    syncCanvasToStore,
                     acquireSyncLock,
                     releaseSyncLock,
                 });
@@ -2060,11 +2204,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const selectedTheme = brandVault.find(brand => brand.id === id);
             set({ toastMessage: `Theme Changed: ${selectedTheme?.name || 'Theme'}` });
             // Apply theme to canvas
-            const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+            const { canvas, canvasReadyState, saveState, requestLayerSync, syncCanvasToStore, acquireSyncLock, releaseSyncLock } = get();
             if (canvas && canvasReadyState === 'ready') {
                 applyThemeToCanvas(canvas, themeData, {
                     saveState,
                     requestLayerSync,
+                    syncCanvasToStore,
                     acquireSyncLock,
                     releaseSyncLock,
                 });
@@ -2075,11 +2220,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     applyTheme: (theme) => {
         useThemeStore.getState().setThemeData(theme);
         // Apply theme to canvas if ready
-        const { canvas, canvasReadyState, saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = get();
+        const { canvas, canvasReadyState, saveState, requestLayerSync, syncCanvasToStore, acquireSyncLock, releaseSyncLock } = get();
         if (canvas && canvasReadyState === 'ready') {
             applyThemeToCanvas(canvas, theme, {
                 saveState,
                 requestLayerSync,
+                syncCanvasToStore,
                 acquireSyncLock,
                 releaseSyncLock,
             });
@@ -2092,9 +2238,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     resetTheme: () => {
-        const { canvas, saveState } = get();
+        const { canvas, saveState, requestLayerSync, syncCanvasToStore } = get();
         if (!canvas) return;
-        resetAllThemeLinks(canvas, { saveState });
+        resetAllThemeLinks(canvas, { saveState, requestLayerSync, syncCanvasToStore });
         set({ toastMessage: 'Theme links reset' });
     },
 
@@ -2141,19 +2287,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     setObjectThemedFill: (tokenRole) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const themeData = useThemeStore.getState().themeData;
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas && themeData) {
             applyThemedFillToObject(selectedObject, canvas, tokenRole, themeData, {
                 saveState,
                 requestLayerSync,
+                syncCanvasToStore,
             });
         }
     },
 
     applyTint: (tokenRole) => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const themeData = useThemeStore.getState().themeData;
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         const image = selectedObject as fabric.Image;
@@ -2161,12 +2308,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             applyThemeTintToImage(image, canvas, tokenRole, themeData, {
                 saveState,
                 requestLayerSync,
+                syncCanvasToStore,
             });
         }
     },
 
     resetObjectToDefaultTheme: () => {
-        const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
+        const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const themeData = useThemeStore.getState().themeData;
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (!selectedObject || !canvas || !themeData) return;
@@ -2174,6 +2322,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         resetObjectTheme(selectedObject, canvas, themeData, {
             saveState,
             requestLayerSync,
+            syncCanvasToStore,
         });
     },
 
@@ -2325,17 +2474,21 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             get().syncActivePageFromCanvas();
             const exportData = await buildExportCanvasData(canvas);
 
-            const payload = {
+            const savedAt = new Date().toISOString();
+            const payload = buildProjectFilePayload({
                 projectName: safeName,
                 pages: get().pages,
                 activePageIndex: get().activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
                 activeTheme: themeData,
-                lastUpdated: new Date().toISOString(),
+                lastUpdated: savedAt,
                 canvasSize: getDocumentCanvasSize(),
                 unitMode,
-            };
+            }, get().productProjectFields, {
+                projectId: currentLibraryProjectId ?? undefined,
+                now: savedAt,
+            });
 
             const jsonPayload = JSON.stringify(payload);
 
@@ -2365,12 +2518,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({
                 currentLibraryProjectId: nextLibraryProjectId,
                 projectName: safeName,
+                productProjectFields: extractProductProjectFields(payload),
                 isDirty: false,
                 autoSaveStatus: 'saved',
                 saveStatus: 'saved',
                 toastMessage: didUpdateExistingProject
                     ? `Updated library project: ${safeName}`
-                    : `Saved to library: ${safeName}`,
+                    : exportData.failedAssetIds.length > 0
+                        ? `Saved to library with ${exportData.failedAssetIds.length} linked image(s)`
+                        : `Saved to library: ${safeName}`,
             });
         } catch (error) {
             console.error('Failed to save project:', error);
@@ -2400,19 +2556,25 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
 
             const parsed = JSON.parse(result.canvasData);
-            const rawPages = Array.isArray(parsed.pages) ? parsed.pages : null;
+            const normalizedPayload = normalizeDesignSpaceProjectPayload<ProjectPage>(parsed, {
+                projectName: result.project.name,
+                defaultBackground: DEFAULT_CANVAS_BACKGROUND,
+            });
+            const rawPages = Array.isArray(normalizedPayload.pages) && normalizedPayload.pages.length > 0
+                ? normalizedPayload.pages
+                : null;
             const safeActivePageIndex = rawPages && rawPages.length > 0
-                ? Math.max(0, Math.min((parsed.activePageIndex ?? 0) as number, rawPages.length - 1))
+                ? Math.max(0, Math.min((normalizedPayload.activePageIndex ?? 0) as number, rawPages.length - 1))
                 : 0;
-            const rawCanvasData = getInitialPageLoadData(rawPages as ProjectPage[] | null, safeActivePageIndex, parsed.canvasData);
-            const rawAssets = parsed.assets && typeof parsed.assets === 'object'
-                ? (parsed.assets as Record<string, string>)
+            const rawCanvasData = getInitialPageLoadData(rawPages as ProjectPage[] | null, safeActivePageIndex, normalizedPayload.canvasData);
+            const rawAssets = normalizedPayload.assets && typeof normalizedPayload.assets === 'object'
+                ? normalizedPayload.assets
                 : {};
-            const activeTheme = parsed.activeTheme ?? null;
+            const activeTheme = getPayloadActiveTheme(normalizedPayload);
             const canvasSize = rawPages && rawPages.length > 0
                 ? (rawPages[safeActivePageIndex] as ProjectPage | undefined)?.canvasSize
-                : parsed.canvasSize;
-            const unitMode = parsed.unitMode;
+                : normalizedPayload.canvasSize;
+            const unitMode = normalizedPayload.unitMode;
 
             const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
                 prepareCanvasDataForPersistence(rawCanvasData || { objects: [] }, rawAssets);
@@ -2448,6 +2610,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const nextCanvas = get().canvas;
             if (!nextCanvas) return;
             await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
             sanityCheckCanvas(nextCanvas, activeTheme);
             requestLayerSync();
@@ -2468,6 +2631,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 currentLibraryProjectId: projectId,
                 imageAssets: nextAssets,
                 projectName: result.project.name,
+                productProjectFields: extractProductProjectFields(normalizedPayload),
                 isProjectPresetsOpen: false,
                 pages: normalizedPages as any,
                 activePageIndex: safeActivePageIndex,
@@ -2534,41 +2698,49 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     updateCurrentProject: async () => {
-        const { projectName, canvas } = get();
+        const { projectName, currentLibraryProjectId, canvas } = get();
         if (!canvas || !projectName) return;
 
         try {
             get().syncActivePageFromCanvas();
             const exportData = await buildExportCanvasData(canvas);
+            const { db } = await import('../db');
+            let targetProjectId = currentLibraryProjectId;
+            if (!targetProjectId) {
+                const projects = await db.getAllProjects();
+                targetProjectId = projects.find(p => p.name === projectName)?.id ?? null;
+            }
+            if (!targetProjectId) return;
 
-            const payload = {
+            const savedAt = new Date().toISOString();
+            const payload = buildProjectFilePayload({
+                projectName,
+                pages: get().pages,
+                activePageIndex: get().activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
                 activeTheme: useThemeStore.getState().themeData,
-                lastUpdated: new Date().toISOString(),
+                lastUpdated: savedAt,
                 canvasSize: getDocumentCanvasSize(),
                 unitMode: get().unitMode,
-            };
+            }, get().productProjectFields, {
+                projectId: targetProjectId,
+                now: savedAt,
+            });
 
             const jsonPayload = JSON.stringify(payload);
 
-            // Generate thumbnail - using 0.1 multiplier for small, fast thumbnails
             const thumbnail = canvas.toDataURL({
                 format: 'png',
-                multiplier: 0.1, // Small thumbnail
+                multiplier: 0.1,
                 quality: 0.8
             });
 
-            // Import and use the database
-            const { db } = await import('../db');
-
-            // Find existing project by name and update it
-            const projects = await db.getAllProjects();
-            const existingProject = projects.find(p => p.name === projectName);
-
-            if (existingProject) {
-                await db.updateProject(existingProject.id!, projectName, jsonPayload, thumbnail);
-            }
+            await db.updateProject(targetProjectId, projectName, jsonPayload, thumbnail);
+            set({
+                currentLibraryProjectId: targetProjectId,
+                productProjectFields: extractProductProjectFields(payload),
+            });
         } catch (error) {
             console.error('Failed to update project:', error);
             throw error;
@@ -2703,6 +2875,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             saveStatus: state.saveStatus,
             pages: state.pages,
             activePageIndex: state.activePageIndex,
+            productProjectFields: state.productProjectFields,
             isDirty: state.isDirty,
         }),
     }
