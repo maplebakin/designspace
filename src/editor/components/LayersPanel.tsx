@@ -9,6 +9,7 @@ import { isUserObject } from '../utils/objectUtils';
 import * as objectFactories from '../fabric/objectFactories';
 import { loadImageFromFile } from '../services/assetLoader';
 import { Tooltip } from './Tooltip';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
 export const LayersPanel: React.FC = () => {
   const {
@@ -97,10 +98,7 @@ export const LayersPanel: React.FC = () => {
       if (!nextVisible && selectedLayerIds.includes(id)) {
         syncSelectionFromCanvas(canvas);
       }
-      canvas.requestRenderAll();
-      syncCanvasToStore(canvas);
-      requestLayerSync();
-      saveState();
+      commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
     }
   };
   
@@ -112,10 +110,7 @@ export const LayersPanel: React.FC = () => {
       } else {
         canvas.sendObjectBackwards(object);
       }
-      canvas.requestRenderAll();
-      syncCanvasToStore(canvas);
-      requestLayerSync();
-      saveState();
+      commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
     }
   };
 
@@ -141,10 +136,7 @@ export const LayersPanel: React.FC = () => {
       canvas.moveObjectTo(obj, index);
     });
 
-    canvas.requestRenderAll();
-    syncCanvasToStore(canvas);
-    requestLayerSync();
-    saveState();
+    commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
   };
 
   const handleReorder = (sourceId: string, targetId: string) => {
@@ -193,10 +185,7 @@ export const LayersPanel: React.FC = () => {
       } else {
         syncSelectionFromCanvas(canvas);
       }
-      canvas.requestRenderAll();
-      syncCanvasToStore(canvas);
-      requestLayerSync();
-      saveState();
+      commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
     }
   };
 
@@ -345,10 +334,7 @@ export const LayersPanel: React.FC = () => {
     canvas.centerObject(result.asset);
     selectObjectById(result.id);
     sanityCheckCanvas(canvas, themeData);
-    syncCanvasToStore(canvas);
-    canvas.requestRenderAll();
-    requestLayerSync();
-    saveState();
+    commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
 
     if (imageInputRef.current) imageInputRef.current.value = '';
     setIsMenuOpen(false);

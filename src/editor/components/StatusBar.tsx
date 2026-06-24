@@ -110,7 +110,7 @@ export const StatusBar: React.FC = () => {
   const bleedWarning = unitMode === 'in' && canvas && canvasWidth > 0 && canvasHeight > 0 && !hasBleedCoverage;
 
   return (
-    <footer className="bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
+    <footer data-testid="status-bar" className="design-space-statusbar bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-t border-[color:var(--ui-border)] h-12 flex items-center justify-between px-4 gap-4 z-10">
       <div className="flex items-center gap-4 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
         {/* Selection Indicator */}
         {selectionLabel && (

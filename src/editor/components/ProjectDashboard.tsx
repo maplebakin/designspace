@@ -15,9 +15,10 @@ const INITIAL_DISPLAY_COUNT = 5;
 
 interface ProjectDashboardProps {
   onProjectOpen?: () => void | Promise<void>;
+  onOpenComplete?: () => void | Promise<void>;
 }
 
-export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpen }) => {
+export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpen, onOpenComplete }) => {
   const [allProjects, setAllProjects] = useState<ProjectItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
@@ -105,6 +106,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
       return;
     }
     await loadAction();
+    await onOpenComplete?.();
   };
 
   const openProjectPresetsInEditor = async () => {
@@ -115,6 +117,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     });
     setShowOnboarding(true);
     await onProjectOpen?.();
+    await onOpenComplete?.();
   };
 
   const startRename = (projectId: string, currentName: string) => {
@@ -141,44 +144,94 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   return (
-    <div className="min-h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex items-center justify-center p-6" style={{ background: 'var(--bg-warm-radial)' }}>
-      <div className="w-full max-w-[880px] rounded-[2rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] p-10" style={{ boxShadow: 'var(--hero-shadow)' }}>
-        <div className="text-center mb-8">
-          <div className="mx-auto w-14 h-14 rounded-2xl bg-[color:var(--brand-primary)]/20 text-[color:var(--brand-primary)] flex items-center justify-center mb-3.5">
-            <Sparkles className="w-6 h-6 stroke-[1.5]" />
+    <div
+      data-testid="dashboard-root"
+      className="project-dashboard-root min-h-screen bg-[color:var(--ui-bg)] px-6 py-8 text-[color:var(--ui-text)] md:px-10 lg:py-12"
+      style={{ background: 'var(--bg-warm-radial)' }}
+    >
+      <div
+        data-testid="dashboard-panel"
+        className="project-dashboard-panel mx-auto w-full max-w-[1120px] rounded-[2rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] p-5 text-[color:var(--ui-text)] backdrop-blur-[var(--ui-blur)] md:p-7 lg:p-8"
+        style={{ boxShadow: 'var(--hero-shadow)' }}
+      >
+        <section className="project-dashboard-header rounded-[1.75rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-6 md:p-8">
+          <div className="project-dashboard-header-inner flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div className="project-dashboard-title-group flex items-start gap-4">
+              <div className="project-dashboard-brand-icon flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--brand-primary)]/30 bg-[color:var(--brand-primary)]/16 text-[color:var(--brand-primary)]">
+                <Sparkles className="h-7 w-7 stroke-[1.5]" />
+              </div>
+              <div>
+                <p className="project-dashboard-eyebrow text-xs font-semibold uppercase tracking-widest text-[color:var(--brand-primary)]">Printable Product Studio</p>
+                <h1 className="project-dashboard-title mt-2 text-4xl font-semibold tracking-normal md:text-5xl" style={{ fontFamily: 'var(--font-display)' }}>Design Space</h1>
+                <p className="project-dashboard-description mt-4 max-w-2xl text-base font-medium leading-7 text-[color:var(--ui-panel-text)]">
+                  Create themed printable products, reopen saved projects, and package sellable downloads from one workspace.
+                </p>
+              </div>
+            </div>
+            <div className="project-dashboard-status rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-4 py-3 text-sm font-semibold text-[color:var(--ui-panel-text)]">
+              Product projects stay editable until you are ready to export.
+            </div>
           </div>
-          <h1 className="text-4xl font-semibold tracking-[0.02em]" style={{ fontFamily: 'var(--font-display)' }}>Design Space</h1>
-          <p className="text-[color:var(--ui-panel-text)]/70 mt-3 text-sm">Multi-page design studio</p>
-        </div>
+        </section>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+        <div data-testid="dashboard-actions" className="project-dashboard-actions mt-6 grid grid-cols-1 gap-5 md:grid-cols-2">
           <button
             onClick={() => {
               void openProjectPresetsInEditor();
             }}
             data-testid="dashboard-new-project"
-            className="h-12 rounded-xl text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 transition-all duration-200 border border-[color:var(--brand-primary)]/35 bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)] hover:bg-[color:var(--brand-primary)]/22"
+            className="project-dashboard-action-card project-dashboard-action-card-primary group flex min-h-[150px] flex-col justify-start gap-4 rounded-[1.5rem] border border-[color:var(--brand-primary)]/38 bg-[color:var(--ui-panel)] p-6 text-left text-[color:var(--ui-text)] shadow-[var(--ui-shadow-soft)] outline-none transition-colors duration-200 hover:border-[color:var(--brand-primary)]/70 hover:bg-[color:var(--brand-primary)]/12 focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]/45"
             style={{ fontFamily: 'var(--font-ui)' }}
           >
-            <Plus className="w-4 h-4 stroke-[1.5]" /> New Project
+            <span className="project-dashboard-card-top flex items-center justify-between gap-4">
+              <span className="project-dashboard-card-icon project-dashboard-card-icon-primary flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[color:var(--brand-primary)] text-white shadow-sm">
+                <Plus className="h-5 w-5 stroke-[1.5]" aria-hidden="true" />
+              </span>
+              <span className="project-dashboard-card-badge rounded-full border border-[color:var(--brand-primary)]/30 bg-[color:var(--ui-panel)] px-3 py-1 text-xs font-semibold text-[color:var(--brand-primary)]">
+                Start
+              </span>
+            </span>
+            <span>
+              <span className="project-dashboard-card-title block text-xl font-semibold tracking-normal text-[color:var(--ui-text)]">Create Product</span>
+              <span className="project-dashboard-card-description mt-2 block max-w-md text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]">
+                Start a printable product project and choose a recipe or preset in the editor.
+              </span>
+            </span>
           </button>
 
-          <label className="h-12 rounded-xl text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-[color:var(--ui-panel-text)] hover:bg-[color:var(--ui-surface-strong)] hover:text-[color:var(--ui-text)]"
+          <label
+            data-testid="dashboard-open-project"
+            className="project-dashboard-action-card group flex min-h-[150px] cursor-pointer flex-col justify-start gap-4 rounded-[1.5rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-6 text-left text-[color:var(--ui-text)] shadow-[var(--ui-shadow-soft)] outline-none transition-colors duration-200 hover:border-[color:var(--brand-primary)]/45 hover:bg-[color:var(--ui-surface-strong)] focus-within:ring-2 focus-within:ring-[color:var(--brand-primary)]/35"
             style={{ fontFamily: 'var(--font-ui)', boxShadow: 'var(--ui-shadow-soft)' }}
           >
-            <FolderOpen className="w-4 h-4 stroke-[1.5]" /> Open Project
+            <span className="project-dashboard-card-top flex items-center justify-between gap-4">
+              <span className="project-dashboard-card-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)]">
+                <FolderOpen className="h-5 w-5 stroke-[1.5]" aria-hidden="true" />
+              </span>
+              <span className="project-dashboard-card-badge rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--ui-panel-text)]">
+                File
+              </span>
+            </span>
+            <span>
+              <span className="project-dashboard-card-title block text-xl font-semibold tracking-normal text-[color:var(--ui-text)]">Open Product Project</span>
+              <span className="project-dashboard-card-description mt-2 block max-w-md text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]">
+                Load an existing Design Space project file from your computer.
+              </span>
+            </span>
             <input
               type="file"
+              data-testid="dashboard-open-file-input"
               accept=".apocaproject.json,.json"
               className="hidden"
               onChange={(e) => {
+                const input = e.currentTarget;
                 void (async () => {
-                  const file = e.target.files?.[0];
+                  const file = input.files?.[0];
                   if (!file) return;
                   try {
                     await openProjectInEditor(() => loadProjectFile(file));
                   } finally {
-                    e.currentTarget.value = '';
+                    input.value = '';
                   }
                 })();
               }}
@@ -186,31 +239,36 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
           </label>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Recent Projects Library</h2>
+        <section className="project-dashboard-library mt-7 rounded-[1.75rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-5 md:p-6">
+          <div className="project-dashboard-library-header mb-5 flex items-center justify-between gap-3">
+            <div>
+              <p className="project-dashboard-eyebrow text-xs font-semibold uppercase tracking-widest text-[color:var(--brand-primary)]">Library</p>
+              <h2 className="project-dashboard-section-title mt-1 text-xl font-semibold text-[color:var(--ui-text)]">Recent Product Projects</h2>
+            </div>
             {!isLoading && allProjects.length > 0 && (
-              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60">
+              <span className="project-dashboard-count rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-3 py-1 text-xs font-medium uppercase tracking-widest text-[color:var(--ui-panel-text)]">
                 {allProjects.length} project{allProjects.length !== 1 ? 's' : ''}
               </span>
             )}
           </div>
           {isLoading ? (
-            <div className="text-sm text-[color:var(--ui-panel-text)]">Loading…</div>
+            <div className="project-dashboard-empty-state rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-5 py-7 text-base font-medium text-[color:var(--ui-panel-text)]">Loading…</div>
           ) : allProjects.length === 0 ? (
-            <div className="text-sm text-[color:var(--ui-panel-text)]">No recent projects yet.</div>
+            <div className="project-dashboard-empty-state rounded-2xl border border-dashed border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-5 py-9 text-base font-medium leading-7 text-[color:var(--ui-panel-text)]">
+              No product projects yet.
+            </div>
           ) : (
-            <div className="space-y-3">
+            <div className="project-dashboard-project-list grid gap-3">
               {displayedProjects.map((project) => (
                 <div
                   key={project.id}
                   data-testid="dashboard-project-card"
-                  className="w-full rounded-2xl px-4 py-3 transition-all duration-200 group border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/60 hover:bg-[color:var(--ui-surface-strong)] cursor-default"
+                  className="project-dashboard-project-card group flex items-center gap-3 rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-3 transition-colors duration-200 hover:border-[color:var(--brand-primary)]/35 hover:bg-[color:var(--ui-surface-strong)]"
                   style={{ boxShadow: 'var(--ui-shadow-soft)' }}
                 >
                   {editingProjectId === project.id ? (
-                    <div className="flex items-center gap-3">
-                      <div className="w-14 h-14 rounded-xl shrink-0 border border-[color:var(--ui-border)] overflow-hidden flex items-center justify-center bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)] text-lg font-semibold">
+                    <div className="project-dashboard-edit-row flex flex-1 items-center gap-4">
+                      <div className="project-dashboard-project-thumb flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-xl font-semibold text-[color:var(--brand-primary)]">
                         {project.thumbnail ? (
                           <img src={project.thumbnail} alt="" className="w-full h-full object-cover" />
                         ) : (
@@ -228,42 +286,47 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                         }}
                         onBlur={() => void commitRename(project.id)}
                         data-testid="dashboard-rename-input"
-                        className="flex-1 bg-transparent text-sm text-[color:var(--ui-text)] outline-none border-b border-[color:var(--brand-primary)]/50 pb-0.5"
+                        className="project-dashboard-rename-input flex-1 border-b border-[color:var(--brand-primary)]/50 bg-transparent pb-1 text-base text-[color:var(--ui-text)] outline-none"
                       />
                     </div>
                   ) : (
-                    <div className="flex items-center gap-3">
-                      <div className="w-14 h-14 rounded-xl shrink-0 border border-[color:var(--ui-border)] overflow-hidden flex items-center justify-center bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)] text-lg font-semibold">
-                        {project.thumbnail ? (
-                          <img src={project.thumbnail} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          project.name.charAt(0).toUpperCase()
-                        )}
-                      </div>
+                    <>
                       <button
-                        className="flex-1 text-left min-w-0"
+                        className="project-dashboard-project-open flex min-w-0 flex-1 items-center gap-4 rounded-xl p-2 text-left outline-none transition-colors duration-200 hover:bg-[color:var(--ui-surface-soft)] focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]/35"
                         onClick={() => void openProjectInEditor(() => loadProject(project.id))}
                       >
-                        <div className="text-sm text-[color:var(--ui-text)] truncate font-medium">{project.name}</div>
-                        <div className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60 mt-1">{formatDate(project.lastModified)}</div>
+                        <span className="project-dashboard-project-thumb flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-xl font-semibold text-[color:var(--brand-primary)]">
+                          {project.thumbnail ? (
+                            <img src={project.thumbnail} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            project.name.charAt(0).toUpperCase()
+                          )}
+                        </span>
+                        <span className="project-dashboard-project-copy min-w-0">
+                          <span className="project-dashboard-project-title block truncate text-base font-semibold text-[color:var(--ui-text)]">{project.name}</span>
+                          <span className="project-dashboard-project-date mt-1 block text-sm font-medium leading-5 text-[color:var(--ui-panel-text)]">{formatDate(project.lastModified)}</span>
+                          <span className="project-dashboard-project-pill mt-2 inline-flex rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-2.5 py-1 text-xs font-semibold text-[color:var(--ui-panel-text)]">
+                            Open editable product project
+                          </span>
+                        </span>
                       </button>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); startRename(project.id, project.name); }}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-[color:var(--ui-hover-strong)] text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] transition-all duration-150 shrink-0"
+                        className="project-dashboard-rename-button shrink-0 rounded-lg p-2 text-[color:var(--ui-panel-text)] opacity-80 transition-all duration-150 hover:bg-[color:var(--ui-hover-strong)] hover:text-[color:var(--brand-primary)] group-hover:opacity-100"
                         title="Rename project"
                         data-testid={`rename-project-${project.id}`}
                       >
-                        <Pencil className="w-3.5 h-3.5 stroke-[1.5]" />
+                        <Pencil className="h-4 w-4 stroke-[1.5]" />
                       </button>
-                    </div>
+                    </>
                   )}
                 </div>
               ))}
               {hasMoreProjects && (
                 <button
                   onClick={() => setShowAll(!showAll)}
-                  className="w-full flex items-center justify-center gap-1.5 py-3 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--brand-primary)] transition-colors duration-200"
+                  className="project-dashboard-show-all flex w-full items-center justify-center gap-1.5 rounded-xl py-3 text-sm font-medium uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-colors duration-200 hover:bg-[color:var(--ui-panel)] hover:text-[color:var(--brand-primary)]"
                 >
                   {showAll ? (
                     <>
@@ -280,7 +343,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
               )}
             </div>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );

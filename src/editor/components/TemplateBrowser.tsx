@@ -4,12 +4,12 @@ import { shallow } from 'zustand/shallow';
 import { DEFAULT_CANVAS_BACKGROUND, useEditorStore, Template } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
-import { resizeCanvas } from '../fabric/canvasUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
 import { toSerializableObject } from '../utils/serialization';
 import { isPersistableCanvasObject, isUserObject } from '../utils/objectUtils';
 import { renderCanvasToPngBlob } from '../utils/renderToPng';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 import {
     listTemplates,
     saveTemplate,
@@ -195,6 +195,10 @@ export const TemplateBrowser: React.FC = () => {
         setToastMessage,
         canvas,
         requestLayerSync,
+        syncCanvasToStore,
+        syncActivePageFromCanvas,
+        saveState,
+        createProject,
         setUnitMode,
         setCanvasBackgroundColor,
         unitMode,
@@ -204,6 +208,10 @@ export const TemplateBrowser: React.FC = () => {
             setToastMessage: state.setToastMessage,
             canvas: state.canvas,
             requestLayerSync: state.requestLayerSync,
+            syncCanvasToStore: state.syncCanvasToStore,
+            syncActivePageFromCanvas: state.syncActivePageFromCanvas,
+            saveState: state.saveState,
+            createProject: state.createProject,
             setUnitMode: state.setUnitMode,
             setCanvasBackgroundColor: state.setCanvasBackgroundColor,
             unitMode: state.unitMode,
@@ -534,16 +542,25 @@ export const TemplateBrowser: React.FC = () => {
             }
         }
 
-        useEditorStore.getState().clearSelection();
-        canvas.clear();
-        requestLayerSync();
-        setUnitMode(preset.unit);
-
         const widthPx = preset.unit === 'in' ? Math.round(preset.width * preset.dpi) : preset.width;
         const heightPx = preset.unit === 'in' ? Math.round(preset.height * preset.dpi) : preset.height;
-        setCanvasBackgroundColor('#ffffff');
-        canvas.requestRenderAll();
-        resizeCanvas(widthPx, heightPx);
+        createProject({
+            canvasSize: { width: widthPx, height: heightPx },
+            unitMode: preset.unit,
+            source: 'project-presets-modal-confirmed',
+        });
+        setUnitMode(preset.unit);
+        setCanvasBackgroundColor('#ffffff', { save: false });
+        commitCanvasMutation(
+            canvas,
+            {
+                syncCanvasToStore,
+                syncActivePageFromCanvas,
+                saveState,
+                requestLayerSync,
+            },
+            { syncPage: true }
+        );
         setToastMessage(`Blank canvas: ${preset.name}`);
     };
 

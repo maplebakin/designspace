@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
-  Layers,
   MousePointer2,
   Pencil,
   Eraser,
@@ -11,16 +10,13 @@ import {
   PaintBucket,
   Magnet,
   Grid,
-  SlidersHorizontal,
   Download,
   Home,
   Undo2,
   Redo2,
   Keyboard,
   Type,
-  Frame,
   Search,
-  FileText,
 } from 'lucide-react';
 import {
   getPendingInsertionCandidateIds,
@@ -34,7 +30,6 @@ import { useCanvasStore } from '../state/useCanvasStore';
 import { AssetLibrary } from './AssetLibrary';
 import { BrandModal } from './BrandModal';
 import { ExportModal } from './ExportModal';
-import { LayersPanel } from './LayersPanel';
 import { CanvasStage } from './CanvasStage';
 import { CanvasRuler } from './CanvasRuler';
 import { StatusBar } from './StatusBar';
@@ -47,17 +42,18 @@ import { cleanupAssets } from '../services/assetLoader';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { SelectionToolbar } from './SelectionToolbar';
 import { ProjectBrowser } from './ProjectBrowser';
-import { PropertiesPanel } from './PropertiesPanel';
 import { Tooltip } from './Tooltip';
 import { KeyboardShortcutHelp } from './KeyboardShortcutHelp';
 import { registerToastCallback } from '../utils/errorHandling';
 import { SaveStatusBadge } from './SaveStatusBadge';
 import { ProjectQuickOpenModal } from './ProjectQuickOpenModal';
 import { PageStrip } from './PageStrip';
-import { PageBorderPopover } from './PageBorderPopover';
 import { FileDropdown } from './FileDropdown';
 import { NavStrip, NAV_ITEMS, NavId } from './NavStrip';
 import { ShapesPanel } from './ShapesPanel';
+import { ProductPageNavigator } from './ProductPageNavigator';
+import { ProductStarter } from './ProductStarter';
+import { RightInspector, type InspectorTab } from './RightInspector';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
@@ -65,7 +61,6 @@ const CHROME_ICON_BUTTON = 'ui-button-soft group flex items-center justify-cente
 const TOOLBAR_GROUP = 'ui-toolbar-group flex items-center gap-1 rounded-full px-2 py-1.5';
 const TOOLBAR_GROUP_SPACED = 'ui-toolbar-group flex items-center gap-2 rounded-full px-3 py-1.5';
 const TOOL_BUTTON = 'ui-button-icon rounded-lg p-2 transition-all duration-200 hover:scale-105 active:scale-95';
-const PANEL_ACTION_BUTTON = 'ui-button-soft w-full flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] uppercase tracking-widest';
 
 interface ProjectNameEditorProps {
   name: string;
@@ -146,7 +141,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty,
     saveStatus,
     activeTool,
-    selectedObjectId,
     setActiveTool,
     setBrushColor,
     setCanvasBackgroundColor,
@@ -163,6 +157,9 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     redo,
     projectName,
     renameCurrentProject,
+    productProjectFields,
+    pages,
+    activePageIndex,
   } = useEditorStore(
     (state) => ({
       toastMessage: state.toastMessage,
@@ -174,7 +171,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     consumeHistoryDirty: state.consumeHistoryDirty,
     saveStatus: state.saveStatus,
     activeTool: state.activeTool,
-    selectedObjectId: state.selectedObjectId,
     setActiveTool: state.setActiveTool,
     setBrushColor: state.setBrushColor,
     setCanvasBackgroundColor: state.setCanvasBackgroundColor,
@@ -191,6 +187,9 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     redo: state.redo,
     projectName: state.projectName,
     renameCurrentProject: state.renameCurrentProject,
+    productProjectFields: state.productProjectFields,
+    pages: state.pages,
+    activePageIndex: state.activePageIndex,
   }),
     shallow
   );
@@ -210,10 +209,21 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
   const [isDesignSpaceImportOpen, setIsDesignSpaceImportOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState<NavId | null>(null);
+  const [activeNav, setActiveNav] = useState<NavId | 'starter' | null>(null);
   const [isFillPopoverOpen, setIsFillPopoverOpen] = useState(false);
   const [expandedToastId, setExpandedToastId] = useState<string | null>(null);
-  const [rightTab, setRightTab] = useState<'layers' | 'properties' | 'settings'>('layers');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('product');
+  const productTitle = productProjectFields?.productMetadata?.title || projectName || 'Untitled Product';
+  const recipeLabel = productProjectFields?.recipe
+    ? `${productProjectFields.recipe.id} v${productProjectFields.recipe.version}`
+    : 'Custom product';
+  const activePageName = pages[activePageIndex]?.name ?? `Page ${activePageIndex + 1}`;
+  const pageCountLabel = `${pages.length} page${pages.length === 1 ? '' : 's'}`;
+  const activePanelLabel = activeNav === 'starter'
+    ? 'Product Starter'
+    : activeNav === 'insert'
+      ? 'Insert / Templates'
+    : NAV_ITEMS.find((item) => item.id === activeNav)?.label;
 
   const activeToast = useMemo(() => {
     if (toast) return toast;
@@ -573,13 +583,9 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     };
   }, []);
 
-  useEffect(() => {
-    if (selectedObjectId) setRightTab('properties');
-  }, [selectedObjectId]);
-
   const handleSelectNav = (id: NavId | 'layers') => {
     if (id === 'layers') {
-      setRightTab('layers');
+      setInspectorTab('layers');
       return;
     }
     setActiveNav((prev) => (prev === id ? null : id));
@@ -588,6 +594,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   const renderPanel = () => {
     if (!activeNav) return null;
     switch (activeNav) {
+      case 'starter':
+        return <ProductStarter onRecipeCreated={() => setActiveNav(null)} />;
       case 'shapes':
         return <ShapesPanel />;
       case 'insert':
@@ -600,7 +608,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   };
 
   return (
-    <div data-testid="editor-shell" tabIndex={-1} className="w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col">
+    <div data-testid="editor-shell" tabIndex={-1} className="design-space-shell w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col">
         <BrandModal isOpen={isBrandModalOpen} onClose={() => setIsBrandModalOpen(false)} />
         <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
@@ -610,37 +618,29 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         
         {activeToast && (
             <div
-              className={`fixed bottom-4 right-4 z-50 w-[22rem] rounded-2xl border px-4 py-3 text-sm backdrop-blur-[var(--ui-blur)] ${
-                activeToast.variant === 'error'
-                  ? 'border-[rgba(199,88,88,0.38)] bg-[rgba(199,88,88,0.12)] text-[#8b3535]'
-                  : activeToast.variant === 'warning'
-                    ? 'border-[rgba(214,160,90,0.38)] bg-[rgba(214,160,90,0.12)] text-[#7a5420]'
-                    : activeToast.variant === 'success'
-                      ? 'border-[rgba(106,155,122,0.38)] bg-[rgba(106,155,122,0.12)] text-[#2e5e45]'
-                      : 'border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] text-[color:var(--ui-panel-text)]'
-              }`}
-              style={{ boxShadow: 'var(--popover-shadow)' }}
+              data-testid="design-space-toast"
+              className={`design-space-toast design-space-toast-${activeToast.variant}`}
               role="status"
               aria-live={activeToast.variant === 'error' ? 'assertive' : 'polite'}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="break-words text-xs uppercase tracking-widest">{activeToast.message}</p>
+              <div className="design-space-toast-main">
+                <div className="design-space-toast-copy">
+                  <p>{activeToast.message}</p>
                 </div>
                 <button
                   onClick={dismissToast}
-                  className="rounded-md border border-white/20 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                  className="design-space-toast-close"
                   aria-label="Dismiss toast"
                 >
                   Close
                 </button>
               </div>
               {(activeToast.details || activeToast.action) && (
-                <div className="mt-2 flex items-center gap-2">
+                <div className="design-space-toast-actions">
                   {activeToast.details && (
                     <button
                       onClick={() => setExpandedToastId((current) => (current === activeToast.id ? null : activeToast.id))}
-                      className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                      className="design-space-toast-action"
                     >
                       {expandedToastId === activeToast.id ? 'Hide Details' : 'Details'}
                     </button>
@@ -648,7 +648,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   {activeToast.action && (
                     <button
                       onClick={() => activeToast.action?.onAction()}
-                      className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-widest hover:bg-white/10"
+                      className="design-space-toast-action"
                     >
                       {activeToast.action.label}
                     </button>
@@ -656,26 +656,38 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 </div>
               )}
               {activeToast.details && expandedToastId === activeToast.id && (
-                <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-white/15 bg-black/20 p-2 text-[10px] leading-relaxed text-[color:var(--ui-text)] whitespace-pre-wrap">
+                <pre className="design-space-toast-details">
 {activeToast.details}
                 </pre>
               )}
             </div>
         )}
 
-      <header data-testid="editor-toolbar" className="h-14 flex items-center justify-between px-5 shrink-0 bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
-        <div className="min-w-[22rem] flex items-center gap-3">
-          <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)] shrink-0">DSGN Studio</h1>
-          <span className="text-[color:var(--ui-border)] text-xs select-none shrink-0">/</span>
+      <header data-testid="editor-toolbar" className="design-space-topbar h-16 flex items-center justify-between px-5 shrink-0 bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
+        <div className="design-space-projectbar min-w-[25rem] flex items-center gap-3">
+          <div className="design-space-brand shrink-0 leading-tight">
+            <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)]">Design Space</h1>
+            <p className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Printable Product Studio</p>
+          </div>
+          <span className="design-space-toolbar-divider text-[color:var(--ui-border)] text-xs select-none shrink-0">/</span>
           <ProjectNameEditor
             name={projectName}
             onRename={(n) => void renameCurrentProject(n)}
           />
+          <div
+            data-testid="product-context-summary"
+            className="hidden 2xl:flex max-w-[260px] flex-col rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/70 px-3 py-1 leading-tight"
+          >
+            <span className="truncate text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">{productTitle}</span>
+            <span className="truncate text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+              {recipeLabel} · {pageCountLabel} · {activePageName}
+            </span>
+          </div>
           <FileDropdown onImportDesignSpace={() => setIsDesignSpaceImportOpen(true)} />
           <SaveStatusBadge status={saveStatus} />
         </div>
-        <div className="flex-1 flex justify-center items-center gap-4">
-            <div className={TOOLBAR_GROUP}>
+        <div className="design-space-tool-groups flex-1 flex justify-center items-center gap-4">
+            <div className={`design-space-toolbar-group ${TOOLBAR_GROUP}`}>
                 <Tooltip content="Undo (⌘Z)" side="bottom">
                   <button
                       data-testid="toolbar-undo"
@@ -705,7 +717,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   </button>
                 </Tooltip>
             </div>
-            <div className={TOOLBAR_GROUP_SPACED}>
+            <div className={`design-space-toolbar-group ${TOOLBAR_GROUP_SPACED}`}>
                 <Tooltip content="Select (V)" side="bottom">
                   <button
                       onClick={() => setActiveTool('select')}
@@ -781,7 +793,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   </button>
                 </Tooltip>
             </div>
-            <div className={`relative ${TOOLBAR_GROUP_SPACED}`}>
+            <div className={`design-space-toolbar-group relative ${TOOLBAR_GROUP_SPACED}`}>
                 <Tooltip content="Pencil (P)" side="bottom">
                   <button
                       onClick={() => {
@@ -821,7 +833,6 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                                 value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
                                 onChange={(e) => {
                                   setCanvasBackgroundColor(e.target.value);
-                                  setIsFillPopoverOpen(false);
                                 }}
                                 className="h-6 w-10 cursor-pointer rounded border border-[color:var(--ui-border)] bg-transparent"
                                 aria-label="Canvas background color"
@@ -831,7 +842,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 </Popover>
             </div>
         </div>
-        <div className="w-auto flex justify-end items-center gap-4">
+        <div className="design-space-actions w-auto flex justify-end items-center gap-4">
             <CanvasSettingsPopover />
             {onBackToDashboard ? (
               <button
@@ -862,125 +873,91 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Keyboard className={ICON_SMALL} />
               </button>
             </Tooltip>
-            <Tooltip content="Export (⌘E)" side="bottom">
+            <Tooltip content="Export / Product ZIP (⌘E)" side="bottom">
               <button
                 onClick={() => setShowExportModal(true)}
-                className={CHROME_ICON_BUTTON}
+                className={CHROME_BUTTON}
                 aria-label="Export"
               >
                 <Download className={ICON_SMALL} />
+                <span>Export / ZIP</span>
               </button>
             </Tooltip>
         </div>
       </header>
-      <div className="flex-1 flex overflow-hidden">
-        <aside data-testid="left-panel" className="editor-side-panel-left w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex-col">
-          <div className="px-4 py-2.5 border-b border-[color:var(--border-subtle)] shrink-0">
-            <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Workspace</p>
-          </div>
-          <div className="flex-1 min-h-0 flex overflow-hidden">
-            <div className="w-[88px] border-r border-[color:var(--border-subtle)] overflow-y-auto shrink-0">
-              <NavStrip activeNav={activeNav} onSelect={handleSelectNav} />
+      <div data-testid="editor-workspace" className="design-space-workspace flex-1 flex overflow-hidden">
+        <aside data-testid="left-panel" className="design-space-left editor-side-panel-left w-[320px] bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] border-r border-[color:var(--ui-border)] flex-col">
+          <div className="design-space-left-header px-4 py-3 border-b border-[color:var(--border-subtle)] shrink-0 space-y-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">Product Workflow</p>
+              <p className="mt-1 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+                Start from a recipe, edit pages, theme, then export.
+              </p>
             </div>
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="design-space-workflow-buttons grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setActiveNav('starter')}
+                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
+              >
+                Starter
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveNav(null)}
+                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
+              >
+                Pages
+              </button>
+              <button
+                type="button"
+                onClick={() => setInspectorTab('theme')}
+                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
+              >
+                Theme
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(true)}
+                className="rounded-lg border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/10 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--brand-primary)] hover:bg-[color:var(--brand-primary)]/15"
+              >
+                Export ZIP
+              </button>
+            </div>
+          </div>
+          <div className="design-space-left-body flex-1 min-h-0 flex overflow-hidden">
+            <div className="design-space-nav-rail w-[88px] border-r border-[color:var(--border-subtle)] overflow-y-auto shrink-0">
+              <NavStrip activeNav={activeNav === 'starter' ? null : activeNav} onSelect={handleSelectNav} />
+            </div>
+            <div className="design-space-left-content flex-1 min-h-0 flex flex-col overflow-hidden">
               {activeNav ? (
                 <div className="flex flex-col h-full">
-                  <div className="px-3 py-2 border-b border-[color:var(--border-subtle)] shrink-0">
-                    <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{NAV_ITEMS.find((item) => item.id === activeNav)?.label}</span>
+                  <div className="design-space-panel-title px-3 py-2 border-b border-[color:var(--border-subtle)] shrink-0">
+                    <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">{activePanelLabel}</span>
                   </div>
                   <div className="flex-1 overflow-y-auto">
                     {renderPanel()}
                   </div>
                 </div>
               ) : (
-                <div className="p-3 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Select Shapes, Insert, or Assets.</div>
+                <ProductPageNavigator />
               )}
             </div>
           </div>
         </aside>
 
-        <main data-testid="canvas-workspace" className="flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
+        <main data-testid="canvas-workspace" className="design-space-canvas flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
             <SelectionToolbar />
             <CanvasStage onSelectNav={handleSelectNav} />
         </main>
 
-        <aside data-testid="right-panel" className="editor-side-panel-right bg-[color:var(--ui-panel)]/70 backdrop-blur-[var(--ui-blur)] transition-all duration-300 ease-in-out overflow-hidden w-80 border-l border-[color:var(--ui-border)] flex-col">
-            {/* Tab strip */}
-            <div className="flex border-b border-[color:var(--ui-border)] shrink-0">
-              <button
-                onClick={() => setRightTab('layers')}
-                data-testid="right-tab-layers"
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
-                  rightTab === 'layers'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                Layers
-              </button>
-              <button
-                onClick={() => setRightTab('properties')}
-                data-testid="right-tab-properties"
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
-                  rightTab === 'properties'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
-                }`}
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                Properties
-              </button>
-              <button
-                onClick={() => setRightTab('settings')}
-                data-testid="right-tab-settings"
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] uppercase tracking-widest transition-all duration-200 ${
-                  rightTab === 'settings'
-                    ? 'text-[color:var(--brand-primary)] border-b-2 border-[color:var(--brand-primary)] bg-[color:var(--ui-active-soft)]'
-                    : 'text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-[color:var(--ui-hover-soft)]'
-                }`}
-              >
-                <Frame className="w-3.5 h-3.5" />
-                Style
-              </button>
-            </div>
-            {/* Tab content */}
-            <div className="flex-1 overflow-hidden">
-              {rightTab === 'layers' && (
-                <div className="h-full overflow-y-auto">
-                  <LayersPanel />
-                </div>
-              )}
-              {rightTab === 'properties' && <PropertiesPanel />}
-              {rightTab === 'settings' && (
-                <div className="h-full overflow-y-auto p-4 space-y-4">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] mb-3">Page Border</p>
-                    <PageBorderPopover />
-                  </div>
-                  <div className="border-t border-[color:var(--ui-border)] pt-4">
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => setIsBrandModalOpen(true)}
-                        className={PANEL_ACTION_BUTTON}
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        Brand
-                      </button>
-                      <button
-                        onClick={() => setIsSettingsModalOpen(true)}
-                        className={PANEL_ACTION_BUTTON}
-                      >
-                        <SlidersHorizontal className="w-3.5 h-3.5" />
-                        Vibe Settings
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-        </aside>
+        <RightInspector
+          activeTab={inspectorTab}
+          onTabChange={setInspectorTab}
+          onOpenBrandKit={() => setIsBrandModalOpen(true)}
+          onOpenVibeSettings={() => setIsSettingsModalOpen(true)}
+        />
       </div>
       <PageStrip />
       <StatusBar />

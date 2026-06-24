@@ -17,7 +17,7 @@ interface NavStripProps {
 }
 
 export const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
-  <div className="flex flex-col py-2">
+  <div className="design-space-nav-strip flex flex-col py-2">
     {NAV_ITEMS.map((item) => {
       const isActive = activeNav === item.id;
       return (
@@ -25,7 +25,7 @@ export const NavStrip: React.FC<NavStripProps> = ({ activeNav, onSelect }) => (
           key={item.id}
           onClick={() => onSelect(item.id)}
           data-testid={`nav-${item.id}`}
-          className={`w-full border-l-2 px-2 py-3.5 text-center transition-all duration-200 ${
+          className={`design-space-nav-strip-button w-full border-l-2 px-2 py-3.5 text-center transition-all duration-200 ${
             isActive
               ? 'border-l-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/14 text-[color:var(--brand-primary)]'
               : 'border-l-transparent text-[color:var(--ui-panel-text)] hover:bg-[color:var(--ui-hover-soft)] hover:text-[color:var(--ui-text)]'

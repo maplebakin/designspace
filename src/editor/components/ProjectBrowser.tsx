@@ -18,7 +18,7 @@ export const ProjectBrowser: React.FC = () => {
       {isOpen && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[color:var(--ui-panel)] rounded-xl border border-[color:var(--ui-border)] w-full max-w-7xl max-h-[90vh] flex flex-col text-[color:var(--ui-panel-text)] shadow-[0_16px_30px_rgba(0,0,0,0.35)]">
-            <ProjectDashboard />
+            <ProjectDashboard onOpenComplete={() => setIsOpen(false)} />
             <div className="p-4 border-t border-[color:var(--ui-border)] flex justify-end">
               <button
                 onClick={() => setIsOpen(false)}

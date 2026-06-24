@@ -27,7 +27,7 @@ export const PageStrip: React.FC = () => {
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="h-[72px] border-t border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 backdrop-blur-[var(--ui-blur)] px-3 py-1.5 flex items-center gap-2 overflow-x-auto" ref={listRef}>
+    <div data-testid="page-strip" className="design-space-page-strip h-[72px] border-t border-[color:var(--ui-border)] bg-[color:var(--ui-panel)]/80 backdrop-blur-[var(--ui-blur)] px-3 py-1.5 flex items-center gap-2 overflow-x-auto" ref={listRef}>
       {pages.map((page: any, index: number) => (
         <button
           key={page.id}
@@ -41,7 +41,7 @@ export const PageStrip: React.FC = () => {
           }}
           onDragEnd={() => setDragIndex(null)}
           onClick={() => void switchToPage(index)}
-          className={`group relative shrink-0 w-20 h-[56px] rounded-xl border p-1 text-left transition-all duration-200 ${
+          className={`design-space-page-strip-item group relative shrink-0 w-20 h-[56px] rounded-xl border p-1 text-left transition-all duration-200 ${
             activePageIndex === index
               ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/14 shadow-[var(--ui-shadow-soft)]'
               : 'border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/60 hover:bg-[color:var(--ui-surface-strong)]'
@@ -70,7 +70,7 @@ export const PageStrip: React.FC = () => {
       ))}
       <button
         onClick={() => void addPage()}
-        className="shrink-0 w-8 h-[56px] rounded-xl border border-dashed border-[color:var(--ui-border)] hover:border-[color:var(--brand-primary)] hover:text-[color:var(--brand-primary)] text-[color:var(--ui-panel-text)] flex items-center justify-center transition-all duration-200"
+        className="design-space-page-strip-add shrink-0 w-8 h-[56px] rounded-xl border border-dashed border-[color:var(--ui-border)] hover:border-[color:var(--brand-primary)] hover:text-[color:var(--brand-primary)] text-[color:var(--ui-panel-text)] flex items-center justify-center transition-all duration-200"
         aria-label="Add page"
       >
         <Plus className="w-4 h-4" />

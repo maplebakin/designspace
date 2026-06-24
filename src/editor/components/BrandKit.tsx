@@ -4,6 +4,7 @@ import { useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { Palette, Type, Plus, Trash2 } from 'lucide-react';
 import * as objectFactories from '../fabric/objectFactories';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
 interface BrandKitData {
   colors: string[];
@@ -48,6 +49,7 @@ export const BrandKit: React.FC = () => {
     canvas,
     selectedObjectId,
     layersById,
+    syncCanvasToStore,
     saveState,
     requestLayerSync,
     addIText,
@@ -56,6 +58,7 @@ export const BrandKit: React.FC = () => {
       canvas: state.canvas,
       selectedObjectId: state.selectedObjectId,
       layersById: state.layersById,
+      syncCanvasToStore: state.syncCanvasToStore,
       saveState: state.saveState,
       requestLayerSync: state.requestLayerSync,
       addIText: (text: string, fontSize: number, fontWeight: string, role: 'heading' | 'subheading' | 'body') => {
@@ -78,9 +81,7 @@ export const BrandKit: React.FC = () => {
     if (selectedObject) {
       // Change the fill of the selected object
       selectedObject.set({ fill: color });
-      canvas.requestRenderAll();
-      saveState();
-      requestLayerSync();
+      commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
     }
   };
 

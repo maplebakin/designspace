@@ -15,6 +15,7 @@ import {
   Triangle,
 } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
 // Define asset types
 interface Asset {
@@ -263,10 +264,7 @@ const AssetLibrary: React.FC = () => {
         if (obj) {
           canvas.add(obj);
           useEditorStore.getState().selectObjectById((obj as any).id);
-          syncCanvasToStore(canvas);
-          canvas.requestRenderAll();
-          requestLayerSync();
-          saveState();
+          commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
           document.getElementById('editor-shell')?.focus();
         }
       });
