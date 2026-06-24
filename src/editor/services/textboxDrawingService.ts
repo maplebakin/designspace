@@ -174,11 +174,7 @@ function createTextbox(
   (textbox as any).__fixedHeight = height;
   (textbox as any).originalFontSize = DEFAULT_FONT_SIZE;
 
-  // Set up scaling handler to maintain auto-fit behavior
-  setupTextboxScalingHandler(textbox, canvas);
-
-  // Set up text change handler to auto-resize font
-  setupTextChangeHandler(textbox, canvas);
+  attachTextboxAutoFitHandlers(textbox, canvas);
 
   return textbox;
 }
@@ -233,6 +229,16 @@ function setupTextChangeHandler(textbox: fabric.Textbox, canvas: fabric.Canvas):
   };
 
   textbox.on('changed', handleTextChange);
+}
+
+/**
+ * Attaches auto-fit handlers to a fixed-frame textbox.
+ */
+export function attachTextboxAutoFitHandlers(textbox: fabric.Textbox, canvas: fabric.Canvas): void {
+  if ((textbox as any).__autoFitHandlersAttached) return;
+  (textbox as any).__autoFitHandlersAttached = true;
+  setupTextboxScalingHandler(textbox, canvas);
+  setupTextChangeHandler(textbox, canvas);
 }
 
 // ============================================================================

@@ -33,10 +33,14 @@ let documentPaper: fabric.Rect | null = null;
 // in the ruler-excluded area rather than in the full canvas element.
 export const CANVAS_RULER_INSET = 24;
 
-const GUIDE_DASH_ARRAY = [6, 4];
-const BLEED_STROKE_DASHED = 'rgba(239, 68, 68, 0.85)';
+const GUIDE_DASH_ARRAY = [8, 6];
+const SAFE_MARGIN_STROKE = 'rgba(47, 79, 70, 0.46)';
+const BLEED_STROKE_DASHED = 'rgba(178, 87, 60, 0.52)';
 const BLEED_DASH_ARRAY = [4, 4];
-const TRIM_LINE_COLOR = 'rgba(255, 255, 255, 0.6)'; // Crisp white for trim line
+const TRIM_LINE_COLOR = 'rgba(74, 56, 45, 0.34)';
+const PAPER_EDGE_COLOR = 'rgba(74, 56, 45, 0.30)';
+const PAPER_SHADOW = '0 28px 70px rgba(74, 56, 45, 0.22)';
+export const FIT_VIEWPORT_PADDING = 48;
 
 // --- DOCUMENT PAPER (Background for document area only) ---
 
@@ -73,6 +77,9 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
       width,
       height,
       fill: backgroundColor,
+      stroke: PAPER_EDGE_COLOR,
+      strokeWidth: 2,
+      shadow: new fabric.Shadow(PAPER_SHADOW),
     });
     documentPaper.setCoords();
     // Re-add via canvas.add() if it was stripped from the canvas (e.g. by canvas.clear()).
@@ -95,6 +102,9 @@ export const updateDocumentPaper = (canvas: fabric.Canvas, backgroundColor: stri
       width,
       height,
       fill: backgroundColor,
+      stroke: PAPER_EDGE_COLOR,
+      strokeWidth: 2,
+      shadow: new fabric.Shadow(PAPER_SHADOW),
       excludeFromExport: true,
       isGuide: true,
       isDocumentPaper: true,
@@ -132,7 +142,7 @@ export const addSafeMarginGuides = (canvas: fabric.Canvas) => {
   const margin = SAFE_MARGIN_PX;
 
   const guideOptions = {
-    stroke: 'rgba(0, 255, 255, 0.7)', // Soft cyan glow
+    stroke: SAFE_MARGIN_STROKE,
     strokeWidth: 1,
     strokeDashArray: GUIDE_DASH_ARRAY,
     isGuide: true,
@@ -186,7 +196,7 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
     originY: 'top',
     width: width,
     height: height,
-    fill: 'rgba(204, 204, 204, 0.1)',
+    fill: 'rgba(178, 87, 60, 0.035)',
     selectable: false,
     evented: false,
     hasControls: false,
@@ -432,6 +442,30 @@ export const zoomToCenter = (zoom: number): void => {
   centerDocumentInViewport(canvas, clampedZoom);
 };
 
+export const calculateFitCanvasZoom = ({
+  containerWidth,
+  containerHeight,
+  documentWidth,
+  documentHeight,
+  rulerInset = CANVAS_RULER_INSET,
+  padding = FIT_VIEWPORT_PADDING,
+}: {
+  containerWidth: number;
+  containerHeight: number;
+  documentWidth: number;
+  documentHeight: number;
+  rulerInset?: number;
+  padding?: number;
+}) => {
+  const effectiveWidth = Math.max(1, containerWidth - rulerInset);
+  const effectiveHeight = Math.max(1, containerHeight - rulerInset);
+  const availableWidth = Math.max(1, effectiveWidth - padding);
+  const availableHeight = Math.max(1, effectiveHeight - padding);
+  const scaleX = availableWidth / documentWidth;
+  const scaleY = availableHeight / documentHeight;
+  return Math.min(scaleX, scaleY, 1);
+};
+
 /**
  * Fits the document to the available viewport with padding.
  *
@@ -455,19 +489,12 @@ export const fitCanvasToViewport = (containerWidth: number, containerHeight: num
   // Get document dimensions from the store (not from canvas element)
   const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
 
-  // Compute zoom against the ruler-excluded area so the document fits within what's visible.
-  const inset = CANVAS_RULER_INSET;
-  const effectiveWidth = containerWidth - inset;
-  const effectiveHeight = containerHeight - inset;
-
-  const padding = 96;
-  const availableWidth = effectiveWidth - padding;
-  const availableHeight = effectiveHeight - padding;
-
-  // Calculate zoom to fit the document in the viewport
-  const scaleX = availableWidth / documentWidth;
-  const scaleY = availableHeight / documentHeight;
-  const zoom = Math.min(scaleX, scaleY, 1); // Don't zoom in past 100%
+  const zoom = calculateFitCanvasZoom({
+    containerWidth,
+    containerHeight,
+    documentWidth,
+    documentHeight,
+  });
 
   // Use the common centering function (also applies ruler inset internally)
   centerDocumentInViewport(canvas, zoom, containerWidth, containerHeight);

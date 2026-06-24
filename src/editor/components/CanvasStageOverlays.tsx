@@ -64,19 +64,19 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
   };
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
-      <div className="pointer-events-auto flex max-w-2xl flex-col gap-6 rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-8 py-7 backdrop-blur-[var(--ui-blur)]" style={{ boxShadow: 'var(--modal-shadow)' }}>
-        <div className="space-y-1 text-center">
+    <div className="canvas-size-picker-overlay absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+      <div className="canvas-size-picker-panel pointer-events-auto flex max-w-2xl flex-col gap-6 rounded-3xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel-opaque)] px-8 py-7 backdrop-blur-[var(--ui-blur)]" style={{ boxShadow: 'var(--modal-shadow)' }}>
+        <div className="canvas-size-picker-header space-y-1 text-center">
           <h2 className="text-lg font-medium text-[color:var(--ui-panel-text)]">New Canvas</h2>
           <p className="text-xs text-[color:var(--ui-panel-text)]/60">Choose a size to get started</p>
         </div>
-        <div className="space-y-5">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
+        <div className="canvas-size-picker-sections space-y-5">
+          <div className="canvas-size-picker-section space-y-2">
+            <div className="canvas-size-picker-section-title flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
               <Printer className="h-3.5 w-3.5" />
               <span className="text-[10px] uppercase tracking-widest">Print (300 DPI)</span>
             </div>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="canvas-size-picker-grid grid grid-cols-4 gap-2">
               {printPresets.map((preset) => {
                 const preview = getPreviewAspect(preset);
                 return (
@@ -84,38 +84,38 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                     key={preset.id}
                     data-testid={`project-preset-${preset.id}`}
                     onClick={() => onSelect(preset.width, preset.height, 'in')}
-                    className={`group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all duration-200 ${
+                    className={`canvas-size-picker-card group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all duration-200 ${
                       preset.recommended
-                        ? 'border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/10 hover:bg-[color:var(--brand-primary)]/20'
+                        ? 'canvas-size-picker-card-recommended border-[color:var(--brand-primary)]/50 bg-[color:var(--brand-primary)]/10 hover:bg-[color:var(--brand-primary)]/20'
                         : 'border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-strong)]'
                     }`}
                   >
                     {preset.recommended && (
-                      <span className="absolute -top-2 left-1/2 -translate-x-1/2 rounded-full bg-[color:var(--brand-primary)] px-2 py-0.5 text-[8px] uppercase tracking-wider text-white">
+                      <span className="canvas-size-picker-badge absolute -top-2 left-1/2 -translate-x-1/2 rounded-full bg-[color:var(--brand-primary)] px-2 py-0.5 text-[8px] uppercase tracking-wider text-white">
                         Default
                       </span>
                     )}
                     <div
-                      className="rounded-sm border border-[color:var(--ui-panel-text)]/20 bg-white/90"
+                      className="canvas-size-picker-preview rounded-sm border border-[color:var(--ui-panel-text)]/20 bg-white/90"
                       style={{ width: preview.width, height: preview.height }}
                     />
-                    <div className="text-center">
-                      <div className={`text-xs font-medium ${preset.recommended ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)]'}`}>
+                    <div className="canvas-size-picker-card-copy text-center">
+                      <div className={`canvas-size-picker-card-name text-xs font-medium ${preset.recommended ? 'text-[color:var(--brand-primary)]' : 'text-[color:var(--ui-panel-text)]'}`}>
                         {preset.name}
                       </div>
-                      <div className="text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
+                      <div className="canvas-size-picker-card-description text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
                     </div>
                   </button>
                 );
               })}
             </div>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
+          <div className="canvas-size-picker-section space-y-2">
+            <div className="canvas-size-picker-section-title flex items-center gap-2 text-[color:var(--ui-panel-text)]/70">
               <Monitor className="h-3.5 w-3.5" />
               <span className="text-[10px] uppercase tracking-widest">Digital</span>
             </div>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="canvas-size-picker-grid grid grid-cols-4 gap-2">
               {digitalPresets.map((preset) => {
                 const preview = getPreviewAspect(preset);
                 return (
@@ -123,25 +123,25 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                     key={preset.id}
                     data-testid={`project-preset-${preset.id}`}
                     onClick={() => onSelect(preset.width, preset.height, 'px')}
-                    className="group flex flex-col items-center gap-2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-3 transition-all duration-200 hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-strong)]"
+                    className="canvas-size-picker-card group flex flex-col items-center gap-2 rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-3 transition-all duration-200 hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-strong)]"
                   >
                     <div
-                      className="rounded-sm border border-[color:var(--ui-panel-text)]/20 bg-white/90"
+                      className="canvas-size-picker-preview rounded-sm border border-[color:var(--ui-panel-text)]/20 bg-white/90"
                       style={{ width: preview.width, height: preview.height }}
                     />
-                    <div className="text-center">
-                      <div className="text-xs font-medium text-[color:var(--ui-panel-text)]">{preset.name}</div>
-                      <div className="text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
+                    <div className="canvas-size-picker-card-copy text-center">
+                      <div className="canvas-size-picker-card-name text-xs font-medium text-[color:var(--ui-panel-text)]">{preset.name}</div>
+                      <div className="canvas-size-picker-card-description text-[10px] text-[color:var(--ui-panel-text)]/50">{preset.description}</div>
                     </div>
                   </button>
                 );
               })}
             </div>
           </div>
-          <div className="border-t border-[color:var(--ui-border)] pt-2">
+          <div className="canvas-size-picker-custom border-t border-[color:var(--ui-border)] pt-2">
             {showCustom ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
+              <div className="canvas-size-picker-custom-form space-y-3">
+                <div className="canvas-size-picker-custom-fields flex items-center gap-3">
                   <div className="flex-1 space-y-1">
                     <label className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/50">Width</label>
                     <input
@@ -176,7 +176,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
                     </select>
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="canvas-size-picker-custom-actions flex gap-2">
                   <button
                     onClick={() => setShowCustom(false)}
                     className="flex-1 rounded-lg bg-[color:var(--ui-surface-soft)] px-4 py-2 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-colors hover:bg-[color:var(--ui-surface-strong)]"
@@ -194,7 +194,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
             ) : (
               <button
                 onClick={() => setShowCustom(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[color:var(--ui-border)] px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-all hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-soft)] hover:text-[color:var(--ui-panel-text)]"
+                className="canvas-size-picker-custom-toggle flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[color:var(--ui-border)] px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--ui-panel-text)]/70 transition-all hover:border-[color:var(--brand-primary)]/50 hover:bg-[color:var(--ui-surface-soft)] hover:text-[color:var(--ui-panel-text)]"
               >
                 <Settings2 className="h-4 w-4" />
                 Custom Size
@@ -204,7 +204,7 @@ export const CanvasSizePicker: React.FC<CanvasSizePickerProps> = ({ onSelect, on
         </div>
         <button
           onClick={onDismiss}
-          className="text-xs text-[color:var(--ui-panel-text)]/40 transition-colors hover:text-[color:var(--ui-panel-text)]/70"
+          className="canvas-size-picker-dismiss text-xs text-[color:var(--ui-panel-text)]/40 transition-colors hover:text-[color:var(--ui-panel-text)]/70"
         >
           Skip and use default (US Letter)
         </button>

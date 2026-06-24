@@ -2,6 +2,7 @@ import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { useEditorStore } from '../state/editorStore';
 import { isActiveSelection } from '../utils/typeGuards';
+import { attachTextboxAutoFitHandlers } from './textboxDrawingService';
 
 /**
  * Clipboard Service
@@ -15,6 +16,20 @@ let clipboardBuffer: any[] | null = null;
 
 // Paste offset to prevent perfect overlapping
 const PASTE_OFFSET = 20;
+const CLIPBOARD_CUSTOM_PROPS = [
+  'id',
+  'tokenRole',
+  'colorLocked',
+  'isPlaceholder',
+  'adjustments',
+  '__fixedWidth',
+  '__fixedHeight',
+  'originalFontSize',
+  'recipeId',
+  'recipePageId',
+  'slotId',
+  'semanticRole',
+];
 
 /**
  * Copies the currently selected object(s) to the clipboard buffer
@@ -28,7 +43,7 @@ export const copySelection = async (): Promise<boolean> => {
 
   try {
     // Clone the active object(s) and store in buffer
-    const cloned = await activeObject.clone(['id', 'tokenRole', 'colorLocked', 'isPlaceholder', 'adjustments']);
+    const cloned = await activeObject.clone(CLIPBOARD_CUSTOM_PROPS);
 
     if (isActiveSelection(activeObject)) {
       // Multiple objects selected - store each one
@@ -36,13 +51,13 @@ export const copySelection = async (): Promise<boolean> => {
       const objects = selection.getObjects();
       clipboardBuffer = await Promise.all(
         objects.map(async (obj) => {
-          const clonedObj = await obj.clone(['id', 'tokenRole', 'colorLocked', 'isPlaceholder', 'adjustments']);
-          return clonedObj.toObject(['id', 'tokenRole', 'colorLocked', 'isPlaceholder', 'adjustments']);
+          const clonedObj = await obj.clone(CLIPBOARD_CUSTOM_PROPS);
+          return clonedObj.toObject(CLIPBOARD_CUSTOM_PROPS);
         })
       );
     } else {
       // Single object selected
-      clipboardBuffer = [cloned.toObject(['id', 'tokenRole', 'colorLocked', 'isPlaceholder', 'adjustments'])];
+      clipboardBuffer = [cloned.toObject(CLIPBOARD_CUSTOM_PROPS)];
     }
 
     return true;
@@ -74,6 +89,14 @@ export const pasteFromClipboard = async (): Promise<boolean> => {
         top: (obj.top || 0) + PASTE_OFFSET,
       });
       obj.setCoords();
+
+      if (
+        obj.type === 'textbox' &&
+        typeof (obj as any).__fixedWidth === 'number' &&
+        typeof (obj as any).__fixedHeight === 'number'
+      ) {
+        attachTextboxAutoFitHandlers(obj as fabric.Textbox, canvas);
+      }
 
       canvas.add(obj);
       pastedObjects.push(obj);

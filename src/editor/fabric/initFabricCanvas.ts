@@ -9,6 +9,69 @@ export const initFabricSerialization = () => {
 
 type FabricReviver = NonNullable<Parameters<fabric.Canvas['loadFromJSON']>[1]>;
 
+const fitRevivedTextboxToFrame = (textbox: fabric.Textbox, targetWidth: number, targetHeight: number) => {
+  const minFontSize = 8;
+  const maxFontSize = Math.max(
+    minFontSize,
+    Math.floor(Math.max(targetHeight * 0.9, (textbox as any).originalFontSize ?? 0))
+  );
+
+  textbox.set({ width: targetWidth });
+
+  let low = minFontSize;
+  let high = maxFontSize;
+  let bestFontSize = minFontSize;
+
+  const fits = (fontSize: number) => {
+    textbox.set('fontSize', fontSize);
+    textbox.initDimensions();
+    return (textbox.height ?? 0) <= targetHeight;
+  };
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (fits(mid)) {
+      bestFontSize = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  textbox.set('fontSize', bestFontSize);
+  textbox.initDimensions();
+  textbox.setCoords();
+};
+
+const attachRevivedTextboxAutoFitHandlers = (textbox: fabric.Textbox) => {
+  const target = textbox as any;
+  if (target.__autoFitHandlersAttached) return;
+  if (typeof target.__fixedWidth !== 'number' || typeof target.__fixedHeight !== 'number') return;
+
+  target.__autoFitHandlersAttached = true;
+
+  const refit = () => {
+    if (typeof target.__fixedWidth !== 'number' || typeof target.__fixedHeight !== 'number') return;
+    fitRevivedTextboxToFrame(textbox, target.__fixedWidth, target.__fixedHeight);
+    textbox.canvas?.requestRenderAll();
+  };
+
+  const handleScaling = () => {
+    const scaleX = Math.abs(textbox.scaleX ?? 1);
+    const scaleY = Math.abs(textbox.scaleY ?? 1);
+    if (scaleX === 1 && scaleY === 1) return;
+
+    target.__fixedWidth = Math.max(1, (textbox.width ?? target.__fixedWidth) * scaleX);
+    target.__fixedHeight = Math.max(1, target.__fixedHeight * scaleY);
+    textbox.set({ width: target.__fixedWidth, scaleX: 1, scaleY: 1 });
+    refit();
+  };
+
+  textbox.on('changed', refit);
+  textbox.on('scaling', handleScaling);
+  textbox.on('modified', handleScaling);
+};
+
 export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => {
   if (!(instance instanceof fabric.Object)) return;
   const target = instance as any;
@@ -24,6 +87,10 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
   if (target.frameType === undefined) target.frameType = serialized?.frameType ?? undefined;
   if (target.isPageBorder === undefined) target.isPageBorder = serialized?.isPageBorder ?? false;
   if (target.name === undefined) target.name = serialized?.name ?? undefined;
+  if (target.recipeId === undefined) target.recipeId = serialized?.recipeId ?? undefined;
+  if (target.recipePageId === undefined) target.recipePageId = serialized?.recipePageId ?? undefined;
+  if (target.slotId === undefined) target.slotId = serialized?.slotId ?? undefined;
+  if (target.semanticRole === undefined) target.semanticRole = serialized?.semanticRole ?? undefined;
   if (target.borderSettings === undefined) target.borderSettings = serialized?.borderSettings ?? undefined;
   if (target.zIndex === undefined) target.zIndex = serialized?.zIndex ?? serialized?.__zIndex ?? undefined;
   if (target.__zIndex === undefined) target.__zIndex = serialized?.zIndex ?? serialized?.__zIndex ?? undefined;
@@ -33,6 +100,13 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
     if (serialized.charSpacing !== undefined) target.charSpacing = serialized.charSpacing;
     if (serialized.stroke !== undefined) target.stroke = serialized.stroke;
     if (serialized.strokeWidth !== undefined) target.strokeWidth = serialized.strokeWidth;
+
+    if (instance.type === 'textbox') {
+      if (typeof serialized.__fixedWidth === 'number') target.__fixedWidth = serialized.__fixedWidth;
+      if (typeof serialized.__fixedHeight === 'number') target.__fixedHeight = serialized.__fixedHeight;
+      if (typeof serialized.originalFontSize === 'number') target.originalFontSize = serialized.originalFontSize;
+      attachRevivedTextboxAutoFitHandlers(instance as fabric.Textbox);
+    }
 
     // Handle shadow restoration
     if (serialized.shadow) {

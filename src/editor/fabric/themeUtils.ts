@@ -24,6 +24,7 @@ export const applyActiveThemeToCanvas = () => {
         canvas,
         saveState,
         requestLayerSync,
+        syncCanvasToStore,
         canvasReadyState,
         acquireSyncLock,
         releaseSyncLock
@@ -48,6 +49,7 @@ export const applyActiveThemeToCanvas = () => {
     applyThemeToCanvas(canvas, themeData, {
         saveState,
         requestLayerSync,
+        syncCanvasToStore,
         acquireSyncLock,
         releaseSyncLock,
     });

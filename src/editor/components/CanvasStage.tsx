@@ -134,6 +134,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const viewportRecoveryAttemptsRef = useRef(0);
   const didForceRerenderRef = useRef(false);
   const didInitialViewportFitRef = useRef(false);
+  const lastMeasuredViewportRef = useRef({ width: 0, height: 0 });
+  const lastAutoFitZoomRef = useRef<number | null>(null);
   const [isOverlayDismissed, setIsOverlayDismissed] = useState(false);
 
   // PHASE 3.3: Circuit breaker for infinite re-render loop prevention
@@ -202,9 +204,53 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       fabricCanvas.setDimensions({ width: rect.width, height: rect.height });
       fabricCanvas.calcOffset();
       fitCanvasToViewport(rect.width, rect.height);
+      lastMeasuredViewportRef.current = { width: rect.width, height: rect.height };
+      lastAutoFitZoomRef.current = fabricCanvas.getZoom();
       updateViewportState(fabricCanvas);
     }, TaskPriority.High);
   }, [fabricCanvas, updateViewportState]);
+
+  useEffect(() => {
+    if (!fabricCanvas || !containerRef.current || typeof ResizeObserver === 'undefined') return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const width = entry.contentRect.width;
+      const height = entry.contentRect.height;
+      if (width < 20 || height < 20) return;
+
+      const previous = lastMeasuredViewportRef.current;
+      if (
+        Math.abs(previous.width - width) < 1
+        && Math.abs(previous.height - height) < 1
+      ) {
+        return;
+      }
+
+      lastMeasuredViewportRef.current = { width, height };
+      frameScheduler.scheduleTask(() => {
+        fabricCanvas.setDimensions({ width, height });
+        fabricCanvas.calcOffset();
+
+        const currentZoom = fabricCanvas.getZoom();
+        const lastAutoFitZoom = lastAutoFitZoomRef.current;
+        const shouldRefit =
+          pendingViewportFit
+          || lastAutoFitZoom === null
+          || currentZoom <= lastAutoFitZoom + 0.01;
+
+        if (shouldRefit) {
+          fitCanvasToViewport(width, height);
+          lastAutoFitZoomRef.current = fabricCanvas.getZoom();
+        }
+
+        updateViewportState(fabricCanvas);
+      }, TaskPriority.High);
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, [fabricCanvas, pendingViewportFit, updateViewportState]);
 
   useEffect(() => {
     const pendingInsertionSelection = getPendingInsertionCandidateIds() ?? getPendingLayerSyncSelectionIds();
@@ -242,6 +288,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       fabricCanvas.setDimensions({ width: rect.width, height: rect.height });
       fabricCanvas.calcOffset();
       fitCanvasToViewport(rect.width, rect.height);
+      lastMeasuredViewportRef.current = { width: rect.width, height: rect.height };
+      lastAutoFitZoomRef.current = fabricCanvas.getZoom();
       updateViewportState(fabricCanvas);
       clearPendingViewportFit();
     }, TaskPriority.High);
@@ -948,13 +996,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   return (
     <div
       data-testid="canvas-stage"
-      className="workspace relative w-full h-full flex items-center justify-center overflow-hidden"
+      className="design-space-canvas-stage workspace relative w-full h-full flex items-center justify-center overflow-hidden"
       onClick={handleDismissOverlay}
     >
       <div
         ref={containerRef}
         data-testid="canvas-container"
-        className="w-full h-full overflow-hidden bg-transparent"
+        className="design-space-canvas-container w-full h-full overflow-hidden bg-transparent"
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onDragLeave={handleDragLeave}
@@ -995,6 +1043,10 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
                 fabricCanvas.calcOffset();
               }
               fitCanvasToViewport(rect.width, rect.height);
+              lastMeasuredViewportRef.current = { width: rect.width, height: rect.height };
+              if (fabricCanvas) {
+                lastAutoFitZoomRef.current = fabricCanvas.getZoom();
+              }
             }
             setIsOverlayDismissed(true);
             setShowOnboarding(false);

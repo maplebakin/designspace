@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fabric from 'fabric';
 import { saveBrandVaultToDb } from '../utils/indexedDb';
 import { resolveThemeValue } from '../utils/themeResolver';
+import { commitCanvasMutation, type CommitCanvasMutationCallbacks } from '../utils/commitCanvasMutation';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import type { BrandKit } from '../db';
 import { useUiThemeStore } from './uiThemeStore';
@@ -492,14 +493,12 @@ export type SyncLockReason = 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch';
 export const applyThemeToCanvas = (
     canvas: fabric.Canvas,
     themeData: ApocapaletteTheme,
-    callbacks: {
-        saveState: () => void;
-        requestLayerSync: () => void;
+    callbacks: CommitCanvasMutationCallbacks & {
         acquireSyncLock?: (reason: SyncLockReason) => void;
         releaseSyncLock?: () => void;
     }
 ) => {
-    const { saveState, requestLayerSync, acquireSyncLock, releaseSyncLock } = callbacks;
+    const { acquireSyncLock, releaseSyncLock } = callbacks;
 
     // Acquire sync lock if provided
     acquireSyncLock?.('theme-apply');
@@ -540,9 +539,7 @@ export const applyThemeToCanvas = (
         canvas.getObjects().forEach(applyThemeToObject);
 
         if (objectsChanged) {
-            canvas.requestRenderAll();
-            saveState();
-            requestLayerSync();
+            commitCanvasMutation(canvas, callbacks);
         }
     } finally {
         releaseSyncLock?.();
@@ -557,17 +554,12 @@ export const applyThemedFillToObject = (
     canvas: fabric.Canvas,
     tokenRole: string,
     themeData: ApocapaletteTheme,
-    callbacks: {
-        saveState: () => void;
-        requestLayerSync: () => void;
-    }
+    callbacks: CommitCanvasMutationCallbacks
 ) => {
     const colorValue = resolveThemeValue(themeData, tokenRole);
     if (colorValue) {
         object.set({ fill: colorValue, tokenRole, colorLocked: false });
-        canvas.requestRenderAll();
-        callbacks.saveState();
-        callbacks.requestLayerSync();
+        commitCanvasMutation(canvas, callbacks);
     }
 };
 
@@ -579,10 +571,7 @@ export const applyThemeTintToImage = (
     canvas: fabric.Canvas,
     tokenRole: string,
     themeData: ApocapaletteTheme,
-    callbacks: {
-        saveState: () => void;
-        requestLayerSync: () => void;
-    }
+    callbacks: CommitCanvasMutationCallbacks
 ) => {
     const colorValue = resolveThemeValue(themeData, tokenRole);
     if (!colorValue) return;
@@ -595,9 +584,7 @@ export const applyThemeTintToImage = (
     }));
 
     image.applyFilters();
-    canvas.requestRenderAll();
-    callbacks.saveState();
-    callbacks.requestLayerSync();
+    commitCanvasMutation(canvas, callbacks);
 };
 
 /**
@@ -607,10 +594,7 @@ export const resetObjectToDefaultTheme = (
     object: fabric.Object,
     canvas: fabric.Canvas,
     themeData: ApocapaletteTheme,
-    callbacks: {
-        saveState: () => void;
-        requestLayerSync: () => void;
-    }
+    callbacks: CommitCanvasMutationCallbacks
 ) => {
     const { getDefaultTokenRole } = useThemeStore.getState();
     const defaultTokenRole = getDefaultTokenRole(object.type || '', (object as any).role);
@@ -628,9 +612,7 @@ export const resetObjectToDefaultTheme = (
             (object as fabric.Image).applyFilters();
         }
 
-        canvas.requestRenderAll();
-        callbacks.saveState();
-        callbacks.requestLayerSync();
+        commitCanvasMutation(canvas, callbacks);
     }
 };
 
@@ -639,15 +621,12 @@ export const resetObjectToDefaultTheme = (
  */
 export const resetAllThemeLinks = (
     canvas: fabric.Canvas,
-    callbacks: {
-        saveState: () => void;
-    }
+    callbacks: CommitCanvasMutationCallbacks
 ) => {
     canvas.getObjects().forEach(obj => {
         (obj as any).tokenRole = null;
     });
-    canvas.requestRenderAll();
-    callbacks.saveState();
+    commitCanvasMutation(canvas, callbacks, { layerSync: false });
 };
 
 // --- SELECTOR HOOKS ---
