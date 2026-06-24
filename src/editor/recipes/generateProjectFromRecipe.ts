@@ -615,7 +615,7 @@ const buildPageObjects = (
 
   if (page.id === 'cover') {
     const coverSubtitle = recipe.id === 'crochetPatternDecoder'
-      ? 'Abbreviations, gauge checks, row tracking, stitch notes, and modification decisions'
+      ? 'A printable decoding workspace for abbreviations, row counts, gauge checks, modifications, and tricky instructions'
       : 'WIPs, stash, hooks, gifts, pattern notes, and finish-or-frog decisions';
     const coverPrompt = recipe.id === 'crochetPatternDecoder'
       ? 'Pattern decoding focus:'
@@ -660,6 +660,41 @@ const buildPageObjects = (
     );
     addCoverBadge(objects, recipe, page, colors, 'EDITABLE PRINTABLE DRAFT');
     addLinedNotes(objects, recipe, page, colors, 'cover-notes', PAGE_LAYOUT.cover.notesContentLeft, PAGE_LAYOUT.cover.notesContentTop, PAGE_LAYOUT.cover.notesContentWidth, 4, 130);
+    if (recipe.id === 'crochetPatternDecoder') {
+      objects.push(
+        rectObject(recipe, page, 'cover-feature-frame', 'notesBlock', 1940, PAGE_LAYOUT.cover.notesTop, 400, PAGE_LAYOUT.cover.notesHeight, {
+          fill: colors.surface,
+          stroke: colors.border,
+          strokeWidth: 4,
+          tokenRole: TOKEN_ROLES.surface,
+          rx: 28,
+          ry: 28,
+        }),
+        textObject(recipe, page, 'cover-feature-heading', 'heading', 'Inside this kit', 1990, 1390, {
+          width: 300,
+          fontSize: 34,
+          fontWeight: 700,
+          fill: colors.primary,
+          tokenRole: TOKEN_ROLES.heading,
+        })
+      );
+      addChecklist(
+        objects,
+        recipe,
+        page,
+        colors,
+        'cover-features',
+        ['Decode abbreviations', 'Track rows + rounds', 'Test gauge', 'Note modifications', 'Untangle tricky spots'],
+        1990,
+        1488,
+        1,
+        {
+          columnWidth: 320,
+          rowGap: 102,
+          boxSize: 44,
+        }
+      );
+    }
   } else {
     addHeader(objects, recipe, page, colors, page.label);
   }
@@ -808,15 +843,18 @@ const buildPageObjects = (
       addLinedNotes(objects, recipe, page, colors, 'blank-notes', PAGE_LAYOUT.outerX, 430, PAGE_LAYOUT.outerWidth, 20, 120);
       break;
     case 'pattern-snapshot':
-      addSectionIntro(objects, recipe, page, colors, 'pattern-snapshot-intro', 'Capture the pattern source, key materials, and constraints before you start decoding.', PAGE_LAYOUT.outerX, PAGE_LAYOUT.introTop, 1560);
-      addLabelField(objects, recipe, page, colors, 'pattern-name', 'Pattern name', PAGE_LAYOUT.outerX, 420, 1000);
-      addLabelField(objects, recipe, page, colors, 'designer-source', 'Designer/source', 1260, 420, 1080);
-      addLabelField(objects, recipe, page, colors, 'url-book-page', 'URL/book/page', PAGE_LAYOUT.outerX, 720, 1320);
-      addLabelField(objects, recipe, page, colors, 'skill-level', 'Skill level', 1590, 720, 750);
-      addLabelField(objects, recipe, page, colors, 'yarn-weight', 'Yarn weight', PAGE_LAYOUT.outerX, 1020, 620);
-      addLabelField(objects, recipe, page, colors, 'hook-size', 'Hook size', 900, 1020, 620);
-      addLabelField(objects, recipe, page, colors, 'finished-size', 'Finished size', 1590, 1020, 750);
-      addNotesSection(objects, recipe, page, colors, 'snapshot-notes', 'Notes', PAGE_LAYOUT.outerX, 1440, PAGE_LAYOUT.outerWidth, 11, 104, {
+      addSectionIntro(objects, recipe, page, colors, 'pattern-snapshot-intro', 'Capture the pattern source, terms, gauge target, and construction notes before you start decoding.', PAGE_LAYOUT.outerX, PAGE_LAYOUT.introTop, 1680);
+      addLabelField(objects, recipe, page, colors, 'pattern-name', 'Pattern name', PAGE_LAYOUT.outerX, 420, 900);
+      addLabelField(objects, recipe, page, colors, 'designer-source', 'Designer/source', 1160, 420, 740);
+      addLabelField(objects, recipe, page, colors, 'skill-level', 'Skill level', 1950, 420, 390);
+      addLabelField(objects, recipe, page, colors, 'url-book-page', 'URL/book/page', PAGE_LAYOUT.outerX, 700, 1050);
+      addLabelField(objects, recipe, page, colors, 'pattern-format', 'Pattern format', 1320, 700, 460);
+      addLabelField(objects, recipe, page, colors, 'terms-used', 'US or UK terms', 1840, 700, 500);
+      addLabelField(objects, recipe, page, colors, 'yarn-weight', 'Yarn weight', PAGE_LAYOUT.outerX, 980, 520);
+      addLabelField(objects, recipe, page, colors, 'hook-size', 'Hook size', 790, 980, 430);
+      addLabelField(objects, recipe, page, colors, 'gauge-target', 'Gauge target', 1270, 980, 520);
+      addLabelField(objects, recipe, page, colors, 'construction-style', 'Construction style', 1850, 980, 490);
+      addNotesSection(objects, recipe, page, colors, 'snapshot-notes', 'Decoder notes', PAGE_LAYOUT.outerX, 1390, PAGE_LAYOUT.outerWidth, 11, 104, {
         headingFontSize: 38,
       });
       break;
@@ -851,12 +889,15 @@ const buildPageObjects = (
       addLabelField(objects, recipe, page, colors, 'hook-size', 'Hook size', PAGE_LAYOUT.outerX, 420, 620);
       addLabelField(objects, recipe, page, colors, 'yarn', 'Yarn', 900, 420, 620);
       addLabelField(objects, recipe, page, colors, 'gauge-target', 'Gauge target', 1590, 420, 750);
-      addLabelField(objects, recipe, page, colors, 'actual-gauge', 'Actual gauge', PAGE_LAYOUT.outerX, 720, 1000);
-      addLabelField(objects, recipe, page, colors, 'swatch-size', 'Swatch size / blocked?', 1260, 720, 1080);
-      addNotesSection(objects, recipe, page, colors, 'swatch-notes', 'Swatch notes', PAGE_LAYOUT.outerX, 1120, 1000, 8, 104, {
+      addLabelField(objects, recipe, page, colors, 'target-stitches', 'Target stitches per 4 in / 10 cm', PAGE_LAYOUT.outerX, 700, 620);
+      addLabelField(objects, recipe, page, colors, 'target-rows', 'Target rows per 4 in / 10 cm', 900, 700, 620);
+      addLabelField(objects, recipe, page, colors, 'hook-adjustment', 'Hook adjustment: up / down / same', 1590, 700, 750);
+      addLabelField(objects, recipe, page, colors, 'actual-before-blocking', 'Actual before blocking', PAGE_LAYOUT.outerX, 980, 1000);
+      addLabelField(objects, recipe, page, colors, 'actual-after-blocking', 'Actual after blocking', 1260, 980, 1080);
+      addNotesSection(objects, recipe, page, colors, 'swatch-notes', 'Swatch notes', PAGE_LAYOUT.outerX, 1380, 1000, 7, 104, {
         headingFontSize: 38,
       });
-      addNotesSection(objects, recipe, page, colors, 'adjustment-notes', 'Adjustment notes', 1320, 1120, 1020, 8, 104, {
+      addNotesSection(objects, recipe, page, colors, 'adjustment-notes', 'Adjustment notes', 1320, 1380, 1020, 7, 104, {
         headingFontSize: 38,
       });
       break;
@@ -871,12 +912,12 @@ const buildPageObjects = (
       });
       break;
     case 'section-breakdown':
-      addSectionIntro(objects, recipe, page, colors, 'section-breakdown-intro', 'Break a long pattern into smaller sections with goals, trouble points, and status.', PAGE_LAYOUT.outerX, PAGE_LAYOUT.introTop, 1560);
-      addTable(objects, recipe, page, colors, 'section-breakdown', ['Section name', 'Rows / rounds', 'Goal', 'Tricky parts', 'Status'], PAGE_LAYOUT.outerX, 470, PAGE_LAYOUT.outerWidth, 11, {
+      addSectionIntro(objects, recipe, page, colors, 'section-breakdown-intro', 'Break a long crochet pattern into pieces, row ranges, stitch-count goals, repeats, and tricky instructions.', PAGE_LAYOUT.outerX, PAGE_LAYOUT.introTop, 1740);
+      addTable(objects, recipe, page, colors, 'section-breakdown', ['Section / piece', 'Rows / rounds', 'Stitch count goal', 'Shaping / repeats', 'Tricky instruction', 'Status'], PAGE_LAYOUT.outerX, 470, PAGE_LAYOUT.outerWidth, 11, {
         rowHeight: 130,
-        headerFontSize: 24,
+        headerFontSize: 20,
         headerTopPadding: 34,
-        headerSidePadding: 16,
+        headerSidePadding: 12,
         strokeWidth: 4,
       });
       addNotesSection(objects, recipe, page, colors, 'section-plan-notes', 'Section plan notes', PAGE_LAYOUT.outerX, 2170, PAGE_LAYOUT.outerWidth, 6, 100, {
@@ -898,11 +939,11 @@ const buildPageObjects = (
       break;
     case 'trouble-spots':
       addSectionIntro(objects, recipe, page, colors, 'trouble-intro', 'Capture confusing instructions, where they happen, and the fix you want to try next.', PAGE_LAYOUT.outerX, PAGE_LAYOUT.introTop, 1660);
-      addTable(objects, recipe, page, colors, 'trouble-spots', ['Issue', 'Where it happens', 'Possible fix', 'Resolved?', 'Notes'], PAGE_LAYOUT.outerX, 470, PAGE_LAYOUT.outerWidth, 11, {
+      addTable(objects, recipe, page, colors, 'trouble-spots', ['Issue', 'Where it happens', 'Attempted fix', 'Reference/source', 'Resolved?', 'Notes'], PAGE_LAYOUT.outerX, 470, PAGE_LAYOUT.outerWidth, 11, {
         rowHeight: 130,
-        headerFontSize: 24,
+        headerFontSize: 20,
         headerTopPadding: 34,
-        headerSidePadding: 16,
+        headerSidePadding: 12,
         strokeWidth: 4,
       });
       addNotesSection(objects, recipe, page, colors, 'trouble-followup', 'Follow-up questions', PAGE_LAYOUT.outerX, 2170, PAGE_LAYOUT.outerWidth, 6, 100, {
@@ -923,9 +964,12 @@ const buildPageObjects = (
         rowGap: 128,
         boxSize: 54,
       });
-      addLabelField(objects, recipe, page, colors, 'final-measurements', 'Final measurements', PAGE_LAYOUT.outerX, 1100, 1000, 180);
-      addLabelField(objects, recipe, page, colors, 'pattern-changes-to-keep', 'Pattern changes to keep', 1260, 1100, 1080, 180);
-      addNotesSection(objects, recipe, page, colors, 'lessons-learned', 'Lessons learned', PAGE_LAYOUT.outerX, 1510, PAGE_LAYOUT.outerWidth, 10, 104, {
+      addLabelField(objects, recipe, page, colors, 'final-hook-used', 'Final hook used', PAGE_LAYOUT.outerX, 1100, 620, 160);
+      addLabelField(objects, recipe, page, colors, 'final-yarn-used', 'Final yarn used', 900, 1100, 620, 160);
+      addLabelField(objects, recipe, page, colors, 'final-measurements', 'Final measurements', 1590, 1100, 750, 160);
+      addLabelField(objects, recipe, page, colors, 'pattern-changes-to-keep', 'Pattern changes to keep', PAGE_LAYOUT.outerX, 1390, 1000, 180);
+      addLabelField(objects, recipe, page, colors, 'change-next-time', 'What I would change next time', 1260, 1390, 1080, 180);
+      addNotesSection(objects, recipe, page, colors, 'lessons-learned', 'Lessons learned', PAGE_LAYOUT.outerX, 1780, PAGE_LAYOUT.outerWidth, 7, 104, {
         headingFontSize: 38,
       });
       break;

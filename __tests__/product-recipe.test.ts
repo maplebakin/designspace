@@ -530,18 +530,27 @@ describe('product recipe generation', () => {
 
     expect(getPageTextsFor(project.pages[0], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
       'Moon Kit Crochet Pattern Decoder Kit',
-      'Abbreviations, gauge checks, row tracking, stitch notes, and modification decisions',
+      'A printable decoding workspace for abbreviations, row counts, gauge checks, modifications, and tricky instructions',
       'Pattern decoding focus:',
+      'Inside this kit',
+      'Decode abbreviations',
+      'Track rows + rounds',
+      'Test gauge',
+      'Note modifications',
+      'Untangle tricky spots',
     ]));
     expect(getPageTextsFor(project.pages[1], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
       'Pattern name',
       'Designer/source',
       'URL/book/page',
       'Skill level',
+      'Pattern format',
+      'US or UK terms',
       'Yarn weight',
       'Hook size',
-      'Finished size',
-      'Notes',
+      'Gauge target',
+      'Construction style',
+      'Decoder notes',
     ]));
     expect(getPageTextsFor(project.pages[2], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
       'Abbrev.',
@@ -559,7 +568,11 @@ describe('product recipe generation', () => {
       'Hook size',
       'Yarn',
       'Gauge target',
-      'Actual gauge',
+      'Target stitches per 4 in / 10 cm',
+      'Target rows per 4 in / 10 cm',
+      'Hook adjustment: up / down / same',
+      'Actual before blocking',
+      'Actual after blocking',
       'Swatch notes',
       'Adjustment notes',
     ]));
@@ -571,10 +584,11 @@ describe('product recipe generation', () => {
       'Notes',
     ]));
     expect(getPageTextsFor(project.pages[6], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
-      'Section name',
+      'Section / piece',
       'Rows / rounds',
-      'Goal',
-      'Tricky parts',
+      'Stitch count goal',
+      'Shaping / repeats',
+      'Tricky instruction',
       'Status',
     ]));
     expect(getPageTextsFor(project.pages[7], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
@@ -586,7 +600,8 @@ describe('product recipe generation', () => {
     expect(getPageTextsFor(project.pages[8], 'crochetPatternDecoder')).toEqual(expect.arrayContaining([
       'Issue',
       'Where it happens',
-      'Possible fix',
+      'Attempted fix',
+      'Reference/source',
       'Resolved?',
       'Notes',
     ]));
@@ -596,7 +611,10 @@ describe('product recipe generation', () => {
       'Assembly',
       'Edging',
       'Weaving ends',
+      'Final hook used',
+      'Final yarn used',
       'Final measurements',
+      'What I would change next time',
       'Lessons learned',
     ]));
   });
@@ -629,6 +647,10 @@ describe('product recipe generation', () => {
       originX: 'left',
       originY: 'top',
     });
+    expect(getObjectBySlotFor(project.pages[0], 'crochetPatternDecoder', 'cover-feature-frame')).toBeTruthy();
+    expect(getObjectBySlotFor(project.pages[1], 'crochetPatternDecoder', 'pattern-format-label')).toBeTruthy();
+    expect(getObjectBySlotFor(project.pages[4], 'crochetPatternDecoder', 'actual-after-blocking-label')).toBeTruthy();
+    expect(getObjectBySlotFor(project.pages[6], 'crochetPatternDecoder', 'section-breakdown-table')).toBeTruthy();
     expect(getObjectBySlotFor(project.pages[2], 'crochetPatternDecoder', 'abbreviation-decoder-table')).toBeTruthy();
     expect(getObjectBySlotFor(project.pages[5], 'crochetPatternDecoder', 'row-round-tracker-table')).toBeTruthy();
   });
