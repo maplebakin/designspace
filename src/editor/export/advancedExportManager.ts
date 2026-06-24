@@ -22,8 +22,19 @@ export type AdvancedExportOptions = {
   quality?: number;
 };
 
-type ExportPagesPdfOptions = AdvancedExportOptions & {
+export type ExportPagesPdfOptions = AdvancedExportOptions & {
   imageAssets?: Record<string, string>;
+  format?: 'png' | 'jpeg';
+  pdfImageDpi?: number;
+  pdfImageQuality?: number;
+};
+
+export type ExportPagesFormat = Exclude<AdvancedExportFormat, 'pdf'>;
+
+export type ExportedPageBlob = {
+  pageNumber: number;
+  fileName: string;
+  blob: Blob;
 };
 
 const triggerDownload = (blob: Blob, fileName: string) => {
@@ -127,6 +138,16 @@ export class AdvancedExportManager {
   ): Promise<void> {
     pluginManager.emitHook('onExport', { format: 'pdf', options: { ...options, scope: 'all-pages' } });
     const fileName = sanitizeExportBaseName(options.fileName);
+    const blob = await this.exportPagesPdfBlob(pages, options);
+    triggerDownload(blob, `${fileName}.pdf`);
+  }
+
+  async exportPagesPdfBlob(
+    pages: ProjectPage[],
+    options: ExportPagesPdfOptions = {}
+  ): Promise<Blob> {
+    const pdfImageDpi = Math.max(96, Math.min(options.pdfImageDpi ?? options.dpi ?? 150, 200));
+    const pdfImageQuality = Math.max(0.1, Math.min(options.pdfImageQuality ?? options.quality ?? 0.88, 0.95));
     const pdf = new jsPDF({ unit: 'in', format: [1, 1] });
     pdf.deletePage(1);
 
@@ -136,9 +157,12 @@ export class AdvancedExportManager {
       const pageHeight = Math.max(1, Math.round(page.canvasSize?.height ?? useCanvasStore.getState().height));
       const blob = await this.renderPageToPngBlob(page, {
         ...options,
+        dpi: pdfImageDpi,
+        format: 'jpeg',
+        quality: pdfImageQuality,
         pageSize: { width: pageWidth, height: pageHeight },
       });
-      const imageDataUrl = await blobToDataUrl(blob);
+      const imageBytes = await blobToUint8Array(blob);
       const widthInches = coordinateSystem.fromFabricUnits(pageWidth, 'in');
       const heightInches = coordinateSystem.fromFabricUnits(pageHeight, 'in');
 
@@ -146,10 +170,75 @@ export class AdvancedExportManager {
         [widthInches, heightInches],
         widthInches >= heightInches ? 'landscape' : 'portrait'
       );
-      pdf.addImage(imageDataUrl, 'PNG', 0, 0, widthInches, heightInches);
+      pdf.addImage(
+        imageBytes,
+        'JPEG',
+        0,
+        0,
+        widthInches,
+        heightInches,
+        `page-${index + 1}`,
+        'FAST'
+      );
     }
 
-    triggerDownload(pdf.output('blob'), `${fileName}.pdf`);
+    const pdfBlob = pdf.output('blob');
+    if (!pdfBlob || pdfBlob.size <= 0) {
+      throw new Error('PDF export did not produce a nonzero Blob.');
+    }
+    return pdfBlob;
+  }
+
+  async exportPages(
+    pages: ProjectPage[],
+    format: ExportPagesFormat,
+    options: ExportPagesPdfOptions = {}
+  ): Promise<void> {
+    pluginManager.emitHook('onExport', { format, options: { ...options, scope: 'all-pages' } });
+    const exportedPages = await this.exportPagesToBlobs(pages, format, options);
+    exportedPages.forEach(({ blob, fileName }) => triggerDownload(blob, fileName));
+  }
+
+  async exportPagesToBlobs(
+    pages: ProjectPage[],
+    format: ExportPagesFormat,
+    options: ExportPagesPdfOptions = {}
+  ): Promise<ExportedPageBlob[]> {
+    const fileName = sanitizeExportBaseName(options.fileName);
+    const exportedPages: ExportedPageBlob[] = [];
+
+    for (let index = 0; index < pages.length; index += 1) {
+      const page = pages[index];
+      const pageNumber = String(index + 1).padStart(2, '0');
+      const pageWidth = Math.max(1, Math.round(page.canvasSize?.width ?? useCanvasStore.getState().width));
+      const pageHeight = Math.max(1, Math.round(page.canvasSize?.height ?? useCanvasStore.getState().height));
+      const pageOptions = {
+        ...options,
+        pageSize: { width: pageWidth, height: pageHeight },
+      };
+
+      if (format === 'svg') {
+        const blob = await this.renderPageToSvgBlob(page, pageOptions);
+        exportedPages.push({
+          pageNumber: index + 1,
+          fileName: `${fileName}-page-${pageNumber}.svg`,
+          blob,
+        });
+        continue;
+      }
+
+      const blob = await this.renderPageToPngBlob(page, {
+        ...pageOptions,
+        format,
+      });
+      exportedPages.push({
+        pageNumber: index + 1,
+        fileName: `${fileName}-page-${pageNumber}.${format}`,
+        blob,
+      });
+    }
+
+    return exportedPages;
   }
 
   private async renderPageToPngBlob(
@@ -192,16 +281,54 @@ export class AdvancedExportManager {
       exportCanvas.renderAll();
 
       const dataUrl = exportCanvas.toDataURL({
-        format: 'png',
+        format: options.format === 'jpeg' ? 'jpeg' : 'png',
         multiplier: Math.max(1, (options.dpi ?? 300) / 150),
         left: 0,
         top: 0,
         width: pageWidth,
         height: pageHeight,
-        quality: 1,
+        quality: options.quality ?? 1,
       });
       const response = await fetch(dataUrl);
       return await response.blob();
+    } finally {
+      exportCanvas.dispose();
+      canvasElement.remove();
+    }
+  }
+
+  private async renderPageToSvgBlob(
+    page: ProjectPage,
+    options: ExportPagesPdfOptions
+  ): Promise<Blob> {
+    const pageWidth = Math.max(1, Math.round(options.pageSize?.width ?? page.canvasSize?.width ?? useCanvasStore.getState().width));
+    const pageHeight = Math.max(1, Math.round(options.pageSize?.height ?? page.canvasSize?.height ?? useCanvasStore.getState().height));
+    const canvasElement = document.createElement('canvas');
+    const exportCanvas = new fabric.Canvas(canvasElement, {
+      width: pageWidth,
+      height: pageHeight,
+      enableRetinaScaling: false,
+    });
+
+    try {
+      const hydrated = hydrateCanvasDataWithAssets(
+        page.canvasData || { objects: [] },
+        options.imageAssets || {}
+      );
+      await exportCanvas.loadFromJSON(hydrated, reviveCustomFabricProps);
+      exportCanvas.setDimensions({ width: pageWidth, height: pageHeight });
+      const pageBackground = typeof (page.canvasData as any)?.background === 'string'
+        ? (page.canvasData as any).background
+        : null;
+      const background = pageBackground
+        ?? options.backgroundColor
+        ?? (exportCanvas.backgroundColor ? String(exportCanvas.backgroundColor) : null);
+      return this.exportSvg(exportCanvas, {
+        ...options,
+        includeBackground: options.includeBackground,
+        backgroundColor: background,
+        pageSize: { width: pageWidth, height: pageHeight },
+      });
     } finally {
       exportCanvas.dispose();
       canvasElement.remove();
@@ -211,10 +338,22 @@ export class AdvancedExportManager {
 
 export const advancedExportManager = new AdvancedExportManager();
 
-const blobToDataUrl = (blob: Blob): Promise<string> =>
-  new Promise((resolve, reject) => {
+const blobToUint8Array = async (blob: Blob): Promise<Uint8Array> => {
+  if (typeof blob.arrayBuffer === 'function') {
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
+    reader.onload = () => {
+      const result = reader.result;
+      if (result instanceof ArrayBuffer) {
+        resolve(new Uint8Array(result));
+        return;
+      }
+      reject(new Error('Failed to read image blob as binary data.'));
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image blob.'));
+    reader.readAsArrayBuffer(blob);
   });
+};
