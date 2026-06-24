@@ -1,8 +1,10 @@
 import { chaosCraftPlannerRecipe } from './chaosCraftPlanner';
+import { crochetPatternDecoderRecipe } from './crochetPatternDecoder';
 import type { ProductRecipe } from './productRecipeTypes';
 
 export const productRecipes = [
   chaosCraftPlannerRecipe,
+  crochetPatternDecoderRecipe,
 ] as const satisfies readonly ProductRecipe[];
 
 export type ProductRecipeId = typeof productRecipes[number]['id'];

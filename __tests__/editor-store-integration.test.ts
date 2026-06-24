@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fabric from 'fabric';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import {
   getPendingLayerSyncSelectionIds,
   setPendingLayerSyncSelectionIds,
@@ -14,11 +14,21 @@ import { useHistoryStore } from '../src/editor/state/useHistoryStore';
 import { useThemeStore } from '../src/editor/state/useThemeStore';
 import { syncCanvasLayers } from '../src/editor/state/layerSyncHandler';
 import { advancedExportManager } from '../src/editor/export/advancedExportManager';
+import { calculateFitCanvasZoom, FIT_VIEWPORT_PADDING, updateDocumentPaper } from '../src/editor/fabric/canvasUtils';
 import { addCircleFrame } from '../src/editor/fabric/frameFactories';
 import { loadDailyPlannerTemplate, loadRetroManualTemplate } from '../src/editor/fabric/blueprintFactories';
 import { addIText } from '../src/editor/fabric/objectFactories';
 import { ExportModal } from '../src/editor/components/ExportModal';
+import { BrandKit } from '../src/editor/components/BrandKit';
+import { TemplateBrowser } from '../src/editor/components/TemplateBrowser';
+import { EditorShell } from '../src/editor/components/EditorShell';
+import { ProductPageNavigator } from '../src/editor/components/ProductPageNavigator';
+import { buildProductStarterRecipeCards, ProductStarter } from '../src/editor/components/ProductStarter';
+import { ProjectDashboard } from '../src/editor/components/ProjectDashboard';
+import { ProjectPresets } from '../src/editor/components/ProjectPresets';
+import { ProjectPresetsModal } from '../src/editor/components/ProjectPresetsModal';
 import { isUserObject } from '../src/editor/utils/objectUtils';
+import type { ProductRecipe } from '../src/editor/recipes/productRecipeTypes';
 import {
   bringForward,
   bringToFront,
@@ -28,14 +38,52 @@ import {
   sendToBack,
 } from '../src/editor/services/clipboardService';
 import { db } from '../src/editor/db';
+import { DESIGN_SPACE_PROJECT_SCHEMA_VERSION } from '../src/editor/project/projectSchema';
+
+const productForgeMocks = vi.hoisted(() => ({
+  generateProductForgeArtifacts: vi.fn(),
+  packageProductForgeZip: vi.fn(),
+}));
+
+vi.mock('../src/editor/productForge/generateProductForgeArtifacts', () => ({
+  generateProductForgeArtifacts: productForgeMocks.generateProductForgeArtifacts,
+}));
+
+vi.mock('../src/editor/productForge/packageProductForgeZip', () => ({
+  packageProductForgeZip: productForgeMocks.packageProductForgeZip,
+}));
+
+vi.mock('../src/editor/components/CanvasStage', () => ({
+  CanvasStage: () => null,
+}));
+
+vi.mock('../src/editor/components/Inserter', () => ({
+  Inserter: () => null,
+}));
 
 vi.mock('../src/editor/db', () => ({
   db: {
     renameProject: vi.fn().mockResolvedValue(undefined),
     getAllProjects: vi.fn().mockResolvedValue([]),
     getProject: vi.fn().mockResolvedValue(null),
+    loadProject: vi.fn().mockResolvedValue(null),
+    saveProject: vi.fn().mockResolvedValue('new-id'),
+    getBrandKit: vi.fn().mockResolvedValue(null),
+    saveBrandKit: vi.fn().mockResolvedValue('brand-kit-id'),
     updateProject: vi.fn().mockResolvedValue(undefined),
     addProject: vi.fn().mockResolvedValue('new-id'),
+    templates: {
+      toArray: vi.fn().mockResolvedValue([]),
+      where: vi.fn().mockReturnValue({
+        equals: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+      get: vi.fn().mockResolvedValue(undefined),
+      add: vi.fn().mockResolvedValue(1),
+      update: vi.fn().mockResolvedValue(1),
+      delete: vi.fn().mockResolvedValue(undefined),
+    },
   },
 }));
 
@@ -50,6 +98,13 @@ const flushLayerAndHistory = async () => {
   await vi.advanceTimersByTimeAsync(350);
   await flushPromises();
 };
+
+const readBlobText = (blob: Blob) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result ?? ''));
+  reader.onerror = () => reject(reader.error);
+  reader.readAsText(blob);
+});
 
 const rectObject = (id: string, overrides: Partial<SerializedFabricObject> = {}): SerializedFabricObject => ({
   id,
@@ -90,6 +145,21 @@ const imageObject = (id: string) => {
     colorLocked: false,
   } as any);
   return image;
+};
+
+const testTheme = {
+  meta: { schema: 'generic-token-pack-v1', name: 'Test Theme' },
+  brand: {
+    primary: { value: '#00aa00' },
+    accent: { value: '#3366ff' },
+  },
+  typography: {
+    heading: { value: '#111111' },
+    body: { value: '#222222' },
+  },
+  surfaces: {
+    background: { value: '#ffffff' },
+  },
 };
 
 const installLayerSyncHandler = (canvas: fabric.Canvas) => {
@@ -163,6 +233,7 @@ const createHarness = () => {
     syncLock: { isLocked: false, reason: null, queuedSync: false },
     isDirty: false,
     projectName: 'Integration Test',
+    productProjectFields: null,
   });
 
   installLayerSyncHandler(canvas);
@@ -189,6 +260,8 @@ describe('mounted store editor integration', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     harness = createHarness();
+    productForgeMocks.generateProductForgeArtifacts.mockReset();
+    productForgeMocks.packageProductForgeZip.mockReset();
   });
 
   afterEach(() => {
@@ -488,6 +561,818 @@ describe('mounted store editor integration', () => {
     expect(useHistoryStore.getState().canUndo()).toBe(true);
   });
 
+  it('applies BrandKit colors to Fabric and canvasObjects before layer sync can overwrite them', async () => {
+    vi.mocked(db.getBrandKit).mockResolvedValueOnce({
+      colors: ['#123456'],
+      typography: {
+        heading: { fontFamily: 'Arial', fontSize: 32, fontWeight: 'bold' },
+        body: { fontFamily: 'Arial', fontSize: 16, fontWeight: 'normal' },
+      },
+      logoAssets: [],
+    });
+    useEditorStore.getState().addObject(rectObject('brand-shape'), { save: false, select: true });
+    await flushLayerAndHistory();
+
+    render(React.createElement(BrandKit));
+    await act(async () => {
+      await flushPromises();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Apply #123456'));
+      await flushLayerAndHistory();
+    });
+
+    expect(objectById(harness.canvas, 'brand-shape')?.fill).toBe('#123456');
+    expect(useEditorStore.getState().canvasObjects.find((object) => object.id === 'brand-shape')?.fill).toBe('#123456');
+  });
+
+  it('commits themed fill to canvasObjects before history and layer sync', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+    useEditorStore.getState().addObject(rectObject('theme-fill-shape'), { save: false, select: true });
+    await flushLayerAndHistory();
+
+    useEditorStore.getState().setObjectThemedFill('brand.accent.value');
+    await flushLayerAndHistory();
+
+    const serialized = useEditorStore.getState().canvasObjects.find((object) => object.id === 'theme-fill-shape');
+    expect(objectById(harness.canvas, 'theme-fill-shape')?.fill).toBe('#3366ff');
+    expect(serialized).toMatchObject({
+      fill: '#3366ff',
+      tokenRole: 'brand.accent.value',
+      colorLocked: false,
+    });
+  });
+
+  it('commits theme tint filters to canvasObjects before history and layer sync', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+    const image = imageObject('theme-image');
+    harness.canvas.add(image);
+    useEditorStore.getState().syncCanvasToStore(harness.canvas);
+    useEditorStore.getState().requestLayerSync({ force: true });
+    useEditorStore.getState().selectObjectById('theme-image');
+    await flushLayerAndHistory();
+
+    useEditorStore.getState().applyTint('brand.accent.value');
+    await flushLayerAndHistory();
+
+    const liveImage = objectById(harness.canvas, 'theme-image') as fabric.Image | undefined;
+    const serialized = useEditorStore.getState().canvasObjects.find((object) => object.id === 'theme-image') as any;
+    expect(liveImage?.filters?.some((filter: any) => filter.type === 'BlendColor')).toBe(true);
+    expect(serialized?.filters?.some((filter: any) => filter.type === 'BlendColor')).toBe(true);
+  });
+
+  it('commits reset-to-default theme changes to canvasObjects before history and layer sync', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+    useEditorStore.getState().addObject(rectObject('reset-theme-shape', {
+      fill: '#ff00ff',
+      tokenRole: 'brand.accent.value',
+    } as any), { save: false, select: true });
+    await flushLayerAndHistory();
+
+    useEditorStore.getState().resetObjectToDefaultTheme();
+    await flushLayerAndHistory();
+
+    const serialized = useEditorStore.getState().canvasObjects.find((object) => object.id === 'reset-theme-shape');
+    expect(objectById(harness.canvas, 'reset-theme-shape')?.fill).toBe('#00aa00');
+    expect(serialized).toMatchObject({
+      fill: '#00aa00',
+      tokenRole: 'brand.primary.value',
+      colorLocked: false,
+    });
+  });
+
+  it('renders product-studio framing in the main editor shell without replacing existing panels', () => {
+    useEditorStore.setState({
+      projectName: 'Chaos Craft Planner',
+      productProjectFields: {
+        productMetadata: {
+          title: 'Moon Kit Chaos Craft Planner',
+        },
+        recipe: {
+          id: 'chaosCraftPlanner',
+          version: '0.1.0',
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      } as any,
+      pages: [
+        {
+          id: 'page-cover',
+          name: 'Cover',
+          canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+        {
+          id: 'page-overview',
+          name: 'Project Overview',
+          canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+      ],
+      activePageIndex: 1,
+    });
+
+    render(React.createElement(EditorShell, { onBackToDashboard: vi.fn() }));
+
+    expect(screen.getByTestId('editor-shell').className).toContain('design-space-shell');
+    expect(screen.getByTestId('editor-toolbar').className).toContain('design-space-topbar');
+    expect(screen.getByTestId('editor-workspace').className).toContain('design-space-workspace');
+    expect(screen.getByTestId('left-panel').className).toContain('design-space-left');
+    expect(screen.getByTestId('canvas-workspace').className).toContain('design-space-canvas');
+    expect(screen.getByTestId('right-panel').className).toContain('design-space-inspector');
+    expect(screen.getByTestId('page-strip').className).toContain('design-space-page-strip');
+    expect(screen.getByTestId('status-bar').className).toContain('design-space-statusbar');
+
+    expect(screen.getByText('Design Space')).toBeTruthy();
+    expect(screen.getByText('Printable Product Studio')).toBeTruthy();
+    expect(screen.getByTestId('product-context-summary').textContent).toContain('Moon Kit Chaos Craft Planner');
+    expect(screen.getByTestId('product-context-summary').textContent).toContain('chaosCraftPlanner v0.1.0');
+    expect(screen.getByTestId('product-context-summary').textContent).toContain('2 pages');
+    expect(screen.getByTestId('product-context-summary').textContent).toContain('Project Overview');
+
+    const leftPanel = within(screen.getByTestId('left-panel'));
+    expect(leftPanel.getByText('Product Workflow')).toBeTruthy();
+    expect(leftPanel.getByText('Start from a recipe, edit pages, theme, then export.')).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Starter' })).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Pages' })).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Theme' })).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Export ZIP' })).toBeTruthy();
+    expect(leftPanel.getByTestId('product-page-navigator')).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Go to page 1 Cover' })).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Go to page 2 Project Overview' })).toBeTruthy();
+    expect(leftPanel.getByTestId('product-page-nav-item-2').getAttribute('aria-current')).toBe('page');
+    fireEvent.click(leftPanel.getByRole('button', { name: 'Starter' }));
+    expect(leftPanel.getByTestId('product-starter')).toBeTruthy();
+    expect(leftPanel.getByText('Chaos Craft Planner')).toBeTruthy();
+
+    expect(screen.getByTestId('right-tab-product')).toBeTruthy();
+    expect(screen.getByTestId('right-tab-page')).toBeTruthy();
+    expect(screen.getByTestId('right-tab-object')).toBeTruthy();
+    expect(screen.getByTestId('right-tab-theme')).toBeTruthy();
+    expect(screen.getByTestId('right-tab-layers')).toBeTruthy();
+    expect(screen.getByTestId('right-inspector-product-panel').textContent).toContain('Moon Kit Chaos Craft Planner');
+    expect(screen.getByTestId('right-inspector-product-panel').textContent).toContain('chaosCraftPlanner v0.1.0');
+    expect(screen.getByTestId('right-inspector-product-panel').textContent).toContain('2 pages');
+
+    fireEvent.click(screen.getByTestId('right-tab-page'));
+    expect(screen.getByTestId('right-inspector-page-panel').textContent).toContain('2 Project Overview');
+    expect(screen.getByTestId('right-inspector-page-panel').textContent).toContain('2550 × 3300 px');
+
+    fireEvent.click(screen.getByTestId('right-tab-object'));
+    expect(screen.getByTestId('right-inspector-object-panel').textContent).toContain('Select an object to edit it.');
+    expect(screen.getByTestId('right-inspector-object-panel').textContent).toContain('Properties');
+
+    fireEvent.click(screen.getByTestId('right-tab-theme'));
+    expect(screen.getByTestId('right-inspector-theme-panel').textContent).toContain('Brand Kit');
+    expect(screen.getByTestId('right-inspector-theme-panel').textContent).toContain('Color Palettes');
+
+    fireEvent.click(screen.getByTestId('right-tab-layers'));
+    expect(screen.getByTestId('right-inspector-layers-panel').textContent).toContain('Layers');
+    expect(screen.getByRole('button', { name: 'Export' }).textContent).toContain('Export / ZIP');
+  });
+
+  it('renders the canvas paper as a distinct non-exported workbench sheet', () => {
+    useCanvasStore.setState({ width: 2550, height: 3300 });
+
+    updateDocumentPaper(harness.canvas, '#fffdf8');
+
+    const paper = harness.canvas.getObjects().find((object) => (object as any).isDocumentPaper) as fabric.Rect | undefined;
+    expect(paper).toBeTruthy();
+    expect(paper?.excludeFromExport).toBe(true);
+    expect((paper as any)?.isGuide).toBe(true);
+    expect(paper?.originX).toBe('left');
+    expect(paper?.originY).toBe('top');
+    expect(paper?.left).toBe(0);
+    expect(paper?.top).toBe(0);
+    expect(paper?.width).toBe(2550);
+    expect(paper?.height).toBe(3300);
+    expect(paper?.stroke).toBe('rgba(74, 56, 45, 0.30)');
+    expect(paper?.strokeWidth).toBe(2);
+    expect(paper?.shadow).toBeTruthy();
+    expect(FIT_VIEWPORT_PADDING).toBe(48);
+  });
+
+  it('calculates fit zoom from the bounded canvas viewport dimensions', () => {
+    const zoom = calculateFitCanvasZoom({
+      containerWidth: 760,
+      containerHeight: 744,
+      documentWidth: 2550,
+      documentHeight: 3300,
+    });
+
+    expect(zoom).toBeCloseTo((744 - 24 - FIT_VIEWPORT_PADDING) / 3300, 5);
+    expect(2550 * zoom).toBeLessThan(760 - 24);
+    expect(3300 * zoom).toBeLessThanOrEqual(744 - 24 - FIT_VIEWPORT_PADDING);
+  });
+
+  it('renders project feedback in the scoped non-obstructive toast surface and dismisses it', () => {
+    useEditorStore.setState({
+      toastMessage: 'Loaded project: Tarot Card Template',
+      toast: null,
+    });
+
+    render(React.createElement(EditorShell, { onBackToDashboard: vi.fn() }));
+
+    const toast = screen.getByTestId('design-space-toast');
+    expect(toast.className).toContain('design-space-toast');
+    expect(toast.className).toContain('design-space-toast-info');
+    expect(toast.textContent).toContain('Loaded project: Tarot Card Template');
+    expect(toast.textContent).not.toContain('LOADED PROJECT: TAROT CARD TEMPLATE');
+
+    fireEvent.click(within(toast).getByRole('button', { name: 'Dismiss toast' }));
+
+    expect(screen.queryByTestId('design-space-toast')).toBeNull();
+  });
+
+  it('switches pages from the vertical product page navigator through the existing sync flow', async () => {
+    useEditorStore.setState({
+      pages: [
+        {
+          id: 'page-cover',
+          name: 'Cover',
+          canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 800, height: 600 },
+        },
+        {
+          id: 'page-overview',
+          name: 'Project Overview',
+          canvasData: { objects: [rectObject('page-two-shape', { fill: '#0000ff' })], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 800, height: 600 },
+        },
+      ],
+      activePageIndex: 0,
+    });
+    useEditorStore.getState().addObject(rectObject('unsaved-page-one-shape'), { save: false, select: false });
+    await flushLayerAndHistory();
+
+    render(React.createElement(ProductPageNavigator));
+
+    expect(screen.getByRole('button', { name: 'Go to page 1 Cover' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByText('1')).toBeTruthy();
+    expect(screen.getByText('Cover')).toBeTruthy();
+    expect(screen.getByText('Project Overview')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Go to page 2 Project Overview' }));
+      await flushLayerAndHistory();
+    });
+
+    const state = useEditorStore.getState();
+    expect(state.activePageIndex).toBe(1);
+    expect(state.pages[0].canvasData.objects.map((object: SerializedFabricObject) => object.id)).toContain('unsaved-page-one-shape');
+    expect(objectIds(harness.canvas)).toEqual(['page-two-shape']);
+    expect(screen.getByRole('button', { name: 'Go to page 2 Project Overview' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('uses product-first copy on the dashboard without changing the create project entry point', async () => {
+    (db.getAllProjects as any).mockResolvedValueOnce([]);
+
+    render(React.createElement(ProjectDashboard));
+    await act(async () => {
+      await flushPromises();
+    });
+
+    expect(screen.getByText('Printable Product Studio')).toBeTruthy();
+    expect(screen.getByText('Create themed printable products, reopen saved projects, and package sellable downloads from one workspace.')).toBeTruthy();
+    expect(screen.getByTestId('dashboard-new-project').textContent).toContain('Create Product');
+    expect(screen.getByText('Open Product Project')).toBeTruthy();
+    expect(screen.getByText('Recent Product Projects')).toBeTruthy();
+    expect(screen.getByText('No product projects yet.')).toBeTruthy();
+    expect(screen.getByTestId('dashboard-panel').className).toContain('max-w-[1120px]');
+    expect(screen.getByTestId('dashboard-panel').className).toContain('project-dashboard-panel');
+    expect(screen.getByTestId('dashboard-actions').className).toContain('project-dashboard-actions');
+    expect(screen.getByTestId('dashboard-root').className).not.toMatch(/\bscale-|transform|zoom\b/);
+    expect(screen.getByTestId('dashboard-panel').className).not.toMatch(/\bscale-|transform|zoom\b/);
+    expect(screen.getByTestId('dashboard-new-project').className).toContain('min-h-[150px]');
+    expect(screen.getByTestId('dashboard-new-project').className).toContain('project-dashboard-action-card');
+    expect(screen.getByTestId('dashboard-new-project').className).toContain('justify-start');
+    expect(screen.getByTestId('dashboard-open-project').className).toContain('min-h-[150px]');
+    expect(screen.getByTestId('dashboard-open-project').className).toContain('project-dashboard-action-card');
+    expect(screen.getByTestId('dashboard-open-project').className).toContain('justify-start');
+    expect(screen.getByText('Start a printable product project and choose a recipe or preset in the editor.')).toBeTruthy();
+    expect(screen.getByText('Load an existing Design Space project file from your computer.')).toBeTruthy();
+  });
+
+  it('keeps dashboard create and open actions wired to existing behavior', async () => {
+    (db.getAllProjects as any).mockResolvedValueOnce([]);
+    const onProjectOpen = vi.fn();
+
+    render(React.createElement(ProjectDashboard, { onProjectOpen }));
+    await act(async () => {
+      await flushPromises();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dashboard-new-project'));
+      await flushPromises();
+    });
+
+    expect(onProjectOpen).toHaveBeenCalledTimes(1);
+    expect(useEditorStore.getState().showOnboarding).toBe(true);
+    expect(useEditorStore.getState().pages).toHaveLength(1);
+  });
+
+  it('keeps the dashboard open product action wired to project file loading', async () => {
+    (db.getAllProjects as any).mockResolvedValueOnce([]);
+    const loadProjectFileSpy = vi.spyOn(useEditorStore.getState(), 'loadProjectFile').mockResolvedValue(undefined);
+    const onProjectOpen = vi.fn();
+    const projectFile = new File(['{}'], 'craft-planner.apocaproject.json', { type: 'application/json' });
+
+    render(React.createElement(ProjectDashboard, { onProjectOpen }));
+    await act(async () => {
+      await flushPromises();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('dashboard-open-file-input'), {
+        target: { files: [projectFile] },
+      });
+      await flushPromises();
+    });
+
+    expect(onProjectOpen).toHaveBeenCalledTimes(1);
+    expect(loadProjectFileSpy).toHaveBeenCalledWith(projectFile);
+  });
+
+  it('renders recent product projects as readable dashboard rows', async () => {
+    (db.getAllProjects as any).mockResolvedValueOnce([
+      {
+        id: 'project-1',
+        name: 'Chaos Craft Planner Draft',
+        lastModified: '2026-06-20T10:30:00.000Z',
+      },
+      {
+        id: 'project-2',
+        name: 'Gift Planner Test',
+        lastModified: '2026-06-21T11:00:00.000Z',
+      },
+    ]);
+
+    render(React.createElement(ProjectDashboard));
+    await act(async () => {
+      await flushPromises();
+    });
+
+    const cards = screen.getAllByTestId('dashboard-project-card');
+    expect(cards).toHaveLength(2);
+    expect(screen.getByText('Chaos Craft Planner Draft')).toBeTruthy();
+    expect(screen.getByText('Gift Planner Test')).toBeTruthy();
+    expect(screen.getAllByText('Open editable product project')).toHaveLength(2);
+    expect(cards[0].className).toContain('rounded-2xl');
+    expect(cards[0].textContent).toContain('Chaos Craft Planner Draft');
+  });
+
+  it('renders the separated ProductStarter recipe card with product output context', () => {
+    render(React.createElement(ProductStarter));
+
+    expect(screen.getByTestId('product-starter')).toBeTruthy();
+    expect(screen.getByText('Product Starter')).toBeTruthy();
+    const chaosCard = screen.getByTestId('recipe-chaos-craft-planner');
+    expect(within(chaosCard).getByText('Chaos Craft Planner')).toBeTruthy();
+    expect(within(chaosCard).getByText('Generate a 10-page printable craft planner using your active theme.')).toBeTruthy();
+    expect(within(chaosCard).getByText('PDF + previews + metadata + README/listing via Product Forge ZIP.')).toBeTruthy();
+    expect(screen.getByText('More templates and blank canvases remain available under Insert → Templates.')).toBeTruthy();
+  });
+
+  it('renders the Crochet Pattern Decoder Kit card from the recipe registry', () => {
+    render(React.createElement(ProductStarter));
+
+    const crochetCard = screen.getByTestId('recipe-crochet-pattern-decoder');
+    expect(within(crochetCard).getByText('Crochet Pattern Decoder Kit')).toBeTruthy();
+    expect(within(crochetCard).getByText(
+      'Break down crochet patterns into abbreviations, stitch notes, gauge checks, row tracking, and modification notes.'
+    )).toBeTruthy();
+    expect(within(crochetCard).getByText('PDF + previews + metadata + README/listing via Product Forge ZIP.')).toBeTruthy();
+  });
+
+  it('builds ProductStarter cards from recipe metadata', () => {
+    const fixtureRecipe: ProductRecipe = {
+      id: 'fixtureRecipe',
+      version: '1.2.3',
+      name: 'Internal Fixture Name',
+      displayName: 'Fixture Product Kit',
+      starterDescription: 'Generate a fixture printable product.',
+      starterOutputHint: 'Fixture PDF + fixture previews.',
+      defaultPageSize: {
+        presetId: 'us-letter',
+        width: 2550,
+        height: 3300,
+        unitMode: 'in',
+        dpi: 300,
+      },
+      pages: [
+        { id: 'cover', name: 'Cover', label: 'Cover' },
+      ],
+      productMetadataDefaults: {
+        titleTemplate: '{Theme Name} Fixture Product Kit',
+      },
+      exportSettingsDefaults: {
+        fileSlug: 'fixture-product-kit',
+      },
+    };
+
+    expect(buildProductStarterRecipeCards([fixtureRecipe])).toMatchObject([
+      {
+        id: 'fixtureRecipe',
+        name: 'Fixture Product Kit',
+        description: 'Generate a fixture printable product.',
+        outputHint: 'Fixture PDF + fixture previews.',
+        version: '1.2.3',
+        testId: 'recipe-fixture-recipe',
+      },
+    ]);
+  });
+
+  it('renders and triggers a fixture recipe without ProductStarter code changes', async () => {
+    const fixtureRecipe: ProductRecipe = {
+      id: 'fixtureRecipe',
+      version: '1.2.3',
+      name: 'Internal Fixture Name',
+      displayName: 'Fixture Product Kit',
+      starterDescription: 'Generate a fixture printable product.',
+      starterOutputHint: 'Fixture PDF + fixture previews.',
+      defaultPageSize: {
+        presetId: 'us-letter',
+        width: 2550,
+        height: 3300,
+        unitMode: 'in',
+        dpi: 300,
+      },
+      pages: [
+        { id: 'cover', name: 'Cover', label: 'Cover' },
+      ],
+      productMetadataDefaults: {
+        titleTemplate: '{Theme Name} Fixture Product Kit',
+      },
+      exportSettingsDefaults: {
+        fileSlug: 'fixture-product-kit',
+      },
+    };
+    const createSpy = vi
+      .spyOn(useEditorStore.getState(), 'createProjectFromRecipe')
+      .mockResolvedValue(undefined);
+
+    render(React.createElement(ProductStarter, { recipes: [fixtureRecipe] }));
+
+    expect(screen.getByText('Fixture Product Kit')).toBeTruthy();
+    expect(screen.getByText('Generate a fixture printable product.')).toBeTruthy();
+    expect(screen.getByText('Fixture PDF + fixture previews.')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-fixture-recipe'));
+      await flushLayerAndHistory();
+    });
+
+    expect(createSpy).toHaveBeenCalledWith('fixtureRecipe');
+  });
+
+  it('triggers the Crochet Pattern Decoder recipe from the registry card', async () => {
+    const createSpy = vi
+      .spyOn(useEditorStore.getState(), 'createProjectFromRecipe')
+      .mockResolvedValue(undefined);
+
+    render(React.createElement(ProductStarter));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-crochet-pattern-decoder'));
+      await flushLayerAndHistory();
+    });
+
+    expect(createSpy).toHaveBeenCalledWith('crochetPatternDecoder');
+  });
+
+  it('preserves ProductStarter unsaved-work confirmation before recipe generation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    useEditorStore.getState().addObject(rectObject('existing-work'), { save: false, select: false });
+    await flushLayerAndHistory();
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith('Creating Chaos Craft Planner will clear your current design. Continue?');
+    expect(useEditorStore.getState().pages).toHaveLength(1);
+    expect(objectIds(harness.canvas)).toContain('existing-work');
+  });
+
+  it('switches the left workflow from ProductStarter to Pages after recipe creation succeeds', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+    render(React.createElement(EditorShell, { onBackToDashboard: vi.fn() }));
+
+    const leftPanel = within(screen.getByTestId('left-panel'));
+    fireEvent.click(leftPanel.getByRole('button', { name: 'Starter' }));
+    expect(leftPanel.getByTestId('product-starter')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    expect(leftPanel.getByTestId('product-page-navigator')).toBeTruthy();
+    expect(leftPanel.getByText('10 total')).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Go to page 1 Cover' })).toBeTruthy();
+    expect(leftPanel.getByRole('button', { name: 'Go to page 10 Blank Notes' })).toBeTruthy();
+  });
+
+  it('keeps ProductStarter open when recipe creation is cancelled', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    useEditorStore.getState().addObject(rectObject('existing-work'), { save: false, select: false });
+    await flushLayerAndHistory();
+    render(React.createElement(EditorShell, { onBackToDashboard: vi.fn() }));
+
+    const leftPanel = within(screen.getByTestId('left-panel'));
+    fireEvent.click(leftPanel.getByRole('button', { name: 'Starter' }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith('Creating Chaos Craft Planner will clear your current design. Continue?');
+    expect(leftPanel.getByTestId('product-starter')).toBeTruthy();
+    expect(leftPanel.queryByTestId('product-page-navigator')).toBeNull();
+    expect(useEditorStore.getState().pages).toHaveLength(1);
+  });
+
+  it('shows generated Chaos Craft Planner pages in the vertical product page navigator', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    cleanup();
+    render(React.createElement(ProductPageNavigator));
+
+    expect(screen.getByTestId('product-page-navigator')).toBeTruthy();
+    expect(screen.getByText('10 total')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Go to page 1 Cover' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Go to page 2 Project Overview' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Go to page 3 WIP Tracker' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Go to page 10 Blank Notes' })).toBeTruthy();
+  });
+
+  it('starts a blank preset with empty canvasObjects and synced active page data', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    useEditorStore.getState().addObject(rectObject('old-shape'), { save: false, select: false });
+    await flushLayerAndHistory();
+    useEditorStore.getState().syncActivePageFromCanvas();
+    expect(useEditorStore.getState().pages[0].canvasData.objects.map((object: SerializedFabricObject) => object.id)).toEqual(['old-shape']);
+
+    render(React.createElement(TemplateBrowser));
+    await act(async () => {
+      await flushPromises();
+    });
+    fireEvent.click(screen.getByText('US Letter'));
+    await flushLayerAndHistory();
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(objectIds(harness.canvas)).toEqual([]);
+    expect(useEditorStore.getState().canvasObjects).toEqual([]);
+    expect(useEditorStore.getState().pages).toHaveLength(1);
+    expect(useEditorStore.getState().pages[0].canvasData.objects).toEqual([]);
+    expect(useEditorStore.getState().pages[0].canvasSize).toEqual({ width: 2550, height: 3300 });
+    expect(useCanvasStore.getState().width).toBe(2550);
+    expect(useCanvasStore.getState().height).toBe(3300);
+  });
+
+  it('renders the New Canvas modal with readable preset sections and keeps preset selection working', async () => {
+    useEditorStore.setState({ isProjectPresetsOpen: true });
+
+    render(React.createElement(ProjectPresetsModal));
+
+    expect(screen.getAllByText('New Canvas')).toHaveLength(2);
+    expect(screen.getByText('Choose a size to get started')).toBeTruthy();
+    expect(screen.getByText('Print (300 DPI)')).toBeTruthy();
+    expect(screen.getByText('Digital (96 DPI)')).toBeTruthy();
+    expect(screen.getByText('US Letter')).toBeTruthy();
+    expect(screen.getByText('Instagram Square')).toBeTruthy();
+    expect(screen.getByTestId('project-preset-us-letter').className).toContain('project-presets-card');
+    expect(screen.getByTestId('project-preset-us-letter').className).toContain('project-presets-card-recommended');
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('project-preset-us-letter'));
+      await flushLayerAndHistory();
+    });
+
+    expect(useCanvasStore.getState().width).toBe(2550);
+    expect(useCanvasStore.getState().height).toBe(3300);
+    expect(useEditorStore.getState().isProjectPresetsOpen).toBe(false);
+  });
+
+  it('renders ProjectPresets with readable preset cards when used directly', () => {
+    render(React.createElement(ProjectPresets));
+
+    expect(screen.getByText('New Canvas')).toBeTruthy();
+    expect(screen.getByText('Print (300 DPI)')).toBeTruthy();
+    expect(screen.getByText('Digital (96 DPI)')).toBeTruthy();
+    expect(screen.getByTestId('project-preset-a4-document').className).toContain('project-presets-card');
+    expect(screen.getByText('Safe Margin 24px')).toBeTruthy();
+    expect(screen.getByText('Pixels Mode')).toBeTruthy();
+  });
+
+  it('creates a Chaos Craft Planner from the ProductStarter recipe trigger', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    const state = useEditorStore.getState();
+    expect(state.pages).toHaveLength(10);
+    expect(state.activePageIndex).toBe(0);
+    expect(state.pages[0].name).toBe('Cover');
+    expect(objectIds(harness.canvas)).toContain('chaosCraftPlanner-cover-title');
+    expect(state.canvasObjects.map((object) => object.id)).toContain('chaosCraftPlanner-cover-title');
+    expect(state.productProjectFields?.recipe).toMatchObject({
+      id: 'chaosCraftPlanner',
+      version: '0.1.0',
+    });
+    expect(state.productProjectFields?.productMetadata?.title).toBe('Test Theme Chaos Craft Planner');
+    expect(state.saveStatus).toBe('unsaved');
+  });
+
+  it('creates a Chaos Craft Planner with the safe default theme when no active theme is selected', async () => {
+    useThemeStore.getState().setThemeData(null);
+    useThemeStore.getState().setBrandVault([]);
+    useThemeStore.getState().setActiveBrandCollectionId(null);
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    const state = useEditorStore.getState();
+    expect(state.pages).toHaveLength(10);
+    expect(state.pages[0].name).toBe('Cover');
+    expect(state.productProjectFields?.theme?.name).toBe('Default Theme');
+    expect(state.productProjectFields?.productMetadata?.title).toBe('Default Theme Chaos Craft Planner');
+    expect(useThemeStore.getState().themeData?.meta?.name).toBe('Default Theme');
+  });
+
+  it('preserves generated recipe and product fields when downloading the project file', async () => {
+    let capturedBlob: Blob | null = null;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => {
+      capturedBlob = value as Blob;
+      return 'blob:recipe-project-export';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    useThemeStore.getState().setThemeData(testTheme as any);
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    await act(async () => {
+      await useEditorStore.getState().downloadProjectFile();
+      await flushPromises();
+    });
+
+    expect(capturedBlob).toBeTruthy();
+    vi.useRealTimers();
+    const exported = JSON.parse(await readBlobText(capturedBlob!));
+    expect(exported.schemaVersion).toBe(DESIGN_SPACE_PROJECT_SCHEMA_VERSION);
+    expect(exported.recipe).toMatchObject({
+      id: 'chaosCraftPlanner',
+      version: '0.1.0',
+    });
+    expect(exported.pages).toHaveLength(10);
+    expect(exported.pages[0].name).toBe('Cover');
+    expect(exported.productMetadata.title).toBe('Test Theme Chaos Craft Planner');
+    expect(exported.exportSettings.pdfFileName).toBe('test-theme-chaos-craft-planner.pdf');
+  });
+
+  it('exports .apocaproject JSON with the product-aware schema version', async () => {
+    let capturedBlob: Blob | null = null;
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => {
+      capturedBlob = value as Blob;
+      return 'blob:project-export';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    useEditorStore.getState().addObject(rectObject('schema-shape'), { save: false, select: false });
+    await flushLayerAndHistory();
+
+    await useEditorStore.getState().downloadProjectFile();
+
+    expect(createObjectUrlSpy).toHaveBeenCalled();
+    expect(capturedBlob).toBeTruthy();
+    vi.useRealTimers();
+    const exported = JSON.parse(await readBlobText(capturedBlob!));
+    expect(exported.schemaVersion).toBe(DESIGN_SPACE_PROJECT_SCHEMA_VERSION);
+    expect(exported.document.pageSize).toMatchObject({ width: 800, height: 600, unitMode: 'in' });
+    expect(exported.pages[0].canvasData.objects.map((object: SerializedFabricObject) => object.id)).toContain('schema-shape');
+  });
+
+  it('loads product-aware project payloads and updates without losing product fields', async () => {
+    const productPayload = {
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      projectId: 'product-project-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      metadata: {
+        name: 'Loaded Product',
+        slug: 'loaded-product',
+        sourceApp: 'design-space',
+      },
+      document: {
+        pageSize: { presetId: 'us-letter', width: 2550, height: 3300, unitMode: 'in', dpi: 300 },
+        background: { tokenRole: 'surfaces.page-background.value', value: '#f7f1e8' },
+        bleedPx: 36,
+        safeMarginPx: 72,
+      },
+      theme: {
+        source: 'apocapalette',
+        themeId: 'theme-1',
+        name: 'Moon Kit',
+        slug: 'moon-kit',
+        version: '1.0.0',
+        tokens: testTheme,
+      },
+      recipe: {
+        id: 'homeResetPack',
+        version: '0.1.0',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      pages: [{
+        id: 'page-1',
+        name: 'Cover',
+        canvasData: { objects: [rectObject('loaded-shape')], background: '#f7f1e8' },
+        canvasSize: { width: 2550, height: 3300 },
+      }],
+      activePageIndex: 0,
+      canvasData: { objects: [rectObject('loaded-shape')], background: '#f7f1e8' },
+      assets: {},
+      activeTheme: testTheme,
+      lastUpdated: '2026-01-02T00:00:00.000Z',
+      canvasSize: { width: 2550, height: 3300 },
+      unitMode: 'in',
+      exportSettings: {
+        pdfFileName: 'loaded-product.pdf',
+        previewFileNames: ['loaded-product-preview-page-01.png'],
+        formats: ['pdf', 'png'],
+        dpi: 300,
+        includeBackground: true,
+      },
+      productMetadata: {
+        title: 'Loaded Product',
+        description: 'Printable product description',
+        tags: ['printable', 'planner'],
+        category: 'home',
+        useCases: ['reset'],
+        includedFiles: ['loaded-product.pdf'],
+        listingCopy: {
+          shortDescription: 'Short listing copy',
+          longDescription: 'Long listing copy',
+          bullets: ['Editable', 'Printable'],
+        },
+      },
+    };
+    vi.mocked(db.loadProject).mockResolvedValueOnce({
+      project: {
+        id: 'product-project-1',
+        name: 'Loaded Product',
+        lastModified: new Date('2026-01-02T00:00:00.000Z'),
+        canvasDataId: 'canvas-data-1',
+      },
+      canvasData: JSON.stringify(productPayload),
+    });
+
+    await useEditorStore.getState().loadProject('product-project-1');
+    await flushLayerAndHistory();
+
+    expect(objectIds(harness.canvas)).toEqual(['loaded-shape']);
+    expect(useEditorStore.getState().productProjectFields?.recipe?.id).toBe('homeResetPack');
+    vi.mocked(db.updateProject).mockClear();
+
+    await useEditorStore.getState().updateCurrentProject();
+
+    const savedPayload = JSON.parse(vi.mocked(db.updateProject).mock.calls.at(-1)?.[2] as string);
+    expect(savedPayload.schemaVersion).toBe(DESIGN_SPACE_PROJECT_SCHEMA_VERSION);
+    expect(savedPayload.projectId).toBe('product-project-1');
+    expect(savedPayload.recipe).toMatchObject({ id: 'homeResetPack', version: '0.1.0' });
+    expect(savedPayload.document).toMatchObject({
+      pageSize: { presetId: 'us-letter', width: 2550, height: 3300, unitMode: 'in', dpi: 300 },
+      background: { tokenRole: 'surfaces.page-background.value', value: '#f7f1e8' },
+      bleedPx: 36,
+      safeMarginPx: 72,
+    });
+    expect(savedPayload.productMetadata).toMatchObject({
+      title: 'Loaded Product',
+      description: 'Printable product description',
+      tags: ['printable', 'planner'],
+      includedFiles: ['loaded-product.pdf'],
+    });
+    expect(savedPayload.pages[0].canvasData.objects.map((object: SerializedFabricObject) => object.id)).toEqual(['loaded-shape']);
+  });
+
   it('routes ExportModal current-page and all-pages PDF through AdvancedExportManager', async () => {
     const exportSpy = vi.spyOn(advancedExportManager, 'export').mockResolvedValue(undefined);
     const exportPagesSpy = vi.spyOn(advancedExportManager, 'exportPagesPdf').mockResolvedValue(undefined);
@@ -497,6 +1382,20 @@ describe('mounted store editor integration', () => {
     await flushPromises();
 
     render(React.createElement(ExportModal, { isOpen: true, onClose }));
+
+    expect(screen.getByText('Product Bundle / Product Forge ZIP')).toBeTruthy();
+    expect(screen.getByText('Quick Exports')).toBeTruthy();
+    expect(screen.getByText('Advanced Exports')).toBeTruthy();
+    expect(screen.getByText('Packages the printable PDF, preview PNGs, metadata, manifest, README, and listing copy.')).toBeTruthy();
+    expect(screen.getByText('1 page ready for PDF, previews, metadata, and ZIP packaging.')).toBeTruthy();
+    expect(screen.getByText('Common current-page downloads for previews and proofing.')).toBeTruthy();
+    expect(screen.getByText('Lower-level formats for testing, assets, and manual workflows.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download PNG (2x)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download JPEG' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download SVG' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download PNG (All Pages)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download JPEG (All Pages)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download SVG (All Pages)' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Download PDF' }));
     await flushPromises();
@@ -517,6 +1416,145 @@ describe('mounted store editor integration', () => {
       imageAssets: {},
     }));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('downloads Product Forge ZIP from the current editor project', async () => {
+    const artifactResult = {
+      productTitle: 'Integration Product',
+      pageCount: 1,
+      artifacts: [],
+      manifest: {
+        schemaVersion: 'product-forge-artifacts-v1',
+        generatedAt: '2026-06-18T00:00:00.000Z',
+        productTitle: 'Integration Product',
+        pageCount: 1,
+        pageSize: { width: 800, height: 600, unitMode: 'in', dpi: 300 },
+        files: [],
+      },
+    };
+    const zipBlob = new Blob(['zip'], { type: 'application/zip' });
+    productForgeMocks.generateProductForgeArtifacts.mockResolvedValue(artifactResult);
+    productForgeMocks.packageProductForgeZip.mockResolvedValue({
+      status: 'generated',
+      fileName: 'integration-product.zip',
+      mimeType: 'application/zip',
+      blob: zipBlob,
+      sizeBytes: zipBlob.size,
+      manifest: artifactResult.manifest,
+      packagedFiles: [],
+    });
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:product-zip');
+    const revokeObjectUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const linkClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const syncSpy = vi.spyOn(useEditorStore.getState(), 'syncActivePageFromCanvas');
+    useEditorStore.setState({
+      productProjectFields: {
+        schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+        projectId: 'product-zip-project',
+        updatedAt: '2026-06-18T00:00:00.000Z',
+        metadata: { name: 'Integration Product', sourceApp: 'design-space' },
+        document: {
+          pageSize: { presetId: 'us-letter', width: 2550, height: 3300, unitMode: 'in', dpi: 300 },
+        },
+        recipe: { id: 'chaosCraftPlanner', version: '0.1.0' },
+        theme: { name: 'Test Theme' },
+        exportSettings: {
+          pdfFileName: 'integration-product.pdf',
+          previewFileNames: ['integration-product-preview-page-01.png'],
+          formats: ['pdf', 'png'],
+          dpi: 300,
+          includeBackground: true,
+        },
+        productMetadata: {
+          title: 'Integration Product',
+          tags: ['planner'],
+          useCases: ['testing'],
+        },
+      },
+    });
+    const onClose = vi.fn();
+
+    render(React.createElement(ExportModal, { isOpen: true, onClose }));
+
+    expect(screen.getByText('Integration Product')).toBeTruthy();
+    expect(screen.getByText('chaosCraftPlanner v0.1.0')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('download-product-zip'));
+      await flushPromises();
+    });
+
+    expect(syncSpy).toHaveBeenCalled();
+    expect(productForgeMocks.generateProductForgeArtifacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: 'Integration Test',
+      pages: expect.any(Array),
+      productProjectFields: expect.objectContaining({
+        recipe: { id: 'chaosCraftPlanner', version: '0.1.0' },
+      }),
+    }));
+    expect(syncSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      productForgeMocks.generateProductForgeArtifacts.mock.invocationCallOrder[0]
+    );
+    expect(productForgeMocks.packageProductForgeZip).toHaveBeenCalledWith(
+      artifactResult,
+      expect.objectContaining({
+        productMetadata: expect.objectContaining({ title: 'Integration Product' }),
+        recipe: { id: 'chaosCraftPlanner', version: '0.1.0' },
+        exportSettings: expect.objectContaining({ pdfFileName: 'integration-product.pdf' }),
+      })
+    );
+    expect(createObjectUrlSpy).toHaveBeenCalledWith(zipBlob);
+    expect(linkClickSpy).toHaveBeenCalled();
+    expect(revokeObjectUrlSpy).toHaveBeenCalledWith('blob:product-zip');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a Product ZIP error without triggering download when packaging fails', async () => {
+    const artifactResult = {
+      productTitle: 'Broken Product',
+      pageCount: 1,
+      artifacts: [],
+      manifest: {
+        schemaVersion: 'product-forge-artifacts-v1',
+        generatedAt: '2026-06-18T00:00:00.000Z',
+        productTitle: 'Broken Product',
+        pageCount: 1,
+        pageSize: { width: 800, height: 600, unitMode: 'in', dpi: 300 },
+        files: [],
+      },
+    };
+    productForgeMocks.generateProductForgeArtifacts.mockResolvedValue(artifactResult);
+    productForgeMocks.packageProductForgeZip.mockResolvedValue({
+      status: 'failed',
+      fileName: 'broken-product.zip',
+      mimeType: 'application/zip',
+      manifest: artifactResult.manifest,
+      packagedFiles: [],
+      errors: ['Printable PDF artifact is failed: PDF render failed'],
+    });
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:should-not-download');
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onClose = vi.fn();
+
+    render(React.createElement(ExportModal, { isOpen: true, onClose }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('download-product-zip'));
+      await flushPromises();
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain('Printable PDF artifact is failed: PDF render failed');
+    expect(createObjectUrlSpy).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('disables Product ZIP download when there are no pages to package', () => {
+    useEditorStore.setState({ pages: [] });
+
+    render(React.createElement(ExportModal, { isOpen: true, onClose: vi.fn() }));
+
+    expect((screen.getByTestId('download-product-zip') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('No pages are available to package yet.')).toBeTruthy();
   });
 
   it('copies and pastes a single object with a new ID, synced layers, selection, and undo/redo', async () => {
