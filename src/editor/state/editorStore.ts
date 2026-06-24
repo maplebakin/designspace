@@ -1907,7 +1907,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
         await canvas.loadFromJSON(hydrated, reviveCustomFabricProps);
         const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
-        resizeCanvas(nextSize.width, nextSize.height, { save: false });
+        resizeCanvas(nextSize.width, nextSize.height, {
+            save: false,
+            resetViewport: false,
+        });
         const pageBackground =
             typeof (page.canvasData as any)?.background === 'string'
                 ? (page.canvasData as any).background

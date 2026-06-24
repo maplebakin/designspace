@@ -290,7 +290,11 @@ export const renderBleedGuides = (canvas: fabric.Canvas, bleed: number) => {
  * resizeCanvas(2480, 3508);
  * ```
  */
-export const resizeCanvas = (width: number, height: number, options: { save?: boolean; skipRender?: boolean } = {}): void => {
+export const resizeCanvas = (
+  width: number,
+  height: number,
+  options: { save?: boolean; skipRender?: boolean; resetViewport?: boolean } = {}
+): void => {
   const { canvas, saveState, setZoom, setVpt } = useEditorStore.getState();
   if (!canvas) return;
 
@@ -299,12 +303,17 @@ export const resizeCanvas = (width: number, height: number, options: { save?: bo
 
   const hasObjects = canvas.getObjects().some(isUserObject);
 
-  // Reset viewport and zoom for a clean start
-  const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
-  canvas.setZoom(1);
-  canvas.setViewportTransform(nextVpt);
-  setZoom(1);
-  setVpt([...nextVpt]);
+  if (options.resetViewport !== false) {
+    // Reset viewport and zoom for a clean start when changing the active document size.
+    const nextVpt = [1, 0, 0, 1, 0, 0] as fabric.TMat2D;
+    canvas.setZoom(1);
+    canvas.setViewportTransform(nextVpt);
+    setZoom(1);
+    setVpt([...nextVpt]);
+  } else if (canvas.viewportTransform) {
+    setZoom(canvas.getZoom());
+    setVpt([...canvas.viewportTransform]);
+  }
 
   // Update the document paper to reflect new dimensions
   const { canvasBackgroundColor } = useThemeStore.getState();

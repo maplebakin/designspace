@@ -23,6 +23,7 @@ import { BrandKit } from '../src/editor/components/BrandKit';
 import { TemplateBrowser } from '../src/editor/components/TemplateBrowser';
 import { EditorShell } from '../src/editor/components/EditorShell';
 import { ProductPageNavigator } from '../src/editor/components/ProductPageNavigator';
+import { PageStrip } from '../src/editor/components/PageStrip';
 import { buildProductStarterRecipeCards, ProductStarter } from '../src/editor/components/ProductStarter';
 import { ProjectDashboard } from '../src/editor/components/ProjectDashboard';
 import { ProjectPresets } from '../src/editor/components/ProjectPresets';
@@ -823,6 +824,77 @@ describe('mounted store editor integration', () => {
     expect(screen.getByRole('button', { name: 'Go to page 2 Project Overview' }).getAttribute('aria-current')).toBe('page');
   });
 
+  it('preserves the fitted viewport when switching pages from the vertical product page navigator', async () => {
+    useEditorStore.setState({
+      pages: [
+        {
+          id: 'page-cover',
+          name: 'Cover',
+          canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+        {
+          id: 'page-tracker',
+          name: 'Tracker',
+          canvasData: { objects: [rectObject('page-two-shape', { fill: '#0000ff' })], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+      ],
+      activePageIndex: 0,
+    });
+    const fittedVpt: fabric.TMat2D = [0.22, 0, 0, 0.22, 118, 48];
+    harness.canvas.setViewportTransform(fittedVpt);
+    useEditorStore.getState().setZoom(0.22);
+    useEditorStore.getState().setVpt([...fittedVpt]);
+
+    render(React.createElement(ProductPageNavigator));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Go to page 2 Tracker' }));
+      await flushLayerAndHistory();
+    });
+
+    expect(harness.canvas.getZoom()).toBeCloseTo(0.22, 5);
+    expect(harness.canvas.viewportTransform).toEqual(fittedVpt);
+    expect(useEditorStore.getState().vpt).toEqual([...fittedVpt]);
+  });
+
+  it('preserves the fitted viewport when switching pages from the page strip', async () => {
+    useEditorStore.setState({
+      pages: [
+        {
+          id: 'page-cover',
+          name: 'Cover',
+          canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+        {
+          id: 'page-notes',
+          name: 'Notes',
+          canvasData: { objects: [rectObject('page-two-shape', { fill: '#0000ff' })], background: DEFAULT_CANVAS_BACKGROUND },
+          canvasSize: { width: 2550, height: 3300 },
+        },
+      ],
+      activePageIndex: 0,
+    });
+    const fittedVpt: fabric.TMat2D = [0.24, 0, 0, 0.24, 96, 42];
+    harness.canvas.setViewportTransform(fittedVpt);
+    useEditorStore.getState().setZoom(0.24);
+    useEditorStore.getState().setVpt([...fittedVpt]);
+
+    render(React.createElement(PageStrip));
+    const pageButtons = screen.getAllByRole('button');
+
+    await act(async () => {
+      fireEvent.click(pageButtons[1]);
+      await flushLayerAndHistory();
+    });
+
+    expect(harness.canvas.getZoom()).toBeCloseTo(0.24, 5);
+    expect(harness.canvas.viewportTransform).toEqual(fittedVpt);
+    expect(useEditorStore.getState().activePageIndex).toBe(1);
+  });
+
   it('uses product-first copy on the dashboard without changing the create project entry point', async () => {
     (db.getAllProjects as any).mockResolvedValueOnce([]);
 
@@ -1113,6 +1185,30 @@ describe('mounted store editor integration', () => {
     expect(screen.getByRole('button', { name: 'Go to page 2 Project Overview' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Go to page 3 WIP Tracker' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Go to page 10 Blank Notes' })).toBeTruthy();
+  });
+
+  it('keeps generated recipe pages at the fitted viewport after page switches', async () => {
+    useThemeStore.getState().setThemeData(testTheme as any);
+
+    render(React.createElement(ProductStarter));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recipe-chaos-craft-planner'));
+      await flushLayerAndHistory();
+    });
+
+    const fittedZoom = harness.canvas.getZoom();
+    expect(fittedZoom).toBeLessThan(1);
+
+    cleanup();
+    render(React.createElement(ProductPageNavigator));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Go to page 2 Project Overview' }));
+      await flushLayerAndHistory();
+    });
+
+    expect(useEditorStore.getState().activePageIndex).toBe(1);
+    expect(harness.canvas.getZoom()).toBeCloseTo(fittedZoom, 5);
+    expect(harness.canvas.viewportTransform?.[0]).toBeCloseTo(fittedZoom, 5);
   });
 
   it('starts a blank preset with empty canvasObjects and synced active page data', async () => {

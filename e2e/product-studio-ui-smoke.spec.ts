@@ -166,6 +166,17 @@ test.describe('Design Space printable product studio browser smoke', () => {
     await expect(page.getByRole('button', { name: 'Go to page 10 Blank Notes' })).toBeVisible();
     await expect(page.getByTestId('product-context-summary')).toContainText('10 pages');
     await expectPaperFitsWorkbench(page);
+    expect((await snapshot(page)).viewportTransform?.[0]).toBeLessThan(1);
+
+    await page.getByRole('button', { name: 'Go to page 2 Project Overview' }).click();
+    await expect(page.getByTestId('product-context-summary')).toContainText('Project Overview');
+    await expectPaperFitsWorkbench(page);
+    expect((await snapshot(page)).viewportTransform?.[0]).toBeLessThan(1);
+
+    await page.getByTestId('page-strip').getByText('Page 3').click();
+    await expect(page.getByTestId('product-context-summary')).toContainText('WIP Tracker');
+    await expectPaperFitsWorkbench(page);
+    expect((await snapshot(page)).viewportTransform?.[0]).toBeLessThan(1);
 
     await page.getByTestId('editor-toolbar').getByRole('button', { name: 'Export' }).click();
     await expect(page.getByText('Product Bundle / Product Forge ZIP')).toBeVisible();
