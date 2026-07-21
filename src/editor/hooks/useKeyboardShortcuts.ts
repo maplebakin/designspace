@@ -24,7 +24,7 @@ export const useKeyboardShortcuts = () => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
 
-      const { canvas, undo, redo, removeSelectedObject, requestLayerSync } =
+      const { canvas, undo, redo, removeSelectedObject, requestLayerSync, syncCanvasToStore, saveState } =
         useEditorStore.getState();
       if (!canvas) return;
 
@@ -216,11 +216,9 @@ export const useKeyboardShortcuts = () => {
       });
       activeObject.setCoords();
       canvas.requestRenderAll();
+      syncCanvasToStore(canvas);
       requestLayerSync();
-
-      // Take a snapshot for undo/redo after nudging
-      const { takeSnapshot } = useEditorStore.getState();
-      takeSnapshot();
+      saveState();
       return;
     };
 

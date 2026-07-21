@@ -80,6 +80,7 @@ const makeMockArtifactExportManager = (
   options: {
     failPdf?: boolean;
     failPreviewCallNumbers?: number[];
+    emptyPreviewCallNumbers?: number[];
   } = {}
 ): ProductForgeArtifactExportManager => {
   let previewCallCount = 0;
@@ -94,6 +95,13 @@ const makeMockArtifactExportManager = (
       previewCallCount += 1;
       if (options.failPreviewCallNumbers?.includes(previewCallCount)) {
         throw new Error(`Preview render ${previewCallCount} failed`);
+      }
+      if (options.emptyPreviewCallNumbers?.includes(previewCallCount)) {
+        return [{
+          pageNumber: 1,
+          fileName: `preview-${previewCallCount}.png`,
+          blob: new Blob([], { type: 'image/png' }),
+        }];
       }
       return [{
         pageNumber: 1,
@@ -775,7 +783,7 @@ describe('product recipe generation', () => {
     });
     expect(metadataArtifact).toMatchObject({
       id: 'metadata-json',
-      fileName: 'moon-kit-chaos-craft-planner-metadata.json',
+      fileName: 'metadata.json',
       mimeType: 'application/json',
       status: 'generated',
     });
@@ -809,7 +817,7 @@ describe('product recipe generation', () => {
           pageNumber: 7,
         }),
         expect.objectContaining({
-          fileName: 'moon-kit-chaos-craft-planner-metadata.json',
+          fileName: 'metadata.json',
           kind: 'metadata-json',
           mimeType: 'application/json',
         }),
@@ -849,7 +857,7 @@ describe('product recipe generation', () => {
       status: 'generated',
     });
     expect(result.artifacts.find((artifact) => artifact.kind === 'metadata-json')).toMatchObject({
-      fileName: 'moon-kit-crochet-pattern-decoder-kit-metadata.json',
+      fileName: 'metadata.json',
       status: 'generated',
     });
     expect(result.manifest.files).toEqual(
@@ -983,7 +991,7 @@ describe('product recipe generation', () => {
     expect(renderSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('packages generated Product Forge artifacts into a sellable ZIP bundle', async () => {
+  it('packages Product Forge output as a separated internal seller bundle', async () => {
     const project = generateProjectFromRecipe('chaosCraftPlanner', {
       theme: testTheme,
       now: '2026-01-01T00:00:00.000Z',
@@ -1004,39 +1012,76 @@ describe('product recipe generation', () => {
       status: 'generated',
       fileName: 'moon-kit-chaos-craft-planner-product-forge.zip',
       mimeType: 'application/zip',
-      manifest: artifactResult.manifest,
+    });
+    expect(packageResult.manifest).toMatchObject({
+      productTitle: 'Moon Kit Chaos Craft Planner',
+      recipeId: 'chaosCraftPlanner',
+      pageCount: 10,
+      generatedArtifacts: expect.arrayContaining([
+        expect.objectContaining({
+          fileName: 'metadata.json',
+          kind: 'metadata-json',
+        }),
+      ]),
+      packagedFiles: expect.arrayContaining([
+        expect.objectContaining({
+          path: 'moon-kit-chaos-craft-planner/seller-assets/metadata.json',
+          kind: 'metadata-json',
+          status: 'packaged',
+        }),
+        expect.objectContaining({
+          path: 'moon-kit-chaos-craft-planner/seller-assets/manifest.json',
+          kind: 'manifest-json',
+          status: 'packaged',
+        }),
+        expect.objectContaining({
+          path: 'moon-kit-chaos-craft-planner/customer-files/PRINT-INSTRUCTIONS.md',
+          kind: 'customer-instructions',
+          status: 'packaged',
+        }),
+        expect.objectContaining({
+          path: 'moon-kit-chaos-craft-planner/seller-assets/listing-copy.md',
+          kind: 'listing-copy',
+          status: 'packaged',
+        }),
+        expect.objectContaining({
+          path: 'moon-kit-chaos-craft-planner/seller-assets/SELLER-PREFLIGHT.md',
+          kind: 'seller-preflight',
+          status: 'packaged',
+        }),
+      ]),
     });
     expect(packageResult.blob).toBeInstanceOf(Blob);
     expect(packageResult.sizeBytes).toBeGreaterThan(0);
     expect(packageResult.packagedFiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/moon-kit-chaos-craft-planner.pdf',
+          path: 'moon-kit-chaos-craft-planner/customer-files/moon-kit-chaos-craft-planner.pdf',
           kind: 'printable-pdf',
           status: 'packaged',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-01.png',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/previews/moon-kit-chaos-craft-planner-preview-page-01.png',
           kind: 'preview-png',
           status: 'packaged',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/metadata.json',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/metadata.json',
           kind: 'metadata-json',
           status: 'packaged',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/manifest.json',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/manifest.json',
           kind: 'manifest-json',
           status: 'packaged',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/README.md',
-          kind: 'readme',
+          path: 'moon-kit-chaos-craft-planner/customer-files/PRINT-INSTRUCTIONS.md',
+          kind: 'customer-instructions',
           status: 'packaged',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/listing-copy.md',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/listing-copy.md',
           kind: 'listing-copy',
           status: 'packaged',
         }),
@@ -1044,17 +1089,139 @@ describe('product recipe generation', () => {
     );
 
     const zip = await JSZip.loadAsync(packageResult.blob!);
-    expect(zip.file('moon-kit-chaos-craft-planner/moon-kit-chaos-craft-planner.pdf')).toBeTruthy();
-    expect(zip.file('moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-10.png')).toBeTruthy();
-    expect(zip.file('moon-kit-chaos-craft-planner/metadata.json')).toBeTruthy();
-    expect(zip.file('moon-kit-chaos-craft-planner/manifest.json')).toBeTruthy();
-    const readme = await zip.file('moon-kit-chaos-craft-planner/README.md')?.async('string');
-    const listingCopy = await zip.file('moon-kit-chaos-craft-planner/listing-copy.md')?.async('string');
+    expect(zip.file('moon-kit-chaos-craft-planner/customer-files/moon-kit-chaos-craft-planner.pdf')).toBeTruthy();
+    expect(zip.file('moon-kit-chaos-craft-planner/seller-assets/previews/moon-kit-chaos-craft-planner-preview-page-10.png')).toBeTruthy();
+    expect(zip.file('moon-kit-chaos-craft-planner/seller-assets/metadata.json')).toBeTruthy();
+    expect(zip.file('moon-kit-chaos-craft-planner/seller-assets/manifest.json')).toBeTruthy();
+    const readme = await zip.file('moon-kit-chaos-craft-planner/customer-files/PRINT-INSTRUCTIONS.md')?.async('string');
+    const sellerPreflight = await zip.file('moon-kit-chaos-craft-planner/seller-assets/SELLER-PREFLIGHT.md')?.async('string');
+    const listingCopy = await zip.file('moon-kit-chaos-craft-planner/seller-assets/listing-copy.md')?.async('string');
+    const metadata = JSON.parse(await zip.file('moon-kit-chaos-craft-planner/seller-assets/metadata.json')!.async('string'));
+    const manifest = JSON.parse(await zip.file('moon-kit-chaos-craft-planner/seller-assets/manifest.json')!.async('string'));
     expect(readme).toContain('# Moon Kit Chaos Craft Planner');
     expect(readme).toContain('## Print / Use Notes');
-    expect(readme).toContain('Personal/commercial use terms are not configured yet');
+    expect(readme).toContain('Page size: US Letter, 8.5 x 11 in');
+    expect(readme).toContain('Source canvas density: 300 DPI');
+    expect(readme).toContain('Printable PDF raster density: up to 200 DPI');
+    expect(readme).toContain('Preview images: 2550 x 3300 px at 300 DPI');
+    expect(readme).not.toContain('2550 x 3300 in');
+    expect(readme).not.toContain('Recipe: chaosCraftPlanner');
+    expect(readme).not.toContain('Internal Seller Preflight');
+    expect(sellerPreflight).toContain('internal production bundle');
+    expect(sellerPreflight).toContain('Design Space cannot infer or grant licensing rights.');
+    expect(sellerPreflight).toContain('Build the customer download only from `customer-files/`');
     expect(listingCopy).toContain('## Suggested Tags');
     expect(listingCopy).toContain('Digital download only. No physical item will be shipped.');
+    expect(metadata.packagedFiles.map((file: any) => file.path)).toEqual(
+      expect.arrayContaining([
+        'moon-kit-chaos-craft-planner/customer-files/moon-kit-chaos-craft-planner.pdf',
+        'moon-kit-chaos-craft-planner/seller-assets/metadata.json',
+        'moon-kit-chaos-craft-planner/seller-assets/manifest.json',
+        'moon-kit-chaos-craft-planner/customer-files/PRINT-INSTRUCTIONS.md',
+        'moon-kit-chaos-craft-planner/seller-assets/SELLER-PREFLIGHT.md',
+        'moon-kit-chaos-craft-planner/seller-assets/listing-copy.md',
+      ])
+    );
+    expect(metadata.generatedArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fileName: 'metadata.json',
+          kind: 'metadata-json',
+        }),
+      ])
+    );
+    expect(manifest).toEqual(metadata);
+  });
+
+  it('packages Crochet Pattern Decoder with isolated customer and seller files', async () => {
+    const project = generateProjectFromRecipe('crochetPatternDecoder', {
+      theme: testTheme,
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    const artifactResult = await generateProductForgeArtifacts(project, {
+      exportManager: makeMockArtifactExportManager(),
+      now: '2026-02-01T00:00:00.000Z',
+    });
+
+    const packageResult = await packageProductForgeZip(artifactResult, {
+      productMetadata: project.productMetadata,
+      recipe: project.recipe,
+      theme: project.theme,
+      exportSettings: project.exportSettings,
+    });
+
+    expect(packageResult.status).toBe('generated');
+    const zip = await JSZip.loadAsync(packageResult.blob!);
+    const root = 'moon-kit-crochet-pattern-decoder-kit';
+    const actualFiles = Object.keys(zip.files).filter((fileName) => !zip.files[fileName].dir).sort();
+
+    expect(actualFiles).toEqual(
+      expect.arrayContaining([
+        `${root}/customer-files/moon-kit-crochet-pattern-decoder-kit.pdf`,
+        `${root}/seller-assets/metadata.json`,
+        `${root}/seller-assets/manifest.json`,
+        `${root}/customer-files/PRINT-INSTRUCTIONS.md`,
+        `${root}/seller-assets/SELLER-PREFLIGHT.md`,
+        `${root}/seller-assets/listing-copy.md`,
+        `${root}/seller-assets/previews/moon-kit-crochet-pattern-decoder-kit-preview-page-01.png`,
+        `${root}/seller-assets/previews/moon-kit-crochet-pattern-decoder-kit-preview-page-10.png`,
+      ])
+    );
+    expect(actualFiles.some((fileName) => fileName.includes('chaos-craft-planner'))).toBe(false);
+
+    const metadata = JSON.parse(await zip.file(`${root}/seller-assets/metadata.json`)!.async('string'));
+    const manifest = JSON.parse(await zip.file(`${root}/seller-assets/manifest.json`)!.async('string'));
+    const readme = await zip.file(`${root}/customer-files/PRINT-INSTRUCTIONS.md`)!.async('string');
+    const listingCopy = await zip.file(`${root}/seller-assets/listing-copy.md`)!.async('string');
+
+    expect(metadata).toEqual(manifest);
+    expect(metadata).toMatchObject({
+      productTitle: 'Moon Kit Crochet Pattern Decoder Kit',
+      recipeId: 'crochetPatternDecoder',
+      pageCount: 10,
+    });
+    expect(metadata.generatedArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fileName: 'metadata.json',
+          kind: 'metadata-json',
+        }),
+      ])
+    );
+    expect(metadata.packagedFiles.map((file: any) => file.path)).toEqual(
+      expect.arrayContaining([
+        `${root}/customer-files/moon-kit-crochet-pattern-decoder-kit.pdf`,
+        `${root}/seller-assets/metadata.json`,
+        `${root}/seller-assets/manifest.json`,
+        `${root}/customer-files/PRINT-INSTRUCTIONS.md`,
+        `${root}/seller-assets/SELLER-PREFLIGHT.md`,
+        `${root}/seller-assets/listing-copy.md`,
+      ])
+    );
+    expect(metadata.packagedFiles.filter((file: any) => file.kind === 'preview-png')).toHaveLength(10);
+    expect(metadata.files.map((file: any) => file.fileName)).toEqual(
+      expect.arrayContaining([
+        `${root}/seller-assets/metadata.json`,
+        `${root}/seller-assets/manifest.json`,
+        `${root}/customer-files/PRINT-INSTRUCTIONS.md`,
+        `${root}/seller-assets/SELLER-PREFLIGHT.md`,
+        `${root}/seller-assets/listing-copy.md`,
+      ])
+    );
+
+    expect(readme).toContain('# Moon Kit Crochet Pattern Decoder Kit');
+    expect(readme).toContain('Product type: Printable worksheet kit');
+    expect(readme).toContain('Page size: US Letter, 8.5 x 11 in');
+    expect(readme).toContain('Source canvas density: 300 DPI');
+    expect(readme).toContain('Printable PDF raster density: up to 200 DPI');
+    expect(readme).toContain('Preview images: 2550 x 3300 px at 300 DPI');
+    expect(readme).not.toContain('Recipe: crochetPatternDecoder');
+    expect(readme).not.toContain('v0.1.0');
+    expect(readme).not.toContain('2550 x 3300 in');
+    expect(listingCopy).toContain('10-page printable crochet worksheet kit');
+    expect(listingCopy).not.toContain('Editable 10-page printable crochet worksheet kit');
+    expect(`${readme}\n${listingCopy}`).not.toMatch(/Chaos Craft Planner/i);
+    expect(`${readme}\n${listingCopy}`).not.toContain('crochetPatternDecoder');
   });
 
   it('fails ZIP packaging clearly when the required printable PDF is missing or failed', async () => {
@@ -1064,7 +1231,6 @@ describe('product recipe generation', () => {
     });
     const artifactResult = await generateProductForgeArtifacts(project, {
       exportManager: makeMockArtifactExportManager({ failPdf: true }),
-      previewPageLimit: 1,
       now: '2026-02-01T00:00:00.000Z',
     });
 
@@ -1077,7 +1243,6 @@ describe('product recipe generation', () => {
       status: 'failed',
       fileName: 'moon-kit-chaos-craft-planner-product-forge.zip',
       mimeType: 'application/zip',
-      manifest: artifactResult.manifest,
     });
     expect(packageResult.blob).toBeUndefined();
     expect(packageResult.errors).toEqual([
@@ -1085,7 +1250,7 @@ describe('product recipe generation', () => {
     ]);
   });
 
-  it('records optional preview packaging failures without failing the ZIP', async () => {
+  it('rejects ZIP packaging when required previews fail or are skipped', async () => {
     const project = generateProjectFromRecipe('chaosCraftPlanner', {
       theme: testTheme,
       now: '2026-01-01T00:00:00.000Z',
@@ -1103,27 +1268,110 @@ describe('product recipe generation', () => {
       exportSettings: project.exportSettings,
     });
 
-    expect(packageResult.status).toBe('generated');
-    expect(packageResult.blob).toBeInstanceOf(Blob);
+    expect(packageResult.status).toBe('failed');
+    expect(packageResult.blob).toBeUndefined();
     expect(packageResult.packagedFiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-01.png',
-          status: 'packaged',
-        }),
-        expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-02.png',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/previews/moon-kit-chaos-craft-planner-preview-page-02.png',
           status: 'failed',
           error: 'Preview render 2 failed',
         }),
         expect.objectContaining({
-          path: 'moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-03.png',
+          path: 'moon-kit-chaos-craft-planner/seller-assets/previews/moon-kit-chaos-craft-planner-preview-page-03.png',
           status: 'skipped',
         }),
       ])
     );
-    expect(packageResult.errors).toEqual([
-      'moon-kit-chaos-craft-planner/previews/moon-kit-chaos-craft-planner-preview-page-02.png: Preview render 2 failed',
-    ]);
+    expect(packageResult.errors).toEqual(expect.arrayContaining([
+      'Preview page 2 artifact is failed: Preview render 2 failed',
+      'Preview page 3 artifact is skipped.',
+      'Preview page 10 artifact is skipped.',
+    ]));
+  });
+
+  it('sanitizes ZIP, root, PDF, and preview paths from imported project metadata', async () => {
+    const project = generateProjectFromRecipe('chaosCraftPlanner', {
+      theme: testTheme,
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    project.exportSettings = {
+      ...project.exportSettings,
+      pdfFileName: '../../CON.pdf',
+      previewFileNames: project.pages.map(
+        (_, index) => `..\\private\\preview-${String(index + 1).padStart(2, '0')}.png`
+      ),
+    };
+    const artifactResult = await generateProductForgeArtifacts(project, {
+      exportManager: makeMockArtifactExportManager(),
+      now: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(artifactResult.artifacts.find((artifact) => artifact.kind === 'printable-pdf')?.fileName)
+      .toBe('file-CON.pdf');
+    expect(artifactResult.artifacts.find((artifact) => artifact.id === 'preview-png-page-01')?.fileName)
+      .toBe('preview-01.png');
+
+    const packageResult = await packageProductForgeZip(artifactResult, {
+      productMetadata: project.productMetadata,
+      exportSettings: project.exportSettings,
+      fileName: `/tmp/../AUX${String.fromCharCode(0)}.zip`,
+    });
+
+    expect(packageResult.status).toBe('generated');
+    expect(packageResult.fileName).toBe('file-AUX.zip');
+    const zip = await JSZip.loadAsync(packageResult.blob!);
+    const archivePaths = Object.keys(zip.files);
+    expect(archivePaths.every((path) => !path.includes('..') && !path.includes('\\'))).toBe(true);
+    expect(archivePaths.filter((path) => !zip.files[path].dir).every((path) => path.startsWith('file-aux/'))).toBe(true);
+  });
+
+  it('rejects sanitized archive-path collisions instead of overwriting previews', async () => {
+    const project = generateProjectFromRecipe('chaosCraftPlanner', {
+      theme: testTheme,
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    project.exportSettings = {
+      ...project.exportSettings,
+      previewFileNames: project.pages.map(() => '../duplicate.png'),
+    };
+    const artifactResult = await generateProductForgeArtifacts(project, {
+      exportManager: makeMockArtifactExportManager(),
+      now: '2026-02-01T00:00:00.000Z',
+    });
+
+    const packageResult = await packageProductForgeZip(artifactResult, {
+      productMetadata: project.productMetadata,
+      exportSettings: project.exportSettings,
+    });
+
+    expect(packageResult.status).toBe('failed');
+    expect(packageResult.blob).toBeUndefined();
+    expect(packageResult.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('Archive path collision:'),
+    ]));
+  });
+
+  it('rejects empty required preview blobs before ZIP creation', async () => {
+    const project = generateProjectFromRecipe('chaosCraftPlanner', {
+      theme: testTheme,
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    const artifactResult = await generateProductForgeArtifacts(project, {
+      exportManager: makeMockArtifactExportManager({ emptyPreviewCallNumbers: [1] }),
+      now: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(artifactResult.artifacts.find((artifact) => artifact.id === 'preview-png-page-01'))
+      .toMatchObject({ status: 'failed' });
+    const packageResult = await packageProductForgeZip(artifactResult, {
+      productMetadata: project.productMetadata,
+      exportSettings: project.exportSettings,
+    });
+    expect(packageResult.status).toBe('failed');
+    expect(packageResult.blob).toBeUndefined();
+    expect(packageResult.errors).toContain(
+      'Preview page 1 artifact is failed: Preview page 1 did not produce a PNG blob.'
+    );
   });
 });

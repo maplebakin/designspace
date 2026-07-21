@@ -2,7 +2,6 @@ import { jsPDF } from 'jspdf';
 import * as fabric from 'fabric';
 import { renderCanvasToPngBlob } from '../utils/renderToPng';
 import { serializeToSVG } from '../utils/serializeToSVG';
-import { coordinateSystem } from '../utils/coordinateSystem';
 import { pluginManager } from '../utils/pluginArchitecture';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { sanitizeExportBaseName } from '../utils/exportFileName';
@@ -16,6 +15,7 @@ export type AdvancedExportOptions = {
   includeBackground?: boolean;
   backgroundColor?: string | null;
   dpi?: number;
+  sourceDpi?: number;
   bleedPx?: number;
   pageSize?: { width: number; height: number };
   fileName?: string;
@@ -35,6 +35,36 @@ export type ExportedPageBlob = {
   pageNumber: number;
   fileName: string;
   blob: Blob;
+};
+
+const normalizeDpi = (value: number | undefined, fallback: number) =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+
+export const calculateRasterExportScale = (
+  targetDpi: number | undefined,
+  sourceDpi: number | undefined,
+  fallbackSourceDpi = 150
+) => {
+  const source = normalizeDpi(sourceDpi, fallbackSourceDpi);
+  const target = normalizeDpi(targetDpi, source);
+  return Math.max(0.05, Math.min(8, target / source));
+};
+
+export const calculatePdfPageSizeInches = (
+  width: number,
+  height: number,
+  sourceDpi: number | undefined
+) => {
+  const dpi = normalizeDpi(sourceDpi, 300);
+  return {
+    width: Math.max(1, width) / dpi,
+    height: Math.max(1, height) / dpi,
+  };
+};
+
+const waitForDocumentFonts = async () => {
+  if (typeof document === 'undefined' || !document.fonts?.ready) return;
+  await document.fonts.ready;
 };
 
 const triggerDownload = (blob: Blob, fileName: string) => {
@@ -70,6 +100,7 @@ export class AdvancedExportManager {
     }
 
     if (format === 'svg') {
+      await waitForDocumentFonts();
       const blob = this.exportSvg(canvas, options);
       triggerDownload(blob, `${fileName}.svg`);
       return;
@@ -80,20 +111,22 @@ export class AdvancedExportManager {
   }
 
   async exportPng(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
-    const scaleFactor = (options.dpi ?? 300) / 150;
+    await waitForDocumentFonts();
+    const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
     const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
     return renderCanvasToPngBlob(canvas, {
-      scale: Math.max(1, scaleFactor),
+      scale: scaleFactor,
       includeBackground: options.includeBackground ?? true,
       backgroundColor: background,
     });
   }
 
   async exportJpeg(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
-    const scaleFactor = (options.dpi ?? 300) / 150;
+    await waitForDocumentFonts();
+    const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
     const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null) ?? '#ffffff';
     return renderCanvasToPngBlob(canvas, {
-      scale: Math.max(1, scaleFactor),
+      scale: scaleFactor,
       includeBackground: true,
       backgroundColor: background,
       format: 'jpeg',
@@ -119,17 +152,27 @@ export class AdvancedExportManager {
     const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
     const pageWidth = options.pageSize?.width ?? documentWidth;
     const pageHeight = options.pageSize?.height ?? documentHeight;
-    const widthInches = coordinateSystem.fromFabricUnits(pageWidth, 'in');
-    const heightInches = coordinateSystem.fromFabricUnits(pageHeight, 'in');
+    const { width: widthInches, height: heightInches } = calculatePdfPageSizeInches(
+      pageWidth,
+      pageHeight,
+      options.sourceDpi
+    );
     const doc = new jsPDF({
       orientation: widthInches >= heightInches ? 'landscape' : 'portrait',
       unit: 'in',
       format: [widthInches, heightInches],
     });
 
-    doc.addImage(imageUrl, 'PNG', 0, 0, widthInches, heightInches);
-    URL.revokeObjectURL(imageUrl);
-    return doc.output('blob');
+    try {
+      doc.addImage(imageUrl, 'PNG', 0, 0, widthInches, heightInches);
+      const pdfBlob = doc.output('blob');
+      if (!pdfBlob || pdfBlob.size <= 0) {
+        throw new Error('PDF export did not produce a nonzero Blob.');
+      }
+      return pdfBlob;
+    } finally {
+      URL.revokeObjectURL(imageUrl);
+    }
   }
 
   async exportPagesPdf(
@@ -163,8 +206,11 @@ export class AdvancedExportManager {
         pageSize: { width: pageWidth, height: pageHeight },
       });
       const imageBytes = await blobToUint8Array(blob);
-      const widthInches = coordinateSystem.fromFabricUnits(pageWidth, 'in');
-      const heightInches = coordinateSystem.fromFabricUnits(pageHeight, 'in');
+      const { width: widthInches, height: heightInches } = calculatePdfPageSizeInches(
+        pageWidth,
+        pageHeight,
+        options.sourceDpi
+      );
 
       pdf.addPage(
         [widthInches, heightInches],
@@ -245,6 +291,7 @@ export class AdvancedExportManager {
     page: ProjectPage,
     options: ExportPagesPdfOptions
   ): Promise<Blob> {
+    await waitForDocumentFonts();
     const pageWidth = Math.max(1, Math.round(options.pageSize?.width ?? page.canvasSize?.width ?? useCanvasStore.getState().width));
     const pageHeight = Math.max(1, Math.round(options.pageSize?.height ?? page.canvasSize?.height ?? useCanvasStore.getState().height));
     const canvasElement = document.createElement('canvas');
@@ -282,7 +329,7 @@ export class AdvancedExportManager {
 
       const dataUrl = exportCanvas.toDataURL({
         format: options.format === 'jpeg' ? 'jpeg' : 'png',
-        multiplier: Math.max(1, (options.dpi ?? 300) / 150),
+        multiplier: calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi),
         left: 0,
         top: 0,
         width: pageWidth,
@@ -301,6 +348,7 @@ export class AdvancedExportManager {
     page: ProjectPage,
     options: ExportPagesPdfOptions
   ): Promise<Blob> {
+    await waitForDocumentFonts();
     const pageWidth = Math.max(1, Math.round(options.pageSize?.width ?? page.canvasSize?.width ?? useCanvasStore.getState().width));
     const pageHeight = Math.max(1, Math.round(options.pageSize?.height ?? page.canvasSize?.height ?? useCanvasStore.getState().height));
     const canvasElement = document.createElement('canvas');

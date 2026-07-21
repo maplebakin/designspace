@@ -1,51 +1,65 @@
 # Design Space
 
-## Ritualistic Zine-Maker Philosophy Meets Print-First Architecture
+Design Space is a desktop-first browser workspace for building editable, page-based printable products. Its visual language is rooted in tactile zine and craft-planner work, while the implementation uses Fabric.js, React, Zustand, and IndexedDB for a practical canvas-editor workflow.
 
-Design Space is a digital canvas that embraces the spirit of ritualistic zine-making while maintaining a robust, print-ready foundation. This tool honors the tactile, intentional process of zine creation—where each cut, paste, and mark carries meaning—while leveraging modern web technologies to ensure your creations transition seamlessly from screen to print.
+The main flow is:
 
-### Philosophy
+1. Start a blank print/digital document or generate a product from a recipe.
+2. Edit text, shapes, images, themes, layers, and multiple pages on the Fabric canvas.
+3. Save to the browser library or download a portable `.apocaproject.json` file.
+4. Export a page or the ordered project as PDF, PNG, JPEG, or SVG.
 
-In the tradition of zine culture, Design Space champions:
-- **DIY Aesthetics**: Embrace imperfection and handmade qualities
-- **Intentional Process**: Every element placed has purpose and meaning
-- **Accessibility**: Tools that empower creators regardless of technical background
-- **Community Sharing**: Open, remixable templates and collaborative workflows
+Chaos Craft Planner and Crochet Pattern Decoder Kit are the current reference product recipes. Full editing is designed for a desktop-sized viewport; constrained screens retain project download and navigation rather than pretending the complete workstation is comfortable on a phone.
 
-### Technical Architecture
+## Persistence and compatibility
 
-Built with a print-first mindset using:
+- Browser-library projects are stored locally with Dexie/IndexedDB. There is no account or server sync.
+- Portable project files use the versioned `design-space-project-v1` schema while retaining legacy page/canvas fields for backward compatibility.
+- Image assets are embedded into portable and library payloads, including images nested in groups and on inactive pages.
+- Invalid or unsupported project files are validated and staged before the current editor state is replaced.
+- Undo/redo is page-local; switching pages establishes a new history baseline.
 
-- **Fabric.js v6**: Powerful canvas manipulation with vector precision
-- **Zustand**: Lightweight state management for responsive interactions
-- **Apocapalette Tokens**: Consistent, accessible color system for print and screen
+## Export and print scope
 
-#### Key Features
-- High-resolution canvas rendering (300 DPI ready)
-- Grid-based layout system with customizable guides
-- Advanced selection and grouping tools
-- Export to multiple formats (PDF, PNG, SVG)
-- Version history and collaboration features
+Print presets store their logical document as pixels at 300 DPI (for example, US Letter is 2550 × 3300). Export code distinguishes that source density from the requested output density so it does not silently double-scale print documents.
 
-### Getting Started
+PDF output is raster-backed and preserves page size/order, but it is not yet a press-preflight or accessible tagged-PDF system. Font embedding, crop marks, full bleed handling, output profiles, and guaranteed licensed-font reproduction are not currently provided.
 
-1. Clone the repository
-2. Install dependencies: `npm install`
-3. Start the development server: `npm run dev`
-4. Open your browser to `http://localhost:5173`
+## Product Forge boundary
 
-### Development
+Product Forge is an internal seller-production workflow, not a public editor capability. Normal builds exclude its ZIP implementation and UI. An explicitly internal build may enable it with:
 
-This project follows a component-driven architecture with clear separation between:
-- Editor components (`/src/editor/components`)
-- Fabric.js integration (`/src/editor/fabric`)
-- State management (`/src/editor/state`)
-- Utility functions (`/src/editor/utils`)
+```bash
+DESIGN_SPACE_INTERNAL_PRODUCT_FORGE=true npm run build
+```
 
-### Contributing
+This is a build boundary, not user authentication. Do not deploy an internal build as a public multi-user service. Forge output separates printable customer deliverables under `customer-files/` from previews, listing copy, manifests, and the seller checklist under `seller-assets/`. Final license/usage terms remain a production preflight decision and are not invented by this repository; add approved terms before turning `customer-files/` into a customer download.
 
-We welcome contributions that align with the zine-maker philosophy. Please submit pull requests with clear explanations of how your changes enhance the creative process.
+## Development
 
-### License
+Requires Node.js 20 or newer.
 
-MIT License - Free to use, modify, and distribute for personal and commercial projects.
+```bash
+npm ci
+npm run dev
+```
+
+The development server defaults to `http://localhost:5174`.
+
+Quality gates:
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm test
+npm run test:coverage
+npm run test:e2e
+npm run build
+npm audit
+```
+
+The Tauri wrapper uses the same production frontend and opens at 1200 × 800 or larger.
+
+## Repository licensing
+
+No root license file is currently present. Do not assume rights to redistribute bundled themes, templates, fonts, demo imagery, or the application itself until the project owner adds the applicable license and asset records.

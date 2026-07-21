@@ -1,11 +1,33 @@
 import type { UnitMode } from '../utils/units';
+import type {
+  DocumentContentJson,
+  DocumentOverlayImage,
+  DocumentPage,
+  ScanReference,
+} from '../../document/types/documentProject';
+import {
+  constrainDocumentOverlayToPage,
+  constrainDocumentReferenceToPage,
+  getDocumentPaperDimensions,
+} from '../../document/utils/documentPageOrientation';
 
-export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
+export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
+export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
+export type SupportedDesignSpaceProjectSchemaVersion =
+  | typeof LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION
+  | DesignSpaceProjectSchemaVersion;
+export type EditorMode = 'canvas' | 'document';
 export type ProjectExportFormat = 'pdf' | 'png' | 'jpeg' | 'svg';
 
+/**
+ * The legacy canvas page shape remains exported because recipes, Fabric export,
+ * and old project files use it directly. Normalized v2 canvas payloads add
+ * `kind: 'canvas'` without changing the existing canvas data fields.
+ */
 export type ExistingProjectPage = {
+  kind?: 'canvas';
   id: string;
   name: string;
   canvasData?: any;
@@ -14,6 +36,12 @@ export type ExistingProjectPage = {
   canvasSize: { width: number; height: number };
   thumbnail?: string;
 };
+
+export type CanvasProjectPage = ExistingProjectPage & {
+  kind: 'canvas';
+};
+
+export type DesignSpaceProjectPage = CanvasProjectPage | DocumentPage;
 
 export type ProjectPageSize = {
   presetId?: string;
@@ -73,6 +101,7 @@ export type ProjectProductMetadata = {
 
 export type ProductProjectFields = {
   schemaVersion: DesignSpaceProjectSchemaVersion;
+  editorMode: EditorMode;
   projectId: string;
   createdAt?: string;
   updatedAt: string;
@@ -104,6 +133,7 @@ export type ProductAwareProjectPayload<TPage = ExistingProjectPage> = ProductPro
 };
 
 export type NormalizeProjectOptions<TPage = ExistingProjectPage> = {
+  editorMode?: EditorMode;
   projectName?: string;
   projectId?: string;
   now?: string;
@@ -114,6 +144,16 @@ export type NormalizeProjectOptions<TPage = ExistingProjectPage> = {
   defaultBackground?: string;
 };
 
+export type CanvasProjectPayload = ProductAwareProjectPayload<CanvasProjectPage> & {
+  editorMode: 'canvas';
+};
+
+export type DocumentProjectPayload = ProductAwareProjectPayload<DocumentPage> & {
+  editorMode: 'document';
+};
+
+export type DesignSpaceProjectPayload = CanvasProjectPayload | DocumentProjectPayload;
+
 const DEFAULT_PAGE_SIZE = { width: 2550, height: 3300 };
 const DEFAULT_BACKGROUND = '#FAF8F5';
 
@@ -122,6 +162,55 @@ const isObject = (value: unknown): value is Record<string, any> =>
 
 const safeString = (value: unknown) =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+
+export const assertSupportedDesignSpaceProjectSchema = (
+  payload: unknown
+): SupportedDesignSpaceProjectSchemaVersion | undefined => {
+  if (!isObject(payload) || payload.schemaVersion === undefined) {
+    return undefined;
+  }
+  if (
+    payload.schemaVersion === LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION
+    || payload.schemaVersion === DESIGN_SPACE_PROJECT_SCHEMA_VERSION
+  ) {
+    return payload.schemaVersion;
+  }
+  throw new Error(`Unsupported project schema: ${String(payload.schemaVersion)}`);
+};
+
+export const getDesignSpaceProjectEditorMode = (
+  payload: unknown,
+  fallback?: EditorMode
+): EditorMode => {
+  const schemaVersion = assertSupportedDesignSpaceProjectSchema(payload);
+  if (!isObject(payload)) {
+    return fallback ?? 'canvas';
+  }
+
+  // A missing version and v1 both predate document projects. Treating them as
+  // canvas projects is the compatibility contract, even if they contain an
+  // unrelated `editorMode` property.
+  if (
+    schemaVersion === undefined
+    || schemaVersion === LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION
+  ) {
+    return fallback ?? 'canvas';
+  }
+
+  if (payload.editorMode === 'canvas' || payload.editorMode === 'document') {
+    return payload.editorMode;
+  }
+  if (payload.editorMode !== undefined) {
+    throw new Error(`Unsupported editor mode: ${String(payload.editorMode)}`);
+  }
+
+  // Early v2 development payloads may not have written the discriminator.
+  // Defaulting those to canvas is lossless because document pages always carry
+  // an explicit `kind: 'document'` and production document writers set mode.
+  const hasDocumentPage = Array.isArray(payload.pages)
+    && payload.pages.some((page) => isObject(page) && page.kind === 'document');
+  return hasDocumentPage ? 'document' : fallback ?? 'canvas';
+};
 
 const isUnitMode = (value: unknown): value is UnitMode =>
   value === 'px' || value === 'in' || value === 'cm' || value === 'mm';
@@ -133,6 +222,24 @@ const normalizeDimension = (value: unknown, fallback: number) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback;
 };
+
+const normalizePositiveNumber = (value: unknown, fallback: number) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+};
+
+const normalizeNonNegativeNumber = (value: unknown, fallback: number) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
+};
+
+const normalizeFiniteNumber = (value: unknown, fallback: number) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
 
 const normalizeIso = (value: unknown, fallback: string) => {
   const candidate = safeString(value);
@@ -303,11 +410,144 @@ const normalizeProductMetadata = (
   };
 };
 
+const createEmptyDocumentContent = (): DocumentContentJson => ({
+  type: 'doc',
+  content: [{ type: 'paragraph' }],
+});
+
+const normalizeDocumentContent = (value: unknown): DocumentContentJson =>
+  isObject(value) && value.type === 'doc'
+    ? value as DocumentContentJson
+    : createEmptyDocumentContent();
+
+const normalizeOverlayImage = (
+  value: unknown,
+  index: number
+): DocumentOverlayImage | null => {
+  if (!isObject(value)) return null;
+  const assetId = safeString(value.assetId);
+  if (!assetId) return null;
+
+  return {
+    id: safeString(value.id) || `overlay-${index + 1}`,
+    assetId,
+    altText: typeof value.altText === 'string' ? value.altText : '',
+    xPx: normalizeFiniteNumber(value.xPx, 0),
+    yPx: normalizeFiniteNumber(value.yPx, 0),
+    widthPx: normalizePositiveNumber(value.widthPx, 240),
+    heightPx: normalizePositiveNumber(value.heightPx, 180),
+    placement: value.placement === 'behind' ? 'behind' : 'front',
+    caption: safeString(value.caption),
+    naturalWidth: value.naturalWidth === undefined
+      ? undefined
+      : normalizePositiveNumber(value.naturalWidth, 1),
+    naturalHeight: value.naturalHeight === undefined
+      ? undefined
+      : normalizePositiveNumber(value.naturalHeight, 1),
+    locked: typeof value.locked === 'boolean' ? value.locked : undefined,
+  };
+};
+
+const normalizeScanReference = (value: unknown): ScanReference | undefined => {
+  if (!isObject(value)) return undefined;
+  const assetId = safeString(value.assetId);
+  if (!assetId) return undefined;
+
+  return {
+    assetId,
+    sourceType: value.sourceType === 'pdf' ? 'pdf' : 'image',
+    opacity: clamp(normalizeFiniteNumber(value.opacity, 0.35), 0, 1),
+    fit: value.fit === 'cover' || value.fit === 'stretch' ? value.fit : 'contain',
+    scale: clamp(normalizePositiveNumber(value.scale, 1), 0.05, 20),
+    offsetXPx: normalizeFiniteNumber(value.offsetXPx, 0),
+    offsetYPx: normalizeFiniteNumber(value.offsetYPx, 0),
+    visible: typeof value.visible === 'boolean' ? value.visible : true,
+    // Reference scans are editor-only source material and must always reopen
+    // locked. A transient adjust-reference mode may unlock its UI controls.
+    locked: true,
+  };
+};
+
+export const normalizeDocumentProjectPage = (
+  value: unknown,
+  index = 0
+): DocumentPage => {
+  const source = isObject(value) ? value : {};
+  const size = isObject(source.size) ? source.size : {};
+  const presetId = size.presetId === 'a4' ? 'a4' : 'letter';
+  const orientation = size.orientation === 'landscape' ? 'landscape' : 'portrait';
+  const { widthIn, heightIn } = getDocumentPaperDimensions(
+    presetId,
+    orientation
+  );
+  const margins = isObject(source.margins) ? source.margins : {};
+  const rawOverlays = Array.isArray(source.overlayObjects) ? source.overlayObjects : [];
+  const overlayObjects = rawOverlays
+    .map(normalizeOverlayImage)
+    .filter((image): image is DocumentOverlayImage => image !== null)
+    .map((image) => constrainDocumentOverlayToPage(image, widthIn, heightIn));
+  const rawColumnCount = Number(source.columnCount);
+  const columnCount: 1 | 2 | 3 =
+    rawColumnCount === 2 || rawColumnCount === 3 ? rawColumnCount : 1;
+
+  return {
+    kind: 'document',
+    id: safeString(source.id) || `document-page-${index + 1}`,
+    name: safeString(source.name) || `Page ${index + 1}`,
+    size: {
+      presetId,
+      orientation,
+      widthIn,
+      heightIn,
+      dpi: normalizeDimension(size.dpi, 300),
+    },
+    margins: {
+      topIn: clamp(normalizeNonNegativeNumber(margins.topIn, 0.5), 0, heightIn),
+      rightIn: clamp(normalizeNonNegativeNumber(margins.rightIn, 0.5), 0, widthIn),
+      bottomIn: clamp(normalizeNonNegativeNumber(margins.bottomIn, 0.5), 0, heightIn),
+      leftIn: clamp(normalizeNonNegativeNumber(margins.leftIn, 0.5), 0, widthIn),
+    },
+    titleContent: normalizeDocumentContent(source.titleContent),
+    bodyContent: normalizeDocumentContent(source.bodyContent),
+    titleFontSizePx: clamp(normalizePositiveNumber(source.titleFontSizePx, 42), 8, 240),
+    columnCount,
+    columnGapPx: clamp(normalizeNonNegativeNumber(source.columnGapPx, 24), 0, 480),
+    dropCap: source.dropCap === true,
+    overlayObjects,
+    reference: constrainDocumentReferenceToPage(
+      normalizeScanReference(source.reference),
+      widthIn,
+      heightIn
+    ),
+  };
+};
+
+const normalizeCanvasProjectPage = (
+  value: unknown,
+  index: number,
+  fallbackSize: { width: number; height: number }
+): CanvasProjectPage => {
+  const source = isObject(value) ? value : {};
+  const size = isObject(source.canvasSize) ? source.canvasSize : {};
+  return {
+    ...source,
+    kind: 'canvas',
+    id: safeString(source.id) || `canvas-page-${index + 1}`,
+    name: safeString(source.name) || `Page ${index + 1}`,
+    canvasSize: {
+      width: normalizeDimension(size.width, fallbackSize.width),
+      height: normalizeDimension(size.height, fallbackSize.height),
+    },
+  } as CanvasProjectPage;
+};
+
 export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
   payload: unknown,
   options: NormalizeProjectOptions<TPage> = {}
 ): ProductAwareProjectPayload<TPage> => {
   const raw = isObject(payload) ? payload : {};
+  const detectedEditorMode = getDesignSpaceProjectEditorMode(raw);
+  const editorMode = options.editorMode ?? detectedEditorMode;
   const now = normalizeIso(options.now, new Date().toISOString());
   const updatedAt = normalizeIso(raw.updatedAt ?? raw.lastUpdated, now);
   const createdAt = raw.createdAt ? normalizeIso(raw.createdAt, updatedAt) : undefined;
@@ -319,13 +559,23 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     || 'Untitled Project';
   const slug = safeString(metadata.slug) || slugify(name);
   const rawPages = Array.isArray(raw.pages) ? raw.pages : options.pages;
-  const pages = (Array.isArray(rawPages) ? rawPages : []) as TPage[];
-  const firstPage = pages.length > 0 && isObject(pages[0]) ? pages[0] as any : null;
+  const pageCandidates = Array.isArray(rawPages) ? rawPages : [];
+  const firstPage = pageCandidates.length > 0 && isObject(pageCandidates[0])
+    ? pageCandidates[0] as any
+    : null;
   const fallbackCanvasSize = options.canvasSize || raw.canvasSize || firstPage?.canvasSize || DEFAULT_PAGE_SIZE;
   const fallbackSize = {
     width: normalizeDimension((fallbackCanvasSize as any)?.width, DEFAULT_PAGE_SIZE.width),
     height: normalizeDimension((fallbackCanvasSize as any)?.height, DEFAULT_PAGE_SIZE.height),
   };
+  const normalizedPages = editorMode === 'document'
+    ? (
+        pageCandidates.length > 0
+          ? pageCandidates.map((page, index) => normalizeDocumentProjectPage(page, index))
+          : [normalizeDocumentProjectPage(undefined, 0)]
+      )
+    : pageCandidates.map((page, index) => normalizeCanvasProjectPage(page, index, fallbackSize));
+  const pages = normalizedPages as TPage[];
   const unitMode = normalizeUnitMode(raw.unitMode, options.unitMode || 'in');
   const activeTheme = raw.activeTheme ?? options.activeTheme ?? (isObject(raw.theme) ? raw.theme.tokens : undefined);
   const document = normalizeDocument(
@@ -343,6 +593,7 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
 
   return {
     schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+    editorMode,
     projectId,
     createdAt,
     updatedAt,
@@ -377,6 +628,7 @@ export const extractProductProjectFields = (
   payload: ProductAwareProjectPayload<any>
 ): ProductProjectFields => ({
   schemaVersion: payload.schemaVersion,
+  editorMode: payload.editorMode,
   projectId: payload.projectId,
   createdAt: payload.createdAt,
   updatedAt: payload.updatedAt,

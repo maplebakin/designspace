@@ -1,8 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
-import { Sparkles, FolderOpen, Plus, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { Sparkles, FolderOpen, Plus, ChevronDown, ChevronUp, Pencil, FileText } from 'lucide-react';
 import { DEFAULT_CANVAS_SIZE } from '../state/editorStore';
+import type { EditorMode } from '../project/projectSchema';
+import {
+  inspectDesignSpaceProjectFile,
+  inspectLibraryProject,
+} from '../project/projectOpenService';
+import { useDocumentStore } from '../../document/state/documentStore';
 
 interface ProjectItem {
   id: string;
@@ -14,7 +20,7 @@ interface ProjectItem {
 const INITIAL_DISPLAY_COUNT = 5;
 
 interface ProjectDashboardProps {
-  onProjectOpen?: () => void | Promise<void>;
+  onProjectOpen?: (mode?: EditorMode) => void | Promise<void>;
   onOpenComplete?: () => void | Promise<void>;
 }
 
@@ -98,8 +104,16 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     return false;
   };
 
-  const openProjectInEditor = async (loadAction: () => Promise<void>) => {
-    await onProjectOpen?.();
+  const openProjectInEditor = async (
+    loadAction: () => Promise<void>,
+    mode: EditorMode = 'canvas'
+  ) => {
+    await onProjectOpen?.(mode);
+    if (mode === 'document') {
+      await loadAction();
+      await onOpenComplete?.();
+      return;
+    }
     const canvasReady = await waitForEditorCanvas();
     if (!canvasReady) {
       setToastMessage('Editor is still initializing. Please try again.');
@@ -116,8 +130,51 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
       source: 'project-presets-modal-confirmed',
     });
     setShowOnboarding(true);
-    await onProjectOpen?.();
+    await onProjectOpen?.('canvas');
     await onOpenComplete?.();
+  };
+
+  const openBlankDocumentInEditor = async () => {
+    useDocumentStore.getState().createBlankProject();
+    await onProjectOpen?.('document');
+    await onOpenComplete?.();
+  };
+
+  const openLibraryProject = async (projectId: string) => {
+    try {
+      const inspection = await inspectLibraryProject(projectId);
+      if (!inspection) {
+        setToastMessage('Project not found.');
+        return;
+      }
+      if (inspection.editorMode === 'document') {
+        useDocumentStore.getState().hydrateProject(
+          inspection.payload,
+          inspection.libraryProjectId
+        );
+        await onProjectOpen?.('document');
+        await onOpenComplete?.();
+        return;
+      }
+      await openProjectInEditor(() => loadProject(projectId), 'canvas');
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : 'Failed to open project.');
+    }
+  };
+
+  const openPortableProjectFile = async (file: File) => {
+    try {
+      const inspection = await inspectDesignSpaceProjectFile(file);
+      if (inspection.editorMode === 'document') {
+        useDocumentStore.getState().hydrateProject(inspection.payload, null);
+        await onProjectOpen?.('document');
+        await onOpenComplete?.();
+        return;
+      }
+      await openProjectInEditor(() => loadProjectFile(file), 'canvas');
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : 'Failed to open project file.');
+    }
   };
 
   const startRename = (projectId: string, currentName: string) => {
@@ -144,7 +201,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   return (
-    <div
+    <main
+      id="main-content"
+      tabIndex={-1}
       data-testid="dashboard-root"
       className="project-dashboard-root min-h-screen bg-[color:var(--ui-bg)] px-6 py-8 text-[color:var(--ui-text)] md:px-10 lg:py-12"
       style={{ background: 'var(--bg-warm-radial)' }}
@@ -229,7 +288,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                   const file = input.files?.[0];
                   if (!file) return;
                   try {
-                    await openProjectInEditor(() => loadProjectFile(file));
+                    await openPortableProjectFile(file);
                   } finally {
                     input.value = '';
                   }
@@ -237,6 +296,26 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
               }}
             />
           </label>
+
+          <button
+            type="button"
+            onClick={() => {
+              void openBlankDocumentInEditor();
+            }}
+            data-testid="dashboard-new-document"
+            className="project-dashboard-action-card group flex min-h-[132px] flex-col justify-start gap-4 rounded-[1.5rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-6 text-left text-[color:var(--ui-text)] shadow-[var(--ui-shadow-soft)] outline-none transition-colors duration-200 hover:border-[color:var(--brand-primary)]/45 hover:bg-[color:var(--ui-surface-strong)] focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]/35 md:col-span-2 md:flex-row md:items-center"
+            style={{ fontFamily: 'var(--font-ui)' }}
+          >
+            <span className="project-dashboard-card-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-[color:var(--brand-primary)]">
+              <FileText className="h-5 w-5 stroke-[1.5]" aria-hidden="true" />
+            </span>
+            <span>
+              <span className="project-dashboard-card-title block text-xl font-semibold tracking-normal text-[color:var(--ui-text)]">Create Document Project</span>
+              <span className="project-dashboard-card-description mt-2 block max-w-2xl text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]">
+                Reconstruct a fixed-size article page with flowing columns, wrapped photographs, and a removable scan reference.
+              </span>
+            </span>
+          </button>
         </div>
 
         <section className="project-dashboard-library mt-7 rounded-[1.75rem] border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-5 md:p-6">
@@ -293,7 +372,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
                     <>
                       <button
                         className="project-dashboard-project-open flex min-w-0 flex-1 items-center gap-4 rounded-xl p-2 text-left outline-none transition-colors duration-200 hover:bg-[color:var(--ui-surface-soft)] focus-visible:ring-2 focus-visible:ring-[color:var(--brand-primary)]/35"
-                        onClick={() => void openProjectInEditor(() => loadProject(project.id))}
+                        onClick={() => void openLibraryProject(project.id)}
                       >
                         <span className="project-dashboard-project-thumb flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] text-xl font-semibold text-[color:var(--brand-primary)]">
                           {project.thumbnail ? (
@@ -345,6 +424,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
           )}
         </section>
       </div>
-    </div>
+    </main>
   );
 };

@@ -82,12 +82,17 @@ export class FrameScheduler {
       this.timeoutId = null;
     }
 
-    // Execute all tasks in priority order
-    const priorities = Array.from(this.scheduledTasks.keys()).sort((a, b) => a - b);
-    
+    // Detach the current queues before invoking callbacks. A callback is allowed to
+    // schedule more work; that work belongs to the next frame rather than the frame
+    // currently being drained. Iterating the live arrays here can otherwise turn a
+    // self-scheduling canvas update into an unbounded synchronous loop.
+    const queuesToFlush = this.scheduledTasks;
+    this.scheduledTasks = new Map();
+    const priorities = Array.from(queuesToFlush.keys()).sort((a, b) => a - b);
+
     for (const priority of priorities) {
-      const tasks = this.scheduledTasks.get(priority) || [];
-      
+      const tasks = queuesToFlush.get(priority) || [];
+
       // Execute all tasks at this priority level
       for (const task of tasks) {
         try {
@@ -95,13 +100,10 @@ export class FrameScheduler {
         } catch (error) {
           console.error(`Error executing scheduled task with priority ${priority}:`, error);
         }
-        
+
         // Remove the task from the main set
         this.tasks.delete(task);
       }
-      
-      // Clear the priority queue for this level
-      this.scheduledTasks.delete(priority);
     }
   }
 
@@ -130,7 +132,7 @@ export class FrameScheduler {
    * Cancel all scheduled tasks and cancel the RAF
    */
   cancel(): void {
-    if (this.rafId) {
+    if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }

@@ -39,7 +39,12 @@ import {
   sendToBack,
 } from '../src/editor/services/clipboardService';
 import { db } from '../src/editor/db';
-import { DESIGN_SPACE_PROJECT_SCHEMA_VERSION } from '../src/editor/project/projectSchema';
+import {
+  DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+  LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+} from '../src/editor/project/projectSchema';
+import { registerObjectEventHandlers } from '../src/editor/services/canvasEventService';
+import { useKeyboardShortcuts } from '../src/editor/hooks/useKeyboardShortcuts';
 
 const productForgeMocks = vi.hoisted(() => ({
   generateProductForgeArtifacts: vi.fn(),
@@ -415,6 +420,49 @@ describe('mounted store editor integration', () => {
     expect(remainingPage.id).toBe('page-2');
     expect(remainingPage.canvasData.objects.map((object: SerializedFabricObject) => object.id)).toEqual(['page-two-shape']);
     expect(objectIds(harness.canvas)).toEqual(['page-two-shape']);
+  });
+
+  it('serializes rapid page switches so the active index and Fabric content cannot diverge', async () => {
+    const pageOne = rectObject('page-one-shape');
+    const pageTwo = rectObject('page-two-shape', { fill: '#0000ff' });
+    const pageThree = rectObject('page-three-shape', { fill: '#00aa00' });
+    useEditorStore.setState({
+      pages: [
+        { id: 'page-1', name: 'Page 1', canvasData: { objects: [pageOne] }, canvasSize: { width: 800, height: 600 } },
+        { id: 'page-2', name: 'Page 2', canvasData: { objects: [pageTwo] }, canvasSize: { width: 700, height: 500 } },
+        { id: 'page-3', name: 'Page 3', canvasData: { objects: [pageThree] }, canvasSize: { width: 600, height: 400 } },
+      ],
+      activePageIndex: 0,
+      canvasObjects: [pageOne],
+    });
+
+    const originalLoad = harness.canvas.loadFromJSON.bind(harness.canvas);
+    let releaseFirstLoad!: () => void;
+    const firstLoadGate = new Promise<void>((resolve) => {
+      releaseFirstLoad = resolve;
+    });
+    let loadCount = 0;
+    const loadSpy = vi.spyOn(harness.canvas, 'loadFromJSON').mockImplementation(async (...args: any[]) => {
+      loadCount += 1;
+      if (loadCount === 1) await firstLoadGate;
+      return originalLoad(...args);
+    });
+
+    const firstSwitch = useEditorStore.getState().switchToPage(1);
+    await flushPromises();
+    const secondSwitch = useEditorStore.getState().switchToPage(2);
+    await flushPromises();
+
+    expect(loadSpy).toHaveBeenCalledTimes(1);
+    releaseFirstLoad();
+    await Promise.all([firstSwitch, secondSwitch]);
+    await flushPromises();
+
+    expect(loadSpy).toHaveBeenCalledTimes(2);
+    expect(useEditorStore.getState().activePageIndex).toBe(2);
+    expect(objectIds(harness.canvas)).toEqual(['page-three-shape']);
+    expect(useEditorStore.getState().canvasObjects.map((object) => object.id)).toEqual(['page-three-shape']);
+    expect(useCanvasStore.getState()).toMatchObject({ width: 600, height: 400 });
   });
 
   it('routes store-level raster/vector exports through AdvancedExportManager', async () => {
@@ -883,10 +931,10 @@ describe('mounted store editor integration', () => {
     useEditorStore.getState().setVpt([...fittedVpt]);
 
     render(React.createElement(PageStrip));
-    const pageButtons = screen.getAllByRole('button');
+    const notesPageButton = screen.getByRole('button', { name: 'Open page 2: Notes' });
 
     await act(async () => {
-      fireEvent.click(pageButtons[1]);
+      fireEvent.click(notesPageButton);
       await flushLayerAndHistory();
     });
 
@@ -948,6 +996,10 @@ describe('mounted store editor integration', () => {
     const loadProjectFileSpy = vi.spyOn(useEditorStore.getState(), 'loadProjectFile').mockResolvedValue(undefined);
     const onProjectOpen = vi.fn();
     const projectFile = new File(['{}'], 'craft-planner.apocaproject.json', { type: 'application/json' });
+    Object.defineProperty(projectFile, 'text', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue('{}'),
+    });
 
     render(React.createElement(ProjectDashboard, { onProjectOpen }));
     await act(async () => {
@@ -1001,7 +1053,7 @@ describe('mounted store editor integration', () => {
     const chaosCard = screen.getByTestId('recipe-chaos-craft-planner');
     expect(within(chaosCard).getByText('Chaos Craft Planner')).toBeTruthy();
     expect(within(chaosCard).getByText('Generate a 10-page printable craft planner using your active theme.')).toBeTruthy();
-    expect(within(chaosCard).getByText('PDF + previews + metadata + README/listing via Product Forge ZIP.')).toBeTruthy();
+    expect(within(chaosCard).getByText('Printable PDF + page previews + portable product metadata.')).toBeTruthy();
     expect(screen.getByText('More templates and blank canvases remain available under Insert → Templates.')).toBeTruthy();
   });
 
@@ -1013,7 +1065,7 @@ describe('mounted store editor integration', () => {
     expect(within(crochetCard).getByText(
       'Break down crochet patterns into abbreviations, stitch notes, gauge checks, row tracking, and modification notes.'
     )).toBeTruthy();
-    expect(within(crochetCard).getByText('PDF + previews + metadata + README/listing via Product Forge ZIP.')).toBeTruthy();
+    expect(within(crochetCard).getByText('Printable PDF + page previews + portable product metadata.')).toBeTruthy();
   });
 
   it('builds ProductStarter cards from recipe metadata', () => {
@@ -1469,6 +1521,53 @@ describe('mounted store editor integration', () => {
     expect(savedPayload.pages[0].canvasData.objects.map((object: SerializedFabricObject) => object.id)).toEqual(['loaded-shape']);
   });
 
+  it('loads v1 product projects whose active Fabric data is stored at the payload root', async () => {
+    const activeCanvasData = {
+      objects: [rectObject('legacy-product-shape')],
+      background: '#f7f1e8',
+    };
+    const legacyProductPayload = {
+      schemaVersion: LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      projectName: 'Recent Product Draft',
+      pages: [{
+        id: 'legacy-page-1',
+        name: 'Cover',
+        canvasSize: { width: 1200, height: 900 },
+      }],
+      activePageIndex: 0,
+      canvasData: activeCanvasData,
+      lastUpdated: '2026-06-20T10:30:00.000Z',
+      canvasSize: { width: 1200, height: 900 },
+      unitMode: 'in',
+    };
+    vi.mocked(db.loadProject).mockResolvedValueOnce({
+      project: {
+        id: 'recent-product-project',
+        name: 'Recent Product Draft',
+        lastModified: new Date('2026-06-20T10:30:00.000Z'),
+        canvasDataId: 'legacy-canvas-data',
+      },
+      canvasData: JSON.stringify(legacyProductPayload),
+    });
+
+    await useEditorStore.getState().loadProject('recent-product-project');
+    await flushLayerAndHistory();
+
+    expect(objectIds(harness.canvas)).toEqual(['legacy-product-shape']);
+    expect(useEditorStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'recent-product-project',
+      projectName: 'Recent Product Draft',
+      activePageIndex: 0,
+      isDirty: false,
+    });
+    expect(useEditorStore.getState().pages[0]).toMatchObject({
+      kind: 'canvas',
+      id: 'legacy-page-1',
+      canvasSize: { width: 1200, height: 900 },
+    });
+    expect(useEditorStore.getState().toastMessage).toBe('Loaded project: Recent Product Draft');
+  });
+
   it('routes ExportModal current-page and all-pages PDF through AdvancedExportManager', async () => {
     const exportSpy = vi.spyOn(advancedExportManager, 'export').mockResolvedValue(undefined);
     const exportPagesSpy = vi.spyOn(advancedExportManager, 'exportPagesPdf').mockResolvedValue(undefined);
@@ -1486,7 +1585,7 @@ describe('mounted store editor integration', () => {
     expect(screen.getByText('1 page ready for PDF, previews, metadata, and ZIP packaging.')).toBeTruthy();
     expect(screen.getByText('Common current-page downloads for previews and proofing.')).toBeTruthy();
     expect(screen.getByText('Lower-level formats for testing, assets, and manual workflows.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Download PNG (2x)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download PNG (300 DPI)' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Download JPEG' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Download SVG' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Download PNG (All Pages)' })).toBeTruthy();
@@ -1494,7 +1593,7 @@ describe('mounted store editor integration', () => {
     expect(screen.getByRole('button', { name: 'Download SVG (All Pages)' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Download PDF' }));
-    await flushPromises();
+    await act(async () => { await flushPromises(); });
     expect(exportSpy).toHaveBeenCalledWith(harness.canvas, 'pdf', expect.objectContaining({
       includeBackground: true,
       backgroundColor: '#FFEECC',
@@ -1502,8 +1601,10 @@ describe('mounted store editor integration', () => {
       fileName: 'Integration Test',
     }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download PDF (All Pages)' }));
-    await flushPromises();
+    const allPagesPdfButton = screen.getByRole('button', { name: 'Download PDF (All Pages)' }) as HTMLButtonElement;
+    expect(allPagesPdfButton.disabled).toBe(false);
+    fireEvent.click(allPagesPdfButton);
+    await act(async () => { await flushPromises(); });
     expect(exportPagesSpy).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
       includeBackground: true,
       backgroundColor: '#FFEECC',
@@ -1991,6 +2092,255 @@ describe('mounted store editor integration', () => {
     expect(unlocked.selectable).not.toBe(false);
     useEditorStore.getState().selectObjectById('shape-1');
     expect((harness.canvas.getActiveObject() as any)?.id).toBe('shape-1');
+  });
+});
+
+describe('core persistence regressions', () => {
+  let harness: ReturnType<typeof createHarness>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    harness = createHarness();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    harness?.dispose();
+    vi.useRealTimers();
+  });
+
+  it('embeds an inactive page image nested in a group when downloading a project', async () => {
+    vi.useRealTimers();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['inactive-image'], { type: 'image/png' }),
+    } as Response);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    let capturedBlob: Blob | null = null;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => {
+      if (value instanceof Blob && value.type === 'application/json') capturedBlob = value;
+      return 'blob:project-download';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    useEditorStore.setState({
+      pages: [
+        {
+          id: 'page-1',
+          name: 'Page 1',
+          canvasData: { objects: [], background: '#ffffff' },
+          canvasSize: { width: 800, height: 600 },
+        },
+        {
+          id: 'page-2',
+          name: 'Page 2',
+          canvasData: {
+            objects: [{
+              id: 'group-1',
+              type: 'group',
+              objects: [{ id: 'inactive-image', type: 'image', src: 'inactive-image' }],
+            }],
+            background: '#ffffff',
+          },
+          canvasSize: { width: 800, height: 600 },
+        },
+      ],
+      activePageIndex: 0,
+      imageAssets: { 'inactive-image': 'https://assets.test/inactive.png' },
+    });
+
+    await useEditorStore.getState().downloadProjectFile();
+
+    expect(fetchSpy).toHaveBeenCalledWith('https://assets.test/inactive.png');
+    expect(capturedBlob).toBeTruthy();
+    const payload = JSON.parse(await readBlobText(capturedBlob!));
+    expect(payload.pages[1].canvasData.objects[0].objects[0].src).toBe('inactive-image');
+    expect(payload.assets['inactive-image']).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('does not autosave an unsaved or imported project by matching its name', async () => {
+    vi.mocked(db.getAllProjects).mockClear();
+    vi.mocked(db.updateProject).mockClear();
+    useEditorStore.setState({
+      projectName: 'Same Name As Library Project',
+      currentLibraryProjectId: null,
+      isDirty: false,
+      autoSaveStatus: 'idle',
+      saveStatus: 'saved',
+    });
+
+    useEditorStore.getState().saveState();
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(db.getAllProjects).not.toHaveBeenCalled();
+    expect(db.updateProject).not.toHaveBeenCalled();
+    expect(useEditorStore.getState()).toMatchObject({
+      isDirty: true,
+      autoSaveStatus: 'dirty',
+      saveStatus: 'unsaved',
+    });
+  });
+
+  it('clears dirty state only after ID-targeted autosave succeeds', async () => {
+    vi.mocked(db.updateProject).mockClear();
+    useEditorStore.setState({
+      projectName: 'Stable Library Project',
+      currentLibraryProjectId: 'stable-library-id',
+      isDirty: false,
+      autoSaveStatus: 'idle',
+      saveStatus: 'saved',
+    });
+
+    useEditorStore.getState().saveState();
+    await vi.advanceTimersByTimeAsync(2500);
+    await flushPromises();
+
+    expect(db.updateProject).toHaveBeenCalledWith(
+      'stable-library-id',
+      'Stable Library Project',
+      expect.any(String),
+      expect.any(String)
+    );
+    expect(useEditorStore.getState()).toMatchObject({
+      isDirty: false,
+      autoSaveStatus: 'saved',
+      saveStatus: 'saved',
+    });
+  });
+
+  it('keeps existing canvas work intact when project import structure is malformed', async () => {
+    useEditorStore.getState().addObject(rectObject('keep-me'), { save: false, select: false });
+    await flushLayerAndHistory();
+    const malformedFile = {
+      name: 'malformed.apocaproject.json',
+      text: async () => JSON.stringify({
+        projectName: 'Broken',
+        pages: [{ id: 'bad-page', name: 'Bad', canvasData: { objects: 'not-an-array' } }],
+      }),
+    } as File;
+
+    await useEditorStore.getState().loadProjectFile(malformedFile);
+
+    expect(objectIds(harness.canvas)).toContain('keep-me');
+    expect(useEditorStore.getState().canvasObjects.map((object) => object.id)).toContain('keep-me');
+    expect(useEditorStore.getState().toastMessage).toBe('Failed to load project file.');
+  });
+
+  it('rejects oversized imported page dimensions before replacing current work', async () => {
+    useEditorStore.getState().addObject(rectObject('keep-size-safe'), { save: false, select: false });
+    await flushLayerAndHistory();
+    const oversizedFile = {
+      name: 'oversized.apocaproject.json',
+      size: 1024,
+      text: async () => JSON.stringify({
+        projectName: 'Oversized',
+        pages: [{
+          id: 'oversized-page',
+          name: 'Oversized Page',
+          canvasData: { objects: [] },
+          canvasSize: { width: 30_001, height: 600 },
+        }],
+      }),
+    } as File;
+
+    await useEditorStore.getState().loadProjectFile(oversizedFile);
+
+    expect(objectIds(harness.canvas)).toContain('keep-size-safe');
+    expect(useEditorStore.getState().canvasObjects.map((object) => object.id)).toContain('keep-size-safe');
+    expect(useEditorStore.getState().toastMessage).toBe('Failed to load project file.');
+  });
+
+  it('syncs keyboard nudges to the store before history and layer reconciliation', async () => {
+    useEditorStore.getState().addObject(rectObject('nudge-me'), { save: true, select: true });
+    await flushLayerAndHistory();
+    render(React.createElement(() => {
+      useKeyboardShortcuts();
+      return null;
+    }));
+    const before = objectById(harness.canvas, 'nudge-me')?.left ?? 0;
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    expect(objectById(harness.canvas, 'nudge-me')?.left).toBe(before + 1);
+    expect(useEditorStore.getState().canvasObjects.find((object) => object.id === 'nudge-me')?.left).toBe(before + 1);
+    await flushLayerAndHistory();
+    expect(objectById(harness.canvas, 'nudge-me')?.left).toBe(before + 1);
+  });
+
+  it('records Fabric text editing events as persistent document mutations', () => {
+    const text = new fabric.IText('Draft', { id: 'editable-text' } as any);
+    harness.canvas.add(text);
+    const onUpdate = vi.fn();
+    const onHistoryDirty = vi.fn();
+    const registration = registerObjectEventHandlers({
+      canvas: harness.canvas,
+      callbacks: { onUpdate, onHistoryDirty },
+    });
+
+    text.set({ text: 'Final' });
+    harness.canvas.fire('text:changed', { target: text } as any);
+
+    expect(onHistoryDirty).toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalledWith(harness.canvas, { persist: true });
+    registration.cleanup();
+  });
+
+  it('can unlock a non-selectable layer by ID after a full lock', async () => {
+    useEditorStore.getState().addObject(rectObject('lock-me'), { save: true, select: true });
+    await flushLayerAndHistory();
+
+    useEditorStore.getState().toggleObjectLock('lock-me');
+    await flushLayerAndHistory();
+    expect(objectById(harness.canvas, 'lock-me')).toMatchObject({
+      selectable: false,
+      lockMovementX: true,
+    });
+
+    useEditorStore.getState().toggleObjectLock('lock-me');
+    await flushLayerAndHistory();
+    expect(objectById(harness.canvas, 'lock-me')).toMatchObject({
+      selectable: true,
+      lockMovementX: false,
+    });
+  });
+
+  it('marks page reordering unsaved and schedules autosave only for a stable library ID', () => {
+    useEditorStore.setState({
+      currentLibraryProjectId: 'library-project',
+      pages: [
+        { id: 'page-1', name: 'Page 1', canvasData: { objects: [] }, canvasSize: { width: 800, height: 600 } },
+        { id: 'page-2', name: 'Page 2', canvasData: { objects: [] }, canvasSize: { width: 800, height: 600 } },
+      ],
+      activePageIndex: 0,
+      isDirty: false,
+      autoSaveStatus: 'idle',
+      saveStatus: 'saved',
+    });
+
+    useEditorStore.getState().reorderPages(0, 1);
+
+    expect(useEditorStore.getState().pages.map((page) => page.id)).toEqual(['page-2', 'page-1']);
+    expect(useEditorStore.getState()).toMatchObject({
+      isDirty: true,
+      autoSaveStatus: 'dirty',
+      saveStatus: 'unsaved',
+    });
+    expect(useEditorStore.getState().autoSaveTimer).not.toBeNull();
+  });
+
+  it('undoes a background full snapshot whose preceding history entry is a diff', async () => {
+    useEditorStore.getState().addObject(rectObject('shape-before-background'), { save: true, select: false });
+    await flushLayerAndHistory();
+    useEditorStore.getState().setCanvasBackgroundColor('#123456');
+    await flushLayerAndHistory();
+
+    expect(useThemeStore.getState().canvasBackgroundColor).toBe('#123456');
+    await useEditorStore.getState().undo();
+    await flushPromises();
+
+    expect(useThemeStore.getState().canvasBackgroundColor).toBe(DEFAULT_CANVAS_BACKGROUND);
+    expect(objectIds(harness.canvas)).toContain('shape-before-background');
   });
 });
 

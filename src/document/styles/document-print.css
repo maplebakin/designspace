@@ -1,0 +1,36 @@
+@media print {
+  [data-document-editor-ui],
+  [data-document-export-exclude],
+  [data-document-reference-layer],
+  [data-reference-layer],
+  [data-document-overflow-warning],
+  .document-toolbar,
+  .document-scan-reference,
+  .document-overflow-warning,
+  .document-image-controls,
+  .document-image__resize-handle,
+  .document-overlay-delete,
+  .document-overlay-resize,
+  .document-overlay-wrap-select {
+    display: none !important;
+  }
+
+  .document-page-sheet,
+  .document-page-export-root {
+    overflow: hidden !important;
+    box-shadow: none !important;
+  }
+
+  .document-page-transform {
+    transform: none !important;
+  }
+
+  .document-title-prosemirror,
+  .document-flow-prosemirror,
+  .document-image,
+  .document-overlay-image {
+    caret-color: transparent !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+}

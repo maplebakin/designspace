@@ -1,0 +1,599 @@
+import React, { useRef } from 'react';
+import {
+  AlignCenter,
+  AlignJustify,
+  AlignLeft,
+  AlignRight,
+  ArrowDown,
+  ArrowUp,
+  Bold,
+  ImagePlus,
+  Italic,
+  Redo2,
+  RotateCcw,
+  Trash2,
+  Underline,
+  Undo2,
+  Upload,
+} from 'lucide-react';
+import type {
+  DocumentFlowImageWrap,
+  DocumentOverlayPlacement,
+  DocumentPage,
+} from '../types/documentProject';
+import {
+  DOCUMENT_FONT_SIZES_PT,
+} from '../extensions/DocumentTextStyleExtension';
+
+export type DocumentImageInspectorValue = {
+  id: string;
+  kind: 'flow' | 'overlay';
+  widthPx: number;
+  heightPx: number;
+  xPx?: number;
+  yPx?: number;
+  wrap: DocumentFlowImageWrap | DocumentOverlayPlacement;
+  wrapPaddingPx?: number;
+  verticalSpacingPx?: number;
+  spanCount?: 1 | 2 | 3;
+  spanStartColumn?: 1 | 2 | 3;
+  caption: string;
+  altText: string;
+  naturalWidth?: number;
+  naturalHeight?: number;
+  canSpanColumns?: boolean;
+  canMoveEarlier?: boolean;
+  canMoveLater?: boolean;
+};
+
+export type DocumentImageLayoutMode =
+  | Exclude<DocumentFlowImageWrap, 'span-columns'>
+  | DocumentOverlayPlacement
+  | 'span-2'
+  | 'span-3';
+
+export type DocumentTextFormatState = {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  alignment: 'left' | 'center' | 'right' | 'justify';
+  fontSizePt: number | 'mixed';
+};
+
+type DocumentToolbarProps = {
+  page: DocumentPage;
+  activeTextRegion: 'title' | 'body';
+  selectedImage?: DocumentImageInspectorValue | null;
+  referenceAdjustMode: boolean;
+  textFormatState: DocumentTextFormatState;
+  onFormat: (
+    command:
+      | 'bold'
+      | 'italic'
+      | 'underline'
+      | 'undo'
+      | 'redo'
+      | 'align-left'
+      | 'align-center'
+      | 'align-right'
+      | 'align-justify'
+  ) => void;
+  onFontSizeChange: (fontSizePt: number) => void;
+  onImportImages: (files: File[]) => void;
+  onReferenceAdjustModeChange: (enabled: boolean) => void;
+  onReferenceChange: (
+    update: Partial<NonNullable<DocumentPage['reference']>>
+  ) => void;
+  onResetReference: () => void;
+  onSelectedImageChange: (update: Partial<DocumentImageInspectorValue>) => void;
+  onSelectedImageLayoutChange: (
+    layout: DocumentImageLayoutMode
+  ) => void;
+  onSelectedImageSpanStartChange: (startColumn: 1 | 2) => void;
+  onMoveSelectedImage: (direction: 'earlier' | 'later') => void;
+  onReplaceSelectedImage: (file: File) => void;
+  onDeleteSelectedImage: () => void;
+  onResetSelectedImageSize: () => void;
+};
+
+const numericValue = (value: string, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const FormatButton = ({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    className={`document-context-icon-button ${active ? 'is-selected' : ''}`}
+    aria-label={label}
+    aria-pressed={active}
+    onClick={onClick}
+  >
+    {children}
+  </button>
+);
+
+export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const reference = props.page.reference;
+  const context = props.referenceAdjustMode
+    ? 'reference'
+    : props.selectedImage
+      ? 'image'
+      : props.activeTextRegion;
+  const fontSizeValue = props.textFormatState.fontSizePt;
+  const hasPresetFontSize =
+    fontSizeValue !== 'mixed'
+    && DOCUMENT_FONT_SIZES_PT.some((size) => size === fontSizeValue);
+  const selectedLayout: DocumentImageLayoutMode =
+    props.selectedImage?.wrap === 'span-columns'
+      ? `span-${props.selectedImage.spanCount === 3 ? 3 : 2}`
+      : props.selectedImage?.wrap ?? 'float-left';
+
+  return (
+    <div
+      className={`document-context-toolbar document-context-toolbar--${context}`}
+      data-document-editor-ui="true"
+      data-testid="document-context-toolbar"
+      data-context={context}
+    >
+      {props.referenceAdjustMode && reference ? (
+        <div className="document-context-toolbar__content">
+          <div className="document-context-heading">
+            <span>Reference scan</span>
+            <strong>Adjusting alignment</strong>
+          </div>
+          <label className="document-context-field document-context-field--range">
+            <span>Opacity</span>
+            <input
+              aria-label="Adjusting opacity"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={reference.opacity}
+              onChange={(event) => props.onReferenceChange({
+                opacity: numericValue(event.target.value, reference.opacity),
+              })}
+            />
+            <output>{Math.round(reference.opacity * 100)}%</output>
+          </label>
+          <label className="document-context-field">
+            <span>Scale</span>
+            <input
+              aria-label="Adjusting scale"
+              type="number"
+              min="0.05"
+              max="10"
+              step="0.05"
+              value={reference.scale}
+              onChange={(event) => props.onReferenceChange({
+                scale: Math.max(
+                  0.05,
+                  numericValue(event.target.value, reference.scale)
+                ),
+              })}
+            />
+          </label>
+          <label className="document-context-field">
+            <span>X</span>
+            <input
+              aria-label="Adjusting X position"
+              type="number"
+              value={Math.round(reference.offsetXPx)}
+              onChange={(event) => props.onReferenceChange({
+                offsetXPx: numericValue(event.target.value, reference.offsetXPx),
+              })}
+            />
+          </label>
+          <label className="document-context-field">
+            <span>Y</span>
+            <input
+              aria-label="Adjusting Y position"
+              type="number"
+              value={Math.round(reference.offsetYPx)}
+              onChange={(event) => props.onReferenceChange({
+                offsetYPx: numericValue(event.target.value, reference.offsetYPx),
+              })}
+            />
+          </label>
+          <button
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            onClick={props.onResetReference}
+          >
+            <RotateCcw size={15} aria-hidden="true" />
+            Reset
+          </button>
+          <span className="document-context-spacer" />
+          <button
+            type="button"
+            className="document-context-button document-context-button--primary"
+            onClick={() => props.onReferenceAdjustModeChange(false)}
+          >
+            Finish adjusting
+          </button>
+        </div>
+      ) : props.selectedImage ? (
+        <div
+          className="document-context-toolbar__content document-image-inspector"
+          data-testid="document-image-inspector"
+        >
+          <div className="document-context-heading">
+            <span>{props.selectedImage.kind === 'flow' ? 'Flow photo' : 'Positioned photo'}</span>
+            <strong>
+              {props.selectedImage.kind === 'flow'
+                ? 'Wrap and caption'
+                : 'Placement and size'}
+            </strong>
+          </div>
+          <label className="document-context-field">
+            <span>Layout mode</span>
+            <select
+              aria-label="Image layout mode"
+              data-testid="document-image-wrap"
+              value={selectedLayout}
+              onChange={(event) => props.onSelectedImageLayoutChange(
+                event.target.value as DocumentImageLayoutMode
+              )}
+            >
+              <option value="inline">Inline</option>
+              <option value="float-left">Float left</option>
+              <option value="float-right">Float right</option>
+              <option value="top-bottom">Single column (top and bottom)</option>
+              {props.page.columnCount >= 2
+                && props.selectedImage.canSpanColumns !== false && (
+                <option value="span-2">
+                  {props.page.columnCount === 2
+                    ? 'Span both columns'
+                    : 'Span 2 columns'}
+                </option>
+              )}
+              {props.page.columnCount === 3
+                && props.selectedImage.canSpanColumns !== false && (
+                <option value="span-3">Span all 3 columns</option>
+              )}
+              <option value="front">In front of text</option>
+              <option value="behind">Behind text</option>
+            </select>
+          </label>
+          {props.selectedImage.kind === 'flow'
+            && props.selectedImage.wrap === 'span-columns'
+            && props.selectedImage.spanCount === 2
+            && props.page.columnCount === 3 && (
+              <label className="document-context-field">
+                <span>Starting column</span>
+                <select
+                  aria-label="Spanning image starting column"
+                  data-testid="document-image-span-start"
+                  value={props.selectedImage.spanStartColumn === 2 ? '2' : '1'}
+                  onChange={(event) =>
+                    props.onSelectedImageSpanStartChange(
+                      event.target.value === '2' ? 2 : 1
+                    )}
+                >
+                  <option value="1">Columns 1–2</option>
+                  <option value="2">Columns 2–3</option>
+                </select>
+              </label>
+            )}
+          {props.selectedImage.kind === 'flow'
+            && props.selectedImage.wrap === 'span-columns' && (
+              <div
+                className="document-context-button-group"
+                aria-label="Spanning image position"
+              >
+                <button
+                  type="button"
+                  className="document-context-button document-context-button--quiet"
+                  data-testid="document-image-move-earlier"
+                  disabled={!props.selectedImage.canMoveEarlier}
+                  onClick={() => props.onMoveSelectedImage('earlier')}
+                >
+                  <ArrowUp size={15} aria-hidden="true" />
+                  Move earlier
+                </button>
+                <button
+                  type="button"
+                  className="document-context-button document-context-button--quiet"
+                  data-testid="document-image-move-later"
+                  disabled={!props.selectedImage.canMoveLater}
+                  onClick={() => props.onMoveSelectedImage('later')}
+                >
+                  <ArrowDown size={15} aria-hidden="true" />
+                  Move later
+                </button>
+              </div>
+            )}
+          <label className="document-context-field">
+            <span>Width</span>
+            <input
+              aria-label="Image width"
+              data-testid="document-image-width"
+              type="number"
+              min="48"
+              max={props.selectedImage.wrap === 'span-columns' ? 1600 : 720}
+              value={Math.round(props.selectedImage.widthPx)}
+              onChange={(event) => props.onSelectedImageChange({
+                widthPx: Math.max(
+                  48,
+                  numericValue(
+                    event.target.value,
+                    props.selectedImage!.widthPx
+                  )
+                ),
+              })}
+            />
+          </label>
+          {props.selectedImage.kind === 'flow' ? (
+            <label className="document-context-field">
+              <span>
+                {props.selectedImage.wrap === 'span-columns'
+                  ? 'Vertical gap'
+                  : 'Wrap gap'}
+              </span>
+              <input
+                aria-label={
+                  props.selectedImage.wrap === 'span-columns'
+                    ? 'Spanning image vertical spacing'
+                    : 'Image wrap padding'
+                }
+                data-testid="document-image-padding"
+                type="number"
+                min="0"
+                max="96"
+                value={
+                  props.selectedImage.wrap === 'span-columns'
+                    ? props.selectedImage.verticalSpacingPx || 0
+                    : props.selectedImage.wrapPaddingPx || 0
+                }
+                onChange={(event) => props.onSelectedImageChange({
+                  ...(props.selectedImage!.wrap === 'span-columns'
+                    ? {
+                        verticalSpacingPx: Math.max(
+                          0,
+                          numericValue(event.target.value, 0)
+                        ),
+                      }
+                    : {
+                        wrapPaddingPx: Math.max(
+                          0,
+                          numericValue(event.target.value, 0)
+                        ),
+                      }),
+                })}
+              />
+            </label>
+          ) : (
+            <>
+              <label className="document-context-field">
+                <span>X</span>
+                <input
+                  aria-label="Overlay X position"
+                  type="number"
+                  value={Math.round(props.selectedImage.xPx || 0)}
+                  onChange={(event) => props.onSelectedImageChange({
+                    xPx: Math.max(
+                      0,
+                      numericValue(event.target.value, props.selectedImage!.xPx || 0)
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-context-field">
+                <span>Y</span>
+                <input
+                  aria-label="Overlay Y position"
+                  type="number"
+                  value={Math.round(props.selectedImage.yPx || 0)}
+                  onChange={(event) => props.onSelectedImageChange({
+                    yPx: Math.max(
+                      0,
+                      numericValue(event.target.value, props.selectedImage!.yPx || 0)
+                    ),
+                  })}
+                />
+              </label>
+            </>
+          )}
+          <label className="document-context-field document-context-field--wide">
+            <span>Caption</span>
+            <input
+              aria-label="Image caption"
+              data-testid="document-image-caption"
+              value={props.selectedImage.caption}
+              placeholder="Optional caption"
+              onChange={(event) => props.onSelectedImageChange({
+                caption: event.target.value,
+              })}
+            />
+          </label>
+          <label className="document-context-field document-context-field--wide">
+            <span>Alt text</span>
+            <input
+              aria-label="Image alt text"
+              data-testid="document-image-alt"
+              value={props.selectedImage.altText}
+              placeholder="Describe this photo"
+              onChange={(event) => props.onSelectedImageChange({
+                altText: event.target.value,
+              })}
+            />
+          </label>
+          <button
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            onClick={() => replaceInputRef.current?.click()}
+          >
+            <Upload size={15} aria-hidden="true" />
+            Replace
+          </button>
+          <input
+            ref={replaceInputRef}
+            className="document-visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) props.onReplaceSelectedImage(file);
+              event.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            onClick={props.onResetSelectedImageSize}
+          >
+            Reset size
+          </button>
+          <button
+            type="button"
+            className="document-context-button document-context-button--danger"
+            onClick={props.onDeleteSelectedImage}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            Delete
+          </button>
+        </div>
+      ) : (
+        <div className="document-context-toolbar__content">
+          <div className="document-context-heading">
+            <span>Editing</span>
+            <strong>{props.activeTextRegion === 'title' ? 'Title' : 'Body text'}</strong>
+          </div>
+          <div className="document-context-button-group" aria-label="History">
+            <FormatButton label="Undo" onClick={() => props.onFormat('undo')}>
+              <Undo2 size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton label="Redo" onClick={() => props.onFormat('redo')}>
+              <Redo2 size={17} aria-hidden="true" />
+            </FormatButton>
+          </div>
+          <div className="document-context-divider" aria-hidden="true" />
+          <label className="document-context-field document-context-field--font-size">
+            <span>
+              {props.activeTextRegion === 'title' ? 'Title size' : 'Body size'}
+            </span>
+            <select
+              aria-label={
+                props.activeTextRegion === 'title'
+                  ? 'Title text font size'
+                  : 'Body text font size'
+              }
+              data-testid="document-font-size"
+              value={String(fontSizeValue)}
+              onChange={(event) => {
+                const fontSizePt = Number(event.target.value);
+                if (Number.isFinite(fontSizePt)) {
+                  props.onFontSizeChange(fontSizePt);
+                }
+              }}
+            >
+              {fontSizeValue === 'mixed' && (
+                <option value="mixed">Mixed</option>
+              )}
+              {!hasPresetFontSize && fontSizeValue !== 'mixed' && (
+                <option value={String(fontSizeValue)}>
+                  {fontSizeValue} pt
+                </option>
+              )}
+              {DOCUMENT_FONT_SIZES_PT.map((fontSizePt) => (
+                <option key={fontSizePt} value={fontSizePt}>
+                  {fontSizePt} pt
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="document-context-divider" aria-hidden="true" />
+          <div className="document-context-button-group" aria-label="Text style">
+            <FormatButton
+              label="Bold"
+              active={props.textFormatState.bold}
+              onClick={() => props.onFormat('bold')}
+            >
+              <Bold size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton
+              label="Italic"
+              active={props.textFormatState.italic}
+              onClick={() => props.onFormat('italic')}
+            >
+              <Italic size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton
+              label="Underline"
+              active={props.textFormatState.underline}
+              onClick={() => props.onFormat('underline')}
+            >
+              <Underline size={17} aria-hidden="true" />
+            </FormatButton>
+          </div>
+          <div className="document-context-divider" aria-hidden="true" />
+          <div className="document-context-button-group" aria-label="Text alignment">
+            <FormatButton
+              label="Align left"
+              active={props.textFormatState.alignment === 'left'}
+              onClick={() => props.onFormat('align-left')}
+            >
+              <AlignLeft size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton
+              label="Align center"
+              active={props.textFormatState.alignment === 'center'}
+              onClick={() => props.onFormat('align-center')}
+            >
+              <AlignCenter size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton
+              label="Align right"
+              active={props.textFormatState.alignment === 'right'}
+              onClick={() => props.onFormat('align-right')}
+            >
+              <AlignRight size={17} aria-hidden="true" />
+            </FormatButton>
+            <FormatButton
+              label="Justify"
+              active={props.textFormatState.alignment === 'justify'}
+              onClick={() => props.onFormat('align-justify')}
+            >
+              <AlignJustify size={17} aria-hidden="true" />
+            </FormatButton>
+          </div>
+          <div className="document-context-divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="document-context-button"
+            onClick={() => imageInputRef.current?.click()}
+          >
+            <ImagePlus size={17} aria-hidden="true" />
+            Add photo
+          </button>
+          <input
+            ref={imageInputRef}
+            className="document-visually-hidden"
+            data-testid="document-context-image-file-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            onChange={(event) => {
+              const files = Array.from(event.target.files || []);
+              if (files.length) props.onImportImages(files);
+              event.target.value = '';
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { advancedExportManager, type AdvancedExportFormat } from '../export/advancedExportManager';
-import { generateProductForgeArtifacts } from '../productForge/generateProductForgeArtifacts';
-import { packageProductForgeZip } from '../productForge/packageProductForgeZip';
+import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -30,38 +29,81 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   );
 
   const [includeBackground, setIncludeBackground] = useState(true);
+  const [isExportLoading, setIsExportLoading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [isProductZipLoading, setIsProductZipLoading] = useState(false);
   const [productZipError, setProductZipError] = useState<string | null>(null);
   const fileName = projectName;
-  const canPackageProductZip = !!canvas && pages.length > 0 && !isProductZipLoading;
+  const sourceDpi = productProjectFields?.document?.pageSize?.dpi
+    || (unitMode === 'px' ? 96 : 300);
+  const canPackageProductZip = INTERNAL_PRODUCT_FORGE_ENABLED
+    && !!canvas
+    && pages.length > 0
+    && !isProductZipLoading;
   const productTitle = productProjectFields?.productMetadata?.title || projectName || 'Untitled Product';
   const recipe = productProjectFields?.recipe;
   const readinessSummary = pages.length > 0
     ? `${pages.length} page${pages.length === 1 ? '' : 's'} ready for PDF, previews, metadata, and ZIP packaging.`
     : 'No pages are available to package yet.';
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
+  const runExport = async (job: () => Promise<void>) => {
+    if (isExportLoading) return;
+    setExportError(null);
+    setIsExportLoading(true);
+    try {
+      await job();
+      onClose();
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Export failed. Please try again.');
+    } finally {
+      setIsExportLoading(false);
+    }
+  };
+
   const handleExport = async (format: AdvancedExportFormat) => {
     if (!canvas) return;
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
-    await advancedExportManager.export(canvas, format, {
-      includeBackground,
-      backgroundColor: background,
-      dpi: 300,
-      fileName,
+    await runExport(async () => {
+      await advancedExportManager.export(canvas, format, {
+        includeBackground,
+        backgroundColor: background,
+        dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
+        sourceDpi,
+        fileName,
+      });
     });
-    onClose();
   };
   const handleDownloadProductZip = async () => {
-    if (!canvas || pages.length === 0 || isProductZipLoading) return;
+    if (
+      !INTERNAL_PRODUCT_FORGE_ENABLED
+      || !canvas
+      || pages.length === 0
+      || isProductZipLoading
+    ) return;
     setProductZipError(null);
     setIsProductZipLoading(true);
 
     try {
+      const [artifactModule, packageModule] = await Promise.all([
+        import('../productForge/generateProductForgeArtifacts'),
+        import('../productForge/packageProductForgeZip'),
+      ]);
       syncActivePageFromCanvas();
       const state = useEditorStore.getState();
       const pagesForExport = state.pages.length > 0 ? state.pages : pages;
       const safeActiveIndex = Math.max(0, Math.min(state.activePageIndex, Math.max(0, pagesForExport.length - 1)));
       const activePage = pagesForExport[safeActiveIndex];
-      const artifactResult = await generateProductForgeArtifacts({
+      const artifactResult = await artifactModule.generateProductForgeArtifacts({
         projectName: state.projectName || projectName,
         pages: pagesForExport,
         activePageIndex: safeActiveIndex,
@@ -71,7 +113,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         canvasSize: activePage?.canvasSize,
         lastUpdated: new Date().toISOString(),
       });
-      const zipResult = await packageProductForgeZip(artifactResult, {
+      const zipResult = await packageModule.packageProductForgeZip(artifactResult, {
         productMetadata: state.productProjectFields?.productMetadata || productProjectFields?.productMetadata,
         recipe: state.productProjectFields?.recipe || productProjectFields?.recipe,
         theme: state.productProjectFields?.theme || productProjectFields?.theme,
@@ -108,14 +150,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     const nextPages = useEditorStore.getState().pages;
     const nextImageAssets = useEditorStore.getState().imageAssets;
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
-    await advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
-      includeBackground,
-      backgroundColor: background,
-      dpi: 300,
-      fileName,
-      imageAssets: Object.keys(nextImageAssets).length > 0 ? nextImageAssets : imageAssets,
+    await runExport(async () => {
+      await advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
+        includeBackground,
+        backgroundColor: background,
+        dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
+        sourceDpi,
+        fileName,
+        imageAssets: Object.keys(nextImageAssets).length > 0 ? nextImageAssets : imageAssets,
+      });
     });
-    onClose();
   };
   const handleExportAllPages = async (format: Exclude<AdvancedExportFormat, 'pdf'>) => {
     if (!canvas) return;
@@ -124,29 +168,43 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     const nextImageAssets = useEditorStore.getState().imageAssets;
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     const pagesForExport = nextPages.length > 0 ? nextPages : pages;
-    await advancedExportManager.exportPages(pagesForExport, format, {
-      includeBackground,
-      backgroundColor: background,
-      dpi: 300,
-      fileName,
-      imageAssets: Object.keys(nextImageAssets).length > 0 ? nextImageAssets : imageAssets,
+    await runExport(async () => {
+      await advancedExportManager.exportPages(pagesForExport, format, {
+        includeBackground,
+        backgroundColor: background,
+        dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
+        sourceDpi,
+        fileName,
+        imageAssets: Object.keys(nextImageAssets).length > 0 ? nextImageAssets : imageAssets,
+      });
     });
-    onClose();
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+      role="presentation"
+    >
       <div
         className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-white/10 bg-[color:var(--ui-panel)] p-6 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)]"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-dialog-title"
+        aria-busy={isExportLoading || isProductZipLoading}
       >
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-semibold text-[color:var(--ui-text)]">Export / Product Forge</h2>
+            <h2 id="export-dialog-title" className="text-xl font-semibold text-[color:var(--ui-text)]">
+              {INTERNAL_PRODUCT_FORGE_ENABLED ? 'Export / Product Forge' : 'Export'}
+            </h2>
             <p className="mt-1 text-xs text-[color:var(--ui-panel-text)]">
-              Download product-ready files or advanced page exports.
+              {INTERNAL_PRODUCT_FORGE_ENABLED
+                ? 'Download product-ready files or advanced page exports.'
+                : 'Download current-page or multi-page project exports.'}
             </p>
           </div>
           <button
@@ -183,10 +241,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             </button>
           </div>
 
+          {INTERNAL_PRODUCT_FORGE_ENABLED && (
           <section className="space-y-4 rounded-2xl border border-[color:var(--brand-primary)]/35 bg-[color:var(--brand-primary)]/10 p-4" aria-labelledby="product-bundle-heading">
             <div>
               <p id="product-bundle-heading" className="text-xs uppercase tracking-widest text-[color:var(--ui-text)]">
                 Product Bundle / Product Forge ZIP
+              </p>
+              <p className="mt-1 text-[10px] uppercase tracking-widest text-[color:var(--brand-primary)]">
+                Internal seller production only
               </p>
               <p className="mt-1 text-xs text-[color:var(--ui-panel-text)]">
                 Packages the printable PDF, preview PNGs, metadata, manifest, README, and listing copy.
@@ -223,6 +285,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               </p>
             )}
           </section>
+          )}
+
+          {exportError && <p role="alert" className="text-xs text-red-300">{exportError}</p>}
 
           <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4" aria-labelledby="quick-exports-heading">
             <div>
@@ -238,15 +303,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 type="button"
                 data-testid="export-png"
                 onClick={() => void handleExport('png')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
-                Download PNG (2x)
+                {unitMode === 'px' ? 'Download PNG (2x)' : 'Download PNG (300 DPI)'}
               </button>
               <button
                 type="button"
                 onClick={() => void handleExport('pdf')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download PDF
@@ -254,7 +319,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               <button
                 type="button"
                 onClick={() => void handleExportAllPagesPdf()}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download PDF (All Pages)
@@ -262,7 +327,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               <button
                 type="button"
                 onClick={() => void handleExportAllPages('png')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download PNG (All Pages)
@@ -284,7 +349,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 type="button"
                 data-testid="export-jpeg"
                 onClick={() => void handleExport('jpeg')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download JPEG
@@ -292,7 +357,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               <button
                 type="button"
                 onClick={() => void handleExport('svg')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download SVG
@@ -300,7 +365,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               <button
                 type="button"
                 onClick={() => void handleExportAllPages('jpeg')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download JPEG (All Pages)
@@ -308,7 +373,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               <button
                 type="button"
                 onClick={() => void handleExportAllPages('svg')}
-                disabled={!canvas}
+                disabled={!canvas || isExportLoading}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm uppercase tracking-widest text-[color:var(--ui-text)] hover:bg-white/10 transition-colors disabled:opacity-50"
               >
                 Download SVG (All Pages)

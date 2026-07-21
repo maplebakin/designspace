@@ -123,10 +123,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const lastPosXRef = useRef(0);
   const lastPosYRef = useRef(0);
   const pendingPromisesRef = useRef<Set<Promise<unknown>>>(new Set());
-  const updateRafRef = useRef<number | null>(null);
   const updateScheduledRef = useRef(false);
-  const viewportRafRef = useRef<number | null>(null);
   const viewportScheduledRef = useRef(false);
+  const cancelScheduledUpdateRef = useRef<(() => void) | null>(null);
+  const cancelScheduledViewportRef = useRef<(() => void) | null>(null);
+  const pendingUpdateCanvasRef = useRef<fabric.Canvas | null>(null);
   const persistCountRef = useRef(0); // PHASE 2.3: Counter-based persistence
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
@@ -302,22 +303,30 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     const nextCanvas = targetCanvas ?? fabricCanvas;
     if (!nextCanvas) return;
     const shouldPersist = !!options?.persist;
+    pendingUpdateCanvasRef.current = nextCanvas;
 
-    // PHASE 2.3: Counter-based persistence - increment instead of setting boolean
+    // Keep a single batch open until the coalesced frame update is committed.
     if (shouldPersist) {
       if (persistCountRef.current === 0) {
         useEditorStore.getState().startBatch();
       }
-      persistCountRef.current += 1;
+      persistCountRef.current = 1;
     }
 
-    // Use the FrameScheduler to schedule the update
-    frameScheduler.scheduleTask(() => {
+    // Object-moving and drawing events can arrive much faster than the display can
+    // paint. Only the latest canvas state needs to be synchronized per frame.
+    if (updateScheduledRef.current) return;
+    updateScheduledRef.current = true;
+    cancelScheduledUpdateRef.current = frameScheduler.scheduleTask(() => {
         updateScheduledRef.current = false;
-        updateRafRef.current = null;
-        syncCanvasToStore(nextCanvas);
-        updateViewportState(nextCanvas);
-        nextCanvas.requestRenderAll();
+        cancelScheduledUpdateRef.current = null;
+        const canvasToUpdate = pendingUpdateCanvasRef.current;
+        pendingUpdateCanvasRef.current = null;
+        if (canvasToUpdate) {
+          syncCanvasToStore(canvasToUpdate);
+          updateViewportState(canvasToUpdate);
+          canvasToUpdate.requestRenderAll();
+        }
 
         // PHASE 2.3: Counter-based persistence - reset counter and persist if > 0
         if (persistCountRef.current > 0) {
@@ -349,10 +358,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     const nextCanvas = targetCanvas ?? fabricCanvas;
     if (!nextCanvas) return;
 
-    // Use the FrameScheduler to schedule the viewport update
-    frameScheduler.scheduleTask(() => {
+    if (viewportScheduledRef.current) return;
+    viewportScheduledRef.current = true;
+    cancelScheduledViewportRef.current = frameScheduler.scheduleTask(() => {
         viewportScheduledRef.current = false;
-        viewportRafRef.current = null;
+        cancelScheduledViewportRef.current = null;
         updateViewportState(nextCanvas);
       }, TaskPriority.Normal);
   }, [fabricCanvas, updateViewportState]);
@@ -844,9 +854,10 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       guideRegistry.clear(); // PHASE 3.1: Clear guide registry on dispose
 
       // Clean up animation frame
-      if (updateRafRef.current !== null) {
-        cancelAnimationFrame(updateRafRef.current);
-        updateRafRef.current = null;
+      if (updateScheduledRef.current) {
+        cancelScheduledUpdateRef.current?.();
+        cancelScheduledUpdateRef.current = null;
+        pendingUpdateCanvasRef.current = null;
         updateScheduledRef.current = false;
 
         // PHASE 2.3: Counter-based persistence cleanup
@@ -855,9 +866,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
           useEditorStore.getState().endBatch();
         }
       }
-      if (viewportRafRef.current !== null) {
-        cancelAnimationFrame(viewportRafRef.current);
-        viewportRafRef.current = null;
+      if (viewportScheduledRef.current) {
+        cancelScheduledViewportRef.current?.();
+        cancelScheduledViewportRef.current = null;
         viewportScheduledRef.current = false;
       }
 

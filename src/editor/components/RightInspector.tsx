@@ -15,6 +15,7 @@ import { LayersPanel } from './LayersPanel';
 import { PageBorderPopover } from './PageBorderPopover';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ThemeSidebar } from './ThemeSidebar';
+import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 
 export type InspectorTab = 'product' | 'page' | 'object' | 'theme' | 'layers';
 
@@ -54,6 +55,9 @@ const ProductPanel: React.FC = () => {
   const zipReady = recipe && pages.length > 0 && exportSettings?.pdfFileName
     ? 'Ready to package from Export / ZIP'
     : 'Available after product recipe/export settings exist';
+  const exportFormats = exportSettings?.formats?.length
+    ? exportSettings.formats.map((format) => format.toUpperCase()).join(', ')
+    : 'PDF, PNG, JPEG, SVG';
 
   return (
     <div className="design-space-inspector-panel h-full overflow-y-auto p-4" data-testid="right-inspector-product-panel">
@@ -74,7 +78,9 @@ const ProductPanel: React.FC = () => {
         <DetailRow label="Title" value={productTitle} />
         <DetailRow label="Recipe" value={recipe ? `${recipe.id} v${recipe.version}` : 'Custom product'} />
         <DetailRow label="Pages" value={`${pages.length} page${pages.length === 1 ? '' : 's'}`} />
-        <DetailRow label="Product Forge" value={zipReady} />
+        {INTERNAL_PRODUCT_FORGE_ENABLED
+          ? <DetailRow label="Product Forge" value={zipReady} />
+          : <DetailRow label="Exports" value={exportFormats} />}
       </div>
     </div>
   );

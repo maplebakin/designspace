@@ -53,6 +53,7 @@ import { NavStrip, NAV_ITEMS, NavId } from './NavStrip';
 import { ShapesPanel } from './ShapesPanel';
 import { ProductPageNavigator } from './ProductPageNavigator';
 import { ProductStarter } from './ProductStarter';
+import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 import { RightInspector, type InspectorTab } from './RightInspector';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
@@ -157,6 +158,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     redo,
     projectName,
     renameCurrentProject,
+    downloadProjectFile,
     productProjectFields,
     pages,
     activePageIndex,
@@ -187,6 +189,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
     redo: state.redo,
     projectName: state.projectName,
     renameCurrentProject: state.renameCurrentProject,
+    downloadProjectFile: state.downloadProjectFile,
     productProjectFields: state.productProjectFields,
     pages: state.pages,
     activePageIndex: state.activePageIndex,
@@ -663,6 +666,33 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             </div>
         )}
 
+      <div className="design-space-narrow-recovery" data-testid="narrow-editor-notice">
+        <div className="design-space-narrow-recovery-copy">
+          <strong>Editing works best on a larger screen.</strong>
+          <span>The canvas remains available here, with project recovery and navigation kept within reach.</span>
+        </div>
+        <div className="design-space-narrow-recovery-actions">
+          <button
+            type="button"
+            onClick={() => void downloadProjectFile()}
+            className="ui-button-soft"
+          >
+            <Download className={ICON_SMALL} aria-hidden="true" />
+            Download Project
+          </button>
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="ui-button-soft"
+            >
+              <Home className={ICON_SMALL} aria-hidden="true" />
+              Projects
+            </button>
+          )}
+        </div>
+      </div>
+
       <header data-testid="editor-toolbar" className="design-space-topbar h-16 flex items-center justify-between px-5 shrink-0 bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
         <div className="design-space-projectbar min-w-[25rem] flex items-center gap-3">
           <div className="design-space-brand shrink-0 leading-tight">
@@ -693,6 +723,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       data-testid="toolbar-undo"
                       onClick={() => void undo()}
                       disabled={!canUndo}
+                      aria-label="Undo"
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canUndo
                             ? TOOL_BUTTON
@@ -707,6 +738,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                       data-testid="toolbar-redo"
                       onClick={() => void redo()}
                       disabled={!canRedo}
+                      aria-label="Redo"
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           canRedo
                             ? TOOL_BUTTON
@@ -721,6 +753,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content="Select (V)" side="bottom">
                   <button
                       onClick={() => setActiveTool('select')}
+                      aria-label="Select tool"
+                      aria-pressed={activeTool === 'select'}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'select'
                             ? `${TOOL_BUTTON} ui-button-active`
@@ -733,6 +767,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content="Eraser (E)" side="bottom">
                   <button
                       onClick={() => setActiveTool('erase')}
+                      aria-label="Eraser tool"
+                      aria-pressed={activeTool === 'erase'}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'erase'
                             ? `${TOOL_BUTTON} ui-button-active`
@@ -745,6 +781,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content="Pan (H)" side="bottom">
                   <button
                       onClick={() => setActiveTool('pan')}
+                      aria-label="Pan tool"
+                      aria-pressed={activeTool === 'pan'}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'pan'
                             ? `${TOOL_BUTTON} ui-button-active`
@@ -758,6 +796,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                   <button
                       onClick={() => setActiveTool('textbox')}
                       data-testid="tool-textbox"
+                      aria-label="Text box tool"
+                      aria-pressed={activeTool === 'textbox'}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'textbox'
                             ? `${TOOL_BUTTON} ui-button-active`
@@ -771,6 +811,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content={snapEnabled ? 'Snapping On' : 'Snapping Off'} side="bottom">
                   <button
                       onClick={() => setSnapEnabled(!snapEnabled)}
+                      aria-label="Toggle snapping"
+                      aria-pressed={snapEnabled}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         snapEnabled
                           ? `${TOOL_BUTTON} ui-button-active text-[color:var(--brand-primary)]`
@@ -783,6 +825,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Tooltip content={gridEnabled ? 'Grid On' : 'Grid Off'} side="bottom">
                   <button
                       onClick={() => setGridEnabled(!gridEnabled)}
+                      aria-label="Toggle grid"
+                      aria-pressed={gridEnabled}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                         gridEnabled
                           ? `${TOOL_BUTTON} ui-button-active text-[color:var(--brand-primary)]`
@@ -800,6 +844,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                           setActiveTool('draw');
                           setBrushColor((themeData as { brand?: { primary?: { value?: string } } } | null)?.brand?.primary?.value || '#1f2933');
                       }}
+                      aria-label="Pencil tool"
+                      aria-pressed={activeTool === 'draw'}
                       className={`rounded-lg p-2 transition-all duration-200 ${
                           activeTool === 'draw'
                             ? `${TOOL_BUTTON} ui-button-active`
@@ -817,6 +863,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                     <Tooltip content="Canvas Fill" side="bottom">
                       <button
                           className={TOOL_BUTTON}
+                          aria-label="Canvas fill"
                       >
                           <PaintBucket className="w-4 h-4 stroke-[1.5]" />
                       </button>
@@ -873,14 +920,14 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 <Keyboard className={ICON_SMALL} />
               </button>
             </Tooltip>
-            <Tooltip content="Export / Product ZIP (⌘E)" side="bottom">
+            <Tooltip content={INTERNAL_PRODUCT_FORGE_ENABLED ? 'Export / Product ZIP (⌘E)' : 'Export (⌘E)'} side="bottom">
               <button
                 onClick={() => setShowExportModal(true)}
                 className={CHROME_BUTTON}
                 aria-label="Export"
               >
                 <Download className={ICON_SMALL} />
-                <span>Export / ZIP</span>
+                <span>{INTERNAL_PRODUCT_FORGE_ENABLED ? 'Export / ZIP' : 'Export'}</span>
               </button>
             </Tooltip>
         </div>
@@ -898,6 +945,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               <button
                 type="button"
                 onClick={() => setActiveNav('starter')}
+                aria-pressed={activeNav === 'starter'}
                 className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
               >
                 Starter
@@ -905,6 +953,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               <button
                 type="button"
                 onClick={() => setActiveNav(null)}
+                aria-pressed={activeNav === null}
                 className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
               >
                 Pages
@@ -912,6 +961,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               <button
                 type="button"
                 onClick={() => setInspectorTab('theme')}
+                aria-pressed={inspectorTab === 'theme'}
                 className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:bg-white/10"
               >
                 Theme
@@ -921,7 +971,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                 onClick={() => setShowExportModal(true)}
                 className="rounded-lg border border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/10 px-2 py-1.5 text-[9px] uppercase tracking-widest text-[color:var(--brand-primary)] hover:bg-[color:var(--brand-primary)]/15"
               >
-                Export ZIP
+                {INTERNAL_PRODUCT_FORGE_ENABLED ? 'Export ZIP' : 'Export'}
               </button>
             </div>
           </div>
@@ -946,7 +996,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           </div>
         </aside>
 
-        <main data-testid="canvas-workspace" className="design-space-canvas flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
+        <main id="main-content" tabIndex={-1} data-testid="canvas-workspace" className="design-space-canvas flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
             <SelectionToolbar />
             <CanvasStage onSelectNav={handleSelectNav} />

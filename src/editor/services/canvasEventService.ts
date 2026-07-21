@@ -187,6 +187,16 @@ export function registerObjectEventHandlers(
         }
     };
 
+    const handleTextChanged = (event?: { target?: fabric.Object }) => {
+        if (checkAborted(abortSignal)) return;
+        const target = event?.target as fabric.Object | undefined;
+        if (!target || !isTextObject(target)) return;
+
+        markDirtyObject(target);
+        onHistoryDirty?.();
+        onUpdate?.(canvas, { persist: true });
+    };
+
     const handleObjectScaling = (event: any) => {
         if (checkAborted(abortSignal)) return;
         const target = event.target as fabric.Object | undefined;
@@ -241,6 +251,7 @@ export function registerObjectEventHandlers(
     canvas.on('object:added', handleObjectAdded);
     canvas.on('object:removed', handleObjectRemoved);
     canvas.on('object:modified', handleObjectModified);
+    canvas.on('text:changed', handleTextChanged);
     canvas.on('object:moving', handleObjectMoving);
     canvas.on('object:scaling', handleObjectScaling);
 
@@ -249,6 +260,7 @@ export function registerObjectEventHandlers(
             canvas.off('object:added', handleObjectAdded);
             canvas.off('object:removed', handleObjectRemoved);
             canvas.off('object:modified', handleObjectModified);
+            canvas.off('text:changed', handleTextChanged);
             canvas.off('object:moving', handleObjectMoving);
             canvas.off('object:scaling', handleObjectScaling);
         },

@@ -3,6 +3,7 @@ import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { loadImageFromFile, safeLoadImage } from '../services/assetLoader';
 import { isActiveSelection } from '../utils/typeGuards';
+import { useEditorStore } from '../state/editorStore';
 
 type CanvasMutationOptions = { persist?: boolean; activate?: boolean };
 
@@ -390,7 +391,7 @@ export const useCanvasStageInteractions = ({
       trackPromise(loadImageFromFile(file))
         .then((result) => {
           if (!result.success) {
-            console.error('Failed to load dropped image:', result.errorMessage);
+            useEditorStore.getState().setToastMessage(result.errorMessage);
             return;
           }
 
@@ -500,7 +501,7 @@ export const useCanvasStageInteractions = ({
 
     const result = await loadImageFromFile(file);
     if (!result.success) {
-      console.error('Failed to load image:', result.errorMessage);
+      useEditorStore.getState().setToastMessage(result.errorMessage);
       return;
     }
 

@@ -48,7 +48,9 @@ import { type AccessibilitySettings, AccessibilityManager } from '../utils/acces
 import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
 import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 import {
+    assertSupportedDesignSpaceProjectSchema,
     extractProductProjectFields,
+    getDesignSpaceProjectEditorMode,
     normalizeDesignSpaceProjectPayload,
     type ProductAwareProjectPayload,
     type ProductProjectFields,
@@ -65,6 +67,13 @@ export { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 
 // Default canvas background color (cream)
 export const DEFAULT_CANVAS_BACKGROUND = '#FAF8F5';
+
+const MAX_PROJECT_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_PROJECT_PAGES = 250;
+const MAX_OBJECTS_PER_PAGE = 10_000;
+const MAX_OBJECT_NESTING_DEPTH = 50;
+const MAX_PAGE_DIMENSION_PX = 30_000;
+const MAX_EMBEDDED_ASSET_STRING_BYTES = 100 * 1024 * 1024;
 
 export type AutoSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 export type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
@@ -578,7 +587,10 @@ const getInitialPageLoadData = (
 ) => {
     if (rawPages && rawPages.length > 0) {
         const safeIndex = Math.max(0, Math.min(activePageIndex, rawPages.length - 1));
-        return normalizePageCanvasData(rawPages[safeIndex]?.canvasData);
+        const pageCanvasData = rawPages[safeIndex]?.canvasData;
+        if (pageCanvasData !== undefined && pageCanvasData !== null) {
+            return normalizePageCanvasData(pageCanvasData);
+        }
     }
     return normalizePageCanvasData(fallbackCanvasData || { objects: [], background: getSerializedPageBackground() });
 };
@@ -616,6 +628,226 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
         assets,
         failedAssetIds: failedIds,
     };
+};
+
+const collectReferencedImageAssetIds = (canvasData: unknown, target = new Set<string>()) => {
+    const parsed = normalizePageCanvasData(canvasData) as { objects?: any[] };
+    const visit = (object: any) => {
+        if (!object || typeof object !== 'object') return;
+        if (object.type === 'image' && typeof object.id === 'string' && object.id.trim()) {
+            target.add(object.id);
+        }
+        if (Array.isArray(object.objects)) {
+            object.objects.forEach(visit);
+        }
+    };
+    if (Array.isArray(parsed.objects)) parsed.objects.forEach(visit);
+    return target;
+};
+
+const prepareProjectPagesForPersistence = (
+    pages: ProjectPage[],
+    imageAssets: Record<string, string>
+) => {
+    let nextAssets = imageAssets;
+    const nextPages = pages.map((page) => {
+        const prepared = prepareCanvasDataForPersistence(
+            normalizePageCanvasData(page.canvasData),
+            nextAssets
+        );
+        nextAssets = prepared.imageAssets;
+        return { ...page, canvasData: prepared.canvasData };
+    });
+    return { pages: nextPages, imageAssets: nextAssets };
+};
+
+const serializeProjectImageAssets = async (
+    imageAssets: Record<string, string>,
+    referencedIds: Set<string>
+) => {
+    const assets: Record<string, string> = {};
+    const failedAssetIds: string[] = [];
+
+    for (const id of referencedIds) {
+        const source = imageAssets[id];
+        if (!source) {
+            throw new Error(`Unable to preserve image ${id} because its source is missing.`);
+        }
+        if (isDataUrl(source)) {
+            assets[id] = source;
+            continue;
+        }
+        try {
+            assets[id] = await fetchAsDataUrl(source);
+        } catch {
+            if (source.startsWith('blob:')) {
+                throw new Error(`Unable to preserve uploaded image ${id}. Keep the editor open and try again.`);
+            }
+            assets[id] = source;
+            failedAssetIds.push(id);
+        }
+    }
+
+    return { assets, failedAssetIds };
+};
+
+const buildProjectPersistenceData = async (
+    canvas: fabric.Canvas,
+    pages: ProjectPage[],
+    imageAssets: Record<string, string>,
+    activePageIndex: number
+) => {
+    const activeExport = await buildExportCanvasData(canvas);
+    const prepared = prepareProjectPagesForPersistence(pages, imageAssets);
+    const combinedAssetSources = {
+        ...prepared.imageAssets,
+        ...activeExport.assets,
+    };
+    const referencedIds = prepared.pages.reduce(
+        (ids, page) => collectReferencedImageAssetIds(page.canvasData, ids),
+        new Set<string>()
+    );
+    const serializedAssets = await serializeProjectImageAssets(combinedAssetSources, referencedIds);
+    const activePageCanvasData = prepared.pages[activePageIndex]?.canvasData ?? activeExport.canvasData;
+
+    return {
+        pages: prepared.pages,
+        runtimeImageAssets: prepared.imageAssets,
+        canvasData: activePageCanvasData,
+        assets: serializedAssets.assets,
+        failedAssetIds: Array.from(new Set([
+            ...activeExport.failedAssetIds,
+            ...serializedAssets.failedAssetIds,
+        ])),
+    };
+};
+
+const parseProjectCanvasData = (value: unknown, label: string) => {
+    let parsed: unknown;
+    try {
+        parsed = parseCanvasData(value);
+    } catch {
+        throw new Error(`${label} contains invalid canvas JSON.`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${label} is missing canvas data.`);
+    }
+    const objects = (parsed as any).objects;
+    if (!Array.isArray(objects)) {
+        throw new Error(`${label} must contain an objects array.`);
+    }
+    let objectCount = 0;
+    const validateObject = (object: any, depth: number) => {
+        objectCount += 1;
+        if (objectCount > MAX_OBJECTS_PER_PAGE) {
+            throw new Error(`${label} exceeds the ${MAX_OBJECTS_PER_PAGE.toLocaleString()} object limit.`);
+        }
+        if (depth > MAX_OBJECT_NESTING_DEPTH) {
+            throw new Error(`${label} exceeds the maximum object nesting depth.`);
+        }
+        if (!object || typeof object !== 'object' || Array.isArray(object)) {
+            throw new Error(`${label} contains an invalid object.`);
+        }
+        if (typeof object.type !== 'string' || object.type.trim().length === 0) {
+            throw new Error(`${label} contains an object without a valid type.`);
+        }
+        if (object.objects !== undefined) {
+            if (!Array.isArray(object.objects)) {
+                throw new Error(`${label} contains invalid grouped objects.`);
+            }
+            object.objects.forEach((child: any) => validateObject(child, depth + 1));
+        }
+    };
+    objects.forEach((object: any) => validateObject(object, 1));
+    return parsed as Record<string, any>;
+};
+
+const validateProjectPayloadStructure = (raw: unknown) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('Project file must contain a JSON object.');
+    }
+    const payload = raw as Record<string, any>;
+    const validateDimensions = (candidate: any, label: string) => {
+        if (candidate === undefined) return;
+        const width = Number(candidate?.width);
+        const height = Number(candidate?.height);
+        if (
+            !Number.isFinite(width)
+            || width <= 0
+            || width > MAX_PAGE_DIMENSION_PX
+            || !Number.isFinite(height)
+            || height <= 0
+            || height > MAX_PAGE_DIMENSION_PX
+        ) {
+            throw new Error(`${label} has invalid dimensions.`);
+        }
+    };
+    assertSupportedDesignSpaceProjectSchema(payload);
+    if (getDesignSpaceProjectEditorMode(payload) !== 'canvas') {
+        throw new Error('Document projects must be opened in the document editor.');
+    }
+    if (payload.assets !== undefined && (
+        !payload.assets
+        || typeof payload.assets !== 'object'
+        || Array.isArray(payload.assets)
+        || Object.values(payload.assets).some((value) => typeof value !== 'string')
+    )) {
+        throw new Error('Project assets must be a map of image sources.');
+    }
+    if (payload.assets) {
+        const embeddedAssetBytes = Object.values(payload.assets)
+            .filter((value): value is string => typeof value === 'string' && value.startsWith('data:'))
+            .reduce((total, value) => total + value.length, 0);
+        if (embeddedAssetBytes > MAX_EMBEDDED_ASSET_STRING_BYTES) {
+            throw new Error('Project embedded assets exceed the 100 MB limit.');
+        }
+    }
+    if (payload.pages !== undefined && !Array.isArray(payload.pages)) {
+        throw new Error('Project pages must be an array.');
+    }
+    if (Array.isArray(payload.pages) && payload.pages.length > MAX_PROJECT_PAGES) {
+        throw new Error(`Project exceeds the ${MAX_PROJECT_PAGES} page limit.`);
+    }
+    validateDimensions(payload.canvasSize, 'Project');
+    validateDimensions(payload.document?.pageSize, 'Project document');
+    if (Array.isArray(payload.pages) && payload.pages.length > 0) {
+        payload.pages.forEach((page: any, index: number) => {
+            if (!page || typeof page !== 'object' || Array.isArray(page)) {
+                throw new Error(`Page ${index + 1} is invalid.`);
+            }
+            // Canvas data was optional on the original product page schema.
+            // Some saved projects kept the active page JSON only at the payload
+            // root and used `pages` for page names/sizes. Preserve that contract.
+            if (page.canvasData !== undefined && page.canvasData !== null) {
+                parseProjectCanvasData(page.canvasData, `Page ${index + 1}`);
+            }
+            if (page.canvasSize !== undefined) {
+                validateDimensions(page.canvasSize, `Page ${index + 1}`);
+            }
+        });
+        const requestedIndex = typeof payload.activePageIndex === 'number'
+            ? Math.trunc(payload.activePageIndex)
+            : 0;
+        const activeIndex = Math.max(0, Math.min(requestedIndex, payload.pages.length - 1));
+        const activePageCanvasData = payload.pages[activeIndex]?.canvasData;
+        if (activePageCanvasData === undefined || activePageCanvasData === null) {
+            parseProjectCanvasData(payload.canvasData, 'Project');
+        }
+    } else {
+        parseProjectCanvasData(payload.canvasData, 'Project');
+    }
+};
+
+const stageCanvasDataLoad = async (canvasData: any) => {
+    if (typeof document === 'undefined') return;
+    const element = document.createElement('canvas');
+    const stagingCanvas = new fabric.StaticCanvas(element, { width: 1, height: 1 });
+    try {
+        await stagingCanvas.loadFromJSON(canvasData, reviveCustomFabricProps);
+    } finally {
+        await Promise.resolve(stagingCanvas.dispose());
+        element.remove();
+    }
 };
 
 const buildProjectFilePayload = (
@@ -804,6 +1036,7 @@ interface EditorState {
   autoSaveStatus: AutoSaveStatus;
   saveStatus: SaveStatus;
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
+  changeRevision: number;
 
   // PHASE 2.2: Sync Lock Mechanism
   syncLock: {
@@ -959,11 +1192,15 @@ interface EditorState {
   // Stroke and Lock Actions
   setObjectStrokeColor: (color: string) => void;
   setObjectStrokeWidth: (width: number) => void;
-  toggleObjectLock: () => void;
+  toggleObjectLock: (layerId?: string) => void;
 
   // Text Formatting Actions
   setTextLineHeight: (lineHeight: number) => void;
 }
+
+// Fabric mutates a shared canvas throughout loadFromJSON. Serialize page loads so
+// rapid navigation cannot leave page metadata and visible canvas content out of sync.
+let pageSwitchQueue: Promise<void> = Promise.resolve();
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
 export const useEditorStore = createWithEqualityFn<EditorState>()(
@@ -993,6 +1230,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const history = useHistoryStore.getState();
             history.resetHistory();
             history.takeSnapshot();
+        };
+
+        const markProjectDirty = () => {
+            set((state) => ({
+                isDirty: true,
+                changeRevision: state.changeRevision + 1,
+            }));
+            get().setAutoSaveStatus('dirty');
+            if (get().currentLibraryProjectId) {
+                get().triggerAutoSave();
+            }
         };
 
         return ({
@@ -1048,6 +1296,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         autoSaveStatus: 'idle',
         saveStatus: 'saved',
         autoSaveTimer: null,
+        changeRevision: 0,
         showHelpModal: false,
         showExportModal: false,
         showSafeZones: false,
@@ -1897,39 +2146,46 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         };
         set({ pages: nextPages, imageAssets: prepared.imageAssets });
     },
-    switchToPage: async (index, options) => {
-        const { canvas, pages } = get();
-        if (!canvas || index < 0 || index >= pages.length) return;
-        if (options?.saveCurrent !== false) {
-            get().syncActivePageFromCanvas();
-        }
-        const page = get().pages[index];
-        const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
-        await canvas.loadFromJSON(hydrated, reviveCustomFabricProps);
-        const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
-        resizeCanvas(nextSize.width, nextSize.height, {
-            save: false,
-            resetViewport: false,
-        });
-        const pageBackground =
-            typeof (page.canvasData as any)?.background === 'string'
-                ? (page.canvasData as any).background
-                : null;
-        useThemeStore.getState().setCanvasBackgroundColor(pageBackground);
-        canvas.backgroundColor = 'transparent';
-        get().clearSelection();
-        get().syncCanvasToStore(canvas);
-        set({ activePageIndex: index });
-        get().requestLayerSync({ force: true });
-        canvas.requestRenderAll();
-        resetHistoryToCurrentCanvas();
+    switchToPage: (index, options) => {
+        const performSwitch = async () => {
+            const { canvas, pages } = get();
+            if (!canvas || index < 0 || index >= pages.length) return;
+            if (options?.saveCurrent !== false) {
+                get().syncActivePageFromCanvas();
+            }
+            const page = get().pages[index];
+            if (!page) return;
+            const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
+            await canvas.loadFromJSON(hydrated, reviveCustomFabricProps);
+            const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
+            resizeCanvas(nextSize.width, nextSize.height, {
+                save: false,
+                resetViewport: false,
+            });
+            const pageBackground =
+                typeof (page.canvasData as any)?.background === 'string'
+                    ? (page.canvasData as any).background
+                    : null;
+            useThemeStore.getState().setCanvasBackgroundColor(pageBackground);
+            canvas.backgroundColor = 'transparent';
+            get().clearSelection();
+            get().syncCanvasToStore(canvas);
+            set({ activePageIndex: index });
+            get().requestLayerSync({ force: true });
+            canvas.requestRenderAll();
+            resetHistoryToCurrentCanvas();
+        };
+
+        const queuedSwitch = pageSwitchQueue.then(performSwitch, performSwitch);
+        pageSwitchQueue = queuedSwitch.catch(() => undefined);
+        return queuedSwitch;
     },
     addPage: async () => {
         get().syncActivePageFromCanvas();
         const next = { id: uuidv4(), name: `Page ${get().pages.length + 1}`, canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE } };
         set((state) => ({ pages: [...state.pages, next] }));
         await get().switchToPage(get().pages.length - 1);
-        set({ isDirty: true });
+        markProjectDirty();
     },
     deletePage: async (index) => {
         const { pages, activePageIndex } = get();
@@ -1940,8 +2196,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (activePageIndex >= nextPages.length) nextIndex = nextPages.length - 1;
         if (index < activePageIndex) nextIndex -= 1;
         const safeNextIndex = Math.max(0, nextIndex);
-        set({ pages: nextPages, activePageIndex: safeNextIndex, isDirty: true });
+        set({ pages: nextPages, activePageIndex: safeNextIndex });
         await get().switchToPage(safeNextIndex, { saveCurrent: false });
+        markProjectDirty();
     },
     reorderPages: (from, to) => {
         const { pages, activePageIndex } = get();
@@ -1953,7 +2210,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (activePageIndex === from) nextActive = to;
         else if (from < activePageIndex && to >= activePageIndex) nextActive -= 1;
         else if (from > activePageIndex && to <= activePageIndex) nextActive += 1;
-        set({ pages: next, activePageIndex: nextActive, isDirty: true });
+        set({ pages: next, activePageIndex: nextActive });
+        markProjectDirty();
     },
     downloadProjectFile: async () => {
         const {
@@ -1970,9 +2228,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             || null;
 
         get().syncActivePageFromCanvas();
-        let exportData: { canvasData: any; assets: Record<string, string>; failedAssetIds: string[] };
+        let exportData: Awaited<ReturnType<typeof buildProjectPersistenceData>>;
         try {
-            exportData = await buildExportCanvasData(canvas);
+            exportData = await buildProjectPersistenceData(
+                canvas,
+                get().pages,
+                get().imageAssets,
+                get().activePageIndex
+            );
         } catch (error) {
             const message = error instanceof Error && error.message
                 ? error.message
@@ -1984,7 +2247,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const savedAt = new Date().toISOString();
         const payload = buildProjectFilePayload({
             projectName: projectName || 'Untitled Project',
-            pages: get().pages,
+            pages: exportData.pages,
             activePageIndex: get().activePageIndex,
             canvasData: exportData.canvasData,
             assets: exportData.assets,
@@ -2004,7 +2267,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
-        set({ productProjectFields: extractProductProjectFields(payload) });
+        set({
+            productProjectFields: extractProductProjectFields(payload),
+            pages: exportData.pages,
+            imageAssets: exportData.runtimeImageAssets,
+        });
         get().setAutoSaveStatus('saved');
         set({ isDirty: false });
         if (exportData.failedAssetIds.length > 0) {
@@ -2026,8 +2293,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (!canvas) return;
 
         try {
+            if (typeof file.size === 'number' && file.size > MAX_PROJECT_FILE_BYTES) {
+                throw new Error('Project file exceeds the 100 MB import limit.');
+            }
             const text = await file.text();
             const raw = JSON.parse(text) as Partial<ProjectFilePayload>;
+            validateProjectPayloadStructure(raw);
             const fallbackName = file.name
                 .replace(/\.apocaproject\.json$/i, '')
                 .replace(/\.json$/i, '');
@@ -2064,6 +2335,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 migratedCanvasData,
                 nextAssets
             );
+            await stageCanvasDataLoad(hydratedCanvasData);
 
             const nextSize = normalizedPayload.canvasSize;
             const pageSize = rawPages && rawPages.length > 0
@@ -2132,24 +2404,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
         useHistoryStore.getState().saveState(options);
 
-        // Mark unsaved changes
-        set({ isDirty: true });
-        get().setAutoSaveStatus('dirty');
-        const projectName = get().projectName;
-        if (projectName && projectName !== 'Untitled Project') {
-            get().triggerAutoSave();
-        }
+        markProjectDirty();
 
     },
 
     takeSnapshot: () => {
         useHistoryStore.getState().takeSnapshot();
-        set({ isDirty: true });
-        get().setAutoSaveStatus('dirty');
-        const projectName = get().projectName;
-        if (projectName && projectName !== 'Untitled Project') {
-            get().triggerAutoSave();
-        }
+        markProjectDirty();
     },
 
     clearHistory: () => {
@@ -2475,12 +2736,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         try {
             get().syncActivePageFromCanvas();
-            const exportData = await buildExportCanvasData(canvas);
+            const revisionAtStart = get().changeRevision;
+            const exportData = await buildProjectPersistenceData(
+                canvas,
+                get().pages,
+                get().imageAssets,
+                get().activePageIndex
+            );
 
             const savedAt = new Date().toISOString();
             const payload = buildProjectFilePayload({
                 projectName: safeName,
-                pages: get().pages,
+                pages: exportData.pages,
                 activePageIndex: get().activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
@@ -2518,13 +2785,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             if (!nextLibraryProjectId) {
                 nextLibraryProjectId = await db.saveProject(safeName, jsonPayload, thumbnail);
             }
+            const hasNewerChanges = get().changeRevision !== revisionAtStart;
             set({
                 currentLibraryProjectId: nextLibraryProjectId,
                 projectName: safeName,
                 productProjectFields: extractProductProjectFields(payload),
-                isDirty: false,
-                autoSaveStatus: 'saved',
-                saveStatus: 'saved',
+                pages: exportData.pages,
+                imageAssets: exportData.runtimeImageAssets,
+                isDirty: hasNewerChanges,
+                autoSaveStatus: hasNewerChanges ? 'dirty' : 'saved',
+                saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
                 toastMessage: didUpdateExistingProject
                     ? `Updated library project: ${safeName}`
                     : exportData.failedAssetIds.length > 0
@@ -2559,6 +2829,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
 
             const parsed = JSON.parse(result.canvasData);
+            validateProjectPayloadStructure(parsed);
             const normalizedPayload = normalizeDesignSpaceProjectPayload<ProjectPage>(parsed, {
                 projectName: result.project.name,
                 defaultBackground: DEFAULT_CANVAS_BACKGROUND,
@@ -2585,6 +2856,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 migratedCanvasData,
                 nextAssets
             );
+            await stageCanvasDataLoad(hydratedCanvasData);
 
             const normalizedWidth =
                 canvasSize
@@ -2702,23 +2974,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     updateCurrentProject: async () => {
         const { projectName, currentLibraryProjectId, canvas } = get();
-        if (!canvas || !projectName) return;
+        if (!canvas || !projectName || !currentLibraryProjectId) return;
 
         try {
             get().syncActivePageFromCanvas();
-            const exportData = await buildExportCanvasData(canvas);
+            const exportData = await buildProjectPersistenceData(
+                canvas,
+                get().pages,
+                get().imageAssets,
+                get().activePageIndex
+            );
             const { db } = await import('../db');
-            let targetProjectId = currentLibraryProjectId;
-            if (!targetProjectId) {
-                const projects = await db.getAllProjects();
-                targetProjectId = projects.find(p => p.name === projectName)?.id ?? null;
-            }
-            if (!targetProjectId) return;
+            const targetProjectId = currentLibraryProjectId;
 
             const savedAt = new Date().toISOString();
             const payload = buildProjectFilePayload({
                 projectName,
-                pages: get().pages,
+                pages: exportData.pages,
                 activePageIndex: get().activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
@@ -2743,6 +3015,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({
                 currentLibraryProjectId: targetProjectId,
                 productProjectFields: extractProductProjectFields(payload),
+                pages: exportData.pages,
+                imageAssets: exportData.runtimeImageAssets,
             });
         } catch (error) {
             console.error('Failed to update project:', error);
@@ -2780,9 +3054,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
 
-    toggleObjectLock: () => {
+    toggleObjectLock: (layerId) => {
         const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore, clearSelection } = get();
-        const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        const selectedObject = layerId
+            ? canvas?.getObjects().find((object) => (object as any).id === layerId) ?? null
+            : resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
             const isCurrentlyLocked = selectedObject.lockMovementX;
             const nextLocked = !isCurrentlyLocked;
@@ -2821,8 +3097,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     triggerAutoSave: () => {
-        const { projectName, updateCurrentProject, setAutoSaveStatus } = get();
-        if (!projectName || projectName === 'Untitled Project') return;
+        const { currentLibraryProjectId, updateCurrentProject, setAutoSaveStatus } = get();
+        if (!currentLibraryProjectId) return;
 
         // Debounced save - wait 2 seconds of inactivity before saving
         const currentTimer = get().autoSaveTimer;
@@ -2831,9 +3107,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         const timer = setTimeout(async () => {
+            const revisionAtStart = get().changeRevision;
+            set({ autoSaveTimer: null });
             setAutoSaveStatus('saving');
             try {
                 await updateCurrentProject();
+                if (get().changeRevision !== revisionAtStart) {
+                    setAutoSaveStatus('dirty');
+                    get().triggerAutoSave();
+                    return;
+                }
+                set({ isDirty: false });
                 setAutoSaveStatus('saved');
 
                 // Reset status after 2 seconds
@@ -2854,11 +3138,28 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     {
         name: 'designspace-editor',
+        merge: (persistedState, currentState) => {
+            if (!persistedState || typeof persistedState !== 'object') return currentState;
+            // Legacy project payloads and blob-backed assets must not become live
+            // state on startup. Project data belongs in IndexedDB/project files;
+            // blob URLs are session-scoped. The legacy template migration reads
+            // localStorage directly before the first preference write removes it.
+            const {
+                pages: _pages,
+                activePageIndex: _activePageIndex,
+                productProjectFields: _productProjectFields,
+                isDirty: _isDirty,
+                autoSaveStatus: _autoSaveStatus,
+                saveStatus: _saveStatus,
+                userTemplates: _userTemplates,
+                assets: _assets,
+                ...preferences
+            } = persistedState as Record<string, unknown>;
+            return { ...currentState, ...preferences };
+        },
         partialize: (state) => ({
             // Theme state is now persisted by the theme store (designspace-theme)
             // We only persist non-theme editor state here
-            userTemplates: state.userTemplates,
-            assets: state.assets,
             unitMode: state.unitMode,
             unitScale: state.unitScale,
             unitZoom: state.unitZoom,
@@ -2874,12 +3175,6 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             showSafeZones: state.showSafeZones,
             showSuggestionSidebar: state.showSuggestionSidebar,
             accessibilitySettings: state.accessibilitySettings,
-            autoSaveStatus: state.autoSaveStatus,
-            saveStatus: state.saveStatus,
-            pages: state.pages,
-            activePageIndex: state.activePageIndex,
-            productProjectFields: state.productProjectFields,
-            isDirty: state.isDirty,
         }),
     }
   )

@@ -9,6 +9,10 @@ import {
   type ProductAwareProjectPayload,
 } from '../project/projectSchema';
 import type { ProjectPage } from '../state/editorStore';
+import {
+  sanitizeProductForgeFileName,
+  sanitizeProductForgeSlug,
+} from './safeProductForgePaths';
 
 export type ProductForgeArtifactKind = 'printable-pdf' | 'preview-png' | 'metadata-json';
 export type ProductForgeArtifactStatus = 'generated' | 'skipped' | 'failed';
@@ -38,6 +42,11 @@ export type ProductForgeArtifactManifest = {
     height: number;
     unitMode?: string;
     dpi?: number;
+  };
+  rendering: {
+    sourceDpi: number;
+    previewDpi: number;
+    pdfImageDpi: number;
   };
   files: Array<{
     fileName: string;
@@ -84,24 +93,6 @@ const PNG_MIME_TYPE = 'image/png';
 
 const stripExtension = (fileName: string) =>
   fileName.replace(/\.[a-z0-9]+$/i, '');
-
-const slugify = (value: string) => {
-  const slug = value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return slug || 'design-space-product';
-};
-
-const withExtension = (fileName: string | undefined, extension: string, fallbackBase: string) => {
-  const candidate = typeof fileName === 'string' && fileName.trim().length > 0
-    ? fileName.trim()
-    : `${fallbackBase}${extension}`;
-  return candidate.toLowerCase().endsWith(extension)
-    ? candidate
-    : `${stripExtension(candidate)}${extension}`;
-};
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error && error.message ? error.message : String(error || 'Unknown export error');
@@ -154,6 +145,14 @@ const buildManifest = (
     height: project.document.pageSize.height,
     unitMode: project.document.pageSize.unitMode,
     dpi: project.document.pageSize.dpi,
+  },
+  rendering: {
+    sourceDpi: project.document.pageSize.dpi,
+    previewDpi: project.exportSettings?.dpi ?? project.document.pageSize.dpi,
+    pdfImageDpi: Math.min(
+      200,
+      project.exportSettings?.dpi ?? project.document.pageSize.dpi
+    ),
   },
   files: artifacts.map((artifact) => ({
     fileName: artifact.fileName,
@@ -218,9 +217,13 @@ export const generateProductForgeArtifacts = async (
   const project = normalizeArtifactProjectPayload(projectPayload, generatedAt);
   const exportManager = options.exportManager ?? advancedExportManager;
   const productTitle = project.productMetadata?.title || project.metadata.name || project.projectName;
-  const slug = project.metadata.slug || slugify(productTitle);
-  const pdfFileName = withExtension(project.exportSettings?.pdfFileName, '.pdf', slug);
-  const metadataFileName = `${slug}-metadata.json`;
+  const slug = sanitizeProductForgeSlug(project.metadata.slug || productTitle);
+  const pdfFileName = sanitizeProductForgeFileName(
+    project.exportSettings?.pdfFileName,
+    '.pdf',
+    slug
+  );
+  const metadataFileName = 'metadata.json';
   const includePdf = options.includePdf ?? true;
   const includePreviews = options.includePreviews ?? true;
   const includeMetadata = options.includeMetadata ?? true;
@@ -235,6 +238,7 @@ export const generateProductForgeArtifacts = async (
     includeBackground: project.exportSettings?.includeBackground ?? true,
     backgroundColor: project.document.background?.value,
     dpi: project.exportSettings?.dpi ?? project.document.pageSize.dpi,
+    sourceDpi: project.document.pageSize.dpi,
     fileName: stripExtension(pdfFileName),
     imageAssets: options.imageAssets ?? project.assets ?? {},
   };
@@ -243,6 +247,9 @@ export const generateProductForgeArtifacts = async (
   if (includePdf) {
     try {
       const blob = await exportManager.exportPagesPdfBlob(project.pages as ProjectPage[], exportOptions);
+      if (!blob || blob.size <= 0) {
+        throw new Error('Printable PDF export produced an empty blob.');
+      }
       artifacts.push({
         id: 'printable-pdf',
         kind: 'printable-pdf',
@@ -274,7 +281,7 @@ export const generateProductForgeArtifacts = async (
 
   for (let index = 0; index < project.pages.length; index += 1) {
     const pageNumber = index + 1;
-    const fileName = withExtension(
+    const fileName = sanitizeProductForgeFileName(
       previewFileNames[index],
       '.png',
       `${slug}-preview-page-${String(pageNumber).padStart(2, '0')}`
@@ -303,7 +310,7 @@ export const generateProductForgeArtifacts = async (
         }
       );
       const blob = exportedPage?.blob;
-      if (!blob) {
+      if (!blob || blob.size <= 0) {
         throw new Error(`Preview page ${pageNumber} did not produce a PNG blob.`);
       }
       artifacts.push({

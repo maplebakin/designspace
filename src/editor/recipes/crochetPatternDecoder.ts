@@ -7,7 +7,7 @@ export const crochetPatternDecoderRecipe: ProductRecipe = {
   displayName: 'Crochet Pattern Decoder Kit',
   starterDescription:
     'Break down crochet patterns into abbreviations, stitch notes, gauge checks, row tracking, and modification notes.',
-  starterOutputHint: 'PDF + previews + metadata + README/listing via Product Forge ZIP.',
+  starterOutputHint: 'Printable PDF + page previews + portable product metadata.',
   defaultPageSize: {
     presetId: 'us-letter',
     width: 2550,

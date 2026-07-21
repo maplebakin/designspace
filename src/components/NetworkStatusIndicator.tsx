@@ -1,19 +1,10 @@
 import { useEffect, useState } from 'react';
 import { WifiOff, Wifi } from 'lucide-react';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
-import { pwaOfflineManager } from '../editor/offline/pwaOfflineManager';
-import { useEditorStore } from '../editor/state/editorStore';
 
 export function NetworkStatusIndicator() {
   const { isOnline, isSlowConnection, effectiveType } = useNetworkStatus();
-  const [hasOfflineState, setHasOfflineState] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  const setCanvasObjects = useEditorStore((state) => state.setCanvasObjects);
-  const setProjectName = useEditorStore((state) => state.setProjectName);
-
-  useEffect(() => {
-    void pwaOfflineManager.hasOfflineState().then(setHasOfflineState);
-  }, [isOnline]);
 
   // Auto-expand when going offline
   useEffect(() => {
@@ -30,6 +21,7 @@ export function NetworkStatusIndicator() {
 
   return (
     <div
+      id="network-status-details"
       className={`fixed bottom-20 left-4 z-50 rounded-2xl border backdrop-blur-[var(--ui-blur)] shadow-[var(--ui-shadow-strong)] transition-all duration-300 ${
         isOffline
           ? 'border-[color:var(--warm-rose)]/40 bg-[color:var(--warm-rose)]/12'
@@ -37,8 +29,12 @@ export function NetworkStatusIndicator() {
       }`}
     >
       <button
+        type="button"
         onClick={() => setIsExpanded(!isExpanded)}
         className="flex items-center gap-2 px-4 py-2.5"
+        aria-expanded={isExpanded}
+        aria-controls="network-status-message"
+        aria-label={isOffline ? 'Offline status' : `Slow network status: ${effectiveType}`}
       >
         <div className={`relative flex items-center justify-center ${isOffline ? 'text-[color:var(--warm-rose)]' : 'text-amber-600'}`}>
           {isOffline ? (
@@ -59,32 +55,16 @@ export function NetworkStatusIndicator() {
       </button>
 
       {isExpanded && (
-        <div className={`px-4 pb-3 pt-0 border-t ${
+        <div id="network-status-message" className={`max-w-xs px-4 pb-3 pt-0 border-t ${
           isOffline ? 'border-[color:var(--warm-rose)]/20' : 'border-amber-300/40'
         }`}>
           <p className={`text-[10px] uppercase tracking-widest mt-2 ${
             isOffline ? 'text-[color:var(--warm-ink)]/70' : 'text-amber-700/80'
           }`}>
             {isOffline
-              ? 'Your work is saved locally. Changes will sync when you reconnect.'
+              ? 'You can keep working in this browser session. Use File → Save to Library or Download Project File for a durable copy; Design Space does not sync projects to a server.'
               : 'Some features may load slowly.'}
           </p>
-
-          {isOffline && hasOfflineState && (
-            <button
-              type="button"
-              onClick={() => {
-                void pwaOfflineManager.loadOfflineState().then((snapshot) => {
-                  if (!snapshot) return;
-                  setProjectName(snapshot.projectName);
-                  setCanvasObjects(snapshot.canvasObjects);
-                });
-              }}
-              className="mt-3 w-full rounded-xl border border-[color:var(--warm-rose)]/30 bg-[color:var(--warm-cream)] px-3 py-2 text-[10px] uppercase tracking-widest font-medium text-[color:var(--warm-ink)] hover:bg-[color:var(--warm-ivory)] transition-colors"
-            >
-              Restore Last Snapshot
-            </button>
-          )}
         </div>
       )}
     </div>

@@ -116,7 +116,9 @@ export const LayersPanel: React.FC = () => {
 
   const applyLayerOrder = (nextOrder: Layer[]) => {
     if (!canvas) return;
-    const orderedObjects = nextOrder
+    // The panel is displayed front-to-back; Fabric stores its object array
+    // back-to-front. Reverse the UI order before applying canvas indices.
+    const orderedObjects = [...nextOrder].reverse()
       .map((layer) => layersById[layer.id])
       .filter((obj): obj is fabric.Object => !!obj);
     if (orderedObjects.length === 0) return;
@@ -193,8 +195,7 @@ export const LayersPanel: React.FC = () => {
       if (event?.shiftKey) {
         const object = findObjectById(id);
         if (canvas && object) {
-          selectObjectById(id);
-          toggleObjectLock();
+          toggleObjectLock(id);
           requestLayerSync();
         }
         return;

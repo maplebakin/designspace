@@ -119,6 +119,21 @@ const buildCanvasData = (canvasData: any, objects: any[]) => {
   return { ...canvasData, objects };
 };
 
+const mapSerializedObjectTree = (
+  objects: any[],
+  mapper: (object: any) => any
+): any[] => objects.map((object) => {
+  if (!object || typeof object !== 'object') return object;
+  const mappedChildren = Array.isArray(object.objects)
+    ? mapSerializedObjectTree(object.objects, mapper)
+    : object.objects;
+  return mapper(
+    Array.isArray(object.objects)
+      ? { ...object, objects: mappedChildren }
+      : object
+  );
+});
+
 export const prepareCanvasDataForPersistence = (
   canvasData: any,
   imageAssets: Record<string, string>
@@ -128,7 +143,7 @@ export const prepareCanvasDataForPersistence = (
     return { canvasData, imageAssets };
   }
   let nextAssets = imageAssets;
-  const nextObjects = objects.map((obj: any) => {
+  const nextObjects = mapSerializedObjectTree(objects, (obj: any) => {
     if (!obj || obj.type !== 'image') return obj;
     const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : uuidv4();
     const src = typeof obj.src === 'string' ? obj.src : '';
@@ -146,6 +161,9 @@ export const prepareCanvasDataForPersistence = (
         const objectUrl = createObjectUrlFromDataUrl(src, id);
         nextAssets = { ...nextAssets, [id]: objectUrl };
         assetUrl = objectUrl;
+      } else {
+        nextAssets = { ...nextAssets, [id]: src };
+        assetUrl = src;
       }
     }
     if (assetUrl) {
@@ -172,7 +190,7 @@ export const hydrateCanvasDataWithAssets = (
   }
   return {
     ...buildCanvasData(canvasData, objects),
-    objects: objects.map((obj: any) => {
+    objects: mapSerializedObjectTree(objects, (obj: any) => {
       if (!obj || obj.type !== 'image') return obj;
       const id = typeof obj.id === 'string' ? obj.id : '';
       const assetUrl = id ? imageAssets[id] : '';
@@ -199,14 +217,46 @@ export const parseHistorySnapshot = (snapshotStr: string): HistorySnapshot | nul
   }
 };
 
+const resolveHistoryStateAtIndex = (snapshots: string[], targetIndex: number) => {
+  let resolved: any = null;
+
+  for (let index = 0; index <= targetIndex; index += 1) {
+    const snapshot = parseHistorySnapshot(snapshots[index]);
+    if (!snapshot) return null;
+    if (snapshot.type === 'full') {
+      resolved = JSON.parse(JSON.stringify(snapshot.data));
+      continue;
+    }
+    if (!resolved) return null;
+
+    const currentObjects = (getCanvasObjects(resolved) || []) as SerializedObject[];
+    const removedIds = new Set(snapshot.data.removed.map((object) => object.id));
+    const patchesById = new Map(snapshot.data.changed.map((patch) => [patch.id, patch.next]));
+    const nextObjects = currentObjects
+      .filter((object) => !removedIds.has(object.id))
+      .map((object) => {
+        const patch = patchesById.get(object.id);
+        return patch ? { ...object, ...patch } : object;
+      });
+    nextObjects.push(...snapshot.data.added);
+    resolved = buildCanvasData(resolved, nextObjects);
+  }
+
+  return resolved;
+};
+
 const collectImageAssetCounts = (objects: SerializedObject[]) => {
   const counts = new Map<string, number>();
-  objects.forEach((obj) => {
+  const visit = (obj: any) => {
+    if (Array.isArray(obj?.objects)) {
+      obj.objects.forEach(visit);
+    }
     if (!obj || obj.type !== 'image') return;
     const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : '';
     if (!id) return;
     counts.set(id, (counts.get(id) ?? 0) + 1);
-  });
+  };
+  objects.forEach(visit);
   return counts;
 };
 
@@ -285,7 +335,7 @@ export const applyAssetRefCounts = (
 const hydrateSerializedObjectsWithAssets = (
   objects: SerializedObject[],
   imageAssets: Record<string, string>
-) => objects.map((obj) => {
+) => mapSerializedObjectTree(objects, (obj) => {
   if (!obj || obj.type !== 'image') return obj;
   const id = typeof obj.id === 'string' ? obj.id : '';
   const assetUrl = id ? imageAssets[id] : '';
@@ -628,18 +678,18 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
           const imageAssets = _context.getImageAssets();
 
           if (snapshot.type === 'full') {
-            const targetSnapshot = parseHistorySnapshot(targetSnapshotStr);
-            if (!targetSnapshot || targetSnapshot.type !== 'full') return;
-            const hydratedState = hydrateCanvasDataWithAssets(targetSnapshot.data, imageAssets);
-            const historyObjects = (getCanvasObjects(targetSnapshot.data) || []) as SerializedObject[];
+            const targetState = resolveHistoryStateAtIndex(get()._snapshots, get().historyIndex);
+            if (!targetState) return;
+            const hydratedState = hydrateCanvasDataWithAssets(targetState, imageAssets);
+            const historyObjects = (getCanvasObjects(targetState) || []) as SerializedObject[];
             await canvas.loadFromJSON(hydratedState, reviveCustomFabricProps);
-            _context.setBackground?.(typeof targetSnapshot.data?.background === 'string' ? targetSnapshot.data.background : null);
+            _context.setBackground?.(typeof targetState?.background === 'string' ? targetState.background : null);
             canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();
             set({
               lastHistorySnapshot: {
                 objects: historyObjects,
-                background: targetSnapshot.data?.background,
+                background: targetState?.background,
               },
             });
             if (_context.clearSelection) {

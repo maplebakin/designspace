@@ -133,22 +133,39 @@ type PersistPayload = {
   [key: string]: unknown;
 };
 
-const removeUserTemplatesKey = (payload: unknown): string | null => {
+const LEGACY_VOLATILE_EDITOR_KEYS = [
+  'userTemplates',
+  'assets',
+  'pages',
+  'activePageIndex',
+  'productProjectFields',
+  'isDirty',
+  'autoSaveStatus',
+  'saveStatus',
+] as const;
+
+const removeLegacyVolatileEditorKeys = (payload: unknown): string | null => {
   if (!isObject(payload)) return null;
 
   const parsedPayload = payload as PersistPayload;
   if (isObject(parsedPayload.state)) {
     const nextState = { ...parsedPayload.state };
-    if (!('userTemplates' in nextState)) return null;
-    delete nextState.userTemplates;
+    const changed = LEGACY_VOLATILE_EDITOR_KEYS.some((key) => {
+      if (!(key in nextState)) return false;
+      delete nextState[key];
+      return true;
+    });
+    if (!changed) return null;
     return JSON.stringify({ ...parsedPayload, state: nextState });
   }
 
-  if ('userTemplates' in parsedPayload) {
-    const nextPayload: Record<string, unknown> = { ...parsedPayload };
-    delete nextPayload.userTemplates;
-    return JSON.stringify(nextPayload);
-  }
+  const nextPayload: Record<string, unknown> = { ...parsedPayload };
+  const changed = LEGACY_VOLATILE_EDITOR_KEYS.some((key) => {
+    if (!(key in nextPayload)) return false;
+    delete nextPayload[key];
+    return true;
+  });
+  if (changed) return JSON.stringify(nextPayload);
 
   return null;
 };
@@ -206,7 +223,7 @@ export const migrateFromLocalStorage = async (): Promise<TemplateRecord[]> => {
     migrated.push(saved);
   }
 
-  const updatedPayload = removeUserTemplatesKey(parsed);
+  const updatedPayload = removeLegacyVolatileEditorKeys(parsed);
   if (updatedPayload) {
     window.localStorage.setItem('designspace-editor', updatedPayload);
   }

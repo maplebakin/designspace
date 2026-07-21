@@ -4,7 +4,12 @@ import { join, relative } from 'node:path';
 import { captureCanvasState } from '../src/editor/utils/serialization';
 import { isPersistableCanvasObject, isUserObject } from '../src/editor/utils/objectUtils';
 import { useCanvasStore } from '../src/editor/state/useCanvasStore';
-import { useHistoryStore } from '../src/editor/state/useHistoryStore';
+import {
+  hydrateCanvasDataWithAssets,
+  prepareCanvasDataForPersistence,
+  useHistoryStore,
+} from '../src/editor/state/useHistoryStore';
+import { useEditorStore } from '../src/editor/state/editorStore';
 
 const repoRoot = process.cwd();
 const editorRoot = join(repoRoot, 'src/editor');
@@ -61,6 +66,49 @@ describe('editor state integrity harness', () => {
   });
 
   describe('serialization and persistence invariants', () => {
+    it('keeps volatile project payloads and session blob assets out of localStorage', () => {
+      window.localStorage.removeItem('designspace-editor');
+      const oversizedThumbnail = `data:image/png;base64,${'A'.repeat(50_000)}`;
+
+      useEditorStore.setState({
+        pages: [{
+          id: 'large-page',
+          name: 'Large page',
+          canvasData: { objects: [{ id: 'shape', type: 'rect' }] },
+          thumbnail: oversizedThumbnail,
+        }],
+        productProjectFields: { productMetadata: { title: 'Large product' } } as any,
+        assets: [{ id: 'session-asset', url: 'blob:session-only', tags: [] }],
+        isDirty: true,
+      });
+
+      const raw = window.localStorage.getItem('designspace-editor');
+      expect(raw).not.toBeNull();
+      const persisted = JSON.parse(raw || '{}').state;
+      expect(persisted.pages).toBeUndefined();
+      expect(persisted.productProjectFields).toBeUndefined();
+      expect(persisted.assets).toBeUndefined();
+      expect(persisted.isDirty).toBeUndefined();
+      expect(raw?.length).toBeLessThan(10_000);
+    });
+
+    it('prepares and hydrates image assets recursively inside groups', () => {
+      const source = {
+        objects: [{
+          id: 'group-1',
+          type: 'group',
+          objects: [{ id: 'image-1', type: 'image', src: 'https://assets.test/image.png' }],
+        }],
+      };
+
+      const prepared = prepareCanvasDataForPersistence(source, {});
+      expect(prepared.canvasData.objects[0].objects[0].src).toBe('image-1');
+      expect(prepared.imageAssets['image-1']).toBe('https://assets.test/image.png');
+
+      const hydrated = hydrateCanvasDataWithAssets(prepared.canvasData, prepared.imageAssets);
+      expect(hydrated.objects[0].objects[0].src).toBe('https://assets.test/image.png');
+    });
+
     it('captures document size from useCanvasStore and preserves page background', () => {
       useCanvasStore.getState().setCanvasSize(1234, 567);
       const canvas = {
@@ -155,7 +203,8 @@ describe('editor state integrity harness', () => {
     it('prevents page deletion from saving the old canvas into the newly active page', () => {
       const editorStore = readFileSync(join(editorRoot, 'state/editorStore.ts'), 'utf8');
 
-      expect(editorStore).toContain('switchToPage: async (index, options)');
+      expect(editorStore).toContain('switchToPage: (index, options)');
+      expect(editorStore).toContain('pageSwitchQueue.then(performSwitch, performSwitch)');
       expect(editorStore).toContain('options?.saveCurrent !== false');
       expect(editorStore).toContain('switchToPage(safeNextIndex, { saveCurrent: false })');
     });

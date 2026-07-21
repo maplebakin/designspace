@@ -1,4 +1,5 @@
 import Dexie, { Table } from 'dexie';
+import type { EditorMode } from './project/projectSchema';
 
 export interface Project {
   id?: string;
@@ -6,6 +7,9 @@ export interface Project {
   lastModified: Date;
   thumbnail?: string; // Base64 encoded thumbnail
   canvasDataId: string; // Reference to canvasData entry
+  // This is intentionally not indexed. Existing rows omit it and normalize to
+  // canvas, so adding document routing metadata needs no IndexedDB migration.
+  editorMode?: EditorMode;
 }
 
 export interface CanvasData {
@@ -69,7 +73,12 @@ export class DesignSpaceDB extends Dexie {
     this.templates = this.table('templates');
   }
 
-  async saveProject(name: string, jsonPayload: string, thumbnail?: string): Promise<string> {
+  async saveProject(
+    name: string,
+    jsonPayload: string,
+    thumbnail?: string,
+    editorMode: EditorMode = 'canvas'
+  ): Promise<string> {
     const projectId = crypto.randomUUID();
     const canvasDataId = crypto.randomUUID();
     
@@ -88,14 +97,21 @@ export class DesignSpaceDB extends Dexie {
         name,
         lastModified: new Date(),
         thumbnail,
-        canvasDataId
+        canvasDataId,
+        editorMode,
       });
       
       return projectId;
     });
   }
 
-  async updateProject(projectId: string, name: string, jsonPayload: string, thumbnail?: string): Promise<void> {
+  async updateProject(
+    projectId: string,
+    name: string,
+    jsonPayload: string,
+    thumbnail?: string,
+    editorMode?: EditorMode
+  ): Promise<void> {
     return this.transaction('rw', this.projects, this.canvasData, async () => {
       // Update canvas data
       await this.canvasData.where('projectId').equals(projectId).modify({
@@ -106,7 +122,8 @@ export class DesignSpaceDB extends Dexie {
       await this.projects.update(projectId, {
         name,
         lastModified: new Date(),
-        thumbnail
+        thumbnail,
+        ...(editorMode ? { editorMode } : {}),
       });
     });
   }
@@ -170,7 +187,8 @@ export class DesignSpaceDB extends Dexie {
         name: newName,
         lastModified: new Date(),
         thumbnail: project.thumbnail, // Copy the thumbnail
-        canvasDataId: newCanvasDataId
+        canvasDataId: newCanvasDataId,
+        editorMode: project.editorMode,
       });
 
       return newProjectId;

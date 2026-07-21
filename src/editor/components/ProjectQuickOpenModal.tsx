@@ -8,6 +8,7 @@ type ProjectItem = {
   name: string;
   lastModified: Date;
   thumbnail?: string;
+  editorMode: 'canvas' | 'document';
 };
 
 const toProjectItem = (project: any): ProjectItem | null => {
@@ -21,6 +22,7 @@ const toProjectItem = (project: any): ProjectItem | null => {
     name,
     lastModified: timestamp,
     thumbnail: typeof project.thumbnail === 'string' ? project.thumbnail : undefined,
+    editorMode: project.editorMode === 'document' ? 'document' : 'canvas',
   };
 };
 
@@ -52,6 +54,7 @@ export const ProjectQuickOpenModal: React.FC = () => {
         const normalized = allProjects
           .map(toProjectItem)
           .filter((project): project is ProjectItem => project !== null)
+          .filter((project) => project.editorMode === 'canvas')
           .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
         setProjects(normalized);
         setSelectedIndex(0);

@@ -117,10 +117,11 @@ const DesignTab: React.FC = () => {
 };
 
 const UploadsDropdown: React.FC = () => {
-    const { canvas, addAssetToLibrary } = useEditorStore(
+    const { canvas, addAssetToLibrary, setToastMessage } = useEditorStore(
         (state) => ({
             canvas: state.canvas,
             addAssetToLibrary: state.addAssetToLibrary,
+            setToastMessage: state.setToastMessage,
         }),
         shallow
     );
@@ -139,7 +140,7 @@ const UploadsDropdown: React.FC = () => {
         const result = await loadImageFromFile(file);
 
         if (!result.success) {
-            console.error('Failed to load image:', result.errorMessage);
+            setToastMessage(result.errorMessage);
             if (imageInputRef.current) imageInputRef.current.value = '';
             return;
         }
@@ -177,21 +178,28 @@ const UploadsDropdown: React.FC = () => {
         const result = await loadSvgFromFile(file);
 
         if (!result.success) {
-            console.error('Failed to load SVG:', result.errorMessage);
+            setToastMessage(result.errorMessage);
             if (svgInputRef.current) svgInputRef.current.value = '';
             return;
         }
 
-        // Add SVG to canvas
-        objectFactories.addSvgFromUrl(canvas, result.asset);
+        try {
+            await objectFactories.addSvgFromString(canvas, result.asset);
+        } catch (error) {
+            setToastMessage(error instanceof Error ? error.message : 'Failed to import SVG.');
+        }
 
         if (svgInputRef.current) svgInputRef.current.value = '';
     };
 
-    const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handlePdfFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file && canvas) {
-            loadPdfAsBackground(file, canvas);
+            try {
+                await loadPdfAsBackground(file, canvas);
+            } catch (error) {
+                setToastMessage(error instanceof Error ? error.message : 'Failed to import PDF background.');
+            }
         }
         if(pdfInputRef.current) pdfInputRef.current.value = '';
     }
@@ -206,7 +214,7 @@ const UploadsDropdown: React.FC = () => {
                 items={[
                     { label: 'Upload Image', icon: <FileImage className={INSERT_ICON} />, onClick: () => imageInputRef.current?.click() },
                     { label: 'Import SVG', icon: <FileUp className={INSERT_ICON} />, onClick: () => svgInputRef.current?.click() },
-                    { label: 'PDF Background', icon: <FileText className={INSERT_ICON} />, onClick: () => pdfInputRef.current?.click() },
+                    { label: 'PDF Page Background', icon: <FileText className={INSERT_ICON} />, onClick: () => pdfInputRef.current?.click() },
                 ]}
             />
         </div>

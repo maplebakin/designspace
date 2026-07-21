@@ -3,6 +3,7 @@ import { shallow } from 'zustand/shallow';
 import { ChevronDown, FileText } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
 import { PopoverSurface } from './PopoverSurface';
+import { inspectDesignSpaceProjectFile } from '../project/projectOpenService';
 
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
 
@@ -13,13 +14,21 @@ interface FileDropdownProps {
 export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace }) => {
   const [isOpen, setIsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { downloadProjectFile, loadProjectFile, projectName, saveProject, setProjectPresetsOpen } = useEditorStore(
+  const {
+    downloadProjectFile,
+    loadProjectFile,
+    projectName,
+    saveProject,
+    setProjectPresetsOpen,
+    setToastMessage,
+  } = useEditorStore(
     (state) => ({
       downloadProjectFile: state.downloadProjectFile,
       loadProjectFile: state.loadProjectFile,
       projectName: state.projectName,
       saveProject: state.saveProject,
       setProjectPresetsOpen: state.setProjectPresetsOpen,
+      setToastMessage: state.setToastMessage,
     }),
     shallow
   );
@@ -32,7 +41,16 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    await loadProjectFile(file);
+    try {
+      const inspection = await inspectDesignSpaceProjectFile(file);
+      if (inspection.editorMode === 'document') {
+        setToastMessage('Open document projects from the Projects dashboard.');
+      } else {
+        await loadProjectFile(file);
+      }
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : 'Failed to open project file.');
+    }
     event.target.value = '';
     setIsOpen(false);
   };

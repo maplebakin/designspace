@@ -179,8 +179,9 @@ test.describe('Design Space printable product studio browser smoke', () => {
     expect((await snapshot(page)).viewportTransform?.[0]).toBeLessThan(1);
 
     await page.getByTestId('editor-toolbar').getByRole('button', { name: 'Export' }).click();
-    await expect(page.getByText('Product Bundle / Product Forge ZIP')).toBeVisible();
-    await expect(page.getByTestId('download-product-zip')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Export' })).toBeVisible();
+    await expect(page.getByText('Product Bundle / Product Forge ZIP')).toHaveCount(0);
+    await expect(page.getByTestId('download-product-zip')).toHaveCount(0);
     await expect(page.getByText('Quick Exports')).toBeVisible();
     await expect(page.getByText('Advanced Exports')).toBeVisible();
 

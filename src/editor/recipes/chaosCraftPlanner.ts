@@ -6,7 +6,7 @@ export const chaosCraftPlannerRecipe: ProductRecipe = {
   name: 'Chaos Craft Planner',
   displayName: 'Chaos Craft Planner',
   starterDescription: 'Generate a 10-page printable craft planner using your active theme.',
-  starterOutputHint: 'PDF + previews + metadata + README/listing via Product Forge ZIP.',
+  starterOutputHint: 'Printable PDF + page previews + portable product metadata.',
   defaultPageSize: {
     presetId: 'us-letter',
     width: 2550,

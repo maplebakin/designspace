@@ -577,31 +577,27 @@ export const addHerbProfileLayout = (canvas: fabric.Canvas) => {
 };
 
 /**
- * Loads an SVG from a URL and adds it to the canvas, linking it to the theme.
- * @param canvas The fabric.Canvas instance.
- * @param url The URL of the SVG file.
+ * Parses already-sanitized SVG markup and adds it to the canvas.
  */
-export const addSvgFromUrl = async (canvas: fabric.Canvas, url: string) => {
+export const addSvgFromString = async (canvas: fabric.Canvas, svgMarkup: string) => {
     const { themeData } = useThemeStore.getState();
     const accentColor = themeData?.brand?.accent?.value || '#A133FF';
-
-    fabric.loadSVGFromURL(url, (objects, options) => {
-        const objArray = Array.isArray(objects) ? objects : [objects];
-        objArray.forEach((obj: fabric.Object) => {
-            (obj as any).id = uuidv4();
-            (obj as any).tokenRole = 'brand.accent.value';
-            obj.set({
-                colorLocked: false,
-                fill: accentColor,
-            });
+    const { objects, options } = await fabric.loadSVGFromString(svgMarkup);
+    const objectArray = objects.filter((object): object is fabric.Object => !!object);
+    if (objectArray.length === 0) {
+        throw new Error('The SVG did not contain any supported artwork.');
+    }
+    objectArray.forEach((object) => {
+        (object as any).id = uuidv4();
+        (object as any).tokenRole = 'brand.accent.value';
+        object.set({
+            colorLocked: false,
+            fill: accentColor,
         });
-
-        const group = new fabric.Group([...objArray], {
-            ...options,
-        });
-        (group as any).id = uuidv4();
-
-        group.scaleToWidth(getDefaultLength(2, DEFAULT_PX_SVG_WIDTH));
-        insertFabricObject(canvas, () => group, { activate: true });
     });
+
+    const group = new fabric.Group(objectArray, { ...options });
+    (group as any).id = uuidv4();
+    group.scaleToWidth(getDefaultLength(2, DEFAULT_PX_SVG_WIDTH));
+    return insertFabricObject(canvas, () => group, { activate: true });
 };

@@ -51,6 +51,111 @@ export interface FileToAssetOptions {
     center?: boolean;
 }
 
+export const MAX_RASTER_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_RASTER_PIXELS = 100_000_000;
+export const MAX_SVG_FILE_BYTES = 5 * 1024 * 1024;
+
+const readBlobBytes = (blob: Blob) => new Promise<Uint8Array>((resolve, reject) => {
+    if (typeof blob.arrayBuffer === 'function') {
+        blob.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer))).catch(reject);
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+        if (reader.result instanceof ArrayBuffer) {
+            resolve(new Uint8Array(reader.result));
+        } else {
+            reject(new Error('Failed to inspect the file signature.'));
+        }
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to inspect the file signature.'));
+    reader.readAsArrayBuffer(blob);
+});
+
+type RasterKind = 'png' | 'jpeg' | 'webp';
+
+const detectRasterKind = async (file: File): Promise<RasterKind | null> => {
+    const bytes = await readBlobBytes(file.slice(0, 12));
+    if (
+        bytes.length >= 8
+        && bytes[0] === 0x89
+        && bytes[1] === 0x50
+        && bytes[2] === 0x4e
+        && bytes[3] === 0x47
+        && bytes[4] === 0x0d
+        && bytes[5] === 0x0a
+        && bytes[6] === 0x1a
+        && bytes[7] === 0x0a
+    ) return 'png';
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+        return 'jpeg';
+    }
+    if (
+        bytes.length >= 12
+        && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF'
+        && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
+    ) return 'webp';
+    return null;
+};
+
+const EXPECTED_RASTER_MIME: Record<RasterKind, string[]> = {
+    png: ['image/png'],
+    jpeg: ['image/jpeg', 'image/jpg'],
+    webp: ['image/webp'],
+};
+
+export const validateRasterImageFile = async (file: File): Promise<RasterKind> => {
+    if (file.size <= 0) {
+        throw new AssetLoadingError('The selected image is empty.', 'INVALID_FILE');
+    }
+    if (file.size > MAX_RASTER_FILE_BYTES) {
+        throw new AssetLoadingError('Images must be 25 MB or smaller.', 'INVALID_FILE');
+    }
+    const kind = await detectRasterKind(file);
+    if (!kind) {
+        throw new AssetLoadingError('Only valid PNG, JPEG, and WebP images are supported.', 'UNSUPPORTED_FORMAT');
+    }
+    if (file.type && !EXPECTED_RASTER_MIME[kind].includes(file.type.toLowerCase())) {
+        throw new AssetLoadingError('The image contents do not match its declared file type.', 'INVALID_FILE');
+    }
+    return kind;
+};
+
+export const sanitizeSvgMarkup = (source: string): string => {
+    if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        throw new AssetLoadingError('SVG validation is unavailable in this environment.', 'PARSE_ERROR');
+    }
+    const document = new DOMParser().parseFromString(source, 'image/svg+xml');
+    if (document.querySelector('parsererror') || document.documentElement.localName.toLowerCase() !== 'svg') {
+        throw new AssetLoadingError('The selected file is not a valid SVG document.', 'PARSE_ERROR');
+    }
+
+    document.querySelectorAll('script, style, foreignObject, iframe, object, embed').forEach((node) => node.remove());
+    document.querySelectorAll('*').forEach((element) => {
+        Array.from(element.attributes).forEach((attribute) => {
+            const name = attribute.name.toLowerCase();
+            const value = attribute.value.trim();
+            const normalizedValue = Array.from(value)
+                .filter((character) => character.charCodeAt(0) > 0x20)
+                .join('')
+                .toLowerCase();
+            const isEventHandler = name.startsWith('on');
+            const isUnsafeStyle = name === 'style' && /(?:url\s*\(|expression\s*\()/i.test(value);
+            const isLink = name === 'href' || name === 'xlink:href';
+            const isUnsafeLink = isLink
+                && value.length > 0
+                && !value.startsWith('#')
+                && !/^data:image\/(?:png|jpeg|webp);base64,/i.test(value);
+            const isScriptValue = normalizedValue.startsWith('javascript:') || normalizedValue.startsWith('vbscript:');
+            if (isEventHandler || isUnsafeStyle || isUnsafeLink || isScriptValue) {
+                element.removeAttribute(attribute.name);
+            }
+        });
+    });
+
+    return new XMLSerializer().serializeToString(document.documentElement);
+};
+
 // --- BLOB URL REGISTRY ---
 
 /**
@@ -228,6 +333,12 @@ export async function loadFabricImage(
                 'LOAD_FAILED'
             );
         }
+        if (img.width * img.height > MAX_RASTER_PIXELS) {
+            throw new AssetLoadingError(
+                'The image is too large to edit safely (maximum 100 megapixels).',
+                'INVALID_FILE'
+            );
+        }
 
         // Set custom properties
         (img as any).id = id;
@@ -286,14 +397,10 @@ export async function loadImageFromFile(
     file: File,
     options: ImageLoadOptions = {}
 ): Promise<AssetLoadResult<fabric.FabricImage>> {
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-        return createErrorResult(
-            new AssetLoadingError(
-                `Invalid file type: ${file.type}. Expected an image.`,
-                'INVALID_FILE'
-            )
-        );
+    try {
+        await validateRasterImageFile(file);
+    } catch (error) {
+        return createErrorResult(error);
     }
 
     const { url: blobUrl, id } = createTrackedBlobUrl(file, 'image', options.id);
@@ -332,8 +439,14 @@ export async function loadSvgFromFile(
 ): Promise<AssetLoadResult<string>> {
     const id = uuidv4();
 
-    // Validate file type
-    if (file.type !== 'image/svg+xml' && !file.name.endsWith('.svg')) {
+    if (file.size <= 0 || file.size > MAX_SVG_FILE_BYTES) {
+        return createErrorResult(
+            new AssetLoadingError('SVG files must be non-empty and 5 MB or smaller.', 'INVALID_FILE')
+        );
+    }
+
+    // Require an SVG extension and, when supplied, the matching MIME type.
+    if (!file.name.toLowerCase().endsWith('.svg') || (file.type && file.type !== 'image/svg+xml')) {
         return createErrorResult(
             new AssetLoadingError(
                 `Invalid file type: ${file.type}. Expected SVG.`,
@@ -359,9 +472,10 @@ export async function loadSvgFromFile(
                     return;
                 }
 
+                const sanitizedSvg = sanitizeSvgMarkup(svgString);
                 resolve({
                     success: true,
-                    asset: svgString,
+                    asset: sanitizedSvg,
                     id
                 });
             } catch (error) {
@@ -397,13 +511,14 @@ export async function loadStickerFromFile(
     file: File,
     options: ImageLoadOptions = {}
 ): Promise<AssetLoadResult<fabric.FabricImage>> {
-    // Validate file type (stickers must be PNG)
-    if (file.type !== 'image/png') {
+    try {
+        const kind = await validateRasterImageFile(file);
+        if (kind !== 'png') {
+            throw new AssetLoadingError('Stickers must be valid PNG files.', 'INVALID_FILE');
+        }
+    } catch (error) {
         return createErrorResult(
-            new AssetLoadingError(
-                `Invalid file type: ${file.type}. Stickers must be PNG.`,
-                'INVALID_FILE'
-            )
+            error
         );
     }
 

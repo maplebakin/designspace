@@ -114,7 +114,6 @@ const openBlankEditor = async (page: Page) => {
   await page.getByTestId('dashboard-new-project').click();
   await page.getByTestId('project-preset-instagram-square').click();
   await expect(page.getByTestId('editor-shell')).toBeVisible();
-  await expect(page.getByTestId('editor-toolbar')).toBeVisible();
   await expect(page.getByTestId('design-canvas')).toBeVisible();
   await page.waitForFunction(() => (window as any).__DESIGN_SPACE_QA__?.snapshot().canvasReady === true);
 };
@@ -193,12 +192,32 @@ test.describe('browser Fabric editor smoke', () => {
     await expect(page.getByTestId('design-canvas')).toBeVisible();
     // Right panel tabs are visible and not clipped
     await expect(page.getByTestId('right-tab-layers')).toBeVisible();
-    await expect(page.getByTestId('right-tab-properties')).toBeVisible();
+    await expect(page.getByTestId('right-tab-object')).toBeVisible();
     // Left panel nav buttons are visible (left panel shows at 1280px default viewport)
     await expect(page.getByTestId('nav-shapes')).toBeVisible();
     await expect(page.getByTestId('nav-insert')).toBeVisible();
     await expect(page.getByTestId('nav-assets')).toBeVisible();
 
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('keeps both editing sidebars usable at the default 1200px desktop window width', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await openBlankEditor(page);
+
+    await expect(page.getByTestId('editor-toolbar')).toBeVisible();
+    await expect(page.getByTestId('left-panel')).toBeVisible();
+    await expect(page.getByTestId('right-panel')).toBeVisible();
+    await expect(page.getByTestId('right-tab-object')).toBeVisible();
+
+    await page.getByTestId('nav-shapes').click();
+    await page.getByTestId('shape-rectangle').click();
+    await expect.poll(async () => (await snapshot(page)).objects.some((object) => object.type === 'rect')).toBe(true);
+    await expect(page.getByTestId('right-inspector-object-panel')).toBeVisible();
+
+    const canvasBox = await page.getByTestId('canvas-workspace').boundingBox();
+    expect(canvasBox?.width).toBeGreaterThan(350);
     expect(fatalConsole).toEqual([]);
   });
 
@@ -389,7 +408,34 @@ test.describe('browser Fabric editor smoke', () => {
     const canvasBox = await page.getByTestId('design-canvas').boundingBox();
     expect(canvasBox?.width).toBeGreaterThan(20);
     expect(canvasBox?.height).toBeGreaterThan(20);
-    await expect(page.getByTestId('editor-toolbar')).toBeVisible();
+    await expect(page.getByTestId('editor-toolbar')).toBeHidden();
+    await expect(page.getByTestId('left-panel')).toBeHidden();
+    await expect(page.getByTestId('right-panel')).toBeHidden();
+    await expect(page.getByTestId('narrow-editor-notice')).toBeVisible();
+    await expect(page.getByText('Editing works best on a larger screen.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Download Project' })).toBeVisible();
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await expect(page.getByTestId('dashboard-root')).toBeVisible();
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('guards dirty work before returning to the project dashboard', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+    await page.getByTestId('nav-shapes').click();
+    await page.getByTestId('shape-rectangle').click();
+    await expect.poll(async () => (await snapshot(page)).objects.some((object) => object.type === 'rect')).toBe(true);
+
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    const dialog = page.getByTestId('unsaved-navigation-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Save before returning to Projects?')).toBeVisible();
+
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByTestId('editor-shell')).toBeVisible();
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Discard Changes' }).click();
+    await expect(page.getByTestId('dashboard-root')).toBeVisible();
     expect(fatalConsole).toEqual([]);
   });
 
@@ -1027,8 +1073,8 @@ test.describe('fabricObjectsAudit — white rectangle source', () => {
     const fatalConsole = installFatalConsoleCollector(page);
     await openBlankEditor(page);
 
-    // Open the Style tab and apply a page border with default settings
-    await page.getByTestId('right-tab-settings').click();
+    // Open the Page tab and apply a page border with default settings
+    await page.getByTestId('right-tab-page').click();
     await expect(page.getByTestId('page-border-apply')).toBeVisible();
     await page.getByTestId('page-border-apply').click();
 
