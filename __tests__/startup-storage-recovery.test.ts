@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_STORAGE_RECOVERY_PREFIX,
   MAX_SAFE_ORIGIN_STORAGE_BYTES,
+  STORAGE_RECOVERY_MARKER_KEY,
   TEMPLATE_MIGRATION_FLAG_KEY,
   getStartupStorageStatus,
   prepareStartupStorage,
@@ -62,5 +63,18 @@ describe('startup persistence recovery', () => {
     expect(getStartupStorageStatus().indexedDbBlocked).toBe(true);
     expect(JSON.parse(window.localStorage.getItem('designspace-storage-recovery-v1') || '{}'))
       .toMatchObject({ dataPreservedInPlace: true });
+  });
+
+  it('exits recovery mode and clears the marker after storage is healthy again', async () => {
+    window.localStorage.setItem(STORAGE_RECOVERY_MARKER_KEY, JSON.stringify({
+      reason: 'origin-storage-oversized',
+      dataPreservedInPlace: true,
+    }));
+
+    const status = await prepareStartupStorage();
+
+    expect(status.indexedDbBlocked).toBe(false);
+    expect(status.reason).toBe('healthy');
+    expect(window.localStorage.getItem(STORAGE_RECOVERY_MARKER_KEY)).toBeNull();
   });
 });

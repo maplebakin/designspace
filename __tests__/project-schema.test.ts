@@ -152,6 +152,43 @@ describe('project schema normalization', () => {
     expect(normalized.pages[0].canvasData).toBe(canvasData);
   });
 
+  it('imports a recovered portable project and preserves its forensic metadata', () => {
+    const inspection = inspectDesignSpaceProjectJson(JSON.stringify({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'canvas',
+      projectId: 'recovered-project',
+      projectName: 'Recovered Planner',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+      pages: [{
+        kind: 'canvas',
+        id: 'page-1',
+        name: 'Page 1',
+        canvasData: { objects: [] },
+        canvasSize: { width: 800, height: 600 },
+      }],
+      recovery: {
+        originalProjectId: 'legacy-project',
+        originalTimestamp: '2026-01-31T22:00:00.000Z',
+        recoveredAt: '2026-07-22T12:00:00.000Z',
+        sourceBrowserProfile: 'Google Chrome / Default',
+        sourceRecord: '000123.ldb',
+        sourceSequence: 42,
+        validationWarnings: ['Migrated legacy metadata.'],
+        assetsDeduplicated: 3,
+        complete: true,
+        payloadHash: 'abc123',
+      },
+    }));
+
+    expect(inspection.editorMode).toBe('canvas');
+    expect(inspection.payload.recovery).toEqual(expect.objectContaining({
+      originalProjectId: 'legacy-project',
+      sourceBrowserProfile: 'Google Chrome / Default',
+      assetsDeduplicated: 3,
+      complete: true,
+    }));
+  });
+
   it('round-trips and safely normalizes a v2 document payload', () => {
     const normalized = normalizeDesignSpaceProjectPayload<DocumentPage>({
       schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,

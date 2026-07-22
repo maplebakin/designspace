@@ -8,6 +8,7 @@
     "build": "npm run lint && tsc && vite build",
     "test": "vitest run",
     "test:e2e": "env -u NO_COLOR playwright test",
+    "test:recovery": "python3 -m unittest discover -s src-tauri/recovery_tools/tests -p 'test_*.py'",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "validate": "node validate-functionality.js",

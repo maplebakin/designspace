@@ -99,6 +99,19 @@ export type ProjectProductMetadata = {
   };
 };
 
+export type ProjectRecoveryMetadata = {
+  originalProjectId: string;
+  originalTimestamp?: string;
+  recoveredAt: string;
+  sourceBrowserProfile: string;
+  sourceRecord?: string;
+  sourceSequence?: number;
+  validationWarnings: string[];
+  assetsDeduplicated: number;
+  complete: boolean;
+  payloadHash?: string;
+};
+
 export type ProductProjectFields = {
   schemaVersion: DesignSpaceProjectSchemaVersion;
   editorMode: EditorMode;
@@ -116,6 +129,7 @@ export type ProductProjectFields = {
   recipe?: ProjectRecipe;
   exportSettings?: ProjectExportSettings;
   productMetadata?: ProjectProductMetadata;
+  recovery?: ProjectRecoveryMetadata;
 };
 
 export type ProductAwareProjectPayload<TPage = ExistingProjectPage> = ProductProjectFields & {
@@ -410,6 +424,28 @@ const normalizeProductMetadata = (
   };
 };
 
+const normalizeRecoveryMetadata = (value: unknown): ProjectRecoveryMetadata | undefined => {
+  if (!isObject(value)) return undefined;
+  const originalProjectId = safeString(value.originalProjectId);
+  const recoveredAt = safeString(value.recoveredAt);
+  const sourceBrowserProfile = safeString(value.sourceBrowserProfile);
+  if (!originalProjectId || !recoveredAt || !sourceBrowserProfile) return undefined;
+  return {
+    originalProjectId,
+    originalTimestamp: safeString(value.originalTimestamp),
+    recoveredAt,
+    sourceBrowserProfile,
+    sourceRecord: safeString(value.sourceRecord),
+    sourceSequence: typeof value.sourceSequence === 'number' && Number.isFinite(value.sourceSequence)
+      ? value.sourceSequence
+      : undefined,
+    validationWarnings: normalizeStringArray(value.validationWarnings) || [],
+    assetsDeduplicated: Math.max(0, Math.trunc(Number(value.assetsDeduplicated) || 0)),
+    complete: value.complete === true,
+    payloadHash: safeString(value.payloadHash),
+  };
+};
+
 const createEmptyDocumentContent = (): DocumentContentJson => ({
   type: 'doc',
   content: [{ type: 'paragraph' }],
@@ -609,6 +645,7 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     pages,
     exportSettings: normalizeExportSettings(raw.exportSettings, slug, document.pageSize.dpi),
     productMetadata: normalizeProductMetadata(raw.productMetadata, name),
+    recovery: normalizeRecoveryMetadata(raw.recovery),
 
     projectName: name,
     activePageIndex: typeof raw.activePageIndex === 'number' ? raw.activePageIndex : undefined,
@@ -638,4 +675,5 @@ export const extractProductProjectFields = (
   recipe: payload.recipe,
   exportSettings: payload.exportSettings,
   productMetadata: payload.productMetadata,
+  recovery: payload.recovery,
 });

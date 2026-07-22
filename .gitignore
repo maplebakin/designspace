@@ -41,5 +41,9 @@ yarn-error.log*
 # TypeScript cache
 *.tsbuildinfo
 
+# Python recovery test cache
+__pycache__/
+*.py[cod]
+
 # Backup files
 *.backup

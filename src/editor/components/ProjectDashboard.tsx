@@ -10,6 +10,7 @@ import {
 } from '../project/projectOpenService';
 import { useDocumentStore } from '../../document/state/documentStore';
 import { getStartupStorageStatus } from '../persistence/startupStorageRecovery';
+import { RecoveryWorkspace } from '../recovery/RecoveryWorkspace';
 
 interface ProjectItem {
   id: string;
@@ -351,6 +352,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
               </span>
             )}
           </div>
+          <RecoveryWorkspace startupBlocked={storageStatus.indexedDbBlocked} />
           {libraryError ? (
             <div
               className="project-dashboard-empty-state rounded-2xl border border-amber-500/35 bg-amber-100/10 px-5 py-6 text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]"

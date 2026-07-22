@@ -174,6 +174,12 @@ export const prepareStartupStorage = async (): Promise<StartupStorageStatus> => 
     return startupStatus;
   }
 
+  // A successful filesystem cleanup is confirmed by a healthy origin estimate
+  // on the next browser launch. Only then is the prior recovery marker stale.
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(STORAGE_RECOVERY_MARKER_KEY);
+  }
+
   if (
     typeof window !== 'undefined'
     && window.localStorage.getItem(TEMPLATE_MIGRATION_FLAG_KEY) !== 'done'
@@ -194,6 +200,19 @@ export const prepareStartupStorage = async (): Promise<StartupStorageStatus> => 
 };
 
 export const getStartupStorageStatus = () => startupStatus;
+
+export const acknowledgeSuccessfulStorageCleanup = () => {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(STORAGE_RECOVERY_MARKER_KEY);
+  }
+  startupStatus = {
+    indexedDbBlocked: false,
+    reason: 'healthy',
+    usageBytes: null,
+    quotaBytes: null,
+    quarantinedLocalStorage: startupStatus.quarantinedLocalStorage,
+  };
+};
 
 export const assertIndexedDbStartupAllowed = () => {
   if (!startupStatus.indexedDbBlocked) return;
