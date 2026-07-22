@@ -1,4 +1,9 @@
-import { db, type DesignSpaceDB, type Project } from '../db';
+import {
+  db,
+  MAX_LIBRARY_PROJECT_CHARS,
+  type DesignSpaceDB,
+  type Project,
+} from '../db';
 import {
   normalizeDesignSpaceProjectPayload,
   type DesignSpaceProjectPayload,
@@ -23,7 +28,8 @@ type ProjectInspectionOptions = {
   projectId?: string;
 };
 
-type ProjectLibraryReader = Pick<DesignSpaceDB, 'loadProject'>;
+type ProjectLibraryReader = Pick<DesignSpaceDB, 'loadProject'>
+  & Partial<Pick<DesignSpaceDB, 'quarantineProject'>>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -86,6 +92,9 @@ export const inspectDesignSpaceProjectJson = (
   jsonPayload: string,
   options: ProjectInspectionOptions = {}
 ): ProjectOpenInspection => {
+  if (jsonPayload.length > MAX_LIBRARY_PROJECT_CHARS) {
+    throw new Error('Project exceeds the 100 MB validation limit.');
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonPayload);
@@ -125,10 +134,17 @@ export const inspectLibraryProject = async (
   const result = await reader.loadProject(projectId);
   if (!result) return null;
 
-  const inspection = inspectDesignSpaceProjectJson(result.canvasData, {
-    fallbackName: result.project.name,
-    projectId,
-  });
+  let inspection: ProjectOpenInspection;
+  try {
+    inspection = inspectDesignSpaceProjectJson(result.canvasData, {
+      fallbackName: result.project.name,
+      projectId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Project data is invalid.';
+    await reader.quarantineProject?.(projectId, message);
+    throw new Error(`${message} The project was isolated in browser-library recovery data.`);
+  }
   const payload = {
     ...inspection.payload,
     projectName: result.project.name,

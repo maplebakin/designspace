@@ -9,6 +9,7 @@ import {
   inspectLibraryProject,
 } from '../project/projectOpenService';
 import { useDocumentStore } from '../../document/state/documentStore';
+import { getStartupStorageStatus } from '../persistence/startupStorageRecovery';
 
 interface ProjectItem {
   id: string;
@@ -30,7 +31,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   const [showAll, setShowAll] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  const [libraryError, setLibraryError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const storageStatus = getStartupStorageStatus();
 
   const {
     getAllProjects,
@@ -55,19 +58,37 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   }), shallow);
 
   useEffect(() => {
+    let cancelled = false;
     const run = async () => {
+      if (storageStatus.indexedDbBlocked) {
+        setLibraryError(
+          storageStatus.reason === 'origin-storage-oversized'
+            ? 'The browser library is unusually large and has been isolated so Design Space can open safely.'
+            : 'The browser library could not be inspected safely and has been isolated for recovery.'
+        );
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       try {
         const list = await getAllProjects();
+        if (cancelled) return;
         setAllProjects(
           list.map((p: any) => ({ ...p, lastModified: new Date(p.lastModified) }))
         );
+      } catch (error) {
+        if (!cancelled) {
+          setLibraryError(error instanceof Error ? error.message : 'The project library could not be loaded.');
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
     void run();
-  }, [getAllProjects]);
+    return () => {
+      cancelled = true;
+    };
+  }, [getAllProjects, storageStatus.indexedDbBlocked, storageStatus.reason]);
 
   useEffect(() => {
     if (editingProjectId) {
@@ -84,7 +105,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   const hasMoreProjects = allProjects.length > INITIAL_DISPLAY_COUNT;
 
   const formatDate = (date: Date) =>
-    new Intl.DateTimeFormat('en-US', {
+    Number.isNaN(date.getTime()) ? 'Unknown date' : new Intl.DateTimeFormat('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -330,7 +351,25 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
               </span>
             )}
           </div>
-          {isLoading ? (
+          {libraryError ? (
+            <div
+              className="project-dashboard-empty-state rounded-2xl border border-amber-500/35 bg-amber-100/10 px-5 py-6 text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]"
+              data-testid="dashboard-library-recovery"
+              role="status"
+            >
+              <strong className="block text-[color:var(--ui-text)]">Library recovery mode</strong>
+              <span className="mt-1 block">{libraryError}</span>
+              {storageStatus.usageBytes !== null && (
+                <span className="mt-2 block text-xs">
+                  Detected storage: {(storageStatus.usageBytes / (1024 ** 3)).toFixed(1)} GB.
+                  Existing IndexedDB data has not been deleted or rewritten.
+                </span>
+              )}
+              <span className="mt-2 block text-xs">
+                You can still create an unsaved project or open a portable project file. Browser-library access remains disabled until the damaged origin storage is recovered or removed.
+              </span>
+            </div>
+          ) : isLoading ? (
             <div className="project-dashboard-empty-state rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-5 py-7 text-base font-medium text-[color:var(--ui-panel-text)]">Loading…</div>
           ) : allProjects.length === 0 ? (
             <div className="project-dashboard-empty-state rounded-2xl border border-dashed border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-5 py-9 text-base font-medium leading-7 text-[color:var(--ui-panel-text)]">

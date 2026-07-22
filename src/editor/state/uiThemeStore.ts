@@ -1,6 +1,7 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import type { ApocapaletteTheme } from '../types/apocapalette';
+import { createBoundedPersistStorage } from '../persistence/boundedPersistStorage';
 
 export type UiThemeVars = {
   '--ui-bg': string;
@@ -291,6 +292,7 @@ export const useUiThemeStore = createWithEqualityFn<UiThemeState>()(
     }),
     {
       name: 'designspace-ui-theme',
+      storage: createBoundedPersistStorage({ maxBytes: 256 * 1024 }),
       partialize: (state) => ({
         vars: state.vars,
         activePresetId: state.activePresetId,

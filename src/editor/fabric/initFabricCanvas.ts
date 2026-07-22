@@ -9,6 +9,26 @@ export const initFabricSerialization = () => {
 
 type FabricReviver = NonNullable<Parameters<fabric.Canvas['loadFromJSON']>[1]>;
 
+const hydrationDepth = new WeakMap<fabric.StaticCanvas, number>();
+
+export const isCanvasHydrating = (canvas: fabric.StaticCanvas) =>
+  (hydrationDepth.get(canvas) ?? 0) > 0;
+
+export const loadCanvasFromJsonSafely = async (
+  canvas: fabric.StaticCanvas,
+  canvasData: string | Record<string, any>,
+  reviver?: FabricReviver
+) => {
+  hydrationDepth.set(canvas, (hydrationDepth.get(canvas) ?? 0) + 1);
+  try {
+    await canvas.loadFromJSON(canvasData, reviver);
+  } finally {
+    const nextDepth = (hydrationDepth.get(canvas) ?? 1) - 1;
+    if (nextDepth <= 0) hydrationDepth.delete(canvas);
+    else hydrationDepth.set(canvas, nextDepth);
+  }
+};
+
 const fitRevivedTextboxToFrame = (textbox: fabric.Textbox, targetWidth: number, targetHeight: number) => {
   const minFontSize = 8;
   const maxFontSize = Math.max(
@@ -315,48 +335,4 @@ export const drawPersistentGuides = (
   }
 
   canvas.requestRenderAll();
-};
-
-/**
- * Hydrates canvas data with assets from base64 strings.
- * This converts base64 asset data back to blob URLs for use in the canvas.
- */
-export const hydrateCanvasDataWithAssets = async (
-  canvasData: any,
-  assets: Record<string, string> = {}
-): Promise<any> => {
-  if (!canvasData || !canvasData.objects) {
-    return canvasData;
-  }
-
-  // Create a mapping from asset IDs to blob URLs
-  const assetBlobUrls: Record<string, string> = {};
-
-  for (const [assetId, base64Data] of Object.entries(assets)) {
-    try {
-      // Convert base64 to blob
-      const response = await fetch(base64Data);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      assetBlobUrls[assetId] = blobUrl;
-    } catch (error) {
-      console.warn(`Failed to hydrate asset ${assetId}:`, error);
-    }
-  }
-
-  // Update image objects with the new blob URLs
-  const hydratedObjects = canvasData.objects.map((obj: any) => {
-    if (obj.type === 'image' && obj.id && assetBlobUrls[obj.id]) {
-      return {
-        ...obj,
-        src: assetBlobUrls[obj.id],
-      };
-    }
-    return obj;
-  });
-
-  return {
-    ...canvasData,
-    objects: hydratedObjects,
-  };
 };

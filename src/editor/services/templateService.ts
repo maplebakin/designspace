@@ -1,4 +1,5 @@
 import type { TemplateRecord } from '../db';
+import { assertIndexedDbStartupAllowed } from '../persistence/startupStorageRecovery';
 
 export type TemplateCanvasSize = { width: number; height: number };
 
@@ -14,6 +15,7 @@ export type SaveTemplateOptions = {
 const DEFAULT_CANVAS_SIZE: TemplateCanvasSize = { width: 2550, height: 3300 };
 
 const getDb = async () => {
+  assertIndexedDbStartupAllowed();
   const { db } = await import('../db');
   return db;
 };

@@ -1,5 +1,21 @@
 import Dexie, { Table } from 'dexie';
 import type { EditorMode } from './project/projectSchema';
+import { assertIndexedDbStartupAllowed } from './persistence/startupStorageRecovery';
+
+export const MAX_LIBRARY_PROJECT_CHARS = 100 * 1024 * 1024;
+export const MAX_LIBRARY_THUMBNAIL_CHARS = 2 * 1024 * 1024;
+export const MAX_DASHBOARD_PROJECTS = 100;
+
+export const fingerprintProjectPayload = (value: string) => {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  return `${value.length.toString(36)}-${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
+};
 
 export interface Project {
   id?: string;
@@ -10,6 +26,10 @@ export interface Project {
   // This is intentionally not indexed. Existing rows omit it and normalize to
   // canvas, so adding document routing metadata needs no IndexedDB migration.
   editorMode?: EditorMode;
+  contentHash?: string;
+  payloadLength?: number;
+  quarantinedAt?: string;
+  quarantineReason?: string;
 }
 
 export interface CanvasData {
@@ -17,6 +37,14 @@ export interface CanvasData {
   jsonPayload: string; // JSON string of canvas data
   projectId: string; // Reference to project
   lastModified?: Date; // Optional last modified date
+  contentHash?: string;
+  payloadLength?: number;
+}
+
+export interface ProjectRecoveryRecord {
+  projectId: string;
+  quarantinedAt: string;
+  reason: string;
 }
 
 export interface BrandKit {
@@ -56,6 +84,7 @@ export class DesignSpaceDB extends Dexie {
   canvasData!: Table<CanvasData>;
   brandKit!: Table<BrandKit>;
   templates!: Table<TemplateRecord, number>;
+  projectRecovery!: Table<ProjectRecoveryRecord, string>;
 
   constructor() {
     super('DesignSpaceDB');
@@ -65,12 +94,34 @@ export class DesignSpaceDB extends Dexie {
       brandKit: '++id, colors, typography, logoAssets',
       templates: '++id, name, updatedAt, category',
     });
+    this.version(5).stores({
+      projects: '++id, name, lastModified, thumbnail, canvasDataId',
+      canvasData: 'id, jsonPayload, projectId, lastModified',
+      brandKit: '++id, colors, typography, logoAssets',
+      templates: '++id, name, updatedAt, category',
+      projectRecovery: 'projectId, quarantinedAt',
+    });
 
     // Create indexes
     this.projects = this.table('projects');
     this.canvasData = this.table('canvasData');
     this.brandKit = this.table('brandKit');
     this.templates = this.table('templates');
+    this.projectRecovery = this.table('projectRecovery');
+  }
+
+  private projectListRequest: Promise<Project[]> | null = null;
+
+  private validateProjectPayload(jsonPayload: string) {
+    if (jsonPayload.length > MAX_LIBRARY_PROJECT_CHARS) {
+      throw new Error('Project exceeds the 100 MB browser-library limit. Download it as a project file instead.');
+    }
+  }
+
+  private normalizeThumbnail(thumbnail?: string) {
+    return typeof thumbnail === 'string' && thumbnail.length <= MAX_LIBRARY_THUMBNAIL_CHARS
+      ? thumbnail
+      : undefined;
   }
 
   async saveProject(
@@ -79,8 +130,11 @@ export class DesignSpaceDB extends Dexie {
     thumbnail?: string,
     editorMode: EditorMode = 'canvas'
   ): Promise<string> {
+    assertIndexedDbStartupAllowed();
+    this.validateProjectPayload(jsonPayload);
     const projectId = crypto.randomUUID();
     const canvasDataId = crypto.randomUUID();
+    const contentHash = fingerprintProjectPayload(jsonPayload);
     
     // Create transaction to ensure both records are saved together
     return this.transaction('rw', this.projects, this.canvasData, async () => {
@@ -88,7 +142,9 @@ export class DesignSpaceDB extends Dexie {
       await this.canvasData.add({
         id: canvasDataId,
         jsonPayload,
-        projectId
+        projectId,
+        contentHash,
+        payloadLength: jsonPayload.length,
       });
       
       // Save project
@@ -96,9 +152,11 @@ export class DesignSpaceDB extends Dexie {
         id: projectId,
         name,
         lastModified: new Date(),
-        thumbnail,
+        thumbnail: this.normalizeThumbnail(thumbnail),
         canvasDataId,
         editorMode,
+        contentHash,
+        payloadLength: jsonPayload.length,
       });
       
       return projectId;
@@ -111,30 +169,46 @@ export class DesignSpaceDB extends Dexie {
     jsonPayload: string,
     thumbnail?: string,
     editorMode?: EditorMode
-  ): Promise<void> {
+  ): Promise<boolean> {
+    assertIndexedDbStartupAllowed();
+    this.validateProjectPayload(jsonPayload);
+    const contentHash = fingerprintProjectPayload(jsonPayload);
     return this.transaction('rw', this.projects, this.canvasData, async () => {
-      // Update canvas data
-      await this.canvasData.where('projectId').equals(projectId).modify({
-        jsonPayload
-      });
+      const project = await this.projects.get(projectId);
+      if (!project) throw new Error('Project not found');
+      const payloadChanged = project.contentHash !== contentHash
+        || project.payloadLength !== jsonPayload.length;
+      if (payloadChanged) {
+        await this.canvasData.where('projectId').equals(projectId).modify({
+          jsonPayload,
+          contentHash,
+          payloadLength: jsonPayload.length,
+          lastModified: new Date(),
+        });
+      }
       
       // Update project
       await this.projects.update(projectId, {
         name,
         lastModified: new Date(),
-        thumbnail,
+        thumbnail: this.normalizeThumbnail(thumbnail),
+        contentHash,
+        payloadLength: jsonPayload.length,
         ...(editorMode ? { editorMode } : {}),
       });
+      return payloadChanged;
     });
   }
 
   async loadProject(projectId: string): Promise<{ project: Project; canvasData: string } | null> {
+    assertIndexedDbStartupAllowed();
     return this.transaction('r', this.projects, this.canvasData, async () => {
       const project = await this.projects.get(projectId);
-      if (!project) return null;
+      if (!project || project.quarantinedAt) return null;
       
       const canvasDataRecord = await this.canvasData.get(project.canvasDataId);
       if (!canvasDataRecord) return null;
+      this.validateProjectPayload(canvasDataRecord.jsonPayload);
       
       return {
         project,
@@ -144,11 +218,37 @@ export class DesignSpaceDB extends Dexie {
   }
 
   async getAllProjects(): Promise<Project[]> {
-    return this.projects.orderBy('lastModified').reverse().toArray();
+    assertIndexedDbStartupAllowed();
+    if (this.projectListRequest) return this.projectListRequest;
+    const request = this.projects
+      .orderBy('lastModified')
+      .reverse()
+      .filter((project) => !project.quarantinedAt)
+      .limit(MAX_DASHBOARD_PROJECTS)
+      .toArray()
+      .then((projects) => projects.map((project) => ({
+        ...project,
+        thumbnail: this.normalizeThumbnail(project.thumbnail),
+      })))
+      .finally(() => {
+        if (this.projectListRequest === request) this.projectListRequest = null;
+      });
+    this.projectListRequest = request;
+    return request;
+  }
+
+  async quarantineProject(projectId: string, reason: string): Promise<void> {
+    assertIndexedDbStartupAllowed();
+    const quarantinedAt = new Date().toISOString();
+    await this.transaction('rw', this.projects, this.projectRecovery, async () => {
+      await this.projects.update(projectId, { quarantinedAt, quarantineReason: reason });
+      await this.projectRecovery.put({ projectId, quarantinedAt, reason });
+    });
   }
 
   async deleteProject(projectId: string): Promise<void> {
-    return this.transaction('rw', this.projects, this.canvasData, async () => {
+    assertIndexedDbStartupAllowed();
+    return this.transaction('rw', this.projects, this.canvasData, this.projectRecovery, async () => {
       const project = await this.projects.get(projectId);
       if (!project) return;
 
@@ -157,17 +257,21 @@ export class DesignSpaceDB extends Dexie {
 
       // Delete project
       await this.projects.delete(projectId);
+      await this.projectRecovery.delete(projectId);
     });
   }
 
   async duplicateProject(projectId: string, newName: string): Promise<string> {
+    assertIndexedDbStartupAllowed();
     return this.transaction('rw', this.projects, this.canvasData, async () => {
       const project = await this.projects.get(projectId);
-      if (!project) throw new Error('Project not found');
+      if (!project || project.quarantinedAt) throw new Error('Project not found');
 
       // Get the canvas data for the project
       const canvasDataRecord = await this.canvasData.get(project.canvasDataId);
       if (!canvasDataRecord) throw new Error('Canvas data not found');
+      this.validateProjectPayload(canvasDataRecord.jsonPayload);
+      const contentHash = project.contentHash || fingerprintProjectPayload(canvasDataRecord.jsonPayload);
 
       // Create new IDs for the duplicated project
       const newProjectId = crypto.randomUUID();
@@ -178,7 +282,9 @@ export class DesignSpaceDB extends Dexie {
         id: newCanvasDataId,
         jsonPayload: canvasDataRecord.jsonPayload,
         projectId: newProjectId,
-        lastModified: new Date()
+        lastModified: new Date(),
+        contentHash,
+        payloadLength: canvasDataRecord.jsonPayload.length,
       });
 
       // Create new project record
@@ -186,9 +292,11 @@ export class DesignSpaceDB extends Dexie {
         id: newProjectId,
         name: newName,
         lastModified: new Date(),
-        thumbnail: project.thumbnail, // Copy the thumbnail
+        thumbnail: this.normalizeThumbnail(project.thumbnail),
         canvasDataId: newCanvasDataId,
         editorMode: project.editorMode,
+        contentHash,
+        payloadLength: canvasDataRecord.jsonPayload.length,
       });
 
       return newProjectId;
@@ -196,6 +304,7 @@ export class DesignSpaceDB extends Dexie {
   }
 
   async renameProject(projectId: string, newName: string): Promise<void> {
+    assertIndexedDbStartupAllowed();
     await this.projects.update(projectId, {
       name: newName,
       lastModified: new Date(),
@@ -203,11 +312,13 @@ export class DesignSpaceDB extends Dexie {
   }
 
   async getBrandKit(): Promise<BrandKit | null> {
+    assertIndexedDbStartupAllowed();
     const brandKitRecords = await this.brandKit.toArray();
     return brandKitRecords.length > 0 ? brandKitRecords[0] : null;
   }
 
   async saveBrandKit(brandKit: BrandKit): Promise<string> {
+    assertIndexedDbStartupAllowed();
     const existing = await this.getBrandKit();
     if (existing) {
       // Update existing brand kit - use put to replace the entire record
@@ -221,6 +332,7 @@ export class DesignSpaceDB extends Dexie {
   }
 
   async addColorToBrandKit(color: string): Promise<void> {
+    assertIndexedDbStartupAllowed();
     const brandKit = await this.getBrandKit();
     if (brandKit) {
       const updatedColors = [...brandKit.colors, color];

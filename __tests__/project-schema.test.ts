@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
   LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
@@ -354,5 +354,28 @@ describe('project pre-mount inspection', () => {
     expect(() => inspectDesignSpaceProjectJson(JSON.stringify({
       assets: ['not', 'a', 'map'],
     }))).toThrow('Project assets must be a map of image sources.');
+  });
+
+  it('quarantines a corrupt library project without affecting other records', async () => {
+    const quarantineProject = vi.fn().mockResolvedValue(undefined);
+    const reader = {
+      loadProject: vi.fn().mockResolvedValue({
+        project: {
+          id: 'corrupt-project',
+          name: 'Recover Me',
+          canvasDataId: 'corrupt-data',
+          lastModified: new Date(),
+        },
+        canvasData: '{invalid-json',
+      }),
+      quarantineProject,
+    };
+
+    await expect(inspectLibraryProject('corrupt-project', reader as any))
+      .rejects.toThrow('isolated in browser-library recovery data');
+    expect(quarantineProject).toHaveBeenCalledWith(
+      'corrupt-project',
+      'Project file contains invalid JSON.'
+    );
   });
 });

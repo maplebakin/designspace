@@ -14,6 +14,33 @@ import { useEditorStore } from '../state/editorStore';
 // Global WeakMap to track canvas elements that are being/have been initialized
 // This prevents double initialization across component re-renders
 const initializationTracker = new WeakMap<HTMLCanvasElement, boolean>();
+const liveCanvases = new WeakSet<fabric.Canvas>();
+const canvasLifecycleDiagnostics = { created: 0, disposed: 0, active: 0 };
+
+const publishCanvasDiagnostics = () => {
+  if (typeof window === 'undefined') return;
+  (window as any).__DESIGN_SPACE_CANVAS_DIAGNOSTICS__ = {
+    ...canvasLifecycleDiagnostics,
+  };
+};
+
+const recordCanvasCreated = (canvas: fabric.Canvas) => {
+  if (liveCanvases.has(canvas)) return;
+  liveCanvases.add(canvas);
+  canvasLifecycleDiagnostics.created += 1;
+  canvasLifecycleDiagnostics.active += 1;
+  publishCanvasDiagnostics();
+};
+
+const recordCanvasDisposed = (canvas: fabric.Canvas) => {
+  if (!liveCanvases.has(canvas)) return;
+  liveCanvases.delete(canvas);
+  canvasLifecycleDiagnostics.disposed += 1;
+  canvasLifecycleDiagnostics.active = Math.max(0, canvasLifecycleDiagnostics.active - 1);
+  publishCanvasDiagnostics();
+};
+
+export const getCanvasLifecycleDiagnostics = () => ({ ...canvasLifecycleDiagnostics });
 
 export const useCanvasLifecycle = (
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
@@ -90,6 +117,7 @@ export const useCanvasLifecycle = (
           const existingCanvas = (canvasElement as any).__fabric;
           if (existingCanvas && typeof existingCanvas.dispose === 'function') {
             existingCanvas.dispose();
+            recordCanvasDisposed(existingCanvas);
           }
 
           // Clear the __fabric reference
@@ -158,6 +186,7 @@ export const useCanvasLifecycle = (
         controlsAboveOverlay: true,
         stopContextMenu: true,
       });
+      recordCanvasCreated(canvas);
 
       canvas.calcOffset();
 
@@ -171,6 +200,7 @@ export const useCanvasLifecycle = (
       if (abortController.signal.aborted) {
         // Aborted during setup
         canvas.dispose();
+        recordCanvasDisposed(canvas);
         isInitializingRef.current = false;
         return null;
       }
@@ -202,6 +232,7 @@ export const useCanvasLifecycle = (
           const failedCanvas = (canvasRef.current as any).__fabric;
           if (failedCanvas && typeof failedCanvas.dispose === 'function') {
             failedCanvas.dispose();
+            recordCanvasDisposed(failedCanvas);
           }
           delete (canvasRef.current as any).__fabric;
         } catch (cleanupError) {
@@ -261,6 +292,7 @@ export const useCanvasLifecycle = (
         // Check if canvas is still valid before disposing
         if (canvas && typeof canvas.dispose === 'function') {
           await Promise.resolve(canvas.dispose());
+          recordCanvasDisposed(canvas);
         }
 
         // Additional cleanup: ensure __fabric reference is cleared from canvas element

@@ -2,8 +2,13 @@ import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
-import { ensureObjectId, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import {
+    ensureObjectId,
+    loadCanvasFromJsonSafely,
+    reviveCustomFabricProps,
+} from '../fabric/initFabricCanvas';
 import { MemoryManager } from '../../utils/memoryManager';
+import { createBoundedPersistStorage } from '../persistence/boundedPersistStorage';
 import {
     alignLeft,
     alignCenter,
@@ -843,7 +848,7 @@ const stageCanvasDataLoad = async (canvasData: any) => {
     const element = document.createElement('canvas');
     const stagingCanvas = new fabric.StaticCanvas(element, { width: 1, height: 1 });
     try {
-        await stagingCanvas.loadFromJSON(canvasData, reviveCustomFabricProps);
+        await loadCanvasFromJsonSafely(stagingCanvas, canvasData, reviveCustomFabricProps);
     } finally {
         await Promise.resolve(stagingCanvas.dispose());
         element.remove();
@@ -1927,7 +1932,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             ? brandVault.find((brand) => brand.id === template.defaultThemeId)
             : null;
 
-        canvas.loadFromJSON(templateCanvasData, reviveCustomFabricProps).then(() => {
+        loadCanvasFromJsonSafely(canvas, templateCanvasData, reviveCustomFabricProps).then(() => {
             canvas.backgroundColor = 'transparent';
             resetViewCanvas();
             sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
@@ -2095,7 +2100,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     : generatedProject.document.background?.value ?? null
             );
 
-            await canvas.loadFromJSON(firstPage.canvasData, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(canvas, firstPage.canvasData, reviveCustomFabricProps);
             canvas.backgroundColor = 'transparent';
             get().syncCanvasToStore(canvas);
             resetViewCanvas();
@@ -2156,7 +2161,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const page = get().pages[index];
             if (!page) return;
             const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
-            await canvas.loadFromJSON(hydrated, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(canvas, hydrated, reviveCustomFabricProps);
             const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
             resizeCanvas(nextSize.width, nextSize.height, {
                 save: false,
@@ -2353,7 +2358,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             const nextCanvas = get().canvas;
             if (!nextCanvas) return;
-            await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(nextCanvas, hydratedCanvasData, reviveCustomFabricProps);
             get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
 
@@ -2884,7 +2889,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             const nextCanvas = get().canvas;
             if (!nextCanvas) return;
-            await nextCanvas.loadFromJSON(hydratedCanvasData, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(nextCanvas, hydratedCanvasData, reviveCustomFabricProps);
             get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
             sanityCheckCanvas(nextCanvas, activeTheme);
@@ -3138,6 +3143,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
     {
         name: 'designspace-editor',
+        storage: createBoundedPersistStorage({ maxBytes: 512 * 1024 }),
         merge: (persistedState, currentState) => {
             if (!persistedState || typeof persistedState !== 'object') return currentState;
             // Legacy project payloads and blob-backed assets must not become live

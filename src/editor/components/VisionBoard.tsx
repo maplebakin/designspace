@@ -15,6 +15,7 @@ import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore'
 import { useThemeStore } from '../state/useThemeStore';
 import { captureCanvasState } from '../utils/serialization';
 import { BoardItem } from './BoardItem';
+import { loadCanvasFromJsonSafely } from '../fabric/initFabricCanvas';
 
 interface VisionBoardProps {
   onClose?: () => void;
@@ -78,36 +79,33 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
     (item: VisionItem) => {
       if (item.type !== 'design-state' || !canvas) return;
 
-      try {
+      void (async () => {
+        try {
         const data = JSON.parse(item.canvasData);
         const objects = data.objects || [];
 
         const { clearSelection, setCanvasBackgroundColor, syncCanvasToStore, saveState } = useEditorStore.getState();
         clearSelection();
-        canvas.clear();
         setCanvasBackgroundColor(typeof data.background === 'string' ? data.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
         canvas.backgroundColor = 'transparent';
 
-        // Load objects using fabric's loadFromJSON approach
         if (objects.length > 0) {
-          canvas.loadFromJSON(
-            { objects },
-            () => {
-              canvas.backgroundColor = 'transparent';
-              canvas.requestRenderAll();
-              syncCanvasToStore();
-              saveState();
-              setToastMessage(`Loaded: ${item.label || 'Design state'}`);
-            }
-          );
+          await loadCanvasFromJsonSafely(canvas, { objects });
+          canvas.backgroundColor = 'transparent';
+          canvas.requestRenderAll();
+          syncCanvasToStore();
+          saveState();
+          setToastMessage(`Loaded: ${item.label || 'Design state'}`);
         } else {
+          canvas.clear();
           canvas.requestRenderAll();
           setToastMessage(`Loaded empty state: ${item.label || 'Design state'}`);
         }
-      } catch (error) {
-        console.error('Failed to load design state:', error);
-        setToastMessage('Failed to load design state');
-      }
+        } catch (error) {
+          console.error('Failed to load design state:', error);
+          setToastMessage('Failed to load design state');
+        }
+      })();
     },
     [canvas, setToastMessage]
   );

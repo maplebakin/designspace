@@ -128,6 +128,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
   const cancelScheduledUpdateRef = useRef<(() => void) | null>(null);
   const cancelScheduledViewportRef = useRef<(() => void) | null>(null);
   const pendingUpdateCanvasRef = useRef<fabric.Canvas | null>(null);
+  const lifecycleQueueRef = useRef<Promise<void>>(Promise.resolve());
   const persistCountRef = useRef(0); // PHASE 2.3: Counter-based persistence
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
@@ -891,28 +892,39 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     setDirtyObjectsRef,
   ]);
 
-  // Main initialization effect using the lifecycle hook
-  // IMPORTANT: This should only run ONCE on mount, not when setupCanvasHandlers changes
+  // Serialize mount/dispose work. In development StrictMode React runs an effect,
+  // immediately cleans it up, and runs it again. A plain `void init()` cleanup can
+  // miss the canvas because the resolved instance has not reached the local
+  // variable yet, leaking Fabric and every registered listener.
   useEffect(() => {
-    let canvasInstance: fabric.Canvas | null = null;
-    let cleanupHandlers: (() => void) | null = null;
-    let abortController: AbortController | null = null;
+    let cancelled = false;
+    let resource: Awaited<ReturnType<typeof initializeCanvas>> = null;
 
-    const init = async () => {
-      const result = await initializeCanvas(setupCanvasHandlers);
-      if (result) {
-        canvasInstance = result.canvas;
-        cleanupHandlers = result.cleanup;
-        abortController = result.abortController;
-      }
-    };
-
-    void init();
+    const mount = lifecycleQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (cancelled) return;
+        const result = await initializeCanvas(setupCanvasHandlers);
+        if (!result) return;
+        if (cancelled) {
+          await disposeCanvas(result.canvas, result.cleanup, result.abortController);
+          return;
+        }
+        resource = result;
+      });
+    lifecycleQueueRef.current = mount;
 
     return () => {
-      if (canvasInstance) {
-        void disposeCanvas(canvasInstance, cleanupHandlers, abortController);
-      }
+      cancelled = true;
+      const cleanup = lifecycleQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!resource) return;
+          const current = resource;
+          resource = null;
+          await disposeCanvas(current.canvas, current.cleanup, current.abortController);
+        });
+      lifecycleQueueRef.current = cleanup;
     };
   }, [initializeCanvas, disposeCanvas]);
 

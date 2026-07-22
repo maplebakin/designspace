@@ -7,7 +7,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { NetworkStatusIndicator } from './components/NetworkStatusIndicator';
 import { NotificationProvider } from './components/NotificationProvider';
 import { injectAccessibilityStyles } from './utils/accessibility';
-import { migrateFromLocalStorage } from './editor/services/templateService';
 import { useThemeStore } from './editor/state/useThemeStore';
 import { pluginManager, PluginManagerContext } from './editor/utils/pluginArchitecture';
 import { pwaOfflineManager } from './editor/offline/pwaOfflineManager';
@@ -16,9 +15,6 @@ import { DocumentEditorShell } from './document/components/DocumentEditorShell';
 import { useDocumentStore } from './document/state/documentStore';
 import { useProjectSessionStore } from './editor/state/projectSessionStore';
 import type { EditorMode } from './editor/project/projectSchema';
-
-const TEMPLATE_MIGRATION_FLAG_KEY = 'designspace-template-migration-v1';
-let templateMigrationStarted = false;
 
 function App() {
   const [hasActiveSession, setHasActiveSession] = useState(false);
@@ -29,29 +25,6 @@ function App() {
 
   useEffect(() => {
     injectAccessibilityStyles();
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.localStorage) return;
-    if (window.localStorage.getItem(TEMPLATE_MIGRATION_FLAG_KEY) === 'done') return;
-    if (templateMigrationStarted) return;
-    templateMigrationStarted = true;
-
-    let cancelled = false;
-    const runMigration = async () => {
-      try {
-        await migrateFromLocalStorage();
-      } finally {
-        if (!cancelled) {
-          window.localStorage.setItem(TEMPLATE_MIGRATION_FLAG_KEY, 'done');
-        }
-      }
-    };
-
-    void runMigration();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   const canvasProjectName = useEditorStore((state) => state.projectName);

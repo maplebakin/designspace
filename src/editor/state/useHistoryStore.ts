@@ -3,7 +3,11 @@ import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
 import * as fabric from 'fabric';
 import { assetBlobRegistry, revokeTrackedBlobUrl } from '../services/assetLoader';
-import { ensureObjectId, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import {
+  ensureObjectId,
+  loadCanvasFromJsonSafely,
+  reviveCustomFabricProps,
+} from '../fabric/initFabricCanvas';
 import { toSerializableObject } from '../utils/serialization';
 import { recordDiff, ObjectDiff, SerializedObject } from '../utils/diffSaver';
 import { isPersistableCanvasObject } from '../utils/objectUtils';
@@ -682,7 +686,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
             if (!targetState) return;
             const hydratedState = hydrateCanvasDataWithAssets(targetState, imageAssets);
             const historyObjects = (getCanvasObjects(targetState) || []) as SerializedObject[];
-            await canvas.loadFromJSON(hydratedState, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(canvas, hydratedState, reviveCustomFabricProps);
             _context.setBackground?.(typeof targetState?.background === 'string' ? targetState.background : null);
             canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();
@@ -767,7 +771,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
           if (snapshot.type === 'full') {
             const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);
             const historyObjects = (getCanvasObjects(snapshot.data) || []) as SerializedObject[];
-            await canvas.loadFromJSON(hydratedState, reviveCustomFabricProps);
+            await loadCanvasFromJsonSafely(canvas, hydratedState, reviveCustomFabricProps);
             _context.setBackground?.(typeof snapshot.data?.background === 'string' ? snapshot.data.background : null);
             canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();

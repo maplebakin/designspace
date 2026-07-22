@@ -68,11 +68,13 @@ vi.mock('../src/editor/components/Inserter', () => ({
 }));
 
 vi.mock('../src/editor/db', () => ({
+  MAX_LIBRARY_PROJECT_CHARS: 100 * 1024 * 1024,
   db: {
     renameProject: vi.fn().mockResolvedValue(undefined),
     getAllProjects: vi.fn().mockResolvedValue([]),
     getProject: vi.fn().mockResolvedValue(null),
     loadProject: vi.fn().mockResolvedValue(null),
+    quarantineProject: vi.fn().mockResolvedValue(undefined),
     saveProject: vi.fn().mockResolvedValue('new-id'),
     getBrandKit: vi.fn().mockResolvedValue(null),
     saveBrandKit: vi.fn().mockResolvedValue('brand-kit-id'),

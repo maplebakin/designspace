@@ -10,6 +10,7 @@ import type { BrandKit } from '../db';
 import { useUiThemeStore } from './uiThemeStore';
 import { importThemeJson, type SimpleThemeJson, type ColorCategory } from '../services/designSpaceImporter';
 import { isActiveSelection } from '../utils/typeGuards';
+import { createBoundedPersistStorage } from '../persistence/boundedPersistStorage';
 
 // --- INTERFACES ---
 
@@ -458,6 +459,18 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
         }),
         {
             name: 'designspace-theme',
+            storage: createBoundedPersistStorage({ maxBytes: 4 * 1024 * 1024 }),
+            merge: (persistedState, currentState) => {
+                if (!persistedState || typeof persistedState !== 'object') return currentState;
+                const persisted = persistedState as Partial<ThemeState>;
+                return {
+                    ...currentState,
+                    ...persisted,
+                    canvasBackgroundColor: normalizeCanvasBackgroundColor(
+                        persisted.canvasBackgroundColor ?? currentState.canvasBackgroundColor
+                    ),
+                };
+            },
             partialize: (state) => ({
                 themeData: state.themeData,
                 brandVault: state.brandVault,
@@ -471,10 +484,6 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                 visionPalette: state.visionPalette,
                 recentColors: state.recentColors,
             }),
-            onRehydrateStorage: () => (state) => {
-                if (!state) return;
-                state.setCanvasBackgroundColor(state.canvasBackgroundColor);
-            },
         }
     )
 );

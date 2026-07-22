@@ -1,5 +1,5 @@
 import * as fabric from 'fabric';
-import { ensureObjectId } from '../fabric/initFabricCanvas';
+import { ensureObjectId, isCanvasHydrating } from '../fabric/initFabricCanvas';
 import { initSmartGuides } from '../fabric/smartGuides';
 import { updateGuides, fitCanvasToViewport, centerDocumentInViewport } from '../fabric/canvasUtils';
 import { useEditorStore } from '../state/editorStore';
@@ -141,6 +141,7 @@ export function registerObjectEventHandlers(
 
     const handleObjectMoving = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || (target as any).isGuide) return;
         markDirtyObject(target);
@@ -154,6 +155,7 @@ export function registerObjectEventHandlers(
 
     const handleObjectRemoved = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event?.target as fabric.Object | undefined;
 
         if (target && !(target as any).isGuide) {
@@ -174,6 +176,7 @@ export function registerObjectEventHandlers(
 
     const handleObjectModified = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || (target as any).isGuide) return;
 
@@ -189,6 +192,7 @@ export function registerObjectEventHandlers(
 
     const handleTextChanged = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || !isTextObject(target)) return;
 
@@ -199,6 +203,7 @@ export function registerObjectEventHandlers(
 
     const handleObjectScaling = (event: any) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event.target as fabric.Object | undefined;
         if (!target || (target as any).isGuide) return;
         if (target.type !== 'rect') return;
@@ -225,6 +230,7 @@ export function registerObjectEventHandlers(
 
     const handleObjectAdded = (event: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
         const target = event.target as fabric.Object | undefined;
         if (!target) return;
         if ((target as any).isGuide) return;
@@ -750,7 +756,7 @@ export function registerAllCanvasEventHandlers(
         container: HTMLElement;
     }
 ): CanvasEventRegistry {
-    const { canvas, container } = options;
+    const { canvas } = options;
     const registry = new CanvasEventRegistry();
 
     // Register all handler groups
@@ -759,7 +765,6 @@ export function registerAllCanvasEventHandlers(
     registry.register(registerViewportEventHandlers(options));
     registry.register(registerPanEventHandlers(options));
     registry.register(registerKeyboardEventHandlers(options));
-    registry.register(registerResizeEventHandler(canvas, container, options.callbacks.onViewportChange));
     registry.register(registerSmartGuidesHandler(canvas, options.config));
 
     // Initialize guides

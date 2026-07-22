@@ -4,6 +4,7 @@ import { immer } from 'zustand/middleware/immer';
 import { v4 as uuidv4 } from 'uuid';
 import { extractHexColors } from '../utils/colorExtraction';
 import { useThemeStore } from './useThemeStore';
+import { createBoundedPersistStorage } from '../persistence/boundedPersistStorage';
 
 // --- TYPES ---
 
@@ -587,6 +588,7 @@ export const useVisionBoardStore = createWithEqualityFn<VisionBoardState>()(
         })),
         {
             name: 'designspace-vision-board',
+            storage: createBoundedPersistStorage({ maxBytes: 8 * 1024 * 1024 }),
             partialize: (state) => ({
                 items: state.items,
                 boardSize: state.boardSize,
