@@ -318,7 +318,7 @@ def main() -> int:
     seen_revision_hashes: dict[str, set[str]] = {}
     global_assets: dict[str, tuple[str, int]] = {}
 
-    emit("phase", phase="scan", message="Scanning the verified backup read-only.")
+    emit("phase", phase="scan-indexeddb", message="Scanning IndexedDB records from the verified backup.")
 
     # Use two bounded passes. Metadata is small and retained by stable project
     # ID; canvas revisions are decoded and released one record at a time.
@@ -358,6 +358,7 @@ def main() -> int:
         if fixture.is_file()
         else iter_chromium_records(leveldb, blob, forensic_dir, ("canvasData",))
     )
+    emit("phase", phase="validate-projects", message="Validating and migrating recovered project revisions.")
     for record in canvas_records:
         report["recordsScanned"] += 1
         if report["recordsScanned"] % 100 == 0:
@@ -483,7 +484,7 @@ def main() -> int:
         }
 
     report["projectsFound"] = len(set(metadata) | set(seen_revision_hashes))
-    emit("phase", phase="export", message="Writing validated portable project files.")
+    emit("phase", phase="write-exports", message="Writing validated portable project exports.")
     used_names: set[str] = set()
     for project_id in sorted(selected):
         item = selected[project_id]
@@ -520,6 +521,7 @@ def main() -> int:
         staging_dir.rmdir()
     except OSError:
         pass
+    emit("phase", phase="recovery-report", message="Generating the recovery report.")
     report_path = export_root / "recovery-report.json"
     report_path.write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
     emit("complete", reportPath=str(report_path), **{key: report[key] for key in (

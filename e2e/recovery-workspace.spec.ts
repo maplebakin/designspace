@@ -40,19 +40,26 @@ test('desktop recovery workspace requires verified backup, recovery report, and 
           totalBytes: 17 * 1024 ** 3, fileCount: 85, verified: true,
         };
         if (command === 'recovery_verify_backup') return { valid: true, totalBytes: 17 * 1024 ** 3, fileCount: 85 };
-        if (command === 'recovery_extract') return {
-          reportPath: '/safe/recovery/exports/recovery-report.json', exportRoot: '/safe/recovery/exports',
-          recordsScanned: 1200, projectsFound: 3, projectsRecovered: 2, projectsSkipped: 1,
-          corruptRecords: 2, duplicateRevisionsRemoved: 1100, distinctRevisionsSuperseded: 4,
-          assetsHashed: 8, assetsDeduplicated: 3, crossProjectDuplicateAssets: 2,
-          estimatedDuplicateAssetBytes: 1024, originalBackupBytes: 17 * 1024 ** 3,
-          recoveredExportBytes: 3 * 1024 ** 2, warnings: [], failures: [],
-          projects: [{
-            projectId: 'p1', name: 'Recovered Planner', path: '/safe/recovery/exports/recovered-planner.apocaproject.json',
-            bytes: 2 * 1024 ** 2, warnings: [], assetsDeduplicated: 2,
-            usedOlderRevisionBecauseNewerWasCorrupt: true, complete: true,
-          }],
-        };
+        if (command === 'recovery_extract') {
+          (window as any).__recoveryExtractArgs = args;
+          if ((window as any).__failRecovery) {
+            throw 'Configured Python executable does not exist: /missing/python3';
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return {
+            reportPath: '/safe/recovery/exports/recovery-report.json', exportRoot: '/safe/recovery/exports',
+            recordsScanned: 1200, projectsFound: 3, projectsRecovered: 2, projectsSkipped: 1,
+            corruptRecords: 2, duplicateRevisionsRemoved: 1100, distinctRevisionsSuperseded: 4,
+            assetsHashed: 8, assetsDeduplicated: 3, crossProjectDuplicateAssets: 2,
+            estimatedDuplicateAssetBytes: 1024, originalBackupBytes: 17 * 1024 ** 3,
+            recoveredExportBytes: 3 * 1024 ** 2, warnings: [], failures: [],
+            projects: [{
+              projectId: 'p1', name: 'Recovered Planner', path: '/safe/recovery/exports/recovered-planner.apocaproject.json',
+              bytes: 2 * 1024 ** 2, warnings: [], assetsDeduplicated: 2,
+              usedOlderRevisionBecauseNewerWasCorrupt: true, complete: true,
+            }],
+          };
+        }
         if (command === 'recovery_delete_original') {
           if (args.confirmation !== 'DELETE LOCALHOST 5174 DATABASE') throw new Error('wrong confirmation');
           return {
@@ -70,6 +77,7 @@ test('desktop recovery workspace requires verified backup, recovery report, and 
   await expect(page.getByTestId('recovery-workspace')).toBeVisible();
   await expect(page.getByTestId('recovery-database-path')).toContainText('http_localhost_5174.indexeddb.leveldb');
   await expect(page.getByTestId('recovery-delete-original')).toBeDisabled();
+  await expect(page.getByTestId('recovery-extract-precondition')).toContainText('verified backup is required');
 
   await page.getByTestId('recovery-check-space').click();
   await expect(page.getByTestId('recovery-space-status')).toContainText('available');
@@ -77,7 +85,20 @@ test('desktop recovery workspace requires verified backup, recovery report, and 
   await expect(page.getByText('SHA-256 verified')).toBeVisible();
   await expect(page.getByTestId('recovery-delete-original')).toBeDisabled();
 
+  await page.evaluate(() => { (window as any).__failRecovery = true; });
   await page.getByTestId('recovery-extract').click();
+  await expect(page.getByTestId('recovery-error')).toContainText('Configured Python executable does not exist');
+  await expect(page.getByTestId('recovery-error')).toContainText('recovery-audit.jsonl');
+  await expect(page.getByTestId('recovery-extract')).toBeEnabled();
+  await expect(page.getByTestId('recovery-delete-original')).toBeDisabled();
+
+  await page.evaluate(() => { (window as any).__failRecovery = false; });
+  await page.getByTestId('recovery-extract').evaluate((button) => {
+    button.click();
+    button.click();
+  });
+  await expect(page.getByTestId('recovery-extract')).toContainText('Recovering');
+  await expect(page.getByTestId('recovery-progress')).toContainText('Validating the verified backup');
   await expect(page.getByTestId('recovery-report')).toContainText('1200');
   await expect(page.getByTestId('recovery-report')).toContainText('Recovered Planner');
   await expect(page.getByTestId('recovery-delete-original')).toBeDisabled();
@@ -90,5 +111,9 @@ test('desktop recovery workspace requires verified backup, recovery report, and 
   await expect(page.getByTestId('recovery-cleanup-complete')).toContainText('Backup preserved');
 
   const calls = await page.evaluate(() => (window as any).__recoveryCalls as string[]);
+  const extractArgs = await page.evaluate(() => (window as any).__recoveryExtractArgs as Record<string, unknown>);
+  expect(Object.keys(extractArgs).sort()).toEqual(['exportDestination', 'jobId', 'manifestPath']);
+  expect(extractArgs.manifestPath).toBe('/safe/recovery/verified-backup/backup-manifest.json');
+  expect(calls.filter((command) => command === 'recovery_extract')).toHaveLength(2);
   expect(calls.filter((command) => command === 'recovery_delete_original')).toHaveLength(1);
 });

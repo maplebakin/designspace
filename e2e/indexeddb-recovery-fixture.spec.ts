@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
+const originPort = Number(process.env.DESIGN_SPACE_E2E_PORT ?? 5174);
+
 const findOriginDirectory = (root: string, suffix: string): string | null => {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
-    if (entry.isDirectory() && entry.name.includes('localhost_5174') && entry.name.endsWith(suffix)) return path;
+    if (entry.isDirectory() && entry.name.includes(`localhost_${originPort}`) && entry.name.endsWith(suffix)) return path;
     if (entry.isDirectory()) {
       const found = findOriginDirectory(path, suffix);
       if (found) return found;

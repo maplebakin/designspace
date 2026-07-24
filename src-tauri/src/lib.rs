@@ -16,3 +16,17 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn recovery_extract_command_is_registered_in_the_tauri_handler() {
+        let source = include_str!("lib.rs");
+        let registration = ["recovery::", "recovery_extract", ","].concat();
+        assert!(
+            source.contains(&registration),
+            "recovery_extract must remain in tauri::generate_handler!"
+        );
+        assert_eq!(source.matches(&registration).count(), 1);
+    }
+}

@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, CheckCircle2, Database, FileCheck2, FolderSearch, HardDrive, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import { acknowledgeSuccessfulStorageCleanup } from '../persistence/startupStorageRecovery';
 import {
   isTauriRecoveryAvailable,
   RECOVERY_DELETE_CONFIRMATION,
+  RECOVERY_EXTRACT_COMMAND,
   recoveryClient,
+  recoveryErrorMessage,
   type BackupReport,
   type CleanupReport,
   type DestinationReport,
@@ -22,6 +24,10 @@ type ProgressState = {
   recordsScanned?: number;
   projectsRecovered?: number;
 };
+
+const yieldForRecoveryStatusPaint = () => new Promise<void>((resolve) => {
+  requestAnimationFrame(() => resolve());
+});
 
 const formatBytes = (bytes: number | null | undefined) => {
   if (!Number.isFinite(bytes) || !bytes) return '0 B';
@@ -60,6 +66,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
   const [busy, setBusy] = useState<'detect' | 'backup' | 'extract' | 'delete' | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const recoveryInFlight = useRef(false);
 
   const selected = useMemo(
     () => candidates.find((candidate) => candidate.id === selectedId) ?? candidates[0] ?? null,
@@ -94,13 +101,23 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
 
   useEffect(() => {
     if (!desktopAvailable) return;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void import('@tauri-apps/api/event').then(async ({ listen }) => {
-      unlisten = await listen<ProgressState>('design-space-recovery-progress', (event) => {
+      const removeListener = await listen<ProgressState>('design-space-recovery-progress', (event) => {
         setProgress(event.payload);
       });
+      if (disposed) removeListener();
+      else unlisten = removeListener;
+    }).catch((caught) => {
+      const message = recoveryErrorMessage(caught, 'Recovery progress events could not be attached.');
+      console.error('[Design Space recovery] progress listener failed', caught);
+      if (!disposed) setError(message);
     });
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [desktopAvailable]);
 
   const inspectDestination = async () => {
@@ -136,17 +153,46 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
   };
 
   const recoverProjects = async () => {
-    if (!backup) return;
+    console.info('[Design Space recovery] recover button handler started', {
+      command: RECOVERY_EXTRACT_COMMAND,
+    });
+    if (recoveryInFlight.current) {
+      console.info('[Design Space recovery] duplicate recover click ignored');
+      return;
+    }
+    if (!backup?.verified || !backup.manifestPath) {
+      setError('A verified backup is required before project recovery can start.');
+      setReport(null);
+      return;
+    }
+    recoveryInFlight.current = true;
     const jobId = recoveryJobId('extract');
     setActiveJobId(jobId);
     setBusy('extract');
     setError(null);
-    setProgress({ phase: 'scan', message: 'Scanning the verified copy with the Chromium forensic reader…' });
+    setReport(null);
+    setProgress({ phase: 'validate-backup', message: 'Validating the verified backup…' });
     try {
-      setReport(await recoveryClient.extract(backup.manifestPath, exportDestination, jobId));
+      // Yield one frame so WebKit paints the running state before IPC begins.
+      await yieldForRecoveryStatusPaint();
+      const recovered = await recoveryClient.extract(backup.manifestPath, exportDestination, jobId);
+      if (!recovered.reportPath || !Number.isFinite(recovered.projectsRecovered)) {
+        throw new Error('The extractor returned an invalid recovery report. Cleanup remains locked.');
+      }
+      setReport(recovered);
+      setProgress({
+        phase: 'complete',
+        message: `Recovery complete: ${recovered.projectsRecovered} portable project${recovered.projectsRecovered === 1 ? '' : 's'} exported.`,
+        recordsScanned: recovered.recordsScanned,
+        projectsRecovered: recovered.projectsRecovered,
+      });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Recovery failed. The verified backup remains intact.');
+      const auditPath = backup.auditLogPath || applicationAuditPath;
+      const detail = recoveryErrorMessage(caught, 'Recovery failed. The verified backup remains intact.');
+      setError(`${detail}${auditPath && !detail.includes(auditPath) ? ` Detailed audit log: ${auditPath}` : ''}`);
+      setProgress({ phase: 'failed', message: 'Recovery failed. Review the error and retry when ready.' });
     } finally {
+      recoveryInFlight.current = false;
       setActiveJobId(null);
       setBusy(null);
     }
@@ -259,10 +305,15 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
       </Step>
 
       <Step number={5} title="Recover projects from the verified copy" complete={Boolean(report)}>
+        {!backup?.verified && (
+          <p className="mb-3 font-semibold text-amber-700" role="status" data-testid="recovery-extract-precondition">
+            A verified backup is required before project recovery can start.
+          </p>
+        )}
         <label htmlFor="recovery-export-destination" className="font-semibold text-[color:var(--ui-text)]">Portable export destination</label>
         <input id="recovery-export-destination" value={exportDestination} onChange={(event) => setExportDestination(event.target.value)} className="mt-2 w-full rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2" data-testid="recovery-export-destination" />
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => void recoverProjects()} disabled={!backup || busy !== null} className="inline-flex items-center gap-2 rounded-xl bg-[color:var(--brand-primary)] px-4 py-2 font-semibold text-white disabled:opacity-45" data-testid="recovery-extract">
+          <button type="button" onClick={() => void recoverProjects()} disabled={!backup?.verified || busy !== null} className="inline-flex items-center gap-2 rounded-xl bg-[color:var(--brand-primary)] px-4 py-2 font-semibold text-white disabled:opacity-45" data-testid="recovery-extract">
             <FolderSearch className="h-4 w-4" aria-hidden="true" /> {busy === 'extract' ? 'Recovering…' : 'Recover portable projects'}
           </button>
           {activeJobId && <button type="button" onClick={() => void cancel()} className="rounded-xl border border-[color:var(--ui-border)] px-4 py-2 font-semibold" data-testid="recovery-cancel">Cancel safely</button>}

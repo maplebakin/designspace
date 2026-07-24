@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     ffi::CString,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -22,9 +22,14 @@ use walkdir::WalkDir;
 const ORIGIN_LABEL: &str = "localhost:5174";
 const DELETE_CONFIRMATION: &str = "DELETE LOCALHOST 5174 DATABASE";
 const BACKUP_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SUBPROCESS_OUTPUT_BYTES: usize = 128 * 1024;
+const MAX_PROGRESS_EVENT_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
-pub struct RecoveryJobs(Mutex<HashMap<String, Arc<AtomicBool>>>);
+pub struct RecoveryJobs {
+    jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    extraction_running: AtomicBool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -241,6 +246,20 @@ fn directory_stats(path: &Path) -> Result<(u64, u64), String> {
     Ok((bytes, files.len() as u64))
 }
 
+fn default_browser_root_from_environment(command: &str, environment: &[u8]) -> Option<PathBuf> {
+    let home = environment
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"HOME="))
+        .map(|value| PathBuf::from(std::ffi::OsStr::from_bytes(value)))?;
+    if command.contains("google-chrome") {
+        Some(home.join(".config/google-chrome"))
+    } else if command.contains("chromium") {
+        Some(home.join(".config/chromium"))
+    } else {
+        None
+    }
+}
+
 fn profile_process_is_running(browser_root: &Path, profile_name: &str) -> bool {
     let lock = browser_root.join("SingletonLock");
     if let Ok(target) = fs::read_link(&lock) {
@@ -282,10 +301,21 @@ fn profile_process_is_running(browser_root: &Path, profile_name: &str) -> bool {
             return true;
         }
         // Chrome normally puts the user-data root only on the browser process,
-        // not child processes. Any main process using the default config root
-        // is conservatively considered active for all of its profiles.
+        // not child processes. Resolve the main process HOME so an unrelated
+        // browser session cannot falsely lock a recovery profile under another
+        // home directory.
         if !command.contains("--type=") && !command.contains("--user-data-dir=") {
-            return true;
+            match fs::read(process.path().join("environ"))
+                .ok()
+                .and_then(|environment| {
+                    default_browser_root_from_environment(&command, &environment)
+                }) {
+                Some(expected_root) if expected_root == browser_root => return true,
+                Some(_) => {}
+                // If Linux process metadata is unavailable, retain the safer
+                // refusal instead of assuming the profile is inactive.
+                None => return true,
+            }
         }
     }
     false
@@ -580,7 +610,7 @@ fn verify_manifest(
 
 fn register_job(state: &RecoveryJobs, job_id: &str) -> Result<Arc<AtomicBool>, String> {
     let mut jobs = state
-        .0
+        .jobs
         .lock()
         .map_err(|_| "Recovery job registry is unavailable.".to_string())?;
     if jobs.contains_key(job_id) {
@@ -592,9 +622,28 @@ fn register_job(state: &RecoveryJobs, job_id: &str) -> Result<Arc<AtomicBool>, S
 }
 
 fn finish_job(state: &RecoveryJobs, job_id: &str) {
-    if let Ok(mut jobs) = state.0.lock() {
+    if let Ok(mut jobs) = state.jobs.lock() {
         jobs.remove(job_id);
     }
+}
+
+fn register_extraction_job(state: &RecoveryJobs, job_id: &str) -> Result<Arc<AtomicBool>, String> {
+    state
+        .extraction_running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| "A project recovery job is already running.".to_string())?;
+    match register_job(state, job_id) {
+        Ok(cancelled) => Ok(cancelled),
+        Err(error) => {
+            state.extraction_running.store(false, Ordering::Release);
+            Err(error)
+        }
+    }
+}
+
+fn finish_extraction_job(state: &RecoveryJobs, job_id: &str) {
+    finish_job(state, job_id);
+    state.extraction_running.store(false, Ordering::Release);
 }
 
 #[tauri::command]
@@ -660,7 +709,7 @@ pub fn recovery_cancel(
     job_id: String,
 ) -> Result<(), String> {
     let jobs = state
-        .0
+        .jobs
         .lock()
         .map_err(|_| "Recovery job registry is unavailable.".to_string())?;
     let flag = jobs
@@ -840,22 +889,161 @@ fn recovery_tool_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "The bundled Chromium recovery reader is missing.".to_string())
 }
 
-#[tauri::command]
-pub async fn recovery_extract(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, RecoveryJobs>,
-    manifest_path: String,
+fn resolve_python_executable() -> Result<PathBuf, String> {
+    if let Some(configured) = std::env::var_os("DESIGN_SPACE_RECOVERY_PYTHON") {
+        let configured = PathBuf::from(configured);
+        return configured
+            .is_file()
+            .then_some(configured.clone())
+            .ok_or_else(|| {
+                format!(
+                    "Configured Python executable does not exist: {}",
+                    configured.display()
+                )
+            });
+    }
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| "Cannot locate Python: PATH is unavailable.".to_string())?;
+    for directory in std::env::split_paths(&path) {
+        for name in ["python3", "python"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate.canonicalize().or(Ok(candidate));
+            }
+        }
+    }
+    Err("Cannot locate a Python 3 executable. Install Python 3 or set DESIGN_SPACE_RECOVERY_PYTHON to its absolute path.".to_string())
+}
+
+#[derive(Default)]
+struct BoundedOutput {
+    text: String,
+    total_bytes: usize,
+    truncated: bool,
+}
+
+impl BoundedOutput {
+    fn push(&mut self, bytes: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
+        let remaining = MAX_SUBPROCESS_OUTPUT_BYTES.saturating_sub(self.text.len());
+        if remaining > 0 {
+            self.text.push_str(&String::from_utf8_lossy(
+                &bytes[..bytes.len().min(remaining)],
+            ));
+        }
+        self.truncated |= bytes.len() > remaining;
+    }
+
+    fn display(&self) -> String {
+        let trimmed = self.text.trim();
+        if self.truncated {
+            format!(
+                "{trimmed}\n[output truncated after {MAX_SUBPROCESS_OUTPUT_BYTES} bytes; {} bytes drained]",
+                self.total_bytes
+            )
+        } else {
+            trimmed.to_string()
+        }
+    }
+}
+
+fn drain_bounded(mut reader: impl Read) -> BoundedOutput {
+    let mut output = BoundedOutput::default();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => output.push(&chunk[..count]),
+            Err(error) => {
+                output.push(format!("\n[stream read failed: {error}]").as_bytes());
+                break;
+            }
+        }
+    }
+    output
+}
+
+fn emit_recovery_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    message: &str,
+    details: serde_json::Value,
+) {
+    let payload = recovery_progress_payload(phase, message, details);
+    if let Err(error) = app.emit("design-space-recovery-progress", payload) {
+        eprintln!("[Design Space recovery] progress event failed: {error}");
+    }
+}
+
+fn recovery_progress_payload(
+    phase: &str,
+    message: &str,
+    details: serde_json::Value,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "phase": phase,
+        "message": message,
+    });
+    if let (Some(target), Some(source)) = (payload.as_object_mut(), details.as_object()) {
+        target.extend(source.clone());
+    }
+    payload
+}
+
+struct ExtractionRequest {
+    manifest_path: PathBuf,
     export_destination: String,
-    job_id: String,
-) -> Result<RecoveryReport, String> {
-    let manifest_path = PathBuf::from(manifest_path);
-    verify_manifest(&manifest_path, None)?;
-    let manifest = read_manifest(&manifest_path)?;
-    let backup_root = manifest_path
+    python: PathBuf,
+    script: PathBuf,
+    audit_path: PathBuf,
+}
+
+fn run_recovery_extractor<F>(
+    request: ExtractionRequest,
+    cancelled: &AtomicBool,
+    emit: &F,
+) -> Result<RecoveryReport, String>
+where
+    F: Fn(serde_json::Value),
+{
+    if !request.python.is_file() {
+        return Err(format!(
+            "Python executable is missing: {}",
+            request.python.display()
+        ));
+    }
+    if !request.script.is_file() {
+        return Err(format!(
+            "Chromium recovery script is missing: {}",
+            request.script.display()
+        ));
+    }
+    emit(recovery_progress_payload(
+        "validate-backup",
+        "Validating the verified backup byte-for-byte…",
+        serde_json::json!({}),
+    ));
+    let verification = verify_manifest(&request.manifest_path, Some(cancelled))?;
+    let manifest = read_manifest(&request.manifest_path)?;
+    let backup_root = request
+        .manifest_path
         .parent()
         .ok_or_else(|| "Backup root is invalid.".to_string())?
         .to_path_buf();
-    let export_root = expand_destination(&export_destination)?.join(format!(
+    audit(
+        &request.audit_path,
+        "extract",
+        "backup-validated",
+        serde_json::json!({
+            "bytes": verification.total_bytes,
+            "files": verification.file_count,
+        }),
+    )?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Recovery cancelled; the verified backup remains unchanged.".to_string());
+    }
+
+    let export_root = expand_destination(&request.export_destination)?.join(format!(
         "design-space-recovered-{}",
         Utc::now().format("%Y%m%dT%H%M%SZ")
     ));
@@ -865,17 +1053,29 @@ pub async fn recovery_extract(
             export_root.display()
         )
     })?;
-    let cancelled = register_job(&state, &job_id)?;
-    let script = recovery_tool_path(&app)?;
-    let audit_path = backup_root.join("recovery-audit.jsonl");
+    emit(recovery_progress_payload(
+        "launch-extractor",
+        "Launching the read-only Chromium extractor…",
+        serde_json::json!({}),
+    ));
     audit(
-        &audit_path,
+        &request.audit_path,
         "extract",
-        "started",
-        serde_json::json!({"backup": backup_root, "export": export_root}),
+        "launching",
+        serde_json::json!({
+            "python": request.python,
+            "script": request.script,
+            "export": export_root,
+        }),
     )?;
-    let mut child = Command::new("python3")
-        .arg(script)
+    eprintln!(
+        "[Design Space recovery] launching extractor python={} script={}",
+        request.python.display(),
+        request.script.display()
+    );
+
+    let mut child = Command::new(&request.python)
+        .arg(&request.script)
         .arg("--backup-root")
         .arg(&backup_root)
         .arg("--export-root")
@@ -888,7 +1088,12 @@ pub async fn recovery_extract(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("Cannot start the bundled Python recovery reader: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Cannot start Python recovery reader with {}: {error}",
+                request.python.display()
+            )
+        })?;
     let stdout = child
         .stdout
         .take()
@@ -899,39 +1104,67 @@ pub async fn recovery_extract(
         .ok_or_else(|| "Recovery reader produced no error stream.".to_string())?;
     let (progress_tx, progress_rx) = mpsc::channel();
     let stdout_thread = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            if progress_tx.send(line).is_err() {
-                break;
+        let mut captured = BoundedOutput::default();
+        let mut reader = BufReader::new(stdout);
+        let mut chunk = [0_u8; 8192];
+        let mut pending = Vec::new();
+        let mut oversized_line = false;
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => {
+                    captured.push(&chunk[..count]);
+                    for byte in &chunk[..count] {
+                        if *byte == b'\n' {
+                            if !oversized_line {
+                                let line = String::from_utf8_lossy(&pending).into_owned();
+                                let _ = progress_tx.send(line);
+                            }
+                            pending.clear();
+                            oversized_line = false;
+                        } else if pending.len() < MAX_PROGRESS_EVENT_BYTES {
+                            pending.push(*byte);
+                        } else {
+                            oversized_line = true;
+                        }
+                    }
+                }
+                Err(error) => {
+                    captured.push(format!("\n[stdout read failed: {error}]\n").as_bytes());
+                    break;
+                }
             }
         }
+        if !pending.is_empty() && !oversized_line {
+            let _ = progress_tx.send(String::from_utf8_lossy(&pending).into_owned());
+        }
+        captured
     });
-    let stderr_thread = thread::spawn(move || {
-        let mut message = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut message);
-        message
-    });
+    let stderr_thread = thread::spawn(move || drain_bounded(stderr));
     let status = loop {
         if cancelled.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
-            finish_job(&state, &job_id);
-            audit(
-                &audit_path,
+            let stdout = stdout_thread.join().unwrap_or_default();
+            let stderr = stderr_thread.join().unwrap_or_default();
+            let _ = audit(
+                &request.audit_path,
                 "extract",
                 "cancelled",
-                serde_json::json!({"partialExport": export_root}),
-            )?;
+                serde_json::json!({
+                    "partialExport": export_root,
+                    "stdout": stdout.display(),
+                    "stderr": stderr.display(),
+                }),
+            );
             return Err(
                 "Recovery cancelled; the verified backup and partial export were preserved."
                     .to_string(),
             );
         }
         while let Ok(line) = progress_rx.try_recv() {
-            let line = line.map_err(|error| format!("Cannot read recovery progress: {error}"))?;
             if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&line) {
-                let _ = app.emit("design-space-recovery-progress", progress);
+                emit(progress);
             }
         }
         if let Some(status) = child
@@ -942,28 +1175,54 @@ pub async fn recovery_extract(
         }
         thread::sleep(Duration::from_millis(100));
     };
-    let _ = stdout_thread.join();
+    let stdout = stdout_thread.join().unwrap_or_else(|_| {
+        let mut output = BoundedOutput::default();
+        output.push(b"Recovery reader stdout thread failed.");
+        output
+    });
     while let Ok(line) = progress_rx.try_recv() {
-        if let Ok(line) = line {
-            if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&line) {
-                let _ = app.emit("design-space-recovery-progress", progress);
-            }
+        if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&line) {
+            emit(progress);
         }
     }
-    let stderr = stderr_thread
-        .join()
-        .unwrap_or_else(|_| "Recovery reader stderr thread failed.".to_string());
-    finish_job(&state, &job_id);
+    let stderr = stderr_thread.join().unwrap_or_else(|_| {
+        let mut output = BoundedOutput::default();
+        output.push(b"Recovery reader stderr thread failed.");
+        output
+    });
+    eprintln!(
+        "[Design Space recovery] extractor exited status={} stdout_bytes={} stderr_bytes={}",
+        status, stdout.total_bytes, stderr.total_bytes
+    );
     if !status.success() {
-        let error = stderr.trim().to_string();
+        let stderr_detail = stderr.display();
+        let stdout_detail = stdout.display();
         audit(
-            &audit_path,
+            &request.audit_path,
             "extract",
             "failed",
-            serde_json::json!({"error": error, "partialExport": export_root}),
+            serde_json::json!({
+                "exitStatus": status.to_string(),
+                "stdout": stdout_detail,
+                "stderr": stderr_detail,
+                "partialExport": export_root,
+            }),
         )?;
-        return Err(format!("Chromium recovery reader failed: {error}"));
+        let concise = if stderr_detail.is_empty() {
+            "No stderr was produced.".to_string()
+        } else {
+            stderr_detail.chars().take(2000).collect()
+        };
+        return Err(format!(
+            "Chromium recovery reader exited with {status}: {concise}"
+        ));
     }
+
+    emit(recovery_progress_payload(
+        "recovery-report",
+        "Generating and validating the recovery report…",
+        serde_json::json!({}),
+    ));
     let report_path = export_root.join("recovery-report.json");
     let mut report: RecoveryReport = serde_json::from_reader(
         File::open(&report_path).map_err(|error| format!("Recovery report is missing: {error}"))?,
@@ -971,16 +1230,102 @@ pub async fn recovery_extract(
     .map_err(|error| format!("Recovery report is invalid: {error}"))?;
     report.report_path = report_path.display().to_string();
     audit(
-        &audit_path,
+        &request.audit_path,
         "extract",
         "completed",
         serde_json::json!({
             "report": report_path,
             "projectsRecovered": report.projects_recovered,
             "corruptRecords": report.corrupt_records,
+            "stdout": stdout.display(),
+            "stderr": stderr.display(),
         }),
     )?;
     Ok(report)
+}
+
+#[tauri::command]
+pub async fn recovery_extract(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RecoveryJobs>,
+    manifest_path: String,
+    export_destination: String,
+    job_id: String,
+) -> Result<RecoveryReport, String> {
+    eprintln!("[Design Space recovery] recovery_extract command began job={job_id}");
+    let cancelled = register_extraction_job(&state, &job_id)?;
+    let manifest_path = PathBuf::from(manifest_path);
+    let audit_path = manifest_path
+        .parent()
+        .map(|path| path.join("recovery-audit.jsonl"));
+    emit_recovery_progress(
+        &app,
+        "validate-backup",
+        "Validating the verified backup…",
+        serde_json::json!({}),
+    );
+    let result = async {
+        let audit_path = audit_path
+            .clone()
+            .ok_or_else(|| "Backup manifest has no parent folder.".to_string())?;
+        audit(
+            &audit_path,
+            "extract",
+            "requested",
+            serde_json::json!({"jobId": job_id}),
+        )?;
+        let python = resolve_python_executable()?;
+        let script = recovery_tool_path(&app)?;
+        eprintln!(
+            "[Design Space recovery] resolved python={} script={}",
+            python.display(),
+            script.display()
+        );
+        audit(
+            &audit_path,
+            "extract",
+            "runtime-resolved",
+            serde_json::json!({"python": python, "script": script}),
+        )?;
+        let app_for_worker = app.clone();
+        let cancelled_for_worker = cancelled.clone();
+        let request = ExtractionRequest {
+            manifest_path,
+            export_destination,
+            python,
+            script,
+            audit_path,
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            let emit = |progress| {
+                if let Err(error) = app_for_worker.emit("design-space-recovery-progress", progress)
+                {
+                    eprintln!("[Design Space recovery] progress event failed: {error}");
+                }
+            };
+            run_recovery_extractor(request, &cancelled_for_worker, &emit)
+        })
+        .await
+        .map_err(|error| format!("Recovery worker could not complete: {error}"))?
+    }
+    .await;
+    finish_extraction_job(&state, &job_id);
+    if let Err(error) = &result {
+        eprintln!("[Design Space recovery] recovery_extract failed: {error}");
+        if let Some(audit_path) = &audit_path {
+            let _ = audit(
+                audit_path,
+                "extract",
+                "command-failed",
+                serde_json::json!({"error": error}),
+            );
+            return Err(format!(
+                "{error} Detailed audit log: {}",
+                audit_path.display()
+            ));
+        }
+    }
+    result
 }
 
 fn verify_source_matches_backup(
@@ -1175,6 +1520,31 @@ mod tests {
         detect_with_home(root).unwrap().remove(0)
     }
 
+    fn fixture_backup(root: &Path) -> BackupReport {
+        let candidate = fixture_candidate(root);
+        create_backup(
+            &candidate,
+            &root.join("verified-backup"),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    }
+
+    fn extraction_request(
+        root: &Path,
+        backup: &BackupReport,
+        python: PathBuf,
+        script: PathBuf,
+    ) -> ExtractionRequest {
+        ExtractionRequest {
+            manifest_path: PathBuf::from(&backup.manifest_path),
+            export_destination: root.join("exports").display().to_string(),
+            python,
+            script,
+            audit_path: PathBuf::from(&backup.audit_log_path),
+        }
+    }
+
     #[test]
     fn detects_only_supported_profiles_and_exact_origin() {
         let root = test_root("detect");
@@ -1243,6 +1613,26 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_default_browser_home_does_not_lock_another_profile_root() {
+        let chrome = default_browser_root_from_environment(
+            "/opt/google/chrome/google-chrome",
+            b"USER=test\0HOME=/home/other-user\0",
+        )
+        .unwrap();
+        assert_eq!(chrome, Path::new("/home/other-user/.config/google-chrome"));
+        assert_ne!(
+            chrome,
+            Path::new("/tmp/recovery-fixture/.config/google-chrome")
+        );
+        let chromium = default_browser_root_from_environment(
+            "/usr/lib/chromium/chromium",
+            b"HOME=/home/chromium-user\0",
+        )
+        .unwrap();
+        assert_eq!(chromium, Path::new("/home/chromium-user/.config/chromium"));
+    }
+
+    #[test]
     fn refuses_insufficient_space_before_copy() {
         let root = test_root("space");
         let mut candidate = fixture_candidate(&root);
@@ -1284,6 +1674,141 @@ mod tests {
                 .extension()
                 .is_some_and(|ext| ext == "partial")));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extractor_reports_missing_python_and_missing_script() {
+        let root = test_root("extract-missing-runtime");
+        let backup = fixture_backup(&root);
+        let emit = |_progress| {};
+        let missing_python = extraction_request(
+            &root,
+            &backup,
+            root.join("missing-python"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("recovery_tools/recover_indexeddb.py"),
+        );
+        assert!(
+            run_recovery_extractor(missing_python, &AtomicBool::new(false), &emit)
+                .unwrap_err()
+                .contains("Python executable is missing")
+        );
+
+        let missing_script = extraction_request(
+            &root,
+            &backup,
+            resolve_python_executable().unwrap(),
+            root.join("missing-recovery-script.py"),
+        );
+        assert!(
+            run_recovery_extractor(missing_script, &AtomicBool::new(false), &emit)
+                .unwrap_err()
+                .contains("recovery script is missing")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nonzero_extractor_exit_has_bounded_stderr_and_audit_details() {
+        let root = test_root("extract-stderr");
+        let backup = fixture_backup(&root);
+        let script = root.join("fail-extractor.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 150000 ]; do printf x >&2; i=$((i + 1)); done\nexit 7\n",
+        )
+        .unwrap();
+        let request = extraction_request(&root, &backup, PathBuf::from("/bin/sh"), script);
+        let error =
+            run_recovery_extractor(request, &AtomicBool::new(false), &|_progress| {}).unwrap_err();
+        assert!(error.contains("exited with exit status: 7"));
+        assert!(error.len() < 3_000);
+        let audit = fs::read_to_string(&backup.audit_log_path).unwrap();
+        assert!(audit.contains("output truncated after 131072 bytes"));
+        assert!(audit.len() < 300_000);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verified_fixture_launches_real_extractor_and_emits_all_stages() {
+        let root = test_root("extract-success");
+        let candidate = fixture_candidate(&root);
+        let fixture_path = Path::new(&candidate.database_path).join("recovery-fixture.ndjson");
+        let payload = serde_json::json!({
+            "projectName": "IPC Fixture",
+            "canvasData": {"objects": [{"type": "rect", "fill": "blue"}]},
+            "canvasSize": {"width": 800, "height": 600}
+        });
+        let rows = [
+            serde_json::json!({
+                "store": "projects", "key": "fixture-project", "seq": 1,
+                "value": {"id": "fixture-project", "name": "IPC Fixture"}
+            }),
+            serde_json::json!({
+                "store": "canvasData", "key": "fixture-canvas", "seq": 2,
+                "value": {
+                    "projectId": "fixture-project",
+                    "jsonPayload": serde_json::to_string(&payload).unwrap()
+                }
+            }),
+        ];
+        fs::write(
+            &fixture_path,
+            rows.iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let source_hash = sha256_file(&fixture_path, None).unwrap().1;
+        let backup = create_backup(
+            &candidate,
+            &root.join("verified-backup"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let phases = Mutex::new(Vec::new());
+        let report = run_recovery_extractor(
+            extraction_request(
+                &root,
+                &backup,
+                resolve_python_executable().unwrap(),
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("recovery_tools/recover_indexeddb.py"),
+            ),
+            &AtomicBool::new(false),
+            &|progress| {
+                if let Some(phase) = progress.get("phase").and_then(|value| value.as_str()) {
+                    phases.lock().unwrap().push(phase.to_string());
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(report.projects_recovered, 1);
+        assert!(Path::new(&report.report_path).is_file());
+        assert_eq!(sha256_file(&fixture_path, None).unwrap().1, source_hash);
+        let phases = phases.into_inner().unwrap();
+        for expected in [
+            "validate-backup",
+            "launch-extractor",
+            "scan-indexeddb",
+            "validate-projects",
+            "write-exports",
+            "recovery-report",
+        ] {
+            assert!(phases.iter().any(|phase| phase == expected), "{expected}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicate_extraction_jobs_are_rejected_until_the_first_finishes() {
+        let state = RecoveryJobs::default();
+        register_extraction_job(&state, "extract-first").unwrap();
+        assert!(register_extraction_job(&state, "extract-second")
+            .unwrap_err()
+            .contains("already running"));
+        finish_extraction_job(&state, "extract-first");
+        register_extraction_job(&state, "extract-retry").unwrap();
+        finish_extraction_job(&state, "extract-retry");
     }
 
     #[test]
