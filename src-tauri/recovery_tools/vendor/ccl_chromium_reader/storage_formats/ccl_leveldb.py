@@ -222,7 +222,12 @@ class LdbFile:
         if magic != LdbFile.MAGIC:
             raise ValueError(f"Invalid magic number in {file}")
 
-        self._index = self._read_index()
+        # Do not eagerly decode and retain the table index. Large Chromium
+        # stores can contain tens of millions of index entries spread across
+        # many tables; materializing every `(key, BlockHandle)` tuple here
+        # multiplies memory usage far beyond the bytes on disk. The recovery
+        # reader walks one immutable table at a time, so its index can be
+        # decompressed lazily and released when that table has been consumed.
 
     def _read_block(self, handle: BlockHandle) -> Block:
         # block is the size in the blockhandle plus the trailer
@@ -245,15 +250,11 @@ class LdbFile:
 
         return Block(raw_block, is_compressed, self, handle.offset)
 
-    def _read_index(self) -> typing.Tuple[typing.Tuple[bytes, BlockHandle], ...]:
-        index_block = self._read_block(self._index_handle)
-        # key is earliest key, value is BlockHandle to that data block
-        return tuple((entry.key, BlockHandle.from_bytes(entry.value))
-                     for entry in index_block)
-
     def __iter__(self) -> typing.Iterable[Record]:
         """Iterate Records in this Table file"""
-        for block_key, handle in self._index:
+        index_block = self._read_block(self._index_handle)
+        for entry in index_block:
+            handle = BlockHandle.from_bytes(entry.value)
             block = self._read_block(handle)
             for entry in block:
                 yield Record.ldb_record(

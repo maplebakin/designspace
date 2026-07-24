@@ -13,6 +13,7 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import itertools
 import json
 import os
 import pathlib
@@ -322,12 +323,17 @@ def main() -> int:
 
     # Use two bounded passes. Metadata is small and retained by stable project
     # ID; canvas revisions are decoded and released one record at a time.
-    metadata_records = (
-        (record for record in iter_fixture_records(fixture) if record.get("store") in ("projects", "__decode_error__"))
+    recovery_records = iter(
+        iter_fixture_records(fixture)
         if fixture.is_file()
-        else iter_chromium_records(leveldb, blob, forensic_dir, ("projects",))
+        else iter_chromium_records(leveldb, blob, forensic_dir, ("projects", "canvasData"))
     )
+    first_canvas_record = None
+    metadata_records = recovery_records
     for record in metadata_records:
+        if record.get("store") == "canvasData":
+            first_canvas_record = record
+            break
         report["recordsScanned"] += 1
         if report["recordsScanned"] % 100 == 0:
             emit("progress", recordsScanned=report["recordsScanned"], projectsRecovered=report["projectsRecovered"])
@@ -353,10 +359,9 @@ def main() -> int:
                     report["thumbnailBytesExcluded"] += len(thumbnail.encode("utf-8"))
                 metadata[project_id] = {**cleaned, "_seq": int(record.get("seq", 0))}
             continue
-    canvas_records = (
-        (record for record in iter_fixture_records(fixture) if record.get("store") == "canvasData")
-        if fixture.is_file()
-        else iter_chromium_records(leveldb, blob, forensic_dir, ("canvasData",))
+    canvas_records = itertools.chain(
+        () if first_canvas_record is None else (first_canvas_record,),
+        recovery_records,
     )
     emit("phase", phase="validate-projects", message="Validating and migrating recovered project revisions.")
     for record in canvas_records:
@@ -535,5 +540,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        emit("fatal", message=str(error), traceback=traceback.format_exc(limit=12))
+        message = f"{type(error).__name__}: {error}".rstrip()
+        emit("fatal", message=message, traceback=traceback.format_exc(limit=12))
         raise SystemExit(1)

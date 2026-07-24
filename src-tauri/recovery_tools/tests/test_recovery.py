@@ -4,8 +4,16 @@ import json
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
+
+
+VENDOR = pathlib.Path(__file__).parents[1] / "vendor"
+sys.path.insert(0, str(VENDOR))
+
+from ccl_chromium_reader.storage_formats import ccl_leveldb
 
 
 class RecoveryFixtureTest(unittest.TestCase):
@@ -94,6 +102,41 @@ class RecoveryFixtureTest(unittest.TestCase):
         self.assertTrue(report["projects"][0]["complete"])
         self.assertTrue(any(item["usedOlderRevisionBecauseNewerWasCorrupt"] for item in report["projects"]))
         self.assertTrue((self.exports / "forensic" / "corrupt-records.jsonl").exists())
+
+    def test_leveldb_table_indexes_are_loaded_lazily(self):
+        table = self.root / "000001.ldb"
+        footer = b"\0\0\0\0" + (b"\0" * 36) + ccl_leveldb.LdbFile.MAGIC.to_bytes(8, "little")
+        table.write_bytes(footer)
+
+        class FakeBlock(list):
+            was_compressed = False
+            offset = 0
+
+        index = FakeBlock([
+            ccl_leveldb.RawBlockEntry(
+                key=b"index",
+                value=b"\0\0",
+                block_offset=0,
+            )
+        ])
+        data = FakeBlock([
+            ccl_leveldb.RawBlockEntry(
+                key=b"k" + (b"\0" * 8),
+                value=b"value",
+                block_offset=0,
+            )
+        ])
+        with mock.patch.object(
+            ccl_leveldb.LdbFile,
+            "_read_block",
+            side_effect=[index, data],
+        ) as read_block:
+            ldb = ccl_leveldb.LdbFile(table)
+            self.assertEqual(read_block.call_count, 0)
+            records = list(ldb)
+            self.assertEqual(read_block.call_count, 2)
+            self.assertEqual(records[0].value, b"value")
+            ldb.close()
 
 
 if __name__ == "__main__":

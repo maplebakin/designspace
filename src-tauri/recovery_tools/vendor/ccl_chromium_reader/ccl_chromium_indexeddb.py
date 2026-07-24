@@ -412,11 +412,32 @@ class IndexedDb:
         self._fetched_records = BoundedRecordStream(self._db)
 
     def _fetch_meta_data(self):
-        global_metadata_raw = self._get_raw_global_metadata()
+        # Chromium metadata is a tiny subset of the raw database. Upstream
+        # performs three complete LevelDB scans to fetch its global, database,
+        # and object-store layers. On a recovery copy with millions of
+        # duplicate revisions that repeatedly decompresses every table index.
+        # Collect only metadata-prefix records in one bounded scan and reuse
+        # that small list for all three metadata decoders.
+        metadata_records = []
+        global_metadata_raw = {}
+        for record in reversed(self._fetched_records):
+            if record.state != ccl_leveldb.KeyState.Live:
+                continue
+            try:
+                db_id, object_store_id, index_id, _ = self.read_prefix(io.BytesIO(record.key))
+            except (ValueError, TypeError):
+                continue
+            if object_store_id != 0 or index_id != 0:
+                continue
+            metadata_records.append(record)
+            if db_id == 0 and record.key.startswith(b"\x00\x00\x00\x00"):
+                current = global_metadata_raw.get(record.key)
+                if current is None or current.seq < record.seq:
+                    global_metadata_raw[record.key] = record
         self.global_metadata = GlobalMetadata(global_metadata_raw)
-        database_metadata_raw = self._get_raw_database_metadata()
+        database_metadata_raw = self._get_raw_database_metadata(metadata_records)
         self.database_metadata = DatabaseMetadata(database_metadata_raw)
-        objectstore_metadata_raw = self._get_raw_object_store_metadata()
+        objectstore_metadata_raw = self._get_raw_object_store_metadata(metadata_records)
         self.object_store_meta = ObjectStoreMetadata(objectstore_metadata_raw)
 
     @staticmethod
@@ -502,7 +523,7 @@ class IndexedDb:
 
         return meta
 
-    def _get_raw_database_metadata(self, live_only=True):
+    def _get_raw_database_metadata(self, records=None, live_only=True):
         if not live_only:
             raise NotImplementedError("Deleted metadata not implemented yet")
 
@@ -511,7 +532,8 @@ class IndexedDb:
         for db_id in self.global_metadata.db_ids:
 
             prefix = IndexedDb.make_prefix(db_id.dbid_no, 0, 0)
-            for record in reversed(self._fetched_records):
+            source = records if records is not None else reversed(self._fetched_records)
+            for record in source:
                 if record.key.startswith(prefix) and record.state == ccl_leveldb.KeyState.Live:
                     # we only want live keys and the newest version thereof (highest seq)
                     meta_type = record.key[len(prefix)]
@@ -521,7 +543,7 @@ class IndexedDb:
 
         return db_meta
 
-    def _get_raw_object_store_metadata(self, live_only=True):
+    def _get_raw_object_store_metadata(self, records=None, live_only=True):
         if not live_only:
             raise NotImplementedError("Deleted metadata not implemented yet")
 
@@ -531,7 +553,8 @@ class IndexedDb:
 
             prefix = IndexedDb.make_prefix(db_id.dbid_no, 0, 0, [50])
 
-            for record in reversed(self._fetched_records):
+            source = records if records is not None else reversed(self._fetched_records)
+            for record in source:
                 if record.key.startswith(prefix) and record.state == ccl_leveldb.KeyState.Live:
                     # we only want live keys and the newest version thereof (highest seq)
                     objstore_id, varint_raw = _le_varint_from_bytes(record.key[len(prefix):])

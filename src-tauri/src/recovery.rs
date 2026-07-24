@@ -1210,10 +1210,9 @@ fn latest_failure_from_audit(path: &Path) -> Option<String> {
         if status != "failed" && status != "command-failed" {
             return None;
         }
-        entry
-            .pointer("/details/error")
-            .or_else(|| entry.pointer("/details/stderr"))
-            .and_then(|value| value.as_str())
+        ["/details/error", "/details/fatal", "/details/stderr"]
+            .iter()
+            .find_map(|pointer| entry.pointer(pointer).and_then(|value| value.as_str()))
             .map(str::to_string)
     })
 }
@@ -1943,6 +1942,7 @@ where
         captured
     });
     let stderr_thread = thread::spawn(move || drain_bounded(stderr));
+    let mut fatal_detail = None;
     let status = loop {
         if cancelled.load(Ordering::Relaxed) {
             let _ = child.kill();
@@ -1966,6 +1966,9 @@ where
         }
         while let Ok(line) = progress_rx.try_recv() {
             if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&line) {
+                if let Some(fatal) = structured_fatal_event(&progress) {
+                    fatal_detail = Some(fatal);
+                }
                 emit(progress);
             }
         }
@@ -1984,6 +1987,9 @@ where
     });
     while let Ok(line) = progress_rx.try_recv() {
         if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(fatal) = structured_fatal_event(&progress) {
+                fatal_detail = Some(fatal);
+            }
             emit(progress);
         }
     }
@@ -1999,6 +2005,7 @@ where
     if !status.success() {
         let stderr_detail = stderr.display();
         let stdout_detail = stdout.display();
+        let structured_fatal = fatal_detail.or_else(|| structured_fatal_message(&stdout_detail));
         audit(
             &request.audit_path,
             "extract",
@@ -2007,11 +2014,14 @@ where
                 "exitStatus": status.to_string(),
                 "stdout": stdout_detail,
                 "stderr": stderr_detail,
+                "fatal": structured_fatal,
                 "partialExport": export_root,
             }),
         )?;
-        let concise = if stderr_detail.is_empty() {
-            "No stderr was produced.".to_string()
+        let concise = if let Some(fatal) = structured_fatal {
+            fatal
+        } else if stderr_detail.is_empty() {
+            "The reader produced no structured fatal error or stderr. Review the audit log for its bounded stdout.".to_string()
         } else {
             stderr_detail.chars().take(2000).collect()
         };
@@ -2044,6 +2054,30 @@ where
         }),
     )?;
     Ok(report)
+}
+
+fn structured_fatal_message(stdout: &str) -> Option<String> {
+    stdout.lines().rev().find_map(|line| {
+        let event = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        structured_fatal_event(&event)
+    })
+}
+
+fn structured_fatal_event(event: &serde_json::Value) -> Option<String> {
+    if event.get("event").and_then(|value| value.as_str()) != Some("fatal") {
+        return None;
+    }
+    let message = event
+        .get("message")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty());
+    let traceback_tail = event
+        .get("traceback")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.lines().rev().find(|line| !line.trim().is_empty()));
+    message
+        .or(traceback_tail)
+        .map(|value| value.chars().take(2000).collect())
 }
 
 #[tauri::command]
@@ -2692,6 +2726,27 @@ mod tests {
         assert!(audit.len() < 300_000);
         assert!(latest_failure_from_audit(Path::new(&backup.audit_log_path))
             .is_some_and(|failure| failure.contains('x')));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nonzero_extractor_surfaces_structured_fatal_stdout_without_stderr() {
+        let root = test_root("extract-stdout-fatal");
+        let backup = fixture_backup(&root);
+        let script = root.join("fail-extractor.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 150000 ]; do printf x; i=$((i + 1)); done\nprintf '\\n%s\\n' '{\"event\":\"fatal\",\"message\":\"MemoryError: bounded table index allocation failed\",\"traceback\":\"trace\"}'\nexit 1\n",
+        )
+        .unwrap();
+        let request = extraction_request(&root, &backup, PathBuf::from("/bin/sh"), script);
+        let error =
+            run_recovery_extractor(request, &AtomicBool::new(false), &|_progress| {}).unwrap_err();
+        assert!(error.contains("MemoryError: bounded table index allocation failed"));
+        assert!(!error.contains("No stderr was produced"));
+        let audit = fs::read_to_string(&backup.audit_log_path).unwrap();
+        assert!(audit.contains("bounded table index allocation failed"));
+        assert!(audit.contains("output truncated after 131072 bytes"));
         fs::remove_dir_all(root).unwrap();
     }
 
