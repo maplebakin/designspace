@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::CString,
     fs::{self, File, OpenOptions},
     io::{BufReader, Read, Write},
@@ -14,7 +14,7 @@ use std::{
         mpsc, Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
@@ -24,6 +24,8 @@ const DELETE_CONFIRMATION: &str = "DELETE LOCALHOST 5174 DATABASE";
 const BACKUP_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SUBPROCESS_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_PROGRESS_EVENT_BYTES: usize = 64 * 1024;
+const MAX_RECOVERY_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const SESSION_VERSION: u32 = 1;
 
 #[derive(Default)]
 pub struct RecoveryJobs {
@@ -70,6 +72,8 @@ struct BackupFile {
     relative_path: String,
     size_bytes: u64,
     sha256: String,
+    #[serde(default)]
+    modified_unix_millis: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +89,7 @@ struct BackupManifest {
     files: Vec<BackupFile>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupReport {
     pub backup_path: String,
@@ -105,7 +109,7 @@ pub struct VerificationReport {
     pub manifest_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryReport {
     pub version: u32,
@@ -143,6 +147,57 @@ pub struct CleanupReport {
     pub free_bytes_before: u64,
     pub free_bytes_after: u64,
     pub source_absent: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumableBackup {
+    pub id: String,
+    pub backup_path: String,
+    pub manifest_path: String,
+    pub audit_log_path: String,
+    pub total_bytes: u64,
+    pub file_count: u64,
+    pub verified: bool,
+    pub previously_verified: bool,
+    pub fast_validation_passed: bool,
+    pub requires_full_verification: bool,
+    pub created_at: Option<String>,
+    pub status: String,
+    pub rejection_reason: Option<String>,
+    pub report: Option<RecoveryReport>,
+    pub recovery_completed: bool,
+    pub last_failure: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeDiscovery {
+    pub backups: Vec<ResumableBackup>,
+    pub selected_manifest_path: Option<String>,
+    pub searched_roots: Vec<String>,
+    pub session_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoverySession {
+    version: u32,
+    database_id: String,
+    browser: String,
+    profile: String,
+    profile_path: String,
+    database_path: String,
+    blob_path: Option<String>,
+    origin: String,
+    recovery_roots: Vec<String>,
+    selected_backup_path: Option<String>,
+    selected_manifest_path: Option<String>,
+    export_destination: Option<String>,
+    recovery_report_path: Option<String>,
+    extraction_completed: bool,
+    last_failure: Option<String>,
+    updated_at: String,
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -489,6 +544,396 @@ fn application_audit(
     Ok(path)
 }
 
+fn recovery_session_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot locate Design Space application data: {error}"))?;
+    fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "Cannot create recovery session directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    Ok(directory.join("browser-recovery-session.json"))
+}
+
+fn read_bounded_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Cannot inspect recovery metadata {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "Recovery metadata is not a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_RECOVERY_METADATA_BYTES {
+        return Err(format!(
+            "Recovery metadata exceeds the {} byte safety limit: {}",
+            MAX_RECOVERY_METADATA_BYTES,
+            path.display()
+        ));
+    }
+    serde_json::from_reader(
+        File::open(path).map_err(|error| {
+            format!("Cannot open recovery metadata {}: {error}", path.display())
+        })?,
+    )
+    .map_err(|error| format!("Invalid recovery metadata {}: {error}", path.display()))
+}
+
+fn load_recovery_session(app: &tauri::AppHandle) -> Result<Option<RecoverySession>, String> {
+    let path = recovery_session_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let session: RecoverySession = read_bounded_json(&path)?;
+    if session.version != SESSION_VERSION {
+        return Ok(None);
+    }
+    Ok(Some(session))
+}
+
+fn write_recovery_session(
+    app: &tauri::AppHandle,
+    session: &RecoverySession,
+) -> Result<PathBuf, String> {
+    let path = recovery_session_path(app)?;
+    let partial = path.with_extension("json.partial");
+    let file = File::create(&partial).map_err(|error| {
+        format!(
+            "Cannot create recovery session {}: {error}",
+            partial.display()
+        )
+    })?;
+    serde_json::to_writer_pretty(file, session)
+        .map_err(|error| format!("Cannot write recovery session: {error}"))?;
+    fs::rename(&partial, &path).map_err(|error| {
+        format!(
+            "Cannot finalize recovery session {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+fn session_for_candidate(
+    candidate: &RecoveryCandidate,
+    recovery_roots: Vec<String>,
+) -> RecoverySession {
+    RecoverySession {
+        version: SESSION_VERSION,
+        database_id: candidate.id.clone(),
+        browser: candidate.browser.clone(),
+        profile: candidate.profile.clone(),
+        profile_path: candidate.profile_path.clone(),
+        database_path: candidate.database_path.clone(),
+        blob_path: candidate.blob_path.clone(),
+        origin: candidate.origin.clone(),
+        recovery_roots,
+        selected_backup_path: None,
+        selected_manifest_path: None,
+        export_destination: None,
+        recovery_report_path: None,
+        extraction_completed: false,
+        last_failure: None,
+        updated_at: Utc::now().to_rfc3339(),
+    }
+}
+
+fn record_recovery_session(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    export_destination: Option<&str>,
+    report: Option<&RecoveryReport>,
+    failure: Option<&str>,
+) -> Result<(), String> {
+    let manifest = read_manifest(manifest_path)?;
+    let backup_root = manifest_path
+        .parent()
+        .ok_or_else(|| "Backup manifest has no parent folder.".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve selected backup: {error}"))?;
+    let mut roots = backup_root
+        .parent()
+        .map(|value| vec![value.display().to_string()])
+        .unwrap_or_default();
+    let expanded_export = export_destination.map(expand_destination).transpose()?;
+    if let Some(export) = &expanded_export {
+        let canonical_or_requested = export.canonicalize().unwrap_or_else(|_| export.clone());
+        let display = canonical_or_requested.display().to_string();
+        if !roots.contains(&display) {
+            roots.push(display);
+        }
+    }
+    let mut session = session_for_candidate(&manifest.source, roots);
+    session.selected_backup_path = Some(backup_root.display().to_string());
+    session.selected_manifest_path = Some(manifest_path.display().to_string());
+    session.export_destination = expanded_export.map(|path| path.display().to_string());
+    session.recovery_report_path = report.map(|value| value.report_path.clone());
+    session.extraction_completed = report.is_some();
+    session.last_failure = failure.map(str::to_string);
+    session.updated_at = Utc::now().to_rfc3339();
+    write_recovery_session(app, &session)?;
+    Ok(())
+}
+
+fn source_identity_matches(
+    manifest: &BackupManifest,
+    candidate: &RecoveryCandidate,
+) -> Result<(), String> {
+    let source = &manifest.source;
+    if source.id != candidate.id
+        || source.browser != candidate.browser
+        || source.profile != candidate.profile
+        || source.origin != ORIGIN_LABEL
+        || source.origin != candidate.origin
+        || source.profile_path != candidate.profile_path
+        || source.database_path != candidate.database_path
+        || source.blob_path != candidate.blob_path
+    {
+        return Err(
+            "Backup belongs to a different browser profile, origin, or canonical source path."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn audit_confirms_verified_backup(
+    path: &Path,
+    expected_bytes: u64,
+    expected_files: u64,
+) -> Result<bool, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Backup audit log is missing: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Backup audit log is not a regular file.".to_string());
+    }
+    if metadata.len() > MAX_RECOVERY_METADATA_BYTES {
+        return Err("Backup audit log exceeds the metadata safety limit.".to_string());
+    }
+    let input = std::io::BufReader::new(
+        File::open(path).map_err(|error| format!("Cannot open backup audit log: {error}"))?,
+    );
+    for line in std::io::BufRead::lines(input) {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if entry.get("action").and_then(|value| value.as_str()) == Some("backup")
+            && entry.get("status").and_then(|value| value.as_str()) == Some("verified")
+            && entry
+                .pointer("/details/bytes")
+                .and_then(|value| value.as_u64())
+                == Some(expected_bytes)
+            && entry
+                .pointer("/details/files")
+                .and_then(|value| value.as_u64())
+                == Some(expected_files)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn backup_id(path: &Path) -> String {
+    let mut digest = Sha256::new();
+    digest.update(path.as_os_str().as_bytes());
+    format!("backup-{}", &hex::encode(digest.finalize())[..20])
+}
+
+fn rejected_backup(path: &Path, status: &str, reason: impl Into<String>) -> ResumableBackup {
+    ResumableBackup {
+        id: backup_id(path),
+        backup_path: path.display().to_string(),
+        manifest_path: path.join("backup-manifest.json").display().to_string(),
+        audit_log_path: path.join("recovery-audit.jsonl").display().to_string(),
+        total_bytes: 0,
+        file_count: 0,
+        verified: false,
+        previously_verified: false,
+        fast_validation_passed: false,
+        requires_full_verification: false,
+        created_at: None,
+        status: status.to_string(),
+        rejection_reason: Some(reason.into()),
+        report: None,
+        recovery_completed: false,
+        last_failure: None,
+    }
+}
+
+fn metadata_modified_millis(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+}
+
+fn fast_validate_backup(
+    backup_path: &Path,
+    approved_root: &Path,
+    candidate: &RecoveryCandidate,
+) -> Result<(ResumableBackup, BackupManifest), String> {
+    let root_metadata = fs::symlink_metadata(backup_path)
+        .map_err(|error| format!("Cannot inspect backup folder: {error}"))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err("Backup folder is a symlink or is not a directory.".to_string());
+    }
+    let canonical_root = approved_root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve approved recovery root: {error}"))?;
+    let canonical_backup = backup_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve backup folder: {error}"))?;
+    if !canonical_backup.starts_with(&canonical_root) || canonical_backup == canonical_root {
+        return Err("Backup path escapes the approved recovery root.".to_string());
+    }
+    let name = canonical_backup
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Backup folder name is invalid.".to_string())?;
+    if !name.starts_with("design-space-indexeddb-backup-") || name.ends_with(".partial") {
+        return Err(
+            "Backup folder is incomplete or does not use the recovery backup format.".into(),
+        );
+    }
+    if canonical_backup.join("backup-status.json").exists()
+        || fs::read_dir(&canonical_backup)
+            .map_err(|error| format!("Cannot inspect backup markers: {error}"))?
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".partial"))
+    {
+        return Err("Incomplete .partial backup marker found.".to_string());
+    }
+
+    let manifest_path = canonical_backup.join("backup-manifest.json");
+    let manifest: BackupManifest = read_bounded_json(&manifest_path)?;
+    if manifest.version != 1 || !manifest.verified || manifest.verified_at.is_none() {
+        return Err("Manifest is incomplete or was never marked verified.".to_string());
+    }
+    source_identity_matches(&manifest, candidate)?;
+    if manifest.files.len() as u64 != manifest.file_count
+        || manifest
+            .files
+            .iter()
+            .map(|entry| entry.size_bytes)
+            .sum::<u64>()
+            != manifest.total_bytes
+    {
+        return Err("Manifest file count or byte totals are inconsistent.".to_string());
+    }
+    let audit_path = canonical_backup.join("recovery-audit.jsonl");
+    if !audit_confirms_verified_backup(&audit_path, manifest.total_bytes, manifest.file_count)? {
+        return Err("Backup audit log has no matching verified completion record.".to_string());
+    }
+
+    let verified_at_millis = manifest
+        .verified_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .and_then(|value| u64::try_from(value.timestamp_millis()).ok());
+    let mut total_bytes = 0_u64;
+    let mut listed = HashSet::new();
+    let mut metadata_changed = false;
+    for entry in &manifest.files {
+        let relative = Path::new(&entry.relative_path);
+        validate_relative_path(relative)?;
+        if !(relative.starts_with("source/leveldb") || relative.starts_with("source/blob")) {
+            return Err(format!(
+                "Manifest entry is outside source/leveldb or source/blob: {}",
+                relative.display()
+            ));
+        }
+        if !listed.insert(entry.relative_path.clone()) {
+            return Err(format!("Duplicate manifest entry: {}", entry.relative_path));
+        }
+        let file = canonical_backup.join(relative);
+        let metadata = fs::symlink_metadata(&file)
+            .map_err(|_| format!("Listed backup file is missing: {}", file.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "Listed backup file is a symlink or not a regular file: {}",
+                file.display()
+            ));
+        }
+        let canonical_file = file
+            .canonicalize()
+            .map_err(|error| format!("Cannot resolve listed backup file: {error}"))?;
+        if !canonical_file.starts_with(&canonical_backup) {
+            return Err(format!(
+                "Listed backup file escapes the backup folder: {}",
+                file.display()
+            ));
+        }
+        if metadata.len() != entry.size_bytes {
+            return Err(format!(
+                "Listed backup file size changed: {}",
+                file.display()
+            ));
+        }
+        let actual_modified = metadata_modified_millis(&metadata);
+        if let Some(expected_modified) = entry.modified_unix_millis {
+            metadata_changed |= actual_modified != Some(expected_modified);
+        } else if let (Some(actual), Some(verified)) = (actual_modified, verified_at_millis) {
+            metadata_changed |= actual > verified.saturating_add(1_000);
+        }
+        total_bytes = total_bytes.saturating_add(metadata.len());
+    }
+    let source_root = canonical_backup.join("source");
+    let actual_files = collect_files(&source_root)?;
+    let actual_listed = actual_files
+        .iter()
+        .map(|file| {
+            file.strip_prefix(&canonical_backup)
+                .map(|value| value.display().to_string())
+                .map_err(|_| "Cannot validate backup source inventory.".to_string())
+        })
+        .collect::<Result<HashSet<_>, _>>()?;
+    if actual_listed != listed
+        || actual_files.len() as u64 != manifest.file_count
+        || total_bytes != manifest.total_bytes
+    {
+        return Err("Backup source inventory no longer matches the manifest.".to_string());
+    }
+
+    let status = if metadata_changed {
+        "Backup changed since verification"
+    } else {
+        "Fast validation passed"
+    };
+    Ok((
+        ResumableBackup {
+            id: backup_id(&canonical_backup),
+            backup_path: canonical_backup.display().to_string(),
+            manifest_path: manifest_path.display().to_string(),
+            audit_log_path: audit_path.display().to_string(),
+            total_bytes: manifest.total_bytes,
+            file_count: manifest.file_count,
+            verified: !metadata_changed,
+            previously_verified: true,
+            fast_validation_passed: !metadata_changed,
+            requires_full_verification: metadata_changed,
+            created_at: Some(manifest.created_at.clone()),
+            status: status.to_string(),
+            rejection_reason: None,
+            report: None,
+            recovery_completed: false,
+            last_failure: None,
+        },
+        manifest,
+    ))
+}
+
 fn copy_tree(
     source: &Path,
     destination: &Path,
@@ -542,6 +987,12 @@ fn copy_tree(
         output
             .sync_all()
             .map_err(|error| format!("Cannot sync {}: {error}", destination_file.display()))?;
+        let modified_unix_millis = destination_file
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64);
         entries.push(BackupFile {
             relative_path: Path::new("source")
                 .join(prefix)
@@ -550,6 +1001,7 @@ fn copy_tree(
                 .to_string(),
             size_bytes: size,
             sha256: hex::encode(digest.finalize()),
+            modified_unix_millis,
         });
     }
     Ok(())
@@ -646,6 +1098,313 @@ fn finish_extraction_job(state: &RecoveryJobs, job_id: &str) {
     state.extraction_running.store(false, Ordering::Release);
 }
 
+fn canonical_path_within(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Cannot inspect recovery path {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("Recovery path is a symlink: {}", path.display()));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve recovery path {}: {error}", path.display()))?;
+    if roots.iter().any(|root| canonical.starts_with(root)) {
+        Ok(canonical)
+    } else {
+        Err(format!(
+            "Recovery path is outside approved recovery roots: {}",
+            path.display()
+        ))
+    }
+}
+
+fn validate_recovery_report(
+    path: &Path,
+    backup_root: &Path,
+    manifest: &BackupManifest,
+    approved_roots: &[PathBuf],
+) -> Result<RecoveryReport, String> {
+    let canonical_report = canonical_path_within(path, approved_roots)?;
+    let mut report: RecoveryReport = read_bounded_json(&canonical_report)?;
+    if report.version != 1 {
+        return Err("Recovery report schema version is unsupported.".to_string());
+    }
+    let canonical_backup = backup_root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve report backup root: {error}"))?;
+    let reported_backup = Path::new(&report.backup_root)
+        .canonicalize()
+        .map_err(|error| format!("Recovery report backup no longer exists: {error}"))?;
+    if reported_backup != canonical_backup {
+        return Err("Recovery report belongs to a different verified backup.".to_string());
+    }
+    let expected_profile = format!("{} / {}", manifest.source.browser, manifest.source.profile);
+    if report.source_profile != expected_profile {
+        return Err("Recovery report belongs to a different browser profile.".to_string());
+    }
+    let canonical_export = canonical_path_within(Path::new(&report.export_root), approved_roots)?;
+    if !canonical_report.starts_with(&canonical_export)
+        || report.projects_recovered != report.projects.len() as u64
+    {
+        return Err("Recovery report export inventory is inconsistent.".to_string());
+    }
+    for project in &report.projects {
+        let project_path = project
+            .get("path")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Recovery report project path is missing.".to_string())?;
+        let canonical_project = canonical_path_within(Path::new(project_path), approved_roots)?;
+        if !canonical_project.starts_with(&canonical_export) {
+            return Err("Recovered project escapes its export folder.".to_string());
+        }
+        let expected_bytes = project.get("bytes").and_then(|value| value.as_u64());
+        if expected_bytes
+            != Some(
+                canonical_project
+                    .metadata()
+                    .map_err(|error| format!("Cannot inspect recovered project: {error}"))?
+                    .len(),
+            )
+        {
+            return Err("Recovered project size no longer matches its report.".to_string());
+        }
+    }
+    report.report_path = canonical_report.display().to_string();
+    Ok(report)
+}
+
+fn report_candidates(roots: &[PathBuf], session: Option<&RecoverySession>) -> Vec<PathBuf> {
+    let mut reports = Vec::new();
+    if let Some(path) = session.and_then(|value| value.recovery_report_path.as_deref()) {
+        reports.push(PathBuf::from(path));
+    }
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("design-space-recovered-")
+            {
+                reports.push(entry.path().join("recovery-report.json"));
+            }
+        }
+    }
+    reports.sort();
+    reports.dedup();
+    reports.reverse();
+    reports
+}
+
+fn latest_failure_from_audit(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > MAX_RECOVERY_METADATA_BYTES {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    content.lines().rev().find_map(|line| {
+        let entry = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        let status = entry.get("status")?.as_str()?;
+        if status != "failed" && status != "command-failed" {
+            return None;
+        }
+        entry
+            .pointer("/details/error")
+            .or_else(|| entry.pointer("/details/stderr"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    })
+}
+
+fn approved_recovery_roots(
+    requested: &[String],
+    session: Option<&RecoverySession>,
+) -> Result<Vec<PathBuf>, String> {
+    let mut raw_roots = vec![home_dir()?.join("Design-Space-Recovery")];
+    for raw in requested {
+        raw_roots.push(expand_destination(raw)?);
+    }
+    if let Some(session) = session {
+        raw_roots.extend(session.recovery_roots.iter().map(PathBuf::from));
+        if let Some(path) = &session.selected_backup_path {
+            if let Some(parent) = Path::new(path).parent() {
+                raw_roots.push(parent.to_path_buf());
+            }
+        }
+        if let Some(path) = &session.export_destination {
+            raw_roots.push(PathBuf::from(path));
+        }
+    }
+    let mut roots = Vec::new();
+    for root in raw_roots {
+        if !root.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&root)
+            .map_err(|error| format!("Cannot inspect recovery root {}: {error}", root.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let canonical = root
+            .canonicalize()
+            .map_err(|error| format!("Cannot resolve recovery root {}: {error}", root.display()))?;
+        if !roots.contains(&canonical) {
+            roots.push(canonical);
+        }
+    }
+    Ok(roots)
+}
+
+fn select_resumable_manifest(
+    backups: &[ResumableBackup],
+    preferred_manifest: Option<&str>,
+) -> Option<String> {
+    preferred_manifest
+        .filter(|manifest| {
+            backups.iter().any(|backup| {
+                backup.manifest_path == *manifest
+                    && (backup.fast_validation_passed || backup.requires_full_verification)
+            })
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            backups
+                .iter()
+                .find(|backup| backup.fast_validation_passed)
+                .or_else(|| {
+                    backups
+                        .iter()
+                        .find(|backup| backup.requires_full_verification)
+                })
+                .map(|backup| backup.manifest_path.clone())
+        })
+}
+
+fn discover_backups(
+    app: &tauri::AppHandle,
+    candidate: &RecoveryCandidate,
+    destinations: &[String],
+    preferred_manifest: Option<&str>,
+) -> Result<ResumeDiscovery, String> {
+    let session = load_recovery_session(app).ok().flatten().filter(|session| {
+        session.database_id == candidate.id
+            && session.database_path == candidate.database_path
+            && session.origin == candidate.origin
+    });
+    let roots = approved_recovery_roots(destinations, session.as_ref())?;
+    let reports = report_candidates(&roots, session.as_ref());
+    let mut backups = Vec::new();
+    for root in &roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("design-space-indexeddb-backup-") {
+                continue;
+            }
+            let path = entry.path();
+            if name.ends_with(".partial") {
+                backups.push(rejected_backup(
+                    &path,
+                    "Incomplete .partial backup found",
+                    "This backup was interrupted and cannot be resumed.",
+                ));
+                continue;
+            }
+            match fast_validate_backup(&path, root, candidate) {
+                Ok((mut backup, manifest)) => {
+                    for report_path in &reports {
+                        if !report_path.is_file() {
+                            continue;
+                        }
+                        if let Ok(report) = validate_recovery_report(
+                            report_path,
+                            Path::new(&backup.backup_path),
+                            &manifest,
+                            &roots,
+                        ) {
+                            backup.recovery_completed = true;
+                            backup.report = Some(report);
+                            backup.status = "Recovery report found".to_string();
+                            break;
+                        }
+                    }
+                    backup.last_failure = latest_failure_from_audit(Path::new(
+                        &backup.audit_log_path,
+                    ))
+                    .or_else(|| {
+                        session
+                            .as_ref()
+                            .and_then(|value| value.last_failure.clone())
+                    });
+                    backups.push(backup);
+                }
+                Err(error) => backups.push(rejected_backup(
+                    &path,
+                    if error.contains("size changed") || error.contains("inventory") {
+                        "Backup changed since verification"
+                    } else {
+                        "Backup rejected"
+                    },
+                    error,
+                )),
+            }
+        }
+    }
+    backups.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.backup_path.cmp(&left.backup_path))
+    });
+    let selected_manifest_path = select_resumable_manifest(
+        &backups,
+        preferred_manifest.or_else(|| {
+            session
+                .as_ref()
+                .and_then(|value| value.selected_manifest_path.as_deref())
+        }),
+    );
+
+    let mut reconciled = session.unwrap_or_else(|| session_for_candidate(candidate, Vec::new()));
+    reconciled.recovery_roots = roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect();
+    if let Some(selected) = selected_manifest_path
+        .as_deref()
+        .and_then(|path| backups.iter().find(|backup| backup.manifest_path == path))
+    {
+        reconciled.selected_backup_path = Some(selected.backup_path.clone());
+        reconciled.selected_manifest_path = Some(selected.manifest_path.clone());
+        reconciled.recovery_report_path = selected
+            .report
+            .as_ref()
+            .map(|report| report.report_path.clone());
+        reconciled.extraction_completed = selected.recovery_completed;
+        reconciled.last_failure = selected.last_failure.clone();
+    } else {
+        reconciled.selected_backup_path = None;
+        reconciled.selected_manifest_path = None;
+        reconciled.recovery_report_path = None;
+        reconciled.extraction_completed = false;
+    }
+    reconciled.updated_at = Utc::now().to_rfc3339();
+    let session_path = write_recovery_session(app, &reconciled)?;
+    Ok(ResumeDiscovery {
+        backups,
+        selected_manifest_path,
+        searched_roots: roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect(),
+        session_path: session_path.display().to_string(),
+    })
+}
+
 #[tauri::command]
 pub fn recovery_detect(app: tauri::AppHandle) -> Result<DetectionReport, String> {
     let candidates = detect_with_home(&home_dir()?)?;
@@ -670,6 +1429,34 @@ pub fn recovery_detect(app: tauri::AppHandle) -> Result<DetectionReport, String>
         delete_confirmation: DELETE_CONFIRMATION,
         audit_log_path: audit_log_path.display().to_string(),
     })
+}
+
+#[tauri::command]
+pub fn recovery_discover_backups(
+    app: tauri::AppHandle,
+    database_id: String,
+    destinations: Vec<String>,
+    preferred_manifest: Option<String>,
+) -> Result<ResumeDiscovery, String> {
+    let candidate = resolve_candidate(&database_id)?;
+    let result = discover_backups(
+        &app,
+        &candidate,
+        &destinations,
+        preferred_manifest.as_deref(),
+    )?;
+    application_audit(
+        &app,
+        "discover-backups",
+        "completed",
+        serde_json::json!({
+            "databaseId": database_id,
+            "searchedRoots": result.searched_roots,
+            "backupsFound": result.backups.len(),
+            "selectedManifestPath": result.selected_manifest_path,
+        }),
+    )?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -850,6 +1637,7 @@ fn create_backup(
 
 #[tauri::command]
 pub async fn recovery_create_backup(
+    app: tauri::AppHandle,
     state: tauri::State<'_, RecoveryJobs>,
     database_id: String,
     destination: String,
@@ -862,12 +1650,26 @@ pub async fn recovery_create_backup(
     let cancelled = register_job(&state, &job_id)?;
     let result = create_backup(&candidate, &destination, &cancelled);
     finish_job(&state, &job_id);
+    if let Ok(report) = &result {
+        record_recovery_session(&app, Path::new(&report.manifest_path), None, None, None)?;
+    }
     result
 }
 
 #[tauri::command]
-pub fn recovery_verify_backup(manifest_path: String) -> Result<VerificationReport, String> {
-    verify_manifest(Path::new(&manifest_path), None)
+pub async fn recovery_verify_backup(
+    app: tauri::AppHandle,
+    manifest_path: String,
+) -> Result<VerificationReport, String> {
+    emit_recovery_progress(
+        &app,
+        "reverify-backup",
+        "Re-verifying every backup file with SHA-256…",
+        serde_json::json!({}),
+    );
+    tauri::async_runtime::spawn_blocking(move || verify_manifest(Path::new(&manifest_path), None))
+        .await
+        .map_err(|error| format!("Backup verification worker could not complete: {error}"))?
 }
 
 fn recovery_tool_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1255,6 +2057,8 @@ pub async fn recovery_extract(
     eprintln!("[Design Space recovery] recovery_extract command began job={job_id}");
     let cancelled = register_extraction_job(&state, &job_id)?;
     let manifest_path = PathBuf::from(manifest_path);
+    let session_manifest_path = manifest_path.clone();
+    let session_export_destination = export_destination.clone();
     let audit_path = manifest_path
         .parent()
         .map(|path| path.join("recovery-audit.jsonl"));
@@ -1310,6 +2114,22 @@ pub async fn recovery_extract(
     }
     .await;
     finish_extraction_job(&state, &job_id);
+    let _ = match &result {
+        Ok(report) => record_recovery_session(
+            &app,
+            &session_manifest_path,
+            Some(&session_export_destination),
+            Some(report),
+            None,
+        ),
+        Err(error) => record_recovery_session(
+            &app,
+            &session_manifest_path,
+            Some(&session_export_destination),
+            None,
+            Some(error),
+        ),
+    };
     if let Err(error) = &result {
         eprintln!("[Design Space recovery] recovery_extract failed: {error}");
         if let Some(audit_path) = &audit_path {
@@ -1545,6 +2365,36 @@ mod tests {
         }
     }
 
+    fn validate_fixture_backup(
+        backup: &BackupReport,
+        candidate: &RecoveryCandidate,
+    ) -> Result<ResumableBackup, String> {
+        let backup_path = PathBuf::from(&backup.backup_path);
+        let approved_root = backup_path.parent().unwrap();
+        fast_validate_backup(&backup_path, approved_root, candidate).map(|value| value.0)
+    }
+
+    fn resumable_stub(path: &str, created_at: &str, valid: bool) -> ResumableBackup {
+        ResumableBackup {
+            id: path.to_string(),
+            backup_path: path.to_string(),
+            manifest_path: format!("{path}/backup-manifest.json"),
+            audit_log_path: format!("{path}/recovery-audit.jsonl"),
+            total_bytes: 1,
+            file_count: 1,
+            verified: valid,
+            previously_verified: true,
+            fast_validation_passed: valid,
+            requires_full_verification: !valid,
+            created_at: Some(created_at.to_string()),
+            status: "fixture".to_string(),
+            rejection_reason: None,
+            report: None,
+            recovery_completed: false,
+            last_failure: None,
+        }
+    }
+
     #[test]
     fn detects_only_supported_profiles_and_exact_origin() {
         let root = test_root("detect");
@@ -1677,6 +2527,121 @@ mod tests {
     }
 
     #[test]
+    fn verified_backup_fast_resume_does_not_create_a_second_copy() {
+        let root = test_root("resume-existing");
+        let candidate = fixture_candidate(&root);
+        let destination = root.join("recovery");
+        let backup = create_backup(&candidate, &destination, &AtomicBool::new(false)).unwrap();
+        let before = fs::read_dir(&destination).unwrap().count();
+        let resumed = validate_fixture_backup(&backup, &candidate).unwrap();
+        let after = fs::read_dir(&destination).unwrap().count();
+        assert!(resumed.fast_validation_passed);
+        assert!(resumed.verified);
+        assert_eq!(before, after);
+        assert!(Path::new(&candidate.database_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_verified_manifest_without_recorded_mtimes_can_resume() {
+        let root = test_root("resume-legacy-manifest");
+        let candidate = fixture_candidate(&root);
+        let backup =
+            create_backup(&candidate, &root.join("recovery"), &AtomicBool::new(false)).unwrap();
+        let manifest_path = Path::new(&backup.manifest_path);
+        let mut manifest = read_manifest(manifest_path).unwrap();
+        for entry in &mut manifest.files {
+            entry.modified_unix_millis = None;
+        }
+        serde_json::to_writer_pretty(File::create(manifest_path).unwrap(), &manifest).unwrap();
+        let resumed = validate_fixture_backup(&backup, &candidate).unwrap();
+        assert!(resumed.fast_validation_passed);
+        assert!(!resumed.requires_full_verification);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_resume_rejects_mismatched_identity_partial_missing_and_symlink_data() {
+        let root = test_root("resume-rejections");
+        let candidate = fixture_candidate(&root);
+        let destination = root.join("recovery");
+        let backup = create_backup(&candidate, &destination, &AtomicBool::new(false)).unwrap();
+
+        let mut wrong_profile = candidate.clone();
+        wrong_profile.profile = "Profile 9".to_string();
+        assert!(validate_fixture_backup(&backup, &wrong_profile)
+            .unwrap_err()
+            .contains("different browser profile"));
+
+        let partial = PathBuf::from(&backup.backup_path).with_extension("partial");
+        fs::rename(&backup.backup_path, &partial).unwrap();
+        assert!(fast_validate_backup(&partial, &destination, &candidate)
+            .unwrap_err()
+            .contains("incomplete"));
+        fs::rename(&partial, &backup.backup_path).unwrap();
+
+        let data = Path::new(&backup.backup_path).join("source/leveldb/000001.ldb");
+        let original = fs::read(&data).unwrap();
+        fs::remove_file(&data).unwrap();
+        assert!(validate_fixture_backup(&backup, &candidate)
+            .unwrap_err()
+            .contains("missing"));
+        fs::write(&data, &original).unwrap();
+        let outside = root.join("outside.ldb");
+        fs::write(&outside, &original).unwrap();
+        fs::remove_file(&data).unwrap();
+        std::os::unix::fs::symlink(&outside, &data).unwrap();
+        assert!(validate_fixture_backup(&backup, &candidate)
+            .unwrap_err()
+            .contains("symlink"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changed_file_metadata_requires_full_reverification() {
+        let root = test_root("resume-metadata");
+        let candidate = fixture_candidate(&root);
+        let backup =
+            create_backup(&candidate, &root.join("recovery"), &AtomicBool::new(false)).unwrap();
+        let data = Path::new(&backup.backup_path).join("source/leveldb/000001.ldb");
+        let original = fs::read(&data).unwrap();
+        thread::sleep(Duration::from_millis(5));
+        fs::write(&data, original).unwrap();
+        let resumed = validate_fixture_backup(&backup, &candidate).unwrap();
+        assert!(!resumed.fast_validation_passed);
+        assert!(resumed.requires_full_verification);
+        assert_eq!(resumed.status, "Backup changed since verification");
+        assert!(
+            verify_manifest(Path::new(&backup.manifest_path), None)
+                .unwrap()
+                .valid
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn newest_valid_backup_is_selected_and_stale_session_preference_is_ignored() {
+        let mut backups = vec![
+            resumable_stub("/recovery/older", "2026-07-20T00:00:00Z", true),
+            resumable_stub("/recovery/newer", "2026-07-22T00:00:00Z", true),
+        ];
+        backups.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        assert_eq!(
+            select_resumable_manifest(&backups, None).as_deref(),
+            Some("/recovery/newer/backup-manifest.json")
+        );
+        assert_eq!(
+            select_resumable_manifest(&backups, Some("/missing/backup-manifest.json")).as_deref(),
+            Some("/recovery/newer/backup-manifest.json")
+        );
+        assert_eq!(
+            select_resumable_manifest(&backups, Some("/recovery/older/backup-manifest.json"))
+                .as_deref(),
+            Some("/recovery/older/backup-manifest.json")
+        );
+    }
+
+    #[test]
     fn extractor_reports_missing_python_and_missing_script() {
         let root = test_root("extract-missing-runtime");
         let backup = fixture_backup(&root);
@@ -1725,6 +2690,8 @@ mod tests {
         let audit = fs::read_to_string(&backup.audit_log_path).unwrap();
         assert!(audit.contains("output truncated after 131072 bytes"));
         assert!(audit.len() < 300_000);
+        assert!(latest_failure_from_audit(Path::new(&backup.audit_log_path))
+            .is_some_and(|failure| failure.contains('x')));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1784,6 +2751,15 @@ mod tests {
         .unwrap();
         assert_eq!(report.projects_recovered, 1);
         assert!(Path::new(&report.report_path).is_file());
+        let manifest = read_manifest(Path::new(&backup.manifest_path)).unwrap();
+        let resumed_report = validate_recovery_report(
+            Path::new(&report.report_path),
+            Path::new(&backup.backup_path),
+            &manifest,
+            &[root.canonicalize().unwrap()],
+        )
+        .unwrap();
+        assert_eq!(resumed_report.projects_recovered, 1);
         assert_eq!(sha256_file(&fixture_path, None).unwrap().1, source_hash);
         let phases = phases.into_inner().unwrap();
         for expected in [

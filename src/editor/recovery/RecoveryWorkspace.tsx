@@ -12,6 +12,8 @@ import {
   type DestinationReport,
   type ProjectRecoveryReport,
   type RecoveryCandidate,
+  type ResumableBackup,
+  type ResumeDiscovery,
 } from './recoveryClient';
 
 type RecoveryWorkspaceProps = {
@@ -60,10 +62,15 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
   const [backup, setBackup] = useState<BackupReport | null>(null);
   const [report, setReport] = useState<ProjectRecoveryReport | null>(null);
   const [cleanup, setCleanup] = useState<CleanupReport | null>(null);
+  const [resumableBackups, setResumableBackups] = useState<ResumableBackup[]>([]);
+  const [selectedBackupManifest, setSelectedBackupManifest] = useState('');
+  const [resumeSessionPath, setResumeSessionPath] = useState('');
+  const [resumeStatus, setResumeStatus] = useState('Searching for existing verified backups…');
+  const [deletionSafetyCurrent, setDeletionSafetyCurrent] = useState(false);
   const [confirmation, setConfirmation] = useState('');
   const [applicationAuditPath, setApplicationAuditPath] = useState('');
   const [progress, setProgress] = useState<ProgressState>({});
-  const [busy, setBusy] = useState<'detect' | 'backup' | 'extract' | 'delete' | null>(null);
+  const [busy, setBusy] = useState<'detect' | 'resume' | 'backup' | 'extract' | 'delete' | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const recoveryInFlight = useRef(false);
@@ -73,6 +80,72 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
     [candidates, selectedId]
   );
 
+  const applyResumeDiscovery = (result: ResumeDiscovery) => {
+    setResumableBackups(result.backups);
+    setResumeSessionPath(result.sessionPath);
+    const selectedBackup = result.backups.find(
+      (candidate) => candidate.manifestPath === result.selectedManifestPath
+    );
+    setSelectedBackupManifest(selectedBackup?.manifestPath ?? '');
+    if (!selectedBackup) {
+      setBackup(null);
+      setReport(null);
+      setDeletionSafetyCurrent(false);
+      setResumeStatus(result.backups.some((candidate) => candidate.status.includes('.partial'))
+        ? 'Incomplete .partial backup found. No reusable backup found.'
+        : 'No reusable backup found.');
+      return;
+    }
+    if (selectedBackup.fastValidationPassed) {
+      setBackup(selectedBackup);
+      setReport(selectedBackup.report);
+      setDeletionSafetyCurrent(Boolean(selectedBackup.report));
+      setResumeStatus(selectedBackup.report
+        ? 'Recovery report found. Recovery can resume.'
+        : 'Existing verified backup found. Reusing without copying source data.');
+      setProgress({
+        phase: selectedBackup.report ? 'report-resumed' : 'backup-resumed',
+        message: selectedBackup.report
+          ? 'Recovery report found. Recovery can resume.'
+          : 'Fast validation passed. Existing verified backup found.',
+        recordsScanned: selectedBackup.report?.recordsScanned,
+        projectsRecovered: selectedBackup.report?.projectsRecovered,
+      });
+      if (selectedBackup.lastFailure && !selectedBackup.report) {
+        setError(`Previous recovery attempt failed: ${selectedBackup.lastFailure} Audit log: ${selectedBackup.auditLogPath}`);
+      }
+    } else {
+      setBackup(selectedBackup);
+      setReport(null);
+      setDeletionSafetyCurrent(false);
+      setResumeStatus('Backup changed since verification. Full re-verification is required.');
+    }
+  };
+
+  const discoverExistingBackups = async (
+    candidate: RecoveryCandidate,
+    preferredManifest?: string | null
+  ) => {
+    setResumeStatus('Searching for existing verified backups…');
+    setBusy('resume');
+    try {
+      const result = await recoveryClient.discoverBackups(
+        candidate.id,
+        [backupDestination, exportDestination],
+        preferredManifest
+      );
+      applyResumeDiscovery(result);
+    } catch (caught) {
+      setBackup(null);
+      setReport(null);
+      setDeletionSafetyCurrent(false);
+      setResumeStatus('No reusable backup found.');
+      setError(recoveryErrorMessage(caught, 'Existing backup discovery failed.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const detect = async () => {
     if (!desktopAvailable) return;
     setBusy('detect');
@@ -81,9 +154,13 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
       const result = await recoveryClient.detect();
       setApplicationAuditPath(result.auditLogPath);
       setCandidates(result.candidates);
-      setSelectedId((current) => result.candidates.some((candidate) => candidate.id === current)
-        ? current
-        : result.candidates[0]?.id ?? '');
+      const detected = result.candidates.find((candidate) => candidate.id === selectedId)
+        ?? result.candidates[0]
+        ?? null;
+      setSelectedId(detected?.id ?? '');
+      if (detected) {
+        await discoverExistingBackups(detected, selectedBackupManifest || null);
+      }
       if (result.candidates.length === 0 && !cleanup) {
         setError('No localhost:5174 Design Space IndexedDB directory was detected in supported Chrome or Chromium profiles.');
       }
@@ -125,6 +202,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
     setError(null);
     try {
       setDestination(await recoveryClient.inspectDestination(selected.id, backupDestination));
+      await discoverExistingBackups(selected, selectedBackupManifest || null);
     } catch (caught) {
       setDestination(null);
       setError(caught instanceof Error ? caught.message : 'Destination inspection failed.');
@@ -143,11 +221,58 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
       const verification = await recoveryClient.verifyBackup(result.manifestPath);
       if (!verification.valid) throw new Error('The copied database did not pass integrity verification.');
       setBackup(result);
+      setResumableBackups([]);
+      setSelectedBackupManifest(result.manifestPath);
+      setResumeStatus('Backup verified byte-for-byte. Recovery can continue.');
+      setDeletionSafetyCurrent(false);
       setProgress({ phase: 'backup-complete', message: 'Backup verified byte-for-byte.' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Backup failed. The original database was not changed.');
     } finally {
       setActiveJobId(null);
+      setBusy(null);
+    }
+  };
+
+  const selectExistingBackup = async () => {
+    if (!selected || !selectedBackupManifest) {
+      setError('Choose a valid existing backup before continuing.');
+      return;
+    }
+    setError(null);
+    await discoverExistingBackups(selected, selectedBackupManifest);
+  };
+
+  const reverifyBackup = async () => {
+    if (!backup?.manifestPath) return;
+    setBusy('resume');
+    setError(null);
+    setProgress({ phase: 'reverify-backup', message: 'Re-verifying every backup file with SHA-256…' });
+    try {
+      await yieldForRecoveryStatusPaint();
+      const verification = await recoveryClient.verifyBackup(backup.manifestPath);
+      if (!verification.valid) throw new Error('The backup failed full SHA-256 verification.');
+      const verified = { ...backup, verified: true };
+      setBackup(verified);
+      setResumableBackups((current) => current.map((candidate) => (
+        candidate.manifestPath === backup.manifestPath
+          ? {
+              ...candidate,
+              verified: true,
+              fastValidationPassed: true,
+              requiresFullVerification: false,
+              status: 'Full SHA-256 re-verification passed',
+            }
+          : candidate
+      )));
+      setResumeStatus('Full SHA-256 re-verification passed. Recovery can resume.');
+      setProgress({ phase: 'reverify-complete', message: 'Full SHA-256 re-verification passed.' });
+      setDeletionSafetyCurrent(Boolean(report));
+    } catch (caught) {
+      setReport(null);
+      setDeletionSafetyCurrent(false);
+      setError(recoveryErrorMessage(caught, 'Backup re-verification failed.'));
+    } finally {
       setBusy(null);
     }
   };
@@ -171,6 +296,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
     setBusy('extract');
     setError(null);
     setReport(null);
+    setDeletionSafetyCurrent(false);
     setProgress({ phase: 'validate-backup', message: 'Validating the verified backup…' });
     try {
       // Yield one frame so WebKit paints the running state before IPC begins.
@@ -180,6 +306,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
         throw new Error('The extractor returned an invalid recovery report. Cleanup remains locked.');
       }
       setReport(recovered);
+      setDeletionSafetyCurrent(true);
       setProgress({
         phase: 'complete',
         message: `Recovery complete: ${recovered.projectsRecovered} portable project${recovered.projectsRecovered === 1 ? '' : 's'} exported.`,
@@ -208,7 +335,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
   };
 
   const deleteOriginal = async () => {
-    if (!selected || !backup || !report || confirmation !== RECOVERY_DELETE_CONFIRMATION) return;
+    if (!selected || !backup || !report || !deletionSafetyCurrent || confirmation !== RECOVERY_DELETE_CONFIRMATION) return;
     setBusy('delete');
     setError(null);
     try {
@@ -265,7 +392,16 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
         {selected ? (
           <div className="grid gap-2">
             <label className="font-semibold text-[color:var(--ui-text)]" htmlFor="recovery-database">Detected browser profile</label>
-            <select id="recovery-database" value={selected.id} onChange={(event) => { setSelectedId(event.target.value); setDestination(null); setBackup(null); setReport(null); }} className="rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2" data-testid="recovery-candidate-select">
+            <select id="recovery-database" value={selected.id} onChange={(event) => {
+              const next = candidates.find((candidate) => candidate.id === event.target.value) ?? null;
+              setSelectedId(event.target.value);
+              setDestination(null);
+              setBackup(null);
+              setReport(null);
+              setResumableBackups([]);
+              setDeletionSafetyCurrent(false);
+              if (next) void discoverExistingBackups(next);
+            }} className="rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-3 py-2" data-testid="recovery-candidate-select">
               {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.browser} — {candidate.profile} — {formatBytes(candidate.sizeBytes)}</option>)}
             </select>
             <dl className="grid gap-1 rounded-xl bg-[color:var(--ui-surface-soft)] p-3 text-xs">
@@ -298,9 +434,52 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
       </Step>
 
       <Step number={4} title="Create and verify backup" complete={Boolean(backup?.verified)}>
-        <button type="button" onClick={() => void createBackup()} disabled={!selected || selected.browserRunning || !destination?.sufficientSpace || busy !== null} className="inline-flex items-center gap-2 rounded-xl bg-[color:var(--brand-primary)] px-4 py-2 font-semibold text-white disabled:opacity-45" data-testid="recovery-create-backup">
-          <Archive className="h-4 w-4" aria-hidden="true" /> {busy === 'backup' ? 'Backing up and verifying…' : 'Create verified backup'}
-        </button>
+        <p className="mb-3 font-semibold" aria-live="polite" data-testid="recovery-resume-status">
+          {busy === 'resume' ? 'Searching for existing verified backups…' : resumeStatus}
+        </p>
+        {resumableBackups.length > 0 && (
+          <div className="mb-3 grid gap-2 rounded-xl bg-[color:var(--ui-surface-soft)] p-3">
+            <label htmlFor="recovery-existing-backup" className="font-semibold text-[color:var(--ui-text)]">Existing recovery backups</label>
+            <select
+              id="recovery-existing-backup"
+              value={selectedBackupManifest}
+              onChange={(event) => setSelectedBackupManifest(event.target.value)}
+              className="rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] px-3 py-2"
+              data-testid="recovery-existing-backup"
+            >
+              {resumableBackups.map((candidate) => (
+                <option
+                  key={candidate.id}
+                  value={candidate.fastValidationPassed || candidate.requiresFullVerification ? candidate.manifestPath : ''}
+                  disabled={!candidate.fastValidationPassed && !candidate.requiresFullVerification}
+                >
+                  {candidate.createdAt ?? 'Unknown date'} — {formatBytes(candidate.totalBytes)} — {candidate.status}
+                </option>
+              ))}
+            </select>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => void selectExistingBackup()} disabled={!selectedBackupManifest || busy !== null} className="rounded-xl bg-[color:var(--brand-primary)] px-4 py-2 font-semibold text-white disabled:opacity-45" data-testid="recovery-use-backup">
+                Use this verified backup
+              </button>
+              {backup?.requiresFullVerification && (
+                <button type="button" onClick={() => void reverifyBackup()} disabled={busy !== null} className="rounded-xl border border-[color:var(--ui-border)] px-4 py-2 font-semibold" data-testid="recovery-reverify-backup">
+                  Re-verify backup
+                </button>
+              )}
+            </div>
+            {resumableBackups.filter((candidate) => candidate.rejectionReason).map((candidate) => (
+              <p key={`${candidate.id}-rejection`} className="text-xs text-red-700">
+                {candidate.status}: {candidate.rejectionReason}
+              </p>
+            ))}
+            {resumeSessionPath && <p className="break-all text-xs"><strong>Recovery session:</strong> {resumeSessionPath}</p>}
+          </div>
+        )}
+        {!resumableBackups.some((candidate) => candidate.fastValidationPassed) && (
+          <button type="button" onClick={() => void createBackup()} disabled={!selected || selected.browserRunning || !destination?.sufficientSpace || busy !== null} className="inline-flex items-center gap-2 rounded-xl bg-[color:var(--brand-primary)] px-4 py-2 font-semibold text-white disabled:opacity-45" data-testid="recovery-create-backup">
+            <Archive className="h-4 w-4" aria-hidden="true" /> {busy === 'backup' ? 'Backing up and verifying…' : 'Create verified backup'}
+          </button>
+        )}
         {backup && <div className="mt-3 rounded-xl bg-[color:var(--ui-surface-soft)] p-3 text-xs"><p><strong>Verified backup:</strong> <span className="break-all">{backup.backupPath}</span></p><p><strong>Integrity:</strong> {backup.fileCount} files, {formatBytes(backup.totalBytes)}, SHA-256 verified</p><p><strong>Audit log:</strong> <span className="break-all">{backup.auditLogPath}</span></p></div>}
       </Step>
 
@@ -357,7 +536,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
           <div className="flex items-start gap-2"><AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-red-600" aria-hidden="true" /><p><strong className="text-red-700">Destructive cleanup.</strong> This removes only the exact LevelDB and blob paths displayed in step 1. The verified backup and recovered exports are preserved.</p></div>
           <label htmlFor="recovery-delete-confirmation" className="mt-3 block font-semibold text-[color:var(--ui-text)]">Type <code>{RECOVERY_DELETE_CONFIRMATION}</code></label>
           <input id="recovery-delete-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className="mt-2 w-full rounded-xl border-2 border-red-500 bg-[color:var(--ui-panel)] px-3 py-2" autoComplete="off" data-testid="recovery-delete-confirmation" />
-          <button type="button" onClick={() => void deleteOriginal()} disabled={!report || !backup?.verified || confirmation !== RECOVERY_DELETE_CONFIRMATION || busy !== null || selected?.browserRunning} className="mt-3 rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:opacity-40" data-testid="recovery-delete-original">
+          <button type="button" onClick={() => void deleteOriginal()} disabled={!report || !backup?.verified || !deletionSafetyCurrent || confirmation !== RECOVERY_DELETE_CONFIRMATION || busy !== null || selected?.browserRunning} className="mt-3 rounded-xl bg-red-700 px-4 py-2 font-bold text-white disabled:opacity-40" data-testid="recovery-delete-original">
             {busy === 'delete' ? 'Verifying backup and deleting exact origin…' : 'Delete original localhost:5174 database'}
           </button>
         </div>

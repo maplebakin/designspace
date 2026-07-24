@@ -35,6 +35,27 @@ export type BackupReport = {
   totalBytes: number;
   fileCount: number;
   verified: boolean;
+  requiresFullVerification?: boolean;
+};
+
+export type ResumableBackup = BackupReport & {
+  id: string;
+  previouslyVerified: boolean;
+  fastValidationPassed: boolean;
+  requiresFullVerification: boolean;
+  createdAt: string | null;
+  status: string;
+  rejectionReason: string | null;
+  report: ProjectRecoveryReport | null;
+  recoveryCompleted: boolean;
+  lastFailure: string | null;
+};
+
+export type ResumeDiscovery = {
+  backups: ResumableBackup[];
+  selectedManifestPath: string | null;
+  searchedRoots: string[];
+  sessionPath: string;
 };
 
 export type ProjectRecoveryItem = {
@@ -112,6 +133,15 @@ export const recoveryErrorMessage = (error: unknown, fallback: string) => {
 
 export const recoveryClient = {
   detect: () => invokeRecovery<RecoveryDetection>('recovery_detect'),
+  discoverBackups: (
+    databaseId: string,
+    destinations: string[],
+    preferredManifest?: string | null
+  ) => invokeRecovery<ResumeDiscovery>('recovery_discover_backups', {
+    databaseId,
+    destinations,
+    preferredManifest: preferredManifest ?? null,
+  }),
   inspectDestination: (databaseId: string, destination: string) =>
     invokeRecovery<DestinationReport>('recovery_inspect_destination', { databaseId, destination }),
   createBackup: (databaseId: string, destination: string, jobId: string) =>
