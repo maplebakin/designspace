@@ -79,6 +79,64 @@ export const getSelectedDocumentImage = (
   };
 };
 
+export const commitStructuredDocumentImagePosition = (
+  editor: Editor,
+  expectedPosition: number,
+  imageId: string,
+  xOffsetPx: number,
+  yPx: number
+) => {
+  if (editor.isDestroyed) return false;
+  const nodeAtExpectedPosition = editor.state.doc.nodeAt(expectedPosition);
+  let targetPosition = (
+    nodeAtExpectedPosition?.type.name === 'documentFlowImage'
+    && nodeAtExpectedPosition.attrs.id === imageId
+  )
+    ? expectedPosition
+    : -1;
+  if (targetPosition < 0) {
+    editor.state.doc.descendants((node, position) => {
+      if (targetPosition >= 0) return false;
+      if (
+        node.type.name === 'documentFlowImage'
+        && node.attrs.id === imageId
+      ) {
+        targetPosition = position;
+        return false;
+      }
+      return true;
+    });
+  }
+  if (targetPosition < 0) return false;
+  const targetNode = editor.state.doc.nodeAt(targetPosition);
+  if (!targetNode) return false;
+
+  const nextAttributes = normalizeDocumentImageAttributes({
+    ...(targetNode.attrs as Partial<DocumentImageAttributes>),
+    verticalAnchor: 'page-position',
+    horizontalPlacement: 'custom',
+    xOffsetPx,
+    yPx,
+  });
+  const transaction = editor.state.tr
+    .setNodeMarkup(targetPosition, undefined, nextAttributes);
+  transaction.setSelection(
+    NodeSelection.create(transaction.doc, targetPosition)
+  );
+  editor.view.dispatch(transaction);
+  editor.view.focus();
+
+  const committedNode = editor.state.doc.nodeAt(targetPosition);
+  return (
+    committedNode?.type.name === 'documentFlowImage'
+    && committedNode.attrs.id === imageId
+    && committedNode.attrs.verticalAnchor === 'page-position'
+    && committedNode.attrs.horizontalPlacement === 'custom'
+    && committedNode.attrs.xOffsetPx === nextAttributes.xOffsetPx
+    && committedNode.attrs.yPx === nextAttributes.yPx
+  );
+};
+
 export interface DocumentDropContext {
   position?: number;
   moved: boolean;
@@ -629,18 +687,18 @@ export const FlowEditor = ({
             editor.commands.setNodeSelection(position);
             editor.commands.focus();
           }}
-          onCommitImagePosition={(position, xOffsetPx, yPx) => {
-            editor.chain()
-              .focus()
-              .setNodeSelection(position)
-              .updateSelectedDocumentImage({
-                verticalAnchor: 'page-position',
-                horizontalPlacement: 'custom',
-                xOffsetPx,
-                yPx,
-              })
-              .run();
-          }}
+          onCommitImagePosition={(
+            position,
+            imageId,
+            xOffsetPx,
+            yPx
+          ) => commitStructuredDocumentImagePosition(
+            editor,
+            position,
+            imageId,
+            xOffsetPx,
+            yPx
+          )}
           onCommitImageSize={(
             position,
             widthPx,

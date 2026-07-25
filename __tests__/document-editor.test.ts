@@ -22,6 +22,7 @@ import {
 } from 'vitest';
 import { DocumentEditorShell } from '../src/document/components/DocumentEditorShell';
 import {
+  commitStructuredDocumentImagePosition,
   FlowEditor,
   isDocumentFlowOverflowing,
 } from '../src/document/components/FlowEditor';
@@ -122,7 +123,7 @@ const findTextNodes = (content?: JSONContent): JSONContent[] => {
 };
 
 const dispatchTestPointer = (
-  target: Element,
+  target: Element | Window,
   type: string,
   {
     pointerId,
@@ -2267,7 +2268,7 @@ describe('live document editor UI', () => {
         );
       });
 
-      dispatchTestPointer(imageSlot, 'pointerup', {
+      dispatchTestPointer(window, 'pointerup', {
         pointerId: 71,
         clientX: 100 + deltaX,
         clientY: 100 + deltaY,
@@ -2278,6 +2279,18 @@ describe('live document editor UI', () => {
           xOffsetPx: 40 + deltaX / viewScale,
           yPx: 120 + deltaY / viewScale,
         });
+        expect(Number(container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"]'
+        )!.dataset.imageXOffsetPx)).toBeCloseTo(
+          40 + deltaX / viewScale,
+          5
+        );
+      });
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      dispatchTestPointer(window, 'pointerup', {
+        pointerId: 71,
+        clientX: 100 + deltaX,
+        clientY: 100 + deltaY,
       });
       expect(onUpdate).toHaveBeenCalledTimes(1);
 
@@ -2293,6 +2306,185 @@ describe('live document editor UI', () => {
       });
     }
   );
+
+  it('commits the latest structured move from the window mouseup fallback', async () => {
+    let editor: Editor | null = null;
+    const onUpdate = vi.fn();
+    const content = spanningBodyContent(2, 2);
+    content.content![1] = {
+      ...content.content![1],
+      attrs: {
+        ...content.content![1].attrs,
+        verticalAnchor: 'page-position',
+        yPx: 100,
+        horizontalPlacement: 'custom',
+        xOffsetPx: 20,
+        widthPx: 240,
+        heightPx: 150,
+      },
+    };
+    const { container } = render(React.createElement(FlowEditor, {
+      content,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      viewScale: 1,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onUpdate,
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+    const imageSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    )!;
+    onUpdate.mockClear();
+    dispatchTestPointer(imageSlot, 'pointerdown', {
+      pointerId: 72,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchTestPointer(imageSlot, 'pointermove', {
+      pointerId: 72,
+      clientX: 145,
+      clientY: 130,
+    });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        horizontalPlacement: 'custom',
+        xOffsetPx: 65,
+        yPx: 130,
+      });
+      expect(Number(container.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"]'
+      )!.dataset.imageXOffsetPx)).toBe(65);
+    });
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['pointercancel', 'blur'] as const)(
+    'restores the original structured position after window %s',
+    async (finishEvent) => {
+      let editor: Editor | null = null;
+      const onUpdate = vi.fn();
+      const content = spanningBodyContent(2, 2);
+      content.content![1] = {
+        ...content.content![1],
+        attrs: {
+          ...content.content![1].attrs,
+          verticalAnchor: 'page-position',
+          yPx: 100,
+          horizontalPlacement: 'custom',
+          xOffsetPx: 20,
+          widthPx: 240,
+          heightPx: 150,
+        },
+      };
+      const { container } = render(React.createElement(FlowEditor, {
+        content,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        viewScale: 1,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onUpdate,
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => expect(editor).not.toBeNull());
+      const imageSlot = container.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"]'
+      )!;
+      onUpdate.mockClear();
+      dispatchTestPointer(imageSlot, 'pointerdown', {
+        pointerId: 73,
+        clientX: 100,
+        clientY: 100,
+      });
+      dispatchTestPointer(imageSlot, 'pointermove', {
+        pointerId: 73,
+        clientX: 150,
+        clientY: 140,
+      });
+      await waitFor(() => {
+        expect(Number(container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"]'
+        )!.dataset.imageXOffsetPx)).toBe(70);
+      });
+
+      if (finishEvent === 'pointercancel') {
+        dispatchTestPointer(window, 'pointercancel', {
+          pointerId: 73,
+          clientX: 150,
+          clientY: 140,
+        });
+      } else {
+        fireEvent(window, new Event('blur'));
+      }
+      await waitFor(() => {
+        expect(Number(container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"]'
+        )!.dataset.imageXOffsetPx)).toBe(20);
+      });
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        xOffsetPx: 20,
+        yPx: 100,
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('commits a structured move by stable image id when selection and position are stale', async () => {
+    let editor: Editor | null = null;
+    const onUpdate = vi.fn();
+    const content = spanningBodyContent(2, 2);
+    content.content![1] = {
+      ...content.content![1],
+      attrs: {
+        ...content.content![1].attrs,
+        verticalAnchor: 'page-position',
+        yPx: 100,
+        horizontalPlacement: 'custom',
+        xOffsetPx: 20,
+      },
+    };
+    render(React.createElement(FlowEditor, {
+      content,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onUpdate,
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+    editor!.commands.setTextSelection(1);
+    onUpdate.mockClear();
+
+    expect(commitStructuredDocumentImagePosition(
+      editor!,
+      0,
+      'span-family-photo',
+      55,
+      160
+    )).toBe(true);
+    expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+      verticalAnchor: 'page-position',
+      horizontalPlacement: 'custom',
+      xOffsetPx: 55,
+      yPx: 160,
+    });
+    expect(editor!.state.selection).toBeInstanceOf(NodeSelection);
+    expect((editor!.state.selection as NodeSelection).node.attrs.id)
+      .toBe('span-family-photo');
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
 
   it('renders and excludes two independently positioned spanning images', async () => {
     let editor: Editor | null = null;
@@ -2449,7 +2641,7 @@ describe('live document editor UI', () => {
       clientX: 140,
       clientY: 100,
     });
-    dispatchTestPointer(firstSlot, 'pointerup', {
+    dispatchTestPointer(window, 'pointerup', {
       pointerId: 81,
       clientX: 140,
       clientY: 100,
@@ -2471,6 +2663,38 @@ describe('live document editor UI', () => {
     expect((editor!.getJSON().content || []).find(
       (node) => node.attrs?.id === 'span-left'
     )?.attrs?.xOffsetPx).toBe(40);
+
+    const secondSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="span-right"]'
+    )!;
+    const secondStartX = Number(secondSlot.dataset.imageXOffsetPx);
+    dispatchTestPointer(secondSlot, 'pointerdown', {
+      pointerId: 82,
+      clientX: 200,
+      clientY: 100,
+    });
+    dispatchTestPointer(secondSlot, 'pointermove', {
+      pointerId: 82,
+      clientX: 170,
+      clientY: 100,
+    });
+    dispatchTestPointer(window, 'pointerup', {
+      pointerId: 82,
+      clientX: 170,
+      clientY: 100,
+    });
+    await waitFor(() => {
+      const images = editor!.getJSON().content || [];
+      expect(images.find(
+        (node) => node.attrs?.id === 'span-left'
+      )?.attrs?.xOffsetPx).toBe(40);
+      expect(images.find(
+        (node) => node.attrs?.id === 'span-right'
+      )?.attrs).toMatchObject({
+        horizontalPlacement: 'custom',
+        xOffsetPx: secondStartX - 30,
+      });
+    });
   });
 
   it('stops two-dimensional movement at the nearest image collision', () => {

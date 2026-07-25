@@ -980,9 +980,10 @@ type StructuredDocumentSpanLayoutProps = {
   onSelectImage: (position: number) => void;
   onCommitImagePosition: (
     position: number,
+    imageId: string,
     xOffsetPx: number,
     yPx: number
-  ) => void;
+  ) => boolean;
   onCommitImageSize: (
     position: number,
     widthPx: number,
@@ -1052,6 +1053,7 @@ export const StructuredDocumentSpanLayout = ({
   const [previewOverrides, setPreviewOverrides] = useState<
     Record<string, Partial<DocumentImageAttributes>>
   >({});
+  const layoutRef = useRef<HTMLDivElement | null>(null);
   const model = useMemo(
     () => buildMultiDocumentSpanLayoutModel(
       editor,
@@ -1083,7 +1085,13 @@ export const StructuredDocumentSpanLayout = ({
     maximumXOffsetPx: number;
     startRectangle: DocumentImageRectangle;
     obstacles: DocumentImageRectangle[];
-    captureElement: HTMLDivElement;
+    captureElement: HTMLElement;
+    originalXOffsetPx: number;
+    originalYPx: number;
+    latestPreviewPosition: {
+      xOffsetPx: number;
+      yPx: number;
+    };
     moved: boolean;
   } | null>(null);
   const previewPositionRef = useRef<{
@@ -1122,6 +1130,10 @@ export const StructuredDocumentSpanLayout = ({
     pointerId: number,
     cancelled: boolean
   ) => void>(() => undefined);
+  const finishDragRef = useRef<(
+    pointerId: number,
+    cancelled: boolean
+  ) => void>(() => undefined);
 
   useEffect(() => {
     if (dragRef.current || resizeRef.current) return;
@@ -1139,22 +1151,34 @@ export const StructuredDocumentSpanLayout = ({
 
   useEffect(() => {
     const handlePointerUp = (event: globalThis.PointerEvent) => {
+      finishDragRef.current(event.pointerId, false);
       finishResizeRef.current(event.pointerId, false);
     };
     const handlePointerCancel = (event: globalThis.PointerEvent) => {
+      finishDragRef.current(event.pointerId, true);
       finishResizeRef.current(event.pointerId, true);
     };
     const handleMouseUp = () => {
+      const drag = dragRef.current;
+      if (drag) finishDragRef.current(drag.pointerId, false);
       const resize = resizeRef.current;
       if (resize) finishResizeRef.current(resize.pointerId, false);
+    };
+    const handleBlur = () => {
+      const drag = dragRef.current;
+      if (drag) finishDragRef.current(drag.pointerId, true);
+      const resize = resizeRef.current;
+      if (resize) finishResizeRef.current(resize.pointerId, true);
     };
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerCancel);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 
@@ -1226,7 +1250,8 @@ export const StructuredDocumentSpanLayout = ({
     event.stopPropagation();
     onSelectImage(image.imagePosition);
     if (image.attributes.verticalAnchor !== 'page-position') return;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const captureElement = layoutRef.current || event.currentTarget;
+    captureElement.setPointerCapture?.(event.pointerId);
     const startRectangle = model.collisionRectangles.find(
       (rectangle) => rectangle.imageId === image.imageId
     );
@@ -1245,7 +1270,13 @@ export const StructuredDocumentSpanLayout = ({
       obstacles: model.collisionRectangles.filter(
         (rectangle) => rectangle.imageId !== image.imageId
       ),
-      captureElement: event.currentTarget,
+      captureElement,
+      originalXOffsetPx: image.attributes.xOffsetPx,
+      originalYPx: image.imageTopPx,
+      latestPreviewPosition: {
+        xOffsetPx: image.attributes.xOffsetPx,
+        yPx: image.imageTopPx,
+      },
       moved: false,
     };
     previewPositionRef.current = {
@@ -1438,6 +1469,7 @@ export const StructuredDocumentSpanLayout = ({
       )) > 0.5
       || Math.abs(next.topPx - drag.startImageY) > 0.5;
     previewPositionRef.current = { xOffsetPx, yPx: next.topPx };
+    drag.latestPreviewPosition = { xOffsetPx, yPx: next.topPx };
     schedulePreview(drag.imageId, {
       horizontalPlacement: 'custom',
       xOffsetPx,
@@ -1445,38 +1477,42 @@ export const StructuredDocumentSpanLayout = ({
     });
   };
 
-  const handleImagePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+  const finishDrag = (pointerId: number, cancelled: boolean) => {
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (!drag || drag.pointerId !== pointerId) return;
+    if (drag.captureElement.hasPointerCapture?.(pointerId)) {
+      drag.captureElement.releasePointerCapture?.(pointerId);
     }
-    const preview = previewPositionRef.current;
+    const preview = previewPositionRef.current
+      ?? drag.latestPreviewPosition;
     dragRef.current = null;
     previewPositionRef.current = null;
-    clearPreview(drag.imageId);
-    if (drag.moved && preview) {
-      onCommitImagePosition(
+    if (cancelled || !drag.moved) {
+      clearPreview(drag.imageId);
+      return;
+    }
+    const committed = onCommitImagePosition(
         drag.position,
+        drag.imageId,
         preview.xOffsetPx,
         preview.yPx
-      );
+    );
+    if (!committed) {
+      clearPreview(drag.imageId);
     }
+  };
+  finishDragRef.current = finishDrag;
+
+  const handleImagePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishDrag(event.pointerId, false);
   };
 
   const handleImagePointerCancel = (event: PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-    }
-    dragRef.current = null;
-    previewPositionRef.current = null;
-    clearPreview(drag.imageId);
+    finishDrag(event.pointerId, true);
   };
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
@@ -1519,6 +1555,7 @@ export const StructuredDocumentSpanLayout = ({
 
   return (
     <div
+      ref={layoutRef}
       className="document-spanning-layout"
       data-document-span-layout="true"
       data-span-count={representativeImage?.attributes.spanCount}
@@ -1548,6 +1585,7 @@ export const StructuredDocumentSpanLayout = ({
       data-hidden-for-editing={textEditing ? 'true' : 'false'}
       style={style}
       onPointerDown={handleLayoutPointerDown}
+      onPointerMove={handleImagePointerMove}
       onClick={handleClick}
     >
       <div className="document-span-layout__column-stacks">
