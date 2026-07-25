@@ -1242,14 +1242,14 @@
 
 .document-span-layout__column-stack--occupied
   .document-span-layout__segment--top {
-  height: var(--document-span-image-top, 0);
+  height: var(--document-span-exclusion-top, 0);
 }
 
 .document-span-layout__column-stack--occupied
   .document-span-layout__segment--bottom {
   height: calc(
     var(--document-span-available-height, 720px)
-    - var(--document-span-image-top, 0px)
+    - var(--document-span-exclusion-top, 0px)
     - var(--document-span-exclusion-height, 0px)
   );
 }
@@ -1267,6 +1267,12 @@
   min-width: 0;
   max-width: var(--document-span-width, 100%);
   overflow: hidden;
+}
+
+.document-spanning-layout[data-vertical-anchor="page-position"]
+  .document-span-layout__image-slot {
+  cursor: ns-resize;
+  user-select: none;
 }
 
 .document-span-layout__image-slot > .document-image {

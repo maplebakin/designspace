@@ -116,8 +116,10 @@ describe('document export', () => {
         data-hidden-for-editing="true"
         data-span-count="2"
         data-span-start-column="2"
+        data-vertical-anchor="page-position"
+        data-image-top-px="286"
         data-layout-content-height-px="612"
-        style="display:none"
+        style="display:none; --document-span-image-top: 286px"
       >
         <div class="document-span-layout__column-stacks">
           <div data-layout-role="physical-column" data-column="1">
@@ -170,6 +172,10 @@ describe('document export', () => {
     expect(layout?.style.display).toBe('block');
     expect(layout?.getAttribute('data-hidden-for-editing')).toBe('false');
     expect(layout?.getAttribute('data-layout-content-height-px')).toBe('612');
+    expect(layout?.getAttribute('data-vertical-anchor')).toBe('page-position');
+    expect(layout?.getAttribute('data-image-top-px')).toBe('286');
+    expect(layout?.style.getPropertyValue('--document-span-image-top'))
+      .toBe('286px');
     expect(layout?.querySelector(
       '[data-layout-role="continuing-column"][data-column="1"]'
     )?.textContent).toContain('Column one fills continuously');

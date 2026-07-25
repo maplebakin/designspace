@@ -40,6 +40,9 @@ import {
 } from '../src/document/components/StructuredDocumentSpanLayout';
 import {
   canMoveSelectedStructuredImage,
+  calculateDocumentImageDragY,
+  clampDocumentImageY,
+  normalizeDocumentImageAttributes,
 } from '../src/document/extensions/DocumentImageExtension';
 
 vi.mock('../src/document/services/documentReferenceService', () => ({
@@ -177,24 +180,9 @@ const countTextOccurrences = (value: string, search: string) =>
 
 const readColumnMajorModelHtml = (
   model: NonNullable<ReturnType<typeof buildDocumentSpanLayoutModel>>
-) => {
-  const start = model.attributes.spanStartColumn;
-  const end = start + model.attributes.spanCount - 1;
-  return [
-    ...model.columns
-      .filter((column) => column.column < start)
-      .map((column) => column.topHtml),
-    ...model.columns
-      .filter((column) => column.column >= start && column.column <= end)
-      .map((column) => column.topHtml),
-    ...model.columns
-      .filter((column) => column.column > end)
-      .map((column) => column.topHtml),
-    ...model.columns
-      .filter((column) => column.column >= start && column.column <= end)
-      .map((column) => column.bottomHtml),
-  ].join('');
-};
+) => model.columns
+  .flatMap((column) => [column.topHtml, column.bottomHtml])
+  .join('');
 
 const renderShell = async () => {
   const result = render(React.createElement(DocumentEditorShell));
@@ -964,9 +952,186 @@ describe('live document editor UI', () => {
       spanCount: 1,
       spanStartColumn: 1,
       verticalSpacingPx: 12,
+      verticalAnchor: 'flow',
+      yPx: 0,
       caption: 'Legacy caption',
     });
     expect(container.querySelector('[data-document-span-layout]')).toBeNull();
+  });
+
+  it('normalizes fixed image placement and zoom-aware drag bounds', () => {
+    expect(normalizeDocumentImageAttributes({
+      verticalAnchor: 'invalid' as 'flow',
+      yPx: Number.NaN,
+    })).toMatchObject({
+      verticalAnchor: 'flow',
+      yPx: 0,
+    });
+    expect(normalizeDocumentImageAttributes({
+      verticalAnchor: 'page-position',
+      yPx: -500,
+    })).toMatchObject({
+      verticalAnchor: 'page-position',
+      yPx: 0,
+    });
+    expect(clampDocumentImageY(260, 720, 240, 16)).toBe(260);
+    expect(clampDocumentImageY(-100, 720, 240, 16)).toBe(16);
+    expect(clampDocumentImageY(900, 720, 240, 16)).toBe(464);
+    expect(calculateDocumentImageDragY({
+      startY: 120,
+      pointerDeltaY: 80,
+      viewScale: 0.5,
+      availableHeightPx: 720,
+      imageRegionHeightPx: 240,
+      verticalSpacingPx: 16,
+    })).toBe(280);
+  });
+
+  it.each([
+    [2, 2],
+    [1, 2],
+    [1, 3],
+  ] as const)(
+    'places a fixed image from column %i across %i columns and allocates text once in physical reading order',
+    async (spanStartColumn, spanCount) => {
+      let editor: Editor | null = null;
+      const paragraphs = Array.from({ length: 16 }, (_, index) => ({
+        type: 'paragraph',
+        content: [{
+          type: 'text',
+          text: `FIXED-${index + 1} ${'archive detail '.repeat(4)}`,
+          ...(index === 4
+            ? {
+                marks: [{
+                  type: 'documentTextStyle',
+                  attrs: { fontSizePx: 18 },
+                }],
+              }
+            : {}),
+        }],
+      }));
+      const image = {
+        ...spanningBodyContent(
+          spanCount,
+          spanStartColumn as 1 | 2
+        ).content![1],
+        attrs: {
+          ...spanningBodyContent(
+            spanCount,
+            spanStartColumn as 1 | 2
+          ).content![1].attrs,
+          verticalAnchor: 'page-position',
+          yPx: 180,
+          widthPx: 360,
+        },
+      };
+      render(React.createElement(FlowEditor, {
+        content: {
+          type: 'doc',
+          content: [
+            ...paragraphs.slice(0, 4),
+            image,
+            ...paragraphs.slice(4),
+          ],
+        } as JSONContent,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => expect(editor).not.toBeNull());
+
+      const model = buildDocumentSpanLayoutModel(
+        editor!,
+        3,
+        24,
+        720,
+        720
+      )!;
+      expect(model.attributes).toMatchObject({
+        verticalAnchor: 'page-position',
+        yPx: 180,
+        spanStartColumn,
+        spanCount,
+      });
+      expect(model.imageTopPx).toBe(180);
+      const renderedHtml = readColumnMajorModelHtml(model);
+      for (let index = 1; index <= 16; index += 1) {
+        expect(countTextOccurrences(
+          renderedHtml,
+          `FIXED-${index} `
+        )).toBe(1);
+      }
+      const offsets = Array.from({ length: 16 }, (_, index) =>
+        renderedHtml.indexOf(`FIXED-${index + 1} `)
+      );
+      expect(offsets).toEqual([...offsets].sort(
+        (left, right) => left - right
+      ));
+      expect(renderedHtml).toContain('data-font-size-px="18"');
+      expect(model.overflowing).toBe(false);
+      expect(model.columns.some(
+        (column) =>
+          column.occupied
+          && column.topHtml.length > 0
+          && column.bottomHtml.length > 0
+      )).toBe(true);
+      if (spanStartColumn === 2) {
+        expect(model.columns[0].topHtml.length).toBeGreaterThan(0);
+        expect(model.columns[0].bottomHtml).toBe('');
+        expect(model.columns[1].topHtml.length).toBeGreaterThan(0);
+        expect(model.columns[1].bottomHtml.length).toBeGreaterThan(0);
+      }
+    }
+  );
+
+  it('records one undoable transaction when a fixed image position is committed', async () => {
+    let editor: Editor | null = null;
+    render(React.createElement(FlowEditor, {
+      content: {
+        ...spanningBodyContent(2, 2),
+        content: (spanningBodyContent(2, 2).content || []).map((node) =>
+          node.type === 'documentFlowImage'
+            ? {
+                ...node,
+                attrs: {
+                  ...node.attrs,
+                  verticalAnchor: 'page-position',
+                  yPx: 120,
+                },
+              }
+            : node
+        ),
+      },
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+    let imagePosition = -1;
+    editor!.state.doc.descendants((node, position) => {
+      if (node.type.name === 'documentFlowImage') {
+        imagePosition = position;
+        return false;
+      }
+      return true;
+    });
+    editor!.chain()
+      .setNodeSelection(imagePosition)
+      .updateSelectedDocumentImage({ yPx: 300 })
+      .run();
+    expect(findDocumentImageNode(editor!.getJSON())?.attrs?.yPx).toBe(300);
+    editor!.commands.undo();
+    expect(findDocumentImageNode(editor!.getJSON())?.attrs?.yPx).toBe(120);
+    editor!.commands.redo();
+    expect(findDocumentImageNode(editor!.getJSON())?.attrs?.yPx).toBe(300);
   });
 
   it.each([
@@ -1472,6 +1637,12 @@ describe('live document editor UI', () => {
       name: 'Span all 3 columns',
     })).not.toBeNull();
     expect(screen.queryByLabelText('Spanning image starting column')).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('Image vertical placement'), {
+      target: { value: 'page-position' },
+    });
+    fireEvent.change(await screen.findByLabelText('Image Y position'), {
+      target: { value: '286' },
+    });
     fireEvent.change(screen.getByLabelText('Image width'), {
       target: { value: '640' },
     });
@@ -1490,13 +1661,73 @@ describe('live document editor UI', () => {
     expect(image?.attrs).toMatchObject({
       spanCount: 2,
       spanStartColumn: 2,
+      verticalAnchor: 'page-position',
+      yPx: 286,
       caption: 'The family home, circa 1932',
     });
+    expect(screen.queryByRole('button', { name: 'Move earlier' })).toBeNull();
     expect(Number(image?.attrs?.widthPx)).toBeCloseTo(maximumSpanWidth, 5);
     expect(Number(image?.attrs?.heightPx)).toBeCloseTo(
       maximumSpanWidth * 1000 / 1600,
       5
     );
+  });
+
+  it('previews a zoom-aware page-position drag and commits once on release', async () => {
+    let editor: Editor | null = null;
+    const anchored = spanningBodyContent(2, 2);
+    anchored.content![1] = {
+      ...anchored.content![1],
+      attrs: {
+        ...anchored.content![1].attrs,
+        verticalAnchor: 'page-position',
+        yPx: 120,
+        widthPx: 360,
+      },
+    };
+    const { container } = render(React.createElement(FlowEditor, {
+      content: anchored,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      viewScale: 0.5,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    const slot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    )!;
+    const layout = container.querySelector<HTMLElement>(
+      '[data-document-span-layout]'
+    )!;
+    const dispatchPointer = (type: string, clientY: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        pointerId: { value: 7 },
+        clientY: { value: clientY },
+      });
+      fireEvent(slot, event);
+    };
+    dispatchPointer('pointerdown', 100);
+    dispatchPointer('pointermove', 150);
+    expect(findDocumentImageNode(editor!.getJSON())?.attrs?.yPx).toBe(120);
+    await waitFor(() => {
+      expect(Number(layout.dataset.imageTopPx)).toBe(220);
+    });
+    dispatchPointer('pointerup', 150);
+    await waitFor(() => {
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        verticalAnchor: 'page-position',
+        yPx: 220,
+      });
+    });
+    expect(editor!.getJSON().content?.filter(
+      (node) => node.type === 'documentFlowImage'
+    )).toHaveLength(1);
   });
 
   it('normalizes spanning images without losing content when column count shrinks', async () => {

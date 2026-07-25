@@ -1,13 +1,19 @@
 import {
+  useEffect,
   useMemo,
+  useRef,
+  useState,
   type CSSProperties,
   type MouseEvent,
+  type PointerEvent,
 } from 'react';
 import type { Editor } from '@tiptap/core';
 import type {
   DocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
 import {
+  calculateDocumentImageDragY,
+  clampDocumentImageY,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
 
@@ -27,6 +33,9 @@ export type DocumentSpanLayoutModel = {
   imageRegionHeightPx: number;
   layoutContentHeightPx: number;
   imageTopPx: number;
+  exclusionTopPx: number;
+  exclusionBottomPx: number;
+  maximumImageYPx: number;
   availableHeightPx: number;
   overflowing: boolean;
   columns: Array<{
@@ -36,6 +45,44 @@ export type DocumentSpanLayoutModel = {
     bottomHtml: string;
   }>;
 };
+
+export type DocumentColumnSegment = {
+  column: number;
+  region: 'top' | 'bottom';
+  heightPx: number;
+};
+
+export const buildPhysicalColumnSegments = (
+  columnCount: number,
+  occupiedColumns: number[],
+  availableHeightPx: number,
+  exclusionTopPx: number,
+  exclusionBottomPx: number
+): DocumentColumnSegment[] =>
+  Array.from({ length: columnCount }, (_, index) => index + 1)
+    .flatMap((column) => (
+      occupiedColumns.includes(column)
+        ? [
+            {
+              column,
+              region: 'top' as const,
+              heightPx: Math.max(0, exclusionTopPx),
+            },
+            {
+              column,
+              region: 'bottom' as const,
+              heightPx: Math.max(
+                0,
+                availableHeightPx - exclusionBottomPx
+              ),
+            },
+          ]
+        : [{
+            column,
+            region: 'top' as const,
+            heightPx: Math.max(0, availableHeightPx),
+          }]
+    ));
 
 type StructuredContentMeasurer = {
   measure: (elements: Element[], widthPx: number) => number;
@@ -228,10 +275,9 @@ const allocateElementsToHeight = (
       };
     }
     if (allocated.length === 0) {
-      allocated.push(element);
       return {
         allocated,
-        remaining: elements.slice(index + 1),
+        remaining: elements.slice(index),
       };
     }
     return {
@@ -346,37 +392,38 @@ export const buildDocumentSpanLayoutModel = (
       : 0;
     const imageRegionHeightPx = renderedImageHeightPx
       + (captionHeightPx > 0 ? captionHeightPx + 5 : 0);
-    const imageGapHeightPx = Math.min(
-      safeAvailableHeight,
-      imageRegionHeightPx + spanAttributes.verticalSpacingPx * 2
-    );
-    const maximumImageTopPx = Math.max(
+    const verticalSpacingPx = Math.max(
       0,
-      safeAvailableHeight - imageGapHeightPx
+      spanAttributes.verticalSpacingPx
     );
     const precedingFullColumns = startColumn - 1;
     const preAnchorHeightPx = measurer.measure(before, columnWidthPx);
-    const imageTopPx = Math.min(
-      maximumImageTopPx,
-      Math.max(
-        0,
-        (
-          preAnchorHeightPx
-          - precedingFullColumns * safeAvailableHeight
-        ) / spanCount
-      )
+    const flowImageTopPx = (
+      preAnchorHeightPx
+      - precedingFullColumns * safeAvailableHeight
+    );
+    const requestedImageTopPx =
+      spanAttributes.verticalAnchor === 'page-position'
+        ? spanAttributes.yPx
+        : flowImageTopPx;
+    const imageTopPx = clampDocumentImageY(
+      requestedImageTopPx,
+      safeAvailableHeight,
+      imageRegionHeightPx,
+      verticalSpacingPx
+    );
+    const maximumImageYPx = Math.max(
+      verticalSpacingPx,
+      safeAvailableHeight - imageRegionHeightPx - verticalSpacingPx
+    );
+    const exclusionTopPx = Math.max(0, imageTopPx - verticalSpacingPx);
+    const exclusionBottomPx = Math.min(
+      safeAvailableHeight,
+      imageTopPx + imageRegionHeightPx + verticalSpacingPx
     );
     const occupiedColumns = Array.from(
       { length: spanCount },
       (_, index) => startColumn + index
-    );
-    const precedingColumns = Array.from(
-      { length: startColumn - 1 },
-      (_, index) => index + 1
-    );
-    const followingColumns = Array.from(
-      { length: columnCount - (startColumn + spanCount - 1) },
-      (_, index) => startColumn + spanCount + index
     );
     const columns = Array.from({ length: columnCount }, (_, index) => ({
       column: index + 1,
@@ -384,28 +431,13 @@ export const buildDocumentSpanLayoutModel = (
       topHtml: '',
       bottomHtml: '',
     }));
-    const segmentOrder = [
-      ...precedingColumns.map((column) => ({
-        column,
-        region: 'top' as const,
-        heightPx: safeAvailableHeight,
-      })),
-      ...occupiedColumns.map((column) => ({
-        column,
-        region: 'top' as const,
-        heightPx: imageTopPx,
-      })),
-      ...followingColumns.map((column) => ({
-        column,
-        region: 'top' as const,
-        heightPx: safeAvailableHeight,
-      })),
-      ...occupiedColumns.map((column) => ({
-        column,
-        region: 'bottom' as const,
-        heightPx: maximumImageTopPx - imageTopPx,
-      })),
-    ];
+    const segmentOrder = buildPhysicalColumnSegments(
+      columnCount,
+      occupiedColumns,
+      safeAvailableHeight,
+      exclusionTopPx,
+      exclusionBottomPx
+    );
     let remaining = [...before, ...after];
     segmentOrder.forEach((segment) => {
       const allocation = allocateElementsToHeight(
@@ -442,6 +474,7 @@ export const buildDocumentSpanLayoutModel = (
         ...spanAttributes,
         spanCount: spanCount as 1 | 2 | 3,
         spanStartColumn: startColumn as 1 | 2 | 3,
+        yPx: imageTopPx,
       },
       beforeColumnHtml,
       sideHtml:
@@ -456,6 +489,9 @@ export const buildDocumentSpanLayoutModel = (
       imageRegionHeightPx,
       layoutContentHeightPx,
       imageTopPx,
+      exclusionTopPx,
+      exclusionBottomPx,
+      maximumImageYPx,
       availableHeightPx: safeAvailableHeight,
       overflowing,
       columns,
@@ -473,7 +509,9 @@ type StructuredDocumentSpanLayoutProps = {
   availableHeightPx: number;
   revision: number;
   hidden: boolean;
+  viewScale: number;
   onSelectImage: (position: number) => void;
+  onCommitImageY: (position: number, yPx: number) => void;
   onEditText: () => void;
 };
 
@@ -485,7 +523,9 @@ export const StructuredDocumentSpanLayout = ({
   availableHeightPx,
   revision,
   hidden,
+  viewScale,
   onSelectImage,
+  onCommitImageY,
   onEditText,
 }: StructuredDocumentSpanLayoutProps) => {
   const model = useMemo(
@@ -505,7 +545,34 @@ export const StructuredDocumentSpanLayout = ({
       revision,
     ]
   );
+  const [previewImageY, setPreviewImageY] = useState<number | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startClientY: number;
+    startImageY: number;
+    moved: boolean;
+  } | null>(null);
+  const previewImageYRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setPreviewImageY(null);
+    previewImageYRef.current = null;
+    dragRef.current = null;
+  }, [model?.imageId, model?.attributes.yPx, model?.imageTopPx]);
+
   if (!model) return null;
+
+  const displayedImageY = previewImageY ?? model.imageTopPx;
+  const displayedExclusionTop = Math.max(
+    0,
+    displayedImageY - model.attributes.verticalSpacingPx
+  );
+  const displayedExclusionBottom = Math.min(
+    model.availableHeightPx,
+    displayedImageY
+      + model.imageRegionHeightPx
+      + model.attributes.verticalSpacingPx
+  );
 
   const style = {
     '--document-span-column-count': columnCount,
@@ -517,17 +584,76 @@ export const StructuredDocumentSpanLayout = ({
       `${model.attributes.verticalSpacingPx}px`,
     '--document-span-image-region-height': `${model.imageRegionHeightPx}px`,
     '--document-span-exclusion-height':
-      `${
-        Math.min(
-          model.availableHeightPx,
-          model.imageRegionHeightPx
-            + model.attributes.verticalSpacingPx * 2
-        )
-      }px`,
+      `${displayedExclusionBottom - displayedExclusionTop}px`,
     '--document-span-width': `${model.spanWidthPx}px`,
-    '--document-span-image-top': `${model.imageTopPx}px`,
+    '--document-span-image-top': `${displayedImageY}px`,
+    '--document-span-exclusion-top': `${displayedExclusionTop}px`,
     '--document-span-available-height': `${model.availableHeightPx}px`,
   } as CSSProperties;
+
+  const handleImagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    onSelectImage(model.imagePosition);
+    if (model.attributes.verticalAnchor !== 'page-position') return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startClientY: event.clientY,
+      startImageY: model.imageTopPx,
+      moved: false,
+    };
+    previewImageYRef.current = model.imageTopPx;
+    setPreviewImageY(model.imageTopPx);
+  };
+
+  const handleImagePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextY = calculateDocumentImageDragY({
+      startY: drag.startImageY,
+      pointerDeltaY: event.clientY - drag.startClientY,
+      viewScale,
+      availableHeightPx: model.availableHeightPx,
+      imageRegionHeightPx: model.imageRegionHeightPx,
+      verticalSpacingPx: model.attributes.verticalSpacingPx,
+    });
+    drag.moved = drag.moved || Math.abs(nextY - drag.startImageY) > 0.5;
+    previewImageYRef.current = nextY;
+    setPreviewImageY(nextY);
+  };
+
+  const handleImagePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+    const committedY = previewImageYRef.current ?? model.imageTopPx;
+    dragRef.current = null;
+    previewImageYRef.current = null;
+    setPreviewImageY(null);
+    if (drag.moved) {
+      onCommitImageY(model.imagePosition, committedY);
+    }
+  };
+
+  const handleImagePointerCancel = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+    dragRef.current = null;
+    previewImageYRef.current = null;
+    setPreviewImageY(null);
+  };
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
@@ -552,7 +678,9 @@ export const StructuredDocumentSpanLayout = ({
       data-span-width-px={model.spanWidthPx}
       data-layout-content-height-px={model.layoutContentHeightPx}
       data-layout-overflowing={model.overflowing ? 'true' : 'false'}
-      data-image-top-px={model.imageTopPx}
+      data-image-top-px={displayedImageY}
+      data-image-y-max-px={model.maximumImageYPx}
+      data-vertical-anchor={model.attributes.verticalAnchor}
       data-hidden-for-editing={hidden ? 'true' : 'false'}
       style={style}
       onClick={handleClick}
@@ -616,10 +744,18 @@ export const StructuredDocumentSpanLayout = ({
             model.attributes.spanStartColumn - 1
           }) * (var(--document-span-column-width) + var(--document-span-column-gap)))`,
           top:
-            'calc(var(--document-span-image-top) + var(--document-span-vertical-spacing))',
+            'var(--document-span-image-top)',
           width: `${model.spanWidthPx}px`,
+          touchAction:
+            model.attributes.verticalAnchor === 'page-position'
+              ? 'none'
+              : undefined,
         }}
         dangerouslySetInnerHTML={{ __html: model.imageHtml }}
+        onPointerDown={handleImagePointerDown}
+        onPointerMove={handleImagePointerMove}
+        onPointerUp={handleImagePointerEnd}
+        onPointerCancel={handleImagePointerCancel}
       />
     </div>
   );

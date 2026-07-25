@@ -196,6 +196,8 @@ export const DocumentImageNodeView = ({
       data-document-image="true"
       data-image-id={attributes.id}
       data-wrap={attributes.wrap}
+      data-vertical-anchor={attributes.verticalAnchor}
+      data-y-px={attributes.yPx}
       style={{
         width: `${renderedWidth}px`,
         '--document-image-width': `${renderedWidth}px`,

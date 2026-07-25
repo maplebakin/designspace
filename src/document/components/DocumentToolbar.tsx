@@ -32,6 +32,7 @@ export type DocumentImageInspectorValue = {
   heightPx: number;
   xPx?: number;
   yPx?: number;
+  verticalAnchor?: 'flow' | 'page-position';
   wrap: DocumentFlowImageWrap | DocumentOverlayPlacement;
   wrapPaddingPx?: number;
   verticalSpacingPx?: number;
@@ -290,6 +291,50 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             )}
           {props.selectedImage.kind === 'flow'
             && props.selectedImage.wrap === 'span-columns' && (
+              <>
+                <label className="document-context-field">
+                  <span>Vertical placement</span>
+                  <select
+                    aria-label="Image vertical placement"
+                    data-testid="document-image-vertical-anchor"
+                    value={props.selectedImage.verticalAnchor || 'flow'}
+                    onChange={(event) => props.onSelectedImageChange({
+                      verticalAnchor:
+                        event.target.value === 'page-position'
+                          ? 'page-position'
+                          : 'flow',
+                    })}
+                  >
+                    <option value="flow">Follow article text</option>
+                    <option value="page-position">Fixed position on page</option>
+                  </select>
+                </label>
+                {props.selectedImage.verticalAnchor === 'page-position' && (
+                  <label className="document-context-field">
+                    <span>Position from body top</span>
+                    <input
+                      aria-label="Image Y position"
+                      data-testid="document-image-y-position"
+                      type="number"
+                      min="0"
+                      value={Math.round(props.selectedImage.yPx || 0)}
+                      onChange={(event) => props.onSelectedImageChange({
+                        yPx: Math.max(
+                          0,
+                          numericValue(
+                            event.target.value,
+                            props.selectedImage!.yPx || 0
+                          )
+                        ),
+                      })}
+                    />
+                  </label>
+                )}
+              </>
+            )}
+          {props.selectedImage.kind === 'flow'
+            && props.selectedImage.wrap === 'span-columns'
+            && props.selectedImage.verticalAnchor !== 'page-position' && (
               <div
                 className="document-context-button-group"
                 aria-label="Spanning image position"
@@ -336,42 +381,59 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               })}
             />
           </label>
-          {props.selectedImage.kind === 'flow' ? (
+          {props.selectedImage.kind === 'flow'
+            && props.selectedImage.wrap === 'span-columns' ? (
+            <>
+              <label className="document-context-field">
+                <span>Text wrap padding</span>
+                <input
+                  aria-label="Image wrap padding"
+                  data-testid="document-image-wrap-padding"
+                  type="number"
+                  min="0"
+                  max="96"
+                  value={props.selectedImage.wrapPaddingPx || 0}
+                  onChange={(event) => props.onSelectedImageChange({
+                    wrapPaddingPx: Math.max(
+                      0,
+                      numericValue(event.target.value, 0)
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-context-field">
+                <span>Space above and below</span>
+                <input
+                  aria-label="Spanning image vertical spacing"
+                  data-testid="document-image-vertical-spacing"
+                  type="number"
+                  min="0"
+                  max="96"
+                  value={props.selectedImage.verticalSpacingPx || 0}
+                  onChange={(event) => props.onSelectedImageChange({
+                    verticalSpacingPx: Math.max(
+                      0,
+                      numericValue(event.target.value, 0)
+                    ),
+                  })}
+                />
+              </label>
+            </>
+          ) : props.selectedImage.kind === 'flow' ? (
             <label className="document-context-field">
-              <span>
-                {props.selectedImage.wrap === 'span-columns'
-                  ? 'Vertical gap'
-                  : 'Wrap gap'}
-              </span>
+              <span>Text wrap padding</span>
               <input
-                aria-label={
-                  props.selectedImage.wrap === 'span-columns'
-                    ? 'Spanning image vertical spacing'
-                    : 'Image wrap padding'
-                }
+                aria-label="Image wrap padding"
                 data-testid="document-image-padding"
                 type="number"
                 min="0"
                 max="96"
-                value={
-                  props.selectedImage.wrap === 'span-columns'
-                    ? props.selectedImage.verticalSpacingPx || 0
-                    : props.selectedImage.wrapPaddingPx || 0
-                }
+                value={props.selectedImage.wrapPaddingPx || 0}
                 onChange={(event) => props.onSelectedImageChange({
-                  ...(props.selectedImage!.wrap === 'span-columns'
-                    ? {
-                        verticalSpacingPx: Math.max(
-                          0,
-                          numericValue(event.target.value, 0)
-                        ),
-                      }
-                    : {
-                        wrapPaddingPx: Math.max(
-                          0,
-                          numericValue(event.target.value, 0)
-                        ),
-                      }),
+                  wrapPaddingPx: Math.max(
+                    0,
+                    numericValue(event.target.value, 0)
+                  ),
                 })}
               />
             </label>

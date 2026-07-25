@@ -447,6 +447,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           wrap: selectedFlowImage.attributes.wrap,
           wrapPaddingPx: selectedFlowImage.attributes.wrapPaddingPx,
           verticalSpacingPx: selectedFlowImage.attributes.verticalSpacingPx,
+          verticalAnchor: selectedFlowImage.attributes.verticalAnchor,
+          yPx: selectedFlowImage.attributes.yPx,
           spanCount: selectedFlowImage.attributes.spanCount,
           spanStartColumn: selectedFlowImage.attributes.spanStartColumn,
           caption: selectedFlowImage.attributes.caption,
@@ -501,6 +503,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         ...(typeof update.verticalSpacingPx === 'number'
           ? { verticalSpacingPx: update.verticalSpacingPx }
           : {}),
+        ...(update.verticalAnchor === 'flow'
+          || update.verticalAnchor === 'page-position'
+          ? { verticalAnchor: update.verticalAnchor }
+          : {}),
+        ...(typeof update.yPx === 'number' ? { yPx: update.yPx } : {}),
         ...(typeof update.spanStartColumn === 'number'
           ? { spanStartColumn: update.spanStartColumn }
           : {}),
@@ -643,6 +650,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             spanStartColumn,
             widthPx: spanWidth,
             heightPx: spanWidth * ratio,
+            verticalAnchor:
+              selectedFlowImage.attributes.verticalAnchor || 'flow',
           })
           .run();
         return;
@@ -677,6 +686,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         spanStartColumn: 1,
         wrapPaddingPx: 12,
         verticalSpacingPx: 12,
+        verticalAnchor: 'page-position',
+        yPx: Math.max(
+          0,
+          selectedOverlay.yPx - page.margins.topIn * 96
+        ),
         caption: selectedOverlay.caption || '',
       });
       bodyEditorRef.current?.commands.focus();

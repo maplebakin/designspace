@@ -29,6 +29,8 @@ export type DocumentImageWrap =
   | 'top-bottom'
   | 'span-columns';
 
+export type DocumentImageVerticalAnchor = 'flow' | 'page-position';
+
 export interface DocumentImageAttributes {
   id: string;
   assetId: string;
@@ -42,6 +44,8 @@ export interface DocumentImageAttributes {
   spanStartColumn: 1 | 2 | 3;
   wrapPaddingPx: number;
   verticalSpacingPx: number;
+  verticalAnchor: DocumentImageVerticalAnchor;
+  yPx: number;
   caption: string;
 }
 
@@ -110,8 +114,13 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   spanStartColumn: 1,
   wrapPaddingPx: 12,
   verticalSpacingPx: 12,
+  verticalAnchor: 'flow',
+  yPx: 0,
   caption: '',
 };
+
+const DOCUMENT_IMAGE_VERTICAL_ANCHORS =
+  new Set<DocumentImageVerticalAnchor>(['flow', 'page-position']);
 
 const numericAttribute = (
   value: unknown,
@@ -140,6 +149,64 @@ export const normalizeDocumentImageWrap = (
   && DOCUMENT_IMAGE_WRAPS.has(value as DocumentImageWrap)
     ? value as DocumentImageWrap
     : fallback;
+
+export const normalizeDocumentImageVerticalAnchor = (
+  value: unknown
+): DocumentImageVerticalAnchor =>
+  typeof value === 'string'
+  && DOCUMENT_IMAGE_VERTICAL_ANCHORS.has(
+    value as DocumentImageVerticalAnchor
+  )
+    ? value as DocumentImageVerticalAnchor
+    : 'flow';
+
+export const clampDocumentImageY = (
+  value: unknown,
+  availableHeightPx: number,
+  imageRegionHeightPx: number,
+  verticalSpacingPx = 0
+) => {
+  const available = Math.max(0, Number.isFinite(availableHeightPx)
+    ? availableHeightPx
+    : 0);
+  const region = Math.max(0, Number.isFinite(imageRegionHeightPx)
+    ? imageRegionHeightPx
+    : 0);
+  const spacing = Math.max(0, Number.isFinite(verticalSpacingPx)
+    ? verticalSpacingPx
+    : 0);
+  const maximum = Math.max(spacing, available - region - spacing);
+  const numeric = Number(value);
+  const requested = Number.isFinite(numeric) ? numeric : spacing;
+  return Math.min(maximum, Math.max(spacing, requested));
+};
+
+export const calculateDocumentImageDragY = ({
+  startY,
+  pointerDeltaY,
+  viewScale,
+  availableHeightPx,
+  imageRegionHeightPx,
+  verticalSpacingPx,
+}: {
+  startY: number;
+  pointerDeltaY: number;
+  viewScale: number;
+  availableHeightPx: number;
+  imageRegionHeightPx: number;
+  verticalSpacingPx: number;
+}) => {
+  const scale = Math.max(
+    0.05,
+    Number.isFinite(viewScale) ? viewScale : 1
+  );
+  return clampDocumentImageY(
+    startY + pointerDeltaY / scale,
+    availableHeightPx,
+    imageRegionHeightPx,
+    verticalSpacingPx
+  );
+};
 
 export const normalizeDocumentImageAttributes = (
   value: Partial<DocumentImageAttributes>,
@@ -190,6 +257,10 @@ export const normalizeDocumentImageAttributes = (
       0,
       96
     ),
+    verticalAnchor: normalizeDocumentImageVerticalAnchor(
+      value.verticalAnchor
+    ),
+    yPx: numericAttribute(value.yPx, DEFAULT_IMAGE_ATTRIBUTES.yPx, 0),
     caption: typeof value.caption === 'string' ? value.caption : '',
   };
 };
@@ -420,6 +491,28 @@ const createDocumentImageAttributes = (
         style: `--document-image-vertical-spacing: ${spacing}px`,
       };
     },
+  },
+  verticalAnchor: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.verticalAnchor,
+    parseHTML: (element: HTMLElement) =>
+      normalizeDocumentImageVerticalAnchor(
+        element.getAttribute('data-vertical-anchor')
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-vertical-anchor': normalizeDocumentImageVerticalAnchor(
+        attributes.verticalAnchor
+      ),
+    }),
+  },
+  yPx: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.yPx,
+    parseHTML: (element: HTMLElement) =>
+      getDataNumber(element, 'data-y-px', DEFAULT_IMAGE_ATTRIBUTES.yPx),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-y-px': String(
+        numericAttribute(attributes.yPx, DEFAULT_IMAGE_ATTRIBUTES.yPx, 0)
+      ),
+    }),
   },
   caption: {
     default: '',

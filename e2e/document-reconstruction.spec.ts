@@ -379,6 +379,27 @@ test.describe('document reconstruction MVP', () => {
 
     await page.getByTestId('document-image-span-start').selectOption('2');
     await expect(layout).toHaveAttribute('data-span-start-column', '2');
+    await page.getByTestId('document-image-vertical-anchor')
+      .selectOption('page-position');
+    await expect(layout).toHaveAttribute(
+      'data-vertical-anchor',
+      'page-position'
+    );
+    const maximumImageY = Number(
+      await layout.getAttribute('data-image-y-max-px')
+    );
+    const requestedImageY = Math.max(
+      18,
+      Math.min(300, maximumImageY - 90)
+    );
+    await page.getByTestId('document-image-y-position').fill(
+      String(Math.round(requestedImageY))
+    );
+    await expect.poll(async () =>
+      Number(await layout.getAttribute('data-image-top-px'))
+    ).toBeCloseTo(requestedImageY, 0);
+    await expect(page.getByRole('button', { name: 'Move earlier' }))
+      .toHaveCount(0);
     await expect(layout.locator('[data-layout-role="occupied-columns"]'))
       .toHaveAttribute('data-start-column', '2');
     await expect(layout.locator('[data-layout-role="occupied-columns"]'))
@@ -392,6 +413,9 @@ test.describe('document reconstruction MVP', () => {
     const columnThreeAbove = layout.locator(
       '[data-layout-region="above"][data-column="3"]'
     );
+    const columnTwoBelow = layout.locator(
+      '[data-layout-region="below"][data-column="2"]'
+    );
     await expect(columnOne).toContainText(
       'The first part of the family history fills the opening columns.'
     );
@@ -401,14 +425,43 @@ test.describe('document reconstruction MVP', () => {
     await expect(columnTwoAbove).toContainText(
       'anchor belongs in the lower portion of the article.'
     );
-    await expect(columnThreeAbove).toContainText(
-      'anchor belongs in the lower portion of the article.'
-    );
+    await expect(columnTwoBelow).not.toBeEmpty();
+    await expect(columnThreeAbove).toBeAttached();
     await expect(layout.locator('[data-layout-role="occupied-columns"]'))
       .not.toContainText('Column one continues beside');
     await expect(layout.locator('figcaption')).toHaveText(
       'The Harwood family outside the farmhouse'
     );
+    const imageSlot = layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    );
+    const slotBox = await imageSlot.boundingBox();
+    expect(slotBox).not.toBeNull();
+    const imageYBeforeDrag = Number(
+      await layout.getAttribute('data-image-top-px')
+    );
+    const zoomPercent = Number.parseInt(
+      await page.getByTestId('document-zoom-indicator').textContent() || '100',
+      10
+    );
+    await page.mouse.move(
+      slotBox!.x + slotBox!.width / 2,
+      slotBox!.y + Math.min(40, slotBox!.height / 2)
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      slotBox!.x + slotBox!.width / 2,
+      slotBox!.y + Math.min(40, slotBox!.height / 2) + 40
+    );
+    await page.mouse.up();
+    await expect.poll(async () =>
+      Number(await layout.getAttribute('data-image-top-px'))
+    ).toBeGreaterThan(imageYBeforeDrag);
+    const committedImageY = Number(
+      await layout.getAttribute('data-image-top-px')
+    );
+    expect(committedImageY - imageYBeforeDrag)
+      .toBeCloseTo(40 / (zoomPercent / 100), 0);
     const columnsTwoThreeGeometry = await layout.evaluate((root) => {
       const rootRect = root.getBoundingClientRect();
       const occupiedRect = root.querySelector<HTMLElement>(
@@ -462,6 +515,13 @@ test.describe('document reconstruction MVP', () => {
     const reloadedLayout = page.locator('[data-document-span-layout]');
     await expect(reloadedLayout).toHaveAttribute('data-span-count', '2');
     await expect(reloadedLayout).toHaveAttribute('data-span-start-column', '2');
+    await expect(reloadedLayout).toHaveAttribute(
+      'data-vertical-anchor',
+      'page-position'
+    );
+    await expect.poll(async () =>
+      Number(await reloadedLayout.getAttribute('data-image-top-px'))
+    ).toBeCloseTo(committedImageY, 0);
     await expect(reloadedLayout.locator(
       '[data-layout-role="continuing-column"][data-column="1"]'
     ))
@@ -472,8 +532,8 @@ test.describe('document reconstruction MVP', () => {
       'The Harwood family outside the farmhouse'
     );
     await expect(reloadedLayout.locator(
-      '[data-layout-region="above"][data-column="3"]'
-    )).toContainText('anchor belongs in the lower portion');
+      '[data-layout-region="below"][data-column="2"]'
+    )).not.toBeEmpty();
 
     const pngDownloadPromise = page.waitForEvent('download');
     await (await openExportFormat(page, 'PNG')).click();

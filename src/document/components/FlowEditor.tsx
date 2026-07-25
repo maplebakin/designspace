@@ -598,9 +598,20 @@ export const FlowEditor = ({
           availableHeightPx={layoutHeightPx}
           revision={layoutRevision}
           hidden={editingStructuredText}
+          viewScale={viewScale}
           onSelectImage={(position) => {
             editor.commands.setNodeSelection(position);
             editor.commands.focus();
+          }}
+          onCommitImageY={(position, yPx) => {
+            editor.chain()
+              .focus()
+              .setNodeSelection(position)
+              .updateSelectedDocumentImage({
+                verticalAnchor: 'page-position',
+                yPx,
+              })
+              .run();
           }}
           onEditText={() => {
             setEditingStructuredText(true);

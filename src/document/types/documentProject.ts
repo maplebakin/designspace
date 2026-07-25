@@ -28,6 +28,8 @@ export type DocumentFlowImage = {
   spanStartColumn?: 1 | 2 | 3;
   wrapPaddingPx: number;
   verticalSpacingPx?: number;
+  verticalAnchor?: 'flow' | 'page-position';
+  yPx?: number;
   caption?: string;
   naturalWidth?: number;
   naturalHeight?: number;

@@ -62,6 +62,8 @@ const spanningBodyContent = (): DocumentContentJson => ({
         spanStartColumn: 2,
         wrapPaddingPx: 12,
         verticalSpacingPx: 20,
+        verticalAnchor: 'page-position',
+        yPx: 286,
         caption: 'Family photograph caption',
       },
     },
