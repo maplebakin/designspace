@@ -8,11 +8,17 @@ import {
   type PointerEvent,
 } from 'react';
 import type { Editor } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
 import type {
   DocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
 import {
+  calculateDocumentImageHeight,
   calculateDocumentImageDragY,
+  calculateDocumentImageResizeWidth,
+  calculateDocumentImageXOffset,
+  clampDocumentImageXOffset,
+  getDocumentImageAspectRatio,
   clampDocumentImageY,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
@@ -50,6 +56,52 @@ export type DocumentColumnSegment = {
   column: number;
   region: 'top' | 'bottom';
   heightPx: number;
+};
+
+export type DocumentImageRectangle = {
+  imageId: string;
+  leftPx: number;
+  topPx: number;
+  widthPx: number;
+  heightPx: number;
+};
+
+export type StructuredImageLayout = {
+  imageId: string;
+  imagePosition: number;
+  attributes: DocumentImageAttributes;
+  imageHtml: string;
+  spanLeftPx: number;
+  spanWidthPx: number;
+  renderedImageWidthPx: number;
+  renderedImageHeightPx: number;
+  imageRegionHeightPx: number;
+  imageLeftPx: number;
+  imageTopPx: number;
+  maximumXOffsetPx: number;
+  maximumImageYPx: number;
+};
+
+export type StructuredTextBand = {
+  id: string;
+  column: number;
+  topPx: number;
+  leftPx: number;
+  widthPx: number;
+  heightPx: number;
+  html: string;
+};
+
+export type MultiDocumentSpanLayoutModel = {
+  images: StructuredImageLayout[];
+  exclusions: DocumentImageRectangle[];
+  collisionRectangles: DocumentImageRectangle[];
+  textBands: StructuredTextBand[];
+  columnWidthPx: number;
+  availableWidthPx: number;
+  availableHeightPx: number;
+  layoutContentHeightPx: number;
+  overflowing: boolean;
 };
 
 export const buildPhysicalColumnSegments = (
@@ -293,7 +345,8 @@ export const buildDocumentSpanLayoutModel = (
   columnCount: 1 | 2 | 3,
   columnGapPx = 24,
   availableWidthPx = 720,
-  availableHeightPx = 720
+  availableHeightPx = 720,
+  attributeOverrides: Partial<DocumentImageAttributes> = {}
 ): DocumentSpanLayoutModel | null => {
   let imagePosition: number | null = null;
   let attributes: DocumentImageAttributes | null = null;
@@ -313,7 +366,10 @@ export const buildDocumentSpanLayoutModel = (
     return imagePosition === null;
   });
   if (imagePosition === null || attributes === null) return null;
-  const spanAttributes = attributes as DocumentImageAttributes;
+  const spanAttributes = normalizeDocumentImageAttributes({
+    ...(attributes as DocumentImageAttributes),
+    ...attributeOverrides,
+  });
   const spanPosition = imagePosition as number;
 
   const parsed = new DOMParser().parseFromString(
@@ -376,6 +432,13 @@ export const buildDocumentSpanLayoutModel = (
     'data-rendered-height-px',
     String(renderedImageHeightPx)
   );
+  imageElement.setAttribute('data-width-px', String(spanAttributes.widthPx));
+  imageElement.setAttribute('data-height-px', String(
+    calculateDocumentImageHeight(
+      spanAttributes.widthPx,
+      aspectRatio
+    )
+  ));
   const image = imageElement.querySelector<HTMLElement>(
     '.document-image__media'
   );
@@ -501,6 +564,409 @@ export const buildDocumentSpanLayoutModel = (
   }
 };
 
+const mergeIntervals = (intervals: Array<[number, number]>) =>
+  intervals
+    .sort((left, right) => left[0] - right[0])
+    .reduce<Array<[number, number]>>((merged, interval) => {
+      const previous = merged[merged.length - 1];
+      if (!previous || interval[0] > previous[1]) {
+        merged.push([...interval]);
+      } else {
+        previous[1] = Math.max(previous[1], interval[1]);
+      }
+      return merged;
+    }, []);
+
+const intervalsAroundExclusions = (
+  columnLeftPx: number,
+  columnWidthPx: number,
+  exclusions: DocumentImageRectangle[]
+) => {
+  const columnRightPx = columnLeftPx + columnWidthPx;
+  const blocked = mergeIntervals(
+    exclusions
+      .map((rectangle): [number, number] => [
+        Math.max(columnLeftPx, rectangle.leftPx),
+        Math.min(columnRightPx, rectangle.leftPx + rectangle.widthPx),
+      ])
+      .filter(([left, right]) => right > left)
+  );
+  const available: Array<[number, number]> = [];
+  let cursor = columnLeftPx;
+  blocked.forEach(([left, right]) => {
+    if (left > cursor) available.push([cursor, left]);
+    cursor = Math.max(cursor, right);
+  });
+  if (cursor < columnRightPx) available.push([cursor, columnRightPx]);
+  return available;
+};
+
+export const rectanglesOverlap = (
+  left: DocumentImageRectangle,
+  right: DocumentImageRectangle
+) => (
+  left.leftPx < right.leftPx + right.widthPx
+  && left.leftPx + left.widthPx > right.leftPx
+  && left.topPx < right.topPx + right.heightPx
+  && left.topPx + left.heightPx > right.topPx
+);
+
+export const moveRectangleWithoutCollisions = ({
+  start,
+  desiredLeftPx,
+  desiredTopPx,
+  obstacles,
+}: {
+  start: DocumentImageRectangle;
+  desiredLeftPx: number;
+  desiredTopPx: number;
+  obstacles: DocumentImageRectangle[];
+}) => {
+  const deltaX = desiredLeftPx - start.leftPx;
+  const deltaY = desiredTopPx - start.topPx;
+  let travel = 1;
+  obstacles.forEach((obstacle) => {
+    if (rectanglesOverlap(start, obstacle)) return;
+    const horizontallySeparated = (
+      start.leftPx + start.widthPx <= obstacle.leftPx
+      || start.leftPx >= obstacle.leftPx + obstacle.widthPx
+    );
+    const verticallySeparated = (
+      start.topPx + start.heightPx <= obstacle.topPx
+      || start.topPx >= obstacle.topPx + obstacle.heightPx
+    );
+    if (deltaX === 0 && horizontallySeparated) return;
+    if (deltaY === 0 && verticallySeparated) return;
+    const xEntry = deltaX > 0
+      ? (obstacle.leftPx - (start.leftPx + start.widthPx)) / deltaX
+      : deltaX < 0
+        ? (
+            obstacle.leftPx + obstacle.widthPx - start.leftPx
+          ) / deltaX
+        : Number.NEGATIVE_INFINITY;
+    const xExit = deltaX > 0
+      ? (
+          obstacle.leftPx + obstacle.widthPx - start.leftPx
+        ) / deltaX
+      : deltaX < 0
+        ? (
+            obstacle.leftPx - (start.leftPx + start.widthPx)
+          ) / deltaX
+        : Number.POSITIVE_INFINITY;
+    const yEntry = deltaY > 0
+      ? (obstacle.topPx - (start.topPx + start.heightPx)) / deltaY
+      : deltaY < 0
+        ? (
+            obstacle.topPx + obstacle.heightPx - start.topPx
+          ) / deltaY
+        : Number.NEGATIVE_INFINITY;
+    const yExit = deltaY > 0
+      ? (
+          obstacle.topPx + obstacle.heightPx - start.topPx
+        ) / deltaY
+      : deltaY < 0
+        ? (
+            obstacle.topPx - (start.topPx + start.heightPx)
+          ) / deltaY
+        : Number.POSITIVE_INFINITY;
+    const entry = Math.max(
+      Math.min(xEntry, xExit),
+      Math.min(yEntry, yExit)
+    );
+    const exit = Math.min(
+      Math.max(xEntry, xExit),
+      Math.max(yEntry, yExit)
+    );
+    if (entry <= exit && entry >= 0 && entry <= travel) {
+      travel = entry;
+    }
+  });
+  return {
+    leftPx: start.leftPx + deltaX * travel,
+    topPx: start.topPx + deltaY * travel,
+  };
+};
+
+export const buildMultiDocumentSpanLayoutModel = (
+  editor: Editor,
+  columnCount: 1 | 2 | 3,
+  columnGapPx = 24,
+  availableWidthPx = 720,
+  availableHeightPx = 720,
+  attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {}
+): MultiDocumentSpanLayoutModel | null => {
+  const positionedNodes: Array<{
+    position: number;
+    attributes: DocumentImageAttributes;
+  }> = [];
+  editor.state.doc.descendants((node, position) => {
+    if (
+      node.type.name === 'documentFlowImage'
+      && node.attrs.wrap === 'span-columns'
+    ) {
+      const normalized = normalizeDocumentImageAttributes({
+        ...(node.attrs as Partial<DocumentImageAttributes>),
+        ...(attributeOverrides[String(node.attrs.id)] || {}),
+      });
+      positionedNodes.push({ position, attributes: normalized });
+      return false;
+    }
+    return true;
+  });
+  if (positionedNodes.length === 0) return null;
+
+  const parsed = new DOMParser().parseFromString(
+    `<div data-document-span-source>${editor.getHTML()}</div>`,
+    'text/html'
+  );
+  const source = parsed.querySelector('[data-document-span-source]');
+  if (!source) return null;
+  const children = Array.from(source.children);
+  const structuredIds = new Set(
+    positionedNodes.map(({ attributes }) => attributes.id)
+  );
+  const textElements = children.filter((element) => !(
+    element.getAttribute('data-wrap') === 'span-columns'
+    && structuredIds.has(element.getAttribute('data-image-id') || '')
+  ));
+  const safeWidth = Math.max(1, availableWidthPx);
+  const safeHeight = Math.max(1, availableHeightPx);
+  const safeGap = Math.max(0, columnGapPx);
+  const columnWidthPx = Math.max(
+    1,
+    (safeWidth - safeGap * (columnCount - 1)) / columnCount
+  );
+  const measurer = createStructuredContentMeasurer();
+  try {
+    const images = positionedNodes.flatMap((entry) => {
+      const attributes = entry.attributes;
+      const imageElement = children.find((element) =>
+        element.getAttribute('data-image-id') === attributes.id
+        && element.getAttribute('data-wrap') === 'span-columns'
+      ) as HTMLElement | undefined;
+      if (!imageElement) return [];
+      const spanCount = Math.min(
+        columnCount,
+        Math.max(1, attributes.spanCount)
+      );
+      const startColumn = Math.min(
+        Math.max(1, attributes.spanStartColumn),
+        Math.max(1, columnCount - spanCount + 1)
+      );
+      const spanLeftPx =
+        (startColumn - 1) * (columnWidthPx + safeGap);
+      const spanWidthPx =
+        columnWidthPx * spanCount + safeGap * (spanCount - 1);
+      const renderedImageWidthPx = Math.min(
+        spanWidthPx,
+        attributes.widthPx
+      );
+      const aspectRatio = getDocumentImageAspectRatio(attributes);
+      const renderedImageHeightPx =
+        renderedImageWidthPx / Math.max(0.0001, aspectRatio);
+      const caption = imageElement.querySelector('figcaption');
+      const captionHeightPx = caption
+        ? measurer.measure([caption], renderedImageWidthPx)
+        : 0;
+      const imageRegionHeightPx = renderedImageHeightPx
+        + (captionHeightPx > 0 ? captionHeightPx + 5 : 0);
+      const placement = attributes.horizontalPlacement;
+      const xOffsetPx = calculateDocumentImageXOffset({
+        placement,
+        xOffsetPx: attributes.xOffsetPx,
+        spanWidthPx,
+        imageWidthPx: renderedImageWidthPx,
+      });
+      const imageChildIndex = children.indexOf(imageElement);
+      const semanticElements = children
+        .slice(0, imageChildIndex)
+        .filter((element) => !(
+          element.getAttribute('data-wrap') === 'span-columns'
+          && structuredIds.has(element.getAttribute('data-image-id') || '')
+        ));
+      const flowTop = (
+        measurer.measure(semanticElements, columnWidthPx)
+        - (startColumn - 1) * safeHeight
+      );
+      const imageTopPx = attributes.verticalAnchor === 'page-position'
+        ? clampDocumentImageY(
+            attributes.yPx,
+            safeHeight,
+            imageRegionHeightPx,
+            attributes.verticalSpacingPx
+          )
+        : clampDocumentImageY(
+            flowTop,
+            safeHeight,
+            imageRegionHeightPx,
+            attributes.verticalSpacingPx
+          );
+      imageElement.classList.add(
+        'document-span-layout__image',
+        'document-span-layout__image--structured'
+      );
+      imageElement.style.width = `${renderedImageWidthPx}px`;
+      imageElement.style.maxWidth = `${renderedImageWidthPx}px`;
+      imageElement.setAttribute('data-layout-role', 'spanning-image');
+      imageElement.setAttribute(
+        'data-rendered-width-px',
+        String(renderedImageWidthPx)
+      );
+      imageElement.setAttribute(
+        'data-rendered-height-px',
+        String(renderedImageHeightPx)
+      );
+      const media = imageElement.querySelector<HTMLElement>(
+        '.document-image__media'
+      );
+      if (media) {
+        media.style.width = `${renderedImageWidthPx}px`;
+        media.style.height = `${renderedImageHeightPx}px`;
+      }
+      return [{
+        imageId: attributes.id,
+        imagePosition: entry.position,
+        attributes: {
+          ...attributes,
+          spanCount: spanCount as 1 | 2 | 3,
+          spanStartColumn: startColumn as 1 | 2 | 3,
+          xOffsetPx,
+          yPx: imageTopPx,
+        },
+        imageHtml: imageElement.outerHTML,
+        spanLeftPx,
+        spanWidthPx,
+        renderedImageWidthPx,
+        renderedImageHeightPx,
+        imageRegionHeightPx,
+        imageLeftPx: spanLeftPx + xOffsetPx,
+        imageTopPx,
+        maximumXOffsetPx: Math.max(
+          0,
+          spanWidthPx - renderedImageWidthPx
+        ),
+        maximumImageYPx: Math.max(
+          attributes.verticalSpacingPx,
+          safeHeight
+          - imageRegionHeightPx
+          - attributes.verticalSpacingPx
+        ),
+      }];
+    });
+    const collisionRectangles = images.map((image) => ({
+      imageId: image.imageId,
+      leftPx: image.imageLeftPx,
+      topPx: image.imageTopPx,
+      widthPx: image.renderedImageWidthPx,
+      heightPx: image.imageRegionHeightPx,
+    }));
+    const exclusions = images.map((image) => {
+      const horizontalPadding = image.attributes.wrapPaddingPx;
+      const verticalSpacing = image.attributes.verticalSpacingPx;
+      const left = Math.max(0, image.imageLeftPx - horizontalPadding);
+      const right = Math.min(
+        safeWidth,
+        image.imageLeftPx
+        + image.renderedImageWidthPx
+        + horizontalPadding
+      );
+      const top = Math.max(0, image.imageTopPx - verticalSpacing);
+      const bottom = Math.min(
+        safeHeight,
+        image.imageTopPx
+        + image.imageRegionHeightPx
+        + verticalSpacing
+      );
+      return {
+        imageId: image.imageId,
+        leftPx: left,
+        topPx: top,
+        widthPx: Math.max(0, right - left),
+        heightPx: Math.max(0, bottom - top),
+      };
+    });
+    const candidateBands: Omit<StructuredTextBand, 'html'>[] = [];
+    for (let column = 1; column <= columnCount; column += 1) {
+      const columnLeftPx =
+        (column - 1) * (columnWidthPx + safeGap);
+      const intersecting = exclusions.filter((rectangle) => (
+        rectangle.leftPx < columnLeftPx + columnWidthPx
+        && rectangle.leftPx + rectangle.widthPx > columnLeftPx
+      ));
+      const boundaries = Array.from(new Set([
+        0,
+        safeHeight,
+        ...intersecting.flatMap((rectangle) => [
+          Math.max(0, rectangle.topPx),
+          Math.min(
+            safeHeight,
+            rectangle.topPx + rectangle.heightPx
+          ),
+        ]),
+      ])).sort((left, right) => left - right);
+      for (let index = 0; index < boundaries.length - 1; index += 1) {
+        const topPx = boundaries[index];
+        const bottomPx = boundaries[index + 1];
+        if (bottomPx <= topPx) continue;
+        const active = intersecting.filter((rectangle) => (
+          rectangle.topPx < bottomPx
+          && rectangle.topPx + rectangle.heightPx > topPx
+        ));
+        intervalsAroundExclusions(
+          columnLeftPx,
+          columnWidthPx,
+          active
+        ).forEach(([left, right], intervalIndex) => {
+          const widthPx = right - left;
+          if (widthPx < 72) return;
+          candidateBands.push({
+            id: `column-${column}-band-${index}-${intervalIndex}`,
+            column,
+            topPx,
+            leftPx: left,
+            widthPx,
+            heightPx: bottomPx - topPx,
+          });
+        });
+      }
+    }
+    let remaining = [...textElements];
+    const textBands = candidateBands.map((band) => {
+      const allocation = allocateElementsToHeight(
+        remaining,
+        band.widthPx,
+        band.heightPx,
+        measurer.measure
+      );
+      remaining = allocation.remaining;
+      return {
+        ...band,
+        html: serializeElements(allocation.allocated),
+      };
+    });
+    const overflowing = remaining.length > 0;
+    if (overflowing && textBands.length > 0) {
+      textBands[textBands.length - 1].html += serializeElements(remaining);
+    }
+    const overflowHeightPx = overflowing
+      ? measurer.measure(remaining, columnWidthPx) / columnCount
+      : 0;
+    return {
+      images,
+      exclusions,
+      collisionRectangles,
+      textBands,
+      columnWidthPx,
+      availableWidthPx: safeWidth,
+      availableHeightPx: safeHeight,
+      layoutContentHeightPx: safeHeight + overflowHeightPx,
+      overflowing,
+    };
+  } finally {
+    measurer.dispose();
+  }
+};
+
 type StructuredDocumentSpanLayoutProps = {
   editor: Editor;
   columnCount: 1 | 2 | 3;
@@ -510,9 +976,62 @@ type StructuredDocumentSpanLayoutProps = {
   revision: number;
   textEditing: boolean;
   viewScale: number;
+  minimumImageWidthPx: number;
   onSelectImage: (position: number) => void;
-  onCommitImageY: (position: number, yPx: number) => void;
+  onCommitImagePosition: (
+    position: number,
+    xOffsetPx: number,
+    yPx: number
+  ) => void;
+  onCommitImageSize: (
+    position: number,
+    widthPx: number,
+    heightPx: number,
+    xOffsetPx: number
+  ) => void;
   onEditText: () => void;
+};
+
+const rectangleCollides = (
+  rectangle: DocumentImageRectangle,
+  obstacles: DocumentImageRectangle[]
+) => obstacles.some((obstacle) => rectanglesOverlap(rectangle, obstacle));
+
+export const clampResizeWidthWithoutCollisions = ({
+  startWidthPx,
+  desiredWidthPx,
+  buildRectangle,
+  obstacles,
+}: {
+  startWidthPx: number;
+  desiredWidthPx: number;
+  buildRectangle: (widthPx: number) => DocumentImageRectangle;
+  obstacles: DocumentImageRectangle[];
+}) => {
+  if (startWidthPx === desiredWidthPx || obstacles.length === 0) {
+    return desiredWidthPx;
+  }
+  const steps = 32;
+  let lastSafe = startWidthPx;
+  for (let index = 1; index <= steps; index += 1) {
+    const candidate = startWidthPx
+      + (desiredWidthPx - startWidthPx) * (index / steps);
+    if (rectangleCollides(buildRectangle(candidate), obstacles)) {
+      let low = lastSafe;
+      let high = candidate;
+      for (let iteration = 0; iteration < 18; iteration += 1) {
+        const middle = (low + high) / 2;
+        if (rectangleCollides(buildRectangle(middle), obstacles)) {
+          high = middle;
+        } else {
+          low = middle;
+        }
+      }
+      return low;
+    }
+    lastSafe = candidate;
+  }
+  return desiredWidthPx;
 };
 
 export const StructuredDocumentSpanLayout = ({
@@ -524,17 +1043,23 @@ export const StructuredDocumentSpanLayout = ({
   revision,
   textEditing,
   viewScale,
+  minimumImageWidthPx,
   onSelectImage,
-  onCommitImageY,
+  onCommitImagePosition,
+  onCommitImageSize,
   onEditText,
 }: StructuredDocumentSpanLayoutProps) => {
+  const [previewOverrides, setPreviewOverrides] = useState<
+    Record<string, Partial<DocumentImageAttributes>>
+  >({});
   const model = useMemo(
-    () => buildDocumentSpanLayoutModel(
+    () => buildMultiDocumentSpanLayoutModel(
       editor,
       columnCount,
       columnGapPx,
       availableWidthPx,
-      availableHeightPx
+      availableHeightPx,
+      previewOverrides
     ),
     [
       availableHeightPx,
@@ -542,87 +1067,382 @@ export const StructuredDocumentSpanLayout = ({
       columnCount,
       columnGapPx,
       editor,
+      previewOverrides,
       revision,
     ]
   );
-  const [previewImageY, setPreviewImageY] = useState<number | null>(null);
   const dragRef = useRef<{
     pointerId: number;
+    imageId: string;
+    position: number;
+    startClientX: number;
     startClientY: number;
+    startImageX: number;
     startImageY: number;
+    spanLeftPx: number;
+    maximumXOffsetPx: number;
+    startRectangle: DocumentImageRectangle;
+    obstacles: DocumentImageRectangle[];
+    captureElement: HTMLDivElement;
     moved: boolean;
   } | null>(null);
-  const previewImageYRef = useRef<number | null>(null);
+  const previewPositionRef = useRef<{
+    xOffsetPx: number;
+    yPx: number;
+  } | null>(null);
+  const resizeRef = useRef<{
+    pointerId: number;
+    imageId: string;
+    startClientX: number;
+    startWidth: number;
+    minimumWidth: number;
+    maximumWidth: number;
+    position: number;
+    aspectRatio: number;
+    attributes: DocumentImageAttributes;
+    spanLeftPx: number;
+    spanWidthPx: number;
+    captionExtraHeightPx: number;
+    topPx: number;
+    obstacles: DocumentImageRectangle[];
+    captureElement: HTMLButtonElement;
+    moved: boolean;
+  } | null>(null);
+  const previewResizeRef = useRef<{
+    widthPx: number;
+    heightPx: number;
+    xOffsetPx: number;
+  } | null>(null);
+  const pendingPreviewRef = useRef<{
+    imageId: string;
+    attributes: Partial<DocumentImageAttributes>;
+  } | null>(null);
+  const previewFrameRef = useRef<number | null>(null);
+  const finishResizeRef = useRef<(
+    pointerId: number,
+    cancelled: boolean
+  ) => void>(() => undefined);
 
   useEffect(() => {
-    setPreviewImageY(null);
-    previewImageYRef.current = null;
-    dragRef.current = null;
-  }, [model?.imageId, model?.attributes.yPx, model?.imageTopPx]);
+    if (dragRef.current || resizeRef.current) return;
+    setPreviewOverrides({});
+  }, [revision]);
+
+  useEffect(() => () => {
+    if (previewFrameRef.current === null) return;
+    if (typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(previewFrameRef.current);
+    } else {
+      window.clearTimeout(previewFrameRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      finishResizeRef.current(event.pointerId, false);
+    };
+    const handlePointerCancel = (event: globalThis.PointerEvent) => {
+      finishResizeRef.current(event.pointerId, true);
+    };
+    const handleMouseUp = () => {
+      const resize = resizeRef.current;
+      if (resize) finishResizeRef.current(resize.pointerId, false);
+    };
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
 
   if (!model) return null;
 
-  const displayedImageY = previewImageY ?? model.imageTopPx;
-  const displayedExclusionTop = Math.max(
-    0,
-    displayedImageY - model.attributes.verticalSpacingPx
+  const selectedPosition = editor.state.selection instanceof NodeSelection
+    ? editor.state.selection.from
+    : null;
+  const selectedImage = model.images.find(
+    (image) => image.imagePosition === selectedPosition
   );
-  const displayedExclusionBottom = Math.min(
-    model.availableHeightPx,
-    displayedImageY
-      + model.imageRegionHeightPx
-      + model.attributes.verticalSpacingPx
-  );
-
   const style = {
     '--document-span-column-count': columnCount,
     '--document-span-column-gap': `${columnGapPx}px`,
     '--document-span-column-width': `${model.columnWidthPx}px`,
-    '--document-span-count': model.attributes.spanCount,
-    '--document-span-start-column': model.attributes.spanStartColumn,
-    '--document-span-vertical-spacing':
-      `${model.attributes.verticalSpacingPx}px`,
-    '--document-span-image-region-height': `${model.imageRegionHeightPx}px`,
-    '--document-span-exclusion-height':
-      `${displayedExclusionBottom - displayedExclusionTop}px`,
-    '--document-span-width': `${model.spanWidthPx}px`,
-    '--document-span-image-top': `${displayedImageY}px`,
-    '--document-span-exclusion-top': `${displayedExclusionTop}px`,
     '--document-span-available-height': `${model.availableHeightPx}px`,
   } as CSSProperties;
 
-  const handleImagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onSelectImage(model.imagePosition);
-    if (model.attributes.verticalAnchor !== 'page-position') return;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startClientY: event.clientY,
-      startImageY: model.imageTopPx,
-      moved: false,
-    };
-    previewImageYRef.current = model.imageTopPx;
-    setPreviewImageY(model.imageTopPx);
+  const applyPendingPreview = () => {
+    previewFrameRef.current = null;
+    const pending = pendingPreviewRef.current;
+    if (!pending) return;
+    pendingPreviewRef.current = null;
+    setPreviewOverrides((current) => ({
+      ...current,
+      [pending.imageId]: {
+        ...(current[pending.imageId] || {}),
+        ...pending.attributes,
+      },
+    }));
   };
 
-  const handleImagePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+  const schedulePreview = (
+    imageId: string,
+    attributes: Partial<DocumentImageAttributes>
+  ) => {
+    pendingPreviewRef.current = { imageId, attributes };
+    if (previewFrameRef.current !== null) return;
+    previewFrameRef.current =
+      typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame(applyPendingPreview)
+        : window.setTimeout(applyPendingPreview, 0);
+  };
+
+  const clearPreview = (imageId: string) => {
+    if (previewFrameRef.current !== null) {
+      if (typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(previewFrameRef.current);
+      } else {
+        window.clearTimeout(previewFrameRef.current);
+      }
+      previewFrameRef.current = null;
+    }
+    pendingPreviewRef.current = null;
+    setPreviewOverrides((current) => {
+      if (!(imageId in current)) return current;
+      const next = { ...current };
+      delete next[imageId];
+      return next;
+    });
+  };
+
+  const handleImagePointerDown = (
+    event: PointerEvent<HTMLDivElement>,
+    image: StructuredImageLayout
+  ) => {
+    if (resizeRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectImage(image.imagePosition);
+    if (image.attributes.verticalAnchor !== 'page-position') return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startRectangle = model.collisionRectangles.find(
+      (rectangle) => rectangle.imageId === image.imageId
+    );
+    if (!startRectangle) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      imageId: image.imageId,
+      position: image.imagePosition,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startImageX: image.imageLeftPx,
+      startImageY: image.imageTopPx,
+      spanLeftPx: image.spanLeftPx,
+      maximumXOffsetPx: image.maximumXOffsetPx,
+      startRectangle,
+      obstacles: model.collisionRectangles.filter(
+        (rectangle) => rectangle.imageId !== image.imageId
+      ),
+      captureElement: event.currentTarget,
+      moved: false,
+    };
+    previewPositionRef.current = {
+      xOffsetPx: image.attributes.xOffsetPx,
+      yPx: image.imageTopPx,
+    };
+  };
+
+  const handleResizePointerDown = (
+    event: PointerEvent<HTMLButtonElement>,
+    image: StructuredImageLayout
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (dragRef.current || resizeRef.current) return;
+    onSelectImage(image.imagePosition);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startWidth = image.renderedImageWidthPx;
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      imageId: image.imageId,
+      startClientX: event.clientX,
+      startWidth,
+      minimumWidth: Math.min(
+        image.spanWidthPx,
+        Math.max(48, minimumImageWidthPx)
+      ),
+      maximumWidth: image.spanWidthPx,
+      position: image.imagePosition,
+      aspectRatio: getDocumentImageAspectRatio(image.attributes),
+      attributes: image.attributes,
+      spanLeftPx: image.spanLeftPx,
+      spanWidthPx: image.spanWidthPx,
+      captionExtraHeightPx:
+        image.imageRegionHeightPx - image.renderedImageHeightPx,
+      topPx: image.imageTopPx,
+      obstacles: model.collisionRectangles.filter(
+        (rectangle) => rectangle.imageId !== image.imageId
+      ),
+      captureElement: event.currentTarget,
+      moved: false,
+    };
+    previewResizeRef.current = {
+      widthPx: startWidth,
+      heightPx: image.renderedImageHeightPx,
+      xOffsetPx: image.attributes.xOffsetPx,
+    };
+  };
+
+  const handleResizePointerMove = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const width = calculateDocumentImageResizeWidth({
+      startWidthPx: resize.startWidth,
+      pointerDeltaX: event.clientX - resize.startClientX,
+      viewScale,
+      minimumWidthPx: resize.minimumWidth,
+      maximumWidthPx: resize.maximumWidth,
+    });
+    const buildRectangle = (candidateWidth: number) => {
+      const xOffsetPx = calculateDocumentImageXOffset({
+        placement: resize.attributes.horizontalPlacement,
+        xOffsetPx: resize.attributes.xOffsetPx,
+        spanWidthPx: resize.spanWidthPx,
+        imageWidthPx: candidateWidth,
+      });
+      return {
+        imageId: resize.imageId,
+        leftPx: resize.spanLeftPx + xOffsetPx,
+        topPx: resize.topPx,
+        widthPx: candidateWidth,
+        heightPx: calculateDocumentImageHeight(
+          candidateWidth,
+          resize.aspectRatio
+        ) + resize.captionExtraHeightPx,
+      };
+    };
+    const collisionSafeWidth = clampResizeWidthWithoutCollisions({
+      startWidthPx: resize.startWidth,
+      desiredWidthPx: width,
+      buildRectangle,
+      obstacles: resize.obstacles,
+    });
+    const heightPx = calculateDocumentImageHeight(
+      collisionSafeWidth,
+      resize.aspectRatio
+    );
+    const xOffsetPx = calculateDocumentImageXOffset({
+      placement: resize.attributes.horizontalPlacement,
+      xOffsetPx: resize.attributes.xOffsetPx,
+      spanWidthPx: resize.spanWidthPx,
+      imageWidthPx: collisionSafeWidth,
+    });
+    resize.moved = resize.moved
+      || Math.abs(collisionSafeWidth - resize.startWidth) > 0.5;
+    previewResizeRef.current = {
+      widthPx: collisionSafeWidth,
+      heightPx,
+      xOffsetPx,
+    };
+    schedulePreview(resize.imageId, {
+      widthPx: collisionSafeWidth,
+      heightPx,
+      xOffsetPx,
+    });
+  };
+
+  const finishResize = (pointerId: number, cancelled: boolean) => {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== pointerId) return;
+    if (resize.captureElement.hasPointerCapture?.(pointerId)) {
+      resize.captureElement.releasePointerCapture?.(pointerId);
+    }
+    const preview = previewResizeRef.current;
+    resizeRef.current = null;
+    previewResizeRef.current = null;
+    clearPreview(resize.imageId);
+    if (resize.moved && !cancelled && preview) {
+      onCommitImageSize(
+        resize.position,
+        preview.widthPx,
+        preview.heightPx,
+        preview.xOffsetPx
+      );
+    }
+  };
+  finishResizeRef.current = finishResize;
+
+  const handleResizePointerUp = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishResize(event.pointerId, false);
+  };
+
+  const handleResizePointerCancel = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishResize(event.pointerId, true);
+  };
+
+  const handleResizeClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleImagePointerMove = (
+    event: PointerEvent<HTMLDivElement>
+  ) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    const nextY = calculateDocumentImageDragY({
+    const desiredXOffset = clampDocumentImageXOffset(
+      drag.startImageX
+        + (event.clientX - drag.startClientX) / Math.max(viewScale, 0.01)
+        - drag.spanLeftPx,
+      drag.maximumXOffsetPx + drag.startRectangle.widthPx,
+      drag.startRectangle.widthPx
+    );
+    const desiredY = calculateDocumentImageDragY({
       startY: drag.startImageY,
       pointerDeltaY: event.clientY - drag.startClientY,
       viewScale,
       availableHeightPx: model.availableHeightPx,
-      imageRegionHeightPx: model.imageRegionHeightPx,
-      verticalSpacingPx: model.attributes.verticalSpacingPx,
+      imageRegionHeightPx: drag.startRectangle.heightPx,
+      verticalSpacingPx: 0,
     });
-    drag.moved = drag.moved || Math.abs(nextY - drag.startImageY) > 0.5;
-    previewImageYRef.current = nextY;
-    setPreviewImageY(nextY);
+    const next = moveRectangleWithoutCollisions({
+      start: drag.startRectangle,
+      desiredLeftPx: drag.spanLeftPx + desiredXOffset,
+      desiredTopPx: desiredY,
+      obstacles: drag.obstacles,
+    });
+    const xOffsetPx = clampDocumentImageXOffset(
+      next.leftPx - drag.spanLeftPx,
+      drag.maximumXOffsetPx + drag.startRectangle.widthPx,
+      drag.startRectangle.widthPx
+    );
+    drag.moved = drag.moved
+      || Math.abs(xOffsetPx - (
+        drag.startImageX - drag.spanLeftPx
+      )) > 0.5
+      || Math.abs(next.topPx - drag.startImageY) > 0.5;
+    previewPositionRef.current = { xOffsetPx, yPx: next.topPx };
+    schedulePreview(drag.imageId, {
+      horizontalPlacement: 'custom',
+      xOffsetPx,
+      yPx: next.topPx,
+    });
   };
 
   const handleImagePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
@@ -633,12 +1453,16 @@ export const StructuredDocumentSpanLayout = ({
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture?.(event.pointerId);
     }
-    const committedY = previewImageYRef.current ?? model.imageTopPx;
+    const preview = previewPositionRef.current;
     dragRef.current = null;
-    previewImageYRef.current = null;
-    setPreviewImageY(null);
-    if (drag.moved) {
-      onCommitImageY(model.imagePosition, committedY);
+    previewPositionRef.current = null;
+    clearPreview(drag.imageId);
+    if (drag.moved && preview) {
+      onCommitImagePosition(
+        drag.position,
+        preview.xOffsetPx,
+        preview.yPx
+      );
     }
   };
 
@@ -651,16 +1475,22 @@ export const StructuredDocumentSpanLayout = ({
       event.currentTarget.releasePointerCapture?.(event.pointerId);
     }
     dragRef.current = null;
-    previewImageYRef.current = null;
-    setPreviewImageY(null);
+    previewPositionRef.current = null;
+    clearPreview(drag.imageId);
   };
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
-    if (target.closest('[data-layout-role="spanning-image"]')) {
+    const imageSlot = target.closest<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    );
+    if (imageSlot) {
       event.preventDefault();
       event.stopPropagation();
-      onSelectImage(model.imagePosition);
+      const image = model.images.find(
+        (candidate) => candidate.imageId === imageSlot.dataset.imageId
+      );
+      if (image) onSelectImage(image.imagePosition);
       return;
     }
     event.preventDefault();
@@ -679,24 +1509,41 @@ export const StructuredDocumentSpanLayout = ({
   const handleImageClick = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    onSelectImage(model.imagePosition);
+    const image = model.images.find(
+      (candidate) => candidate.imageId === event.currentTarget.dataset.imageId
+    );
+    if (image) onSelectImage(image.imagePosition);
   };
+
+  const representativeImage = selectedImage || model.images[0];
 
   return (
     <div
       className="document-spanning-layout"
       data-document-span-layout="true"
-      data-span-count={model.attributes.spanCount}
-      data-span-start-column={model.attributes.spanStartColumn}
-      data-span-image-id={model.imageId}
+      data-span-count={representativeImage?.attributes.spanCount}
+      data-span-start-column={representativeImage?.attributes.spanStartColumn}
+      data-span-image-id={representativeImage?.imageId}
+      data-structured-image-count={model.images.length}
       data-column-count={columnCount}
       data-column-width-px={model.columnWidthPx}
-      data-span-width-px={model.spanWidthPx}
+      data-span-width-px={representativeImage?.spanWidthPx}
+      data-rendered-image-width-px={
+        representativeImage?.renderedImageWidthPx
+      }
+      data-rendered-image-height-px={
+        representativeImage?.renderedImageHeightPx
+      }
+      data-image-region-height-px={representativeImage?.imageRegionHeightPx}
       data-layout-content-height-px={model.layoutContentHeightPx}
       data-layout-overflowing={model.overflowing ? 'true' : 'false'}
-      data-image-top-px={displayedImageY}
-      data-image-y-max-px={model.maximumImageYPx}
-      data-vertical-anchor={model.attributes.verticalAnchor}
+      data-image-top-px={representativeImage?.imageTopPx}
+      data-image-left-px={representativeImage?.imageLeftPx}
+      data-image-x-offset-px={representativeImage?.attributes.xOffsetPx}
+      data-image-y-max-px={representativeImage?.maximumImageYPx}
+      data-vertical-anchor={representativeImage?.attributes.verticalAnchor}
+      data-image-selected={selectedImage ? 'true' : 'false'}
+      data-image-resizing={resizeRef.current ? 'true' : 'false'}
       data-text-editing={textEditing ? 'true' : 'false'}
       data-hidden-for-editing={textEditing ? 'true' : 'false'}
       style={style}
@@ -704,78 +1551,103 @@ export const StructuredDocumentSpanLayout = ({
       onClick={handleClick}
     >
       <div className="document-span-layout__column-stacks">
-        {model.columns.map((column) => (
+        {Array.from({ length: columnCount }, (_, index) => index + 1).map(
+          (column) => (
           <div
-            key={`column-${column.column}`}
-            className={[
-              'document-span-layout__column-stack',
-              column.occupied
-                ? 'document-span-layout__column-stack--occupied'
-                : 'document-span-layout__column-stack--continuing',
-            ].join(' ')}
+            key={`column-${column}`}
+            className="document-span-layout__column-stack"
             data-layout-role="physical-column"
-            data-column={column.column}
-            data-occupied={column.occupied ? 'true' : 'false'}
+            data-column={column}
           >
-            <div
-              className="document-span-layout__text-column document-span-layout__segment--top"
-              data-layout-role="explicit-text-column"
-              data-layout-region="above"
-              data-column={column.column}
-            >
-              {column.occupied ? (
-                <div dangerouslySetInnerHTML={{ __html: column.topHtml }} />
-              ) : (
-                <div
-                  data-layout-role="continuing-column"
-                  data-column={column.column}
-                  dangerouslySetInnerHTML={{ __html: column.topHtml }}
-                />
-              )}
-            </div>
-            {column.occupied && (
+            {model.textBands
+              .filter((band) => band.column === column)
+              .map((band) => (
               <div
-                className="document-span-layout__exclusion"
-                data-layout-role="image-exclusion"
-                aria-hidden="true"
+                key={band.id}
+                className="document-span-layout__text-column"
+                data-layout-role="explicit-text-column"
+                data-layout-region="band"
+                data-column={column}
+                data-band-left-px={band.leftPx}
+                data-band-top-px={band.topPx}
+                style={{
+                  position: 'absolute',
+                  left: `${
+                    band.leftPx
+                    - (column - 1) * (
+                      model.columnWidthPx + columnGapPx
+                    )
+                  }px`,
+                  top: `${band.topPx}px`,
+                  width: `${band.widthPx}px`,
+                  height: `${band.heightPx}px`,
+                }}
+                dangerouslySetInnerHTML={{ __html: band.html }}
               />
-            )}
-            <div
-              className="document-span-layout__text-column document-span-layout__segment--bottom"
-              data-layout-role="explicit-text-column"
-              data-layout-region="below"
-              data-column={column.column}
-              dangerouslySetInnerHTML={{ __html: column.bottomHtml }}
-            />
+            ))}
           </div>
         ))}
       </div>
-      <div
-        className="document-span-layout__image-slot"
-        data-layout-role="occupied-columns"
-        data-start-column={model.attributes.spanStartColumn}
-        data-end-column={
-          model.attributes.spanStartColumn + model.attributes.spanCount - 1
-        }
-        style={{
-          left: `calc((${
-            model.attributes.spanStartColumn - 1
-          }) * (var(--document-span-column-width) + var(--document-span-column-gap)))`,
-          top:
-            'var(--document-span-image-top)',
-          width: `${model.spanWidthPx}px`,
-          touchAction:
-            model.attributes.verticalAnchor === 'page-position'
-              ? 'none'
-              : undefined,
-        }}
-        dangerouslySetInnerHTML={{ __html: model.imageHtml }}
-        onPointerDown={handleImagePointerDown}
-        onPointerMove={handleImagePointerMove}
-        onPointerUp={handleImagePointerEnd}
-        onPointerCancel={handleImagePointerCancel}
-        onClick={handleImageClick}
-      />
+      {model.images.map((image) => {
+        const imageSelected = selectedPosition === image.imagePosition;
+        return (
+          <div
+            key={image.imageId}
+            className="document-span-layout__image-slot"
+            data-layout-role="occupied-columns"
+            data-image-id={image.imageId}
+            data-start-column={image.attributes.spanStartColumn}
+            data-end-column={
+              image.attributes.spanStartColumn
+              + image.attributes.spanCount - 1
+            }
+            data-image-left-px={image.imageLeftPx}
+            data-image-top-px={image.imageTopPx}
+            data-image-x-offset-px={image.attributes.xOffsetPx}
+            data-image-selected={imageSelected ? 'true' : 'false'}
+            data-horizontal-placement={image.attributes.horizontalPlacement}
+            data-vertical-anchor={image.attributes.verticalAnchor}
+            style={{
+              left: `${image.imageLeftPx}px`,
+              top: `${image.imageTopPx}px`,
+              width: `${image.renderedImageWidthPx}px`,
+              touchAction:
+                image.attributes.verticalAnchor === 'page-position'
+                  ? 'none'
+                  : undefined,
+            }}
+            onPointerDown={(event) => handleImagePointerDown(event, image)}
+            onPointerMove={handleImagePointerMove}
+            onPointerUp={handleImagePointerEnd}
+            onPointerCancel={handleImagePointerCancel}
+            onClick={handleImageClick}
+          >
+            <div
+              className="document-span-layout__image-content"
+              dangerouslySetInnerHTML={{ __html: image.imageHtml }}
+            />
+            {imageSelected && (
+              <button
+                type="button"
+                className="document-image__resize-handle"
+                aria-label="Resize image"
+                data-document-editor-only="true"
+                data-document-export-exclude="true"
+                style={{
+                  width: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                  height: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                }}
+                onPointerDown={(event) =>
+                  handleResizePointerDown(event, image)}
+                onPointerMove={handleResizePointerMove}
+                onPointerUp={handleResizePointerUp}
+                onPointerCancel={handleResizePointerCancel}
+                onClick={handleResizeClick}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

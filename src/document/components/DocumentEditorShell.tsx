@@ -449,6 +449,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           verticalSpacingPx: selectedFlowImage.attributes.verticalSpacingPx,
           verticalAnchor: selectedFlowImage.attributes.verticalAnchor,
           yPx: selectedFlowImage.attributes.yPx,
+          horizontalPlacement:
+            selectedFlowImage.attributes.horizontalPlacement,
+          xOffsetPx: selectedFlowImage.attributes.xOffsetPx,
           spanCount: selectedFlowImage.attributes.spanCount,
           spanStartColumn: selectedFlowImage.attributes.spanStartColumn,
           caption: selectedFlowImage.attributes.caption,
@@ -508,6 +511,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ? { verticalAnchor: update.verticalAnchor }
           : {}),
         ...(typeof update.yPx === 'number' ? { yPx: update.yPx } : {}),
+        ...(update.horizontalPlacement === 'left'
+          || update.horizontalPlacement === 'center'
+          || update.horizontalPlacement === 'right'
+          || update.horizontalPlacement === 'custom'
+          ? { horizontalPlacement: update.horizontalPlacement }
+          : {}),
+        ...(typeof update.xOffsetPx === 'number'
+          ? { xOffsetPx: update.xOffsetPx }
+          : {}),
         ...(typeof update.spanStartColumn === 'number'
           ? { spanStartColumn: update.spanStartColumn }
           : {}),

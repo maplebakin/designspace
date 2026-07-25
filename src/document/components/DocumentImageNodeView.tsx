@@ -15,6 +15,10 @@ import type {
   DocumentImageNodeName,
 } from '../extensions/DocumentImageExtension';
 import {
+  calculateDocumentImageHeight,
+  calculateDocumentImageResizeWidth,
+  clampDocumentImageWidth,
+  getDocumentImageAspectRatio,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
 
@@ -22,6 +26,7 @@ type ResizeSession = {
   pointerId: number;
   startClientX: number;
   startWidth: number;
+  moved: boolean;
 };
 
 export const DocumentImageNodeView = ({
@@ -40,6 +45,7 @@ export const DocumentImageNodeView = ({
   );
   const source = options.resolveAssetSource(attributes.assetId);
   const resizeSessionRef = useRef<ResizeSession | null>(null);
+  const previewWidthRef = useRef<number | null>(null);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
   const [sourceFailed, setSourceFailed] = useState(false);
 
@@ -49,38 +55,42 @@ export const DocumentImageNodeView = ({
 
   useEffect(() => {
     setPreviewWidth(null);
+    previewWidthRef.current = null;
+    resizeSessionRef.current = null;
   }, [attributes.widthPx]);
 
-  const aspectRatio =
-    attributes.naturalWidth > 0 && attributes.naturalHeight > 0
-      ? attributes.naturalWidth / attributes.naturalHeight
-      : attributes.widthPx / Math.max(1, attributes.heightPx);
+  const aspectRatio = getDocumentImageAspectRatio(attributes);
   const renderedWidth = previewWidth ?? attributes.widthPx;
-  const renderedHeight = Math.max(1, Math.round(renderedWidth / aspectRatio));
+  const renderedHeight = calculateDocumentImageHeight(
+    renderedWidth,
+    aspectRatio
+  );
 
+  const minimumWidthPx = Math.max(options.minWidthPx, 32);
+  const maximumWidthPx = Math.max(
+    minimumWidthPx,
+    attributes.wrap === 'span-columns'
+      ? Math.min(
+          options.maxSpanWidthPx,
+          options.getSpanWidthPx(attributes.spanCount)
+        )
+      : options.maxWidthPx
+  );
   const normalizeWidth = (value: number) =>
-    Math.max(
-      Math.max(options.minWidthPx, 32),
-      Math.min(
-        Math.max(
-          attributes.wrap === 'span-columns'
-            ? Math.min(
-                options.maxSpanWidthPx,
-                options.getSpanWidthPx(attributes.spanCount)
-              )
-            : options.maxWidthPx,
-          Math.max(options.minWidthPx, 32)
-        ),
-        Number.isFinite(value) ? value : attributes.widthPx
-      )
+    clampDocumentImageWidth(
+      value,
+      minimumWidthPx,
+      maximumWidthPx,
+      attributes.widthPx
     );
 
   const commitWidth = (requestedWidth: number) => {
     const widthPx = normalizeWidth(requestedWidth);
     updateAttributes({
       widthPx,
-      heightPx: Math.max(1, Math.round(widthPx / aspectRatio)),
+      heightPx: calculateDocumentImageHeight(widthPx, aspectRatio),
     });
+    previewWidthRef.current = null;
     setPreviewWidth(null);
   };
 
@@ -94,7 +104,9 @@ export const DocumentImageNodeView = ({
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startWidth: attributes.widthPx,
+      moved: false,
     };
+    previewWidthRef.current = attributes.widthPx;
     setPreviewWidth(attributes.widthPx);
   };
 
@@ -104,10 +116,16 @@ export const DocumentImageNodeView = ({
     const session = resizeSessionRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     event.preventDefault();
-    const scale = Math.max(0.05, options.getViewScale() || 1);
-    const nextWidth = normalizeWidth(
-      session.startWidth + (event.clientX - session.startClientX) / scale
-    );
+    const nextWidth = calculateDocumentImageResizeWidth({
+      startWidthPx: session.startWidth,
+      pointerDeltaX: event.clientX - session.startClientX,
+      viewScale: options.getViewScale(),
+      minimumWidthPx,
+      maximumWidthPx,
+    });
+    session.moved =
+      session.moved || Math.abs(nextWidth - session.startWidth) > 0.5;
+    previewWidthRef.current = nextWidth;
     setPreviewWidth(nextWidth);
   };
 
@@ -122,7 +140,28 @@ export const DocumentImageNodeView = ({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     resizeSessionRef.current = null;
-    commitWidth(previewWidth ?? attributes.widthPx);
+    const committedWidth = previewWidthRef.current ?? attributes.widthPx;
+    previewWidthRef.current = null;
+    if (session.moved) {
+      commitWidth(committedWidth);
+    } else {
+      setPreviewWidth(null);
+    }
+  };
+
+  const handleResizeCancel = (
+    event: ReactPointerEvent<HTMLButtonElement>
+  ) => {
+    const session = resizeSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    resizeSessionRef.current = null;
+    previewWidthRef.current = null;
+    setPreviewWidth(null);
   };
 
   const imageContent = (
@@ -167,7 +206,7 @@ export const DocumentImageNodeView = ({
           onPointerDown={handleResizeStart}
           onPointerMove={handleResizeMove}
           onPointerUp={handleResizeEnd}
-          onPointerCancel={handleResizeEnd}
+          onPointerCancel={handleResizeCancel}
         />
       )}
     </>
@@ -198,6 +237,8 @@ export const DocumentImageNodeView = ({
       data-wrap={attributes.wrap}
       data-vertical-anchor={attributes.verticalAnchor}
       data-y-px={attributes.yPx}
+      data-horizontal-placement={attributes.horizontalPlacement}
+      data-x-offset-px={attributes.xOffsetPx}
       style={{
         width: `${renderedWidth}px`,
         '--document-image-width': `${renderedWidth}px`,

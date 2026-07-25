@@ -9,7 +9,7 @@ import {
   type Editor,
   type JSONContent,
 } from '@tiptap/core';
-import { NodeSelection } from '@tiptap/pm/state';
+import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -20,6 +20,7 @@ import {
   DocumentFlowImageExtension,
   DocumentImageCommandsExtension,
   DocumentInlineImageExtension,
+  calculateDocumentImageXOffset,
   normalizeDocumentImageAttributes,
   normalizeDocumentImageSpanForColumnCount,
   type DocumentImageAttributes,
@@ -400,6 +401,7 @@ export const FlowEditor = ({
           getSelectedDocumentImage(updatedEditor),
           updatedEditor
         );
+        setLayoutRevision((revision) => revision + 1);
       },
       onDestroy: () => {
         editorInstanceRef.current = null;
@@ -441,7 +443,6 @@ export const FlowEditor = ({
     if (!editor || editor.isDestroyed) return;
     const transaction = editor.state.tr;
     let changed = false;
-    let foundStructuredSpan = false;
     editor.state.doc.descendants((node, position) => {
       if (
         node.type.name !== 'documentFlowImage'
@@ -449,20 +450,10 @@ export const FlowEditor = ({
       ) {
         return;
       }
-      let normalized = foundStructuredSpan
-        ? {
-            ...normalizeDocumentImageAttributes(
-              node.attrs as Partial<DocumentImageAttributes>
-            ),
-            wrap: 'top-bottom' as const,
-            spanCount: 1 as const,
-            spanStartColumn: 1 as const,
-          }
-        : normalizeDocumentImageSpanForColumnCount(
-            node.attrs as Partial<DocumentImageAttributes>,
-            columnCount
-          );
-      foundStructuredSpan = true;
+      let normalized = normalizeDocumentImageSpanForColumnCount(
+        node.attrs as Partial<DocumentImageAttributes>,
+        columnCount
+      );
       if (normalized.wrap === 'span-columns') {
         const columnWidth = (
           maxSpanImageWidthPx - columnGapPx * (columnCount - 1)
@@ -481,6 +472,15 @@ export const FlowEditor = ({
             heightPx: spanWidth / aspectRatio,
           };
         }
+        normalized = {
+          ...normalized,
+          xOffsetPx: calculateDocumentImageXOffset({
+            placement: normalized.horizontalPlacement,
+            xOffsetPx: normalized.xOffsetPx,
+            spanWidthPx: spanWidth,
+            imageWidthPx: normalized.widthPx,
+          }),
+        };
       }
       if (JSON.stringify(normalized) === JSON.stringify(node.attrs)) return;
       transaction.setNodeMarkup(position, undefined, normalized);
@@ -622,19 +622,38 @@ export const FlowEditor = ({
           revision={layoutRevision}
           textEditing={editingStructuredText}
           viewScale={viewScale}
+          minimumImageWidthPx={minImageWidthPx}
           onSelectImage={(position) => {
             enteringStructuredTextRef.current = false;
             setEditingStructuredText(false);
             editor.commands.setNodeSelection(position);
             editor.commands.focus();
           }}
-          onCommitImageY={(position, yPx) => {
+          onCommitImagePosition={(position, xOffsetPx, yPx) => {
             editor.chain()
               .focus()
               .setNodeSelection(position)
               .updateSelectedDocumentImage({
                 verticalAnchor: 'page-position',
+                horizontalPlacement: 'custom',
+                xOffsetPx,
                 yPx,
+              })
+              .run();
+          }}
+          onCommitImageSize={(
+            position,
+            widthPx,
+            heightPx,
+            xOffsetPx
+          ) => {
+            editor.chain()
+              .focus()
+              .setNodeSelection(position)
+              .updateSelectedDocumentImage({
+                widthPx,
+                heightPx,
+                xOffsetPx,
               })
               .run();
           }}
@@ -642,17 +661,16 @@ export const FlowEditor = ({
             enteringStructuredTextRef.current = true;
             setEditingStructuredText(true);
             const { selection, doc } = editor.state;
-            const textPosition = selection instanceof NodeSelection
-              ? (
-                  selection.from > 1
-                    ? selection.from - 1
-                    : Math.min(doc.content.size - 1, selection.to)
-                )
-              : selection.from;
-            editor.chain()
-              .setTextSelection(Math.max(1, textPosition))
-              .focus()
-              .run();
+            if (selection instanceof NodeSelection) {
+              const near = TextSelection.near(
+                doc.resolve(selection.from),
+                -1
+              );
+              editor.view.dispatch(
+                editor.state.tr.setSelection(near)
+              );
+            }
+            editor.commands.focus();
           }}
         />
       )}

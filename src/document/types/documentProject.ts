@@ -30,6 +30,8 @@ export type DocumentFlowImage = {
   verticalSpacingPx?: number;
   verticalAnchor?: 'flow' | 'page-position';
   yPx?: number;
+  horizontalPlacement?: 'left' | 'center' | 'right' | 'custom';
+  xOffsetPx?: number;
   caption?: string;
   naturalWidth?: number;
   naturalHeight?: number;

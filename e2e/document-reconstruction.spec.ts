@@ -265,10 +265,10 @@ test.describe('document reconstruction MVP', () => {
     await expect(layout).toHaveAttribute('data-span-count', '2');
     await expect(layout).toHaveAttribute('data-span-start-column', '1');
     await expect(layout.locator(
-      '[data-layout-region="above"][data-layout-role="explicit-text-column"]'
+      '[data-layout-role="physical-column"]'
     )).toHaveCount(3);
     await expect(layout.locator(
-      '[data-layout-role="continuing-column"][data-column="3"]'
+      '[data-layout-role="physical-column"][data-column="3"]'
     )).toBeVisible();
     const initialImageTop = Number(
       await layout.getAttribute('data-image-top-px')
@@ -293,17 +293,12 @@ test.describe('document reconstruction MVP', () => {
       Number(await layout.getAttribute('data-image-top-px'))
     ).toBeGreaterThanOrEqual(onceLaterImageTop);
     await expect(layout.locator(
-      '[data-layout-region="below"][data-layout-role="explicit-text-column"]'
-    )).toHaveCount(3);
+      '[data-layout-role="explicit-text-column"]'
+    )).not.toHaveCount(0);
     const bodyPhraseCounts = await layout.evaluate((root) => {
-      const text = [
-        ...Array.from(root.querySelectorAll<HTMLElement>(
-          '[data-layout-region="above"][data-layout-role="explicit-text-column"]'
-        )),
-        ...Array.from(root.querySelectorAll<HTMLElement>(
-          '[data-layout-region="below"][data-layout-role="explicit-text-column"]'
-        )),
-      ].map((region) => region.textContent || '').join('');
+      const text = Array.from(root.querySelectorAll<HTMLElement>(
+        '[data-layout-role="explicit-text-column"]'
+      )).map((region) => region.textContent || '').join('');
       const count = (phrase: string) => text.split(phrase).length - 1;
       return {
         first: count('The first part of the family history fills the opening columns.'),
@@ -323,7 +318,7 @@ test.describe('document reconstruction MVP', () => {
     const columnsOneTwoGeometry = await layout.evaluate((root) => {
       const rootRect = root.getBoundingClientRect();
       const columns = Array.from(root.querySelectorAll<HTMLElement>(
-        '[data-layout-region="above"][data-layout-role="explicit-text-column"]'
+        '[data-layout-role="physical-column"]'
       ));
       const occupied = root.querySelector<HTMLElement>(
         '[data-layout-role="occupied-columns"]'
@@ -343,7 +338,9 @@ test.describe('document reconstruction MVP', () => {
           getComputedStyle(root).columnCount,
           ...columns.map((column) => getComputedStyle(column).columnCount),
         ],
-        wordBreaks: columns.map((column) => getComputedStyle(column).wordBreak),
+        wordBreaks: Array.from(root.querySelectorAll<HTMLElement>(
+          '[data-layout-role="explicit-text-column"]'
+        )).map((column) => getComputedStyle(column).wordBreak),
         occupiedLeft: occupiedRect.left,
         occupiedRight: occupiedRect.right,
         imageLeft: imageRect.left,
@@ -405,17 +402,17 @@ test.describe('document reconstruction MVP', () => {
     await expect(layout.locator('[data-layout-role="occupied-columns"]'))
       .toHaveAttribute('data-end-column', '3');
     const columnOne = layout.locator(
-      '[data-layout-role="continuing-column"][data-column="1"]'
+      '[data-layout-role="physical-column"][data-column="1"]'
     );
     const columnTwoAbove = layout.locator(
-      '[data-layout-region="above"][data-column="2"]'
+      '[data-layout-role="physical-column"][data-column="2"]'
     );
     const columnThreeAbove = layout.locator(
-      '[data-layout-region="above"][data-column="3"]'
+      '[data-layout-role="physical-column"][data-column="3"]'
     );
     const columnTwoBelow = layout.locator(
-      '[data-layout-region="below"][data-column="2"]'
-    );
+      '[data-layout-role="explicit-text-column"][data-column="2"]'
+    ).last();
     await expect(columnOne).toContainText(
       'The first part of the family history fills the opening columns.'
     );
@@ -476,11 +473,97 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.locator(
       '[data-document-image="true"]:visible'
     )).toHaveCount(1);
+    await page.getByTestId('document-image-horizontal-placement')
+      .selectOption('right');
+    await expect(sourceImage).toHaveAttribute(
+      'data-horizontal-placement',
+      'right'
+    );
+    await expect.poll(async () => imageSlot.evaluate((slot) => {
+      const root = slot.closest<HTMLElement>('[data-document-span-layout]')!;
+      return Math.abs(
+        root.getBoundingClientRect().right
+        - slot.getBoundingClientRect().right
+      );
+    })).toBeLessThan(1);
+    const resizeHandle = imageSlot.getByRole('button', {
+      name: 'Resize image',
+    });
+    await expect(resizeHandle).toBeVisible();
+    await expect(page.locator(
+      '.document-image__resize-handle:visible'
+    )).toHaveCount(1);
+    const widthBeforeResize = Number(
+      await sourceImage.getAttribute('data-width-px')
+    );
+    const heightBeforeResize = Number(
+      await sourceImage.getAttribute('data-height-px')
+    );
+    const yBeforeResize = Number(
+      await sourceImage.getAttribute('data-y-px')
+    );
+    const resizeBox = await resizeHandle.boundingBox();
+    expect(resizeBox).not.toBeNull();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2,
+      resizeBox!.y + resizeBox!.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2 - 40,
+      resizeBox!.y + resizeBox!.height / 2
+    );
+    await expect.poll(async () =>
+      Number(await layout.getAttribute('data-rendered-image-width-px'))
+    ).toBeLessThan(widthBeforeResize);
+    expect(Number(
+      await sourceImage.getAttribute('data-width-px')
+    )).toBe(widthBeforeResize);
+    expect(Number(
+      await sourceImage.getAttribute('data-y-px')
+    )).toBe(yBeforeResize);
+    await expect.poll(async () => imageSlot.evaluate((slot) => {
+      const root = slot.closest<HTMLElement>('[data-document-span-layout]')!;
+      return Math.abs(
+        root.getBoundingClientRect().right
+        - slot.getBoundingClientRect().right
+      );
+    })).toBeLessThan(1);
+    await page.mouse.up();
+    await expect.poll(async () =>
+      Number(await sourceImage.getAttribute('data-width-px'))
+    ).toBeLessThan(widthBeforeResize);
+    const committedWidth = Number(
+      await sourceImage.getAttribute('data-width-px')
+    );
+    const committedHeight = Number(
+      await sourceImage.getAttribute('data-height-px')
+    );
+    expect(committedHeight).toBe(Math.round(committedWidth * 48 / 64));
+    expect(committedHeight).toBeLessThan(heightBeforeResize);
+    expect(Number(
+      await sourceImage.getAttribute('data-y-px')
+    )).toBe(yBeforeResize);
+
+    const clickOnlyState = {
+      width: committedWidth,
+      height: committedHeight,
+      y: yBeforeResize,
+    };
+    await imageSlot.getByRole('button', { name: 'Resize image' }).click();
+    expect({
+      width: Number(await sourceImage.getAttribute('data-width-px')),
+      height: Number(await sourceImage.getAttribute('data-height-px')),
+      y: Number(await sourceImage.getAttribute('data-y-px')),
+    }).toEqual(clickOnlyState);
 
     const slotBox = await imageSlot.boundingBox();
     expect(slotBox).not.toBeNull();
     const imageYBeforeDrag = Number(
       await layout.getAttribute('data-image-top-px')
+    );
+    const imageXBeforeDrag = Number(
+      await layout.getAttribute('data-image-left-px')
     );
     const zoomPercent = Number.parseInt(
       await page.getByTestId('document-zoom-indicator').textContent() || '100',
@@ -492,7 +575,7 @@ test.describe('document reconstruction MVP', () => {
     );
     await page.mouse.down();
     await page.mouse.move(
-      slotBox!.x + slotBox!.width / 2,
+      slotBox!.x + slotBox!.width / 2 - 30,
       slotBox!.y + Math.min(40, slotBox!.height / 2) + 40
     );
     await page.mouse.up();
@@ -502,8 +585,17 @@ test.describe('document reconstruction MVP', () => {
     const committedImageY = Number(
       await layout.getAttribute('data-image-top-px')
     );
+    const committedImageX = Number(
+      await layout.getAttribute('data-image-left-px')
+    );
     expect(committedImageY - imageYBeforeDrag)
       .toBeCloseTo(40 / (zoomPercent / 100), 0);
+    expect(committedImageX - imageXBeforeDrag)
+      .toBeCloseTo(-30 / (zoomPercent / 100), 0);
+    await expect(sourceImage).toHaveAttribute(
+      'data-horizontal-placement',
+      'custom'
+    );
     const columnsTwoThreeGeometry = await layout.evaluate((root) => {
       const rootRect = root.getBoundingClientRect();
       const occupiedRect = root.querySelector<HTMLElement>(
@@ -513,11 +605,15 @@ test.describe('document reconstruction MVP', () => {
         '[data-layout-role="spanning-image"]'
       )!.getBoundingClientRect();
       const sideRect = root.querySelector<HTMLElement>(
-        '[data-layout-role="continuing-column"]'
+        '[data-layout-role="physical-column"][data-column="1"]'
       )!.getBoundingClientRect();
       const lowerColumns = Array.from(root.querySelectorAll<HTMLElement>(
-        '[data-layout-region="below"][data-layout-role="explicit-text-column"]'
-      ));
+        '[data-layout-role="explicit-text-column"]'
+      )).filter((column) =>
+        Number(column.dataset.bandTopPx) > Number(
+          root.getAttribute('data-image-top-px')
+        )
+      );
       return {
         rootLeft: rootRect.left,
         rootRight: rootRect.right,
@@ -542,8 +638,8 @@ test.describe('document reconstruction MVP', () => {
       .toBeLessThanOrEqual(columnsTwoThreeGeometry.occupiedRight + 1);
     expect(columnsTwoThreeGeometry.sideHeight)
       .toBeGreaterThan(columnsTwoThreeGeometry.occupiedHeight);
-    expect(columnsTwoThreeGeometry.lowerColumnTextLengths)
-      .toHaveLength(3);
+    expect(columnsTwoThreeGeometry.lowerColumnTextLengths.length)
+      .toBeGreaterThan(0);
     await expect(page.getByTestId('document-overflow-warning')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -564,8 +660,11 @@ test.describe('document reconstruction MVP', () => {
     await expect.poll(async () =>
       Number(await reloadedLayout.getAttribute('data-image-top-px'))
     ).toBeCloseTo(committedImageY, 0);
+    await expect.poll(async () =>
+      Number(await reloadedLayout.getAttribute('data-image-left-px'))
+    ).toBeCloseTo(committedImageX, 0);
     await expect(reloadedLayout.locator(
-      '[data-layout-role="continuing-column"][data-column="1"]'
+      '[data-layout-role="physical-column"][data-column="1"]'
     ))
       .not.toContainText(
         'The article continues beneath the photograph with later memories.'
@@ -574,8 +673,8 @@ test.describe('document reconstruction MVP', () => {
       'The Harwood family outside the farmhouse'
     );
     await expect(reloadedLayout.locator(
-      '[data-layout-region="below"][data-column="2"]'
-    )).not.toBeEmpty();
+      '[data-layout-role="explicit-text-column"][data-column="2"]'
+    ).last()).not.toBeEmpty();
 
     const pngDownloadPromise = page.waitForEvent('download');
     await (await openExportFormat(page, 'PNG')).click();

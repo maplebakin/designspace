@@ -38,11 +38,20 @@ import {
 } from '../src/document/extensions/DocumentTextStyleExtension';
 import {
   buildDocumentSpanLayoutModel,
+  buildMultiDocumentSpanLayoutModel,
+  moveRectangleWithoutCollisions,
+  rectanglesOverlap,
 } from '../src/document/components/StructuredDocumentSpanLayout';
 import {
   canMoveSelectedStructuredImage,
+  calculateDocumentImageHeight,
+  calculateDocumentImageResizeWidth,
   calculateDocumentImageDragY,
+  calculateDocumentImageXOffset,
+  clampDocumentImageXOffset,
+  clampDocumentImageWidth,
   clampDocumentImageY,
+  getDocumentImageAspectRatio,
   normalizeDocumentImageAttributes,
 } from '../src/document/extensions/DocumentImageExtension';
 
@@ -110,6 +119,28 @@ const findTextNodes = (content?: JSONContent): JSONContent[] => {
     ...(content.type === 'text' ? [content] : []),
     ...(content.content || []).flatMap(findTextNodes),
   ];
+};
+
+const dispatchTestPointer = (
+  target: Element,
+  type: string,
+  {
+    pointerId,
+    clientX = 0,
+    clientY = 0,
+  }: {
+    pointerId: number;
+    clientX?: number;
+    clientY?: number;
+  }
+) => {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+  });
+  fireEvent(target, event);
 };
 
 const spanningBodyContent = (
@@ -581,6 +612,61 @@ describe('live document editor UI', () => {
     expect(sizedText?.style.fontSize).toBe(`${fontSizePx}px`);
   });
 
+  it('round-trips independent horizontal placements for multiple spanning images', () => {
+    const left = {
+      ...spanningBodyContent(2, 1).content![1],
+      attrs: {
+        ...spanningBodyContent(2, 1).content![1].attrs,
+        id: 'round-trip-left',
+        verticalAnchor: 'page-position',
+        yPx: 180,
+        horizontalPlacement: 'custom',
+        xOffsetPx: 36.5,
+      },
+    };
+    const right = {
+      ...spanningBodyContent(2, 2).content![1],
+      attrs: {
+        ...spanningBodyContent(2, 2).content![1].attrs,
+        id: 'round-trip-right',
+        verticalAnchor: 'page-position',
+        yPx: 180,
+        horizontalPlacement: 'right',
+        xOffsetPx: 112,
+      },
+    };
+    useDocumentStore.getState().updateBodyContent({
+      type: 'doc',
+      content: [left, right],
+    });
+    const serialized = JSON.stringify(useDocumentStore.getState().project);
+
+    useDocumentStore.getState().reset();
+    useDocumentStore.getState().hydrateProject(JSON.parse(serialized));
+    const images = (
+      useDocumentStore.getState().project?.pages[0].bodyContent.content || []
+    ).filter((node) => node.type === 'documentFlowImage');
+    expect(images.map((image) => ({
+      id: image.attrs?.id,
+      horizontalPlacement: image.attrs?.horizontalPlacement,
+      xOffsetPx: image.attrs?.xOffsetPx,
+      yPx: image.attrs?.yPx,
+    }))).toEqual([
+      {
+        id: 'round-trip-left',
+        horizontalPlacement: 'custom',
+        xOffsetPx: 36.5,
+        yPx: 180,
+      },
+      {
+        id: 'round-trip-right',
+        horizontalPlacement: 'right',
+        xOffsetPx: 112,
+        yPx: 180,
+      },
+    ]);
+  });
+
   it('collapses document properties without hiding the workspace or page', async () => {
     await renderShell();
 
@@ -967,6 +1053,8 @@ describe('live document editor UI', () => {
     })).toMatchObject({
       verticalAnchor: 'flow',
       yPx: 0,
+      horizontalPlacement: 'left',
+      xOffsetPx: 0,
     });
     expect(normalizeDocumentImageAttributes({
       verticalAnchor: 'page-position',
@@ -986,6 +1074,42 @@ describe('live document editor UI', () => {
       imageRegionHeightPx: 240,
       verticalSpacingPx: 16,
     })).toBe(280);
+    expect(getDocumentImageAspectRatio({
+      naturalWidth: 1600,
+      naturalHeight: 1000,
+      widthPx: 320,
+      heightPx: 200,
+    })).toBe(1.6);
+    expect(calculateDocumentImageHeight(420, 1.6)).toBe(263);
+    expect(clampDocumentImageWidth(-100, 48, 472, 240)).toBe(48);
+    expect(clampDocumentImageWidth(900, 48, 472, 240)).toBe(472);
+    expect(calculateDocumentImageResizeWidth({
+      startWidthPx: 240,
+      pointerDeltaX: 60,
+      viewScale: 0.5,
+      minimumWidthPx: 48,
+      maximumWidthPx: 472,
+    })).toBe(360);
+    expect(calculateDocumentImageXOffset({
+      placement: 'left',
+      xOffsetPx: 100,
+      spanWidthPx: 472,
+      imageWidthPx: 320,
+    })).toBe(0);
+    expect(calculateDocumentImageXOffset({
+      placement: 'center',
+      xOffsetPx: 0,
+      spanWidthPx: 472,
+      imageWidthPx: 320,
+    })).toBe(76);
+    expect(calculateDocumentImageXOffset({
+      placement: 'right',
+      xOffsetPx: 0,
+      spanWidthPx: 472,
+      imageWidthPx: 320,
+    })).toBe(152);
+    expect(clampDocumentImageXOffset(-20, 472, 320)).toBe(0);
+    expect(clampDocumentImageXOffset(999, 472, 320)).toBe(152);
   });
 
   it.each([
@@ -1178,7 +1302,7 @@ describe('live document editor UI', () => {
       const layout = container.querySelector('[data-document-span-layout]')!;
       expect(layout.classList.contains('document-flow-prosemirror')).toBe(false);
       expect(layout.querySelectorAll(
-        '[data-layout-region="above"][data-layout-role="explicit-text-column"]'
+        '[data-layout-role="physical-column"]'
       )).toHaveLength(columnCount);
       layout.querySelectorAll<HTMLElement>(
         '[data-layout-role="explicit-text-column"]'
@@ -1205,12 +1329,9 @@ describe('live document editor UI', () => {
         'The unoccupied column continues here.'
       )).toBe(1);
 
-      const side = layout.querySelector('[data-layout-role="continuing-column"]');
-      if (continuingColumn === null) {
-        expect(side).toBeNull();
-      } else {
-        expect(side?.getAttribute('data-column')).toBe(String(continuingColumn));
-      }
+      expect(layout.querySelector(
+        '[data-layout-role="continuing-column"]'
+      )).toBeNull();
     }
   );
 
@@ -1732,6 +1853,228 @@ describe('live document editor UI', () => {
   });
 
   it.each([
+    [2, 2, 0.5],
+    [1, 2, 0.75],
+    [1, 3, 1],
+    [2, 2, 1.5],
+  ] as const)(
+    'resizes a structured span from column %i across %i columns at %d scale',
+    async (spanStartColumn, spanCount, viewScale) => {
+      let editor: Editor | null = null;
+      const onUpdate = vi.fn();
+      const content = spanningBodyContent(
+        spanCount,
+        spanStartColumn as 1 | 2
+      );
+      content.content![1] = {
+        ...content.content![1],
+        attrs: {
+          ...content.content![1].attrs,
+          verticalAnchor: 'page-position',
+          yPx: 120,
+          widthPx: 240,
+          heightPx: 150,
+        },
+      };
+      const { container } = render(React.createElement(FlowEditor, {
+        content,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        viewScale,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onUpdate,
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => expect(editor).not.toBeNull());
+      fireEvent.click(container.querySelector(
+        '[data-layout-role="occupied-columns"]'
+      )!);
+      const handle = await waitFor(() => {
+        const value = container.querySelector<HTMLButtonElement>(
+          '[data-layout-role="occupied-columns"] '
+          + '.document-image__resize-handle'
+        );
+        expect(value).not.toBeNull();
+        return value!;
+      });
+      const layout = container.querySelector<HTMLElement>(
+        '[data-document-span-layout]'
+      )!;
+      const originalRegionHeight = Number(
+        layout.dataset.imageRegionHeightPx
+      );
+      const expectedWidth = Math.min(
+        Number(layout.dataset.spanWidthPx),
+        240 + 60 / viewScale
+      );
+      onUpdate.mockClear();
+
+      dispatchTestPointer(handle, 'pointerdown', {
+        pointerId: 21,
+        clientX: 100,
+      });
+      dispatchTestPointer(handle, 'pointermove', {
+        pointerId: 21,
+        clientX: 160,
+      });
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        widthPx: 240,
+        heightPx: 150,
+        yPx: 120,
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(Number(layout.dataset.renderedImageWidthPx))
+          .toBeCloseTo(expectedWidth, 5);
+      });
+      expect(Number(layout.dataset.renderedImageHeightPx)).toBeCloseTo(
+        expectedWidth / 1.6,
+        5
+      );
+      expect(Number(layout.dataset.imageRegionHeightPx))
+        .toBeGreaterThan(originalRegionHeight);
+      const previewFigure = container.querySelector<HTMLElement>(
+        '[data-layout-role="spanning-image"]'
+      )!;
+      expect(Number.parseFloat(previewFigure.style.width))
+        .toBeCloseTo(expectedWidth, 5);
+      expect(Number.parseFloat(previewFigure.querySelector<HTMLElement>(
+        '.document-image__media'
+      )!.style.height)).toBeCloseTo(expectedWidth / 1.6, 5);
+
+      dispatchTestPointer(handle, 'pointerup', {
+        pointerId: 21,
+        clientX: 160,
+      });
+      await waitFor(() => {
+        expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+          widthPx: expectedWidth,
+          heightPx: calculateDocumentImageHeight(expectedWidth, 1.6),
+          yPx: 120,
+        });
+      });
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      expect(container.querySelectorAll(
+        '[data-layout-role="occupied-columns"] '
+        + '.document-image__resize-handle'
+      )).toHaveLength(1);
+
+      editor!.commands.undo();
+      await waitFor(() => {
+        expect(findDocumentImageNode(editor!.getJSON())?.attrs?.widthPx)
+          .toBe(240);
+        expect(container.querySelector(
+          '[data-layout-role="occupied-columns"] '
+          + '.document-image__resize-handle'
+        )).not.toBeNull();
+      });
+      editor!.commands.redo();
+      await waitFor(() => {
+        expect(findDocumentImageNode(editor!.getJSON())?.attrs?.widthPx)
+          .toBe(expectedWidth);
+      });
+
+      onUpdate.mockClear();
+      const clickOnlyHandle = container.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"] '
+        + '.document-image__resize-handle'
+      )!;
+      dispatchTestPointer(clickOnlyHandle, 'pointerdown', {
+        pointerId: 22,
+        clientX: 160,
+      });
+      dispatchTestPointer(clickOnlyHandle, 'pointerup', {
+        pointerId: 22,
+        clientX: 160,
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('clamps structured resize to the selected span and 48 pixel minimum', async () => {
+    let editor: Editor | null = null;
+    const content = spanningBodyContent(2, 2);
+    content.content![1] = {
+      ...content.content![1],
+      attrs: {
+        ...content.content![1].attrs,
+        verticalAnchor: 'page-position',
+        yPx: 80,
+        widthPx: 240,
+        heightPx: 150,
+      },
+    };
+    const { container } = render(React.createElement(FlowEditor, {
+      content,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      viewScale: 1,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+    fireEvent.click(container.querySelector(
+      '[data-layout-role="occupied-columns"]'
+    )!);
+    let handle = await waitFor(() => {
+      const value = container.querySelector<HTMLButtonElement>(
+        '[data-layout-role="occupied-columns"] '
+        + '.document-image__resize-handle'
+      );
+      expect(value).not.toBeNull();
+      return value!;
+    });
+    const maximumWidth = Number(container.querySelector<HTMLElement>(
+      '[data-document-span-layout]'
+    )!.dataset.spanWidthPx);
+    dispatchTestPointer(handle, 'pointerdown', {
+      pointerId: 31,
+      clientX: 100,
+    });
+    dispatchTestPointer(handle, 'pointermove', {
+      pointerId: 31,
+      clientX: 5100,
+    });
+    dispatchTestPointer(handle, 'pointerup', {
+      pointerId: 31,
+      clientX: 5100,
+    });
+    await waitFor(() => {
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs?.widthPx)
+        .toBe(maximumWidth);
+    });
+
+    handle = container.querySelector<HTMLButtonElement>(
+      '[data-layout-role="occupied-columns"] '
+      + '.document-image__resize-handle'
+    )!;
+    dispatchTestPointer(handle, 'pointerdown', {
+      pointerId: 32,
+      clientX: 100,
+    });
+    dispatchTestPointer(handle, 'pointermove', {
+      pointerId: 32,
+      clientX: -5100,
+    });
+    dispatchTestPointer(handle, 'pointerup', {
+      pointerId: 32,
+      clientX: -5100,
+    });
+    await waitFor(() => {
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        widthPx: 48,
+        heightPx: 30,
+      });
+    });
+  });
+
+  it.each([
     ['page-position', 0.5],
     ['flow', 0.75],
   ] as const)(
@@ -1817,6 +2160,35 @@ describe('live document editor UI', () => {
       )).not.toBeNull();
 
       if (verticalAnchor === 'page-position') {
+        const resizeHandle = container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"] '
+          + '.document-image__resize-handle'
+        )!;
+        dispatchTestPointer(resizeHandle, 'pointerdown', {
+          pointerId: 12,
+          clientX: 100,
+        });
+        dispatchTestPointer(resizeHandle, 'pointermove', {
+          pointerId: 12,
+          clientX: 130,
+        });
+        expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+          widthPx: 360,
+          yPx: 120,
+        });
+        dispatchTestPointer(resizeHandle, 'pointerup', {
+          pointerId: 12,
+          clientX: 130,
+        });
+        await waitFor(() => {
+          expect(findDocumentImageNode(editor!.getJSON())?.attrs)
+            .toMatchObject({
+              widthPx: 420,
+              heightPx: 263,
+              yPx: 120,
+            });
+        });
+
         imageSlot = container.querySelector<HTMLElement>(
           '[data-layout-role="occupied-columns"]'
         )!;
@@ -1830,6 +2202,309 @@ describe('live document editor UI', () => {
       }
     }
   );
+
+  it.each([0.5, 0.75, 1, 1.5])(
+    'moves a fixed spanning image in two dimensions at %d scale',
+    async (viewScale) => {
+      let editor: Editor | null = null;
+      const onUpdate = vi.fn();
+      const content = spanningBodyContent(2, 2);
+      content.content![1] = {
+        ...content.content![1],
+        attrs: {
+          ...content.content![1].attrs,
+          verticalAnchor: 'page-position',
+          yPx: 120,
+          horizontalPlacement: 'custom',
+          xOffsetPx: 40,
+          widthPx: 240,
+          heightPx: 150,
+        },
+      };
+      const { container } = render(React.createElement(FlowEditor, {
+        content,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        viewScale,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onUpdate,
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => expect(editor).not.toBeNull());
+      const imageSlot = container.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"]'
+      )!;
+      const startLeft = Number(imageSlot.dataset.imageLeftPx);
+      const deltaX = 30;
+      const deltaY = 24;
+      onUpdate.mockClear();
+
+      dispatchTestPointer(imageSlot, 'pointerdown', {
+        pointerId: 71,
+        clientX: 100,
+        clientY: 100,
+      });
+      dispatchTestPointer(imageSlot, 'pointermove', {
+        pointerId: 71,
+        clientX: 100 + deltaX,
+        clientY: 100 + deltaY,
+      });
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        xOffsetPx: 40,
+        yPx: 120,
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+      await waitFor(() => {
+        const preview = container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"]'
+        )!;
+        expect(Number(preview.dataset.imageLeftPx)).toBeCloseTo(
+          startLeft + deltaX / viewScale,
+          4
+        );
+      });
+
+      dispatchTestPointer(imageSlot, 'pointerup', {
+        pointerId: 71,
+        clientX: 100 + deltaX,
+        clientY: 100 + deltaY,
+      });
+      await waitFor(() => {
+        expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+          horizontalPlacement: 'custom',
+          xOffsetPx: 40 + deltaX / viewScale,
+          yPx: 120 + deltaY / viewScale,
+        });
+      });
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+
+      editor!.commands.undo();
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        xOffsetPx: 40,
+        yPx: 120,
+      });
+      editor!.commands.redo();
+      expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
+        xOffsetPx: 40 + deltaX / viewScale,
+        yPx: 120 + deltaY / viewScale,
+      });
+    }
+  );
+
+  it('renders and excludes two independently positioned spanning images', async () => {
+    let editor: Editor | null = null;
+    const first = {
+      ...spanningBodyContent(2, 1).content![1],
+      attrs: {
+        ...spanningBodyContent(2, 1).content![1].attrs,
+        id: 'span-left',
+        caption: 'Left photograph',
+        widthPx: 240,
+        heightPx: 150,
+        wrapPaddingPx: 0,
+        verticalSpacingPx: 0,
+        verticalAnchor: 'page-position',
+        yPx: 140,
+        horizontalPlacement: 'left',
+        xOffsetPx: 0,
+      },
+    };
+    const second = {
+      ...spanningBodyContent(2, 2).content![1],
+      attrs: {
+        ...spanningBodyContent(2, 2).content![1].attrs,
+        id: 'span-right',
+        caption: 'Right photograph',
+        widthPx: 240,
+        heightPx: 150,
+        wrapPaddingPx: 0,
+        verticalSpacingPx: 0,
+        verticalAnchor: 'page-position',
+        yPx: 140,
+        horizontalPlacement: 'right',
+        xOffsetPx: 0,
+      },
+    };
+    const markers = Array.from({ length: 10 }, (_, index) => ({
+      type: 'paragraph',
+      content: [{
+        type: 'text',
+        text: `MULTI-${index + 1} ${'marked text '.repeat(5)}`,
+        ...(index === 3 ? {
+          marks: [{
+            type: 'documentTextStyle',
+            attrs: { fontSizePx: 18 },
+          }],
+        } : {}),
+      }],
+    }));
+    const { container } = render(React.createElement(FlowEditor, {
+      content: {
+        type: 'doc',
+        content: [...markers.slice(0, 4), first, second, ...markers.slice(4)],
+      } as JSONContent,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,MULTI',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor!,
+      3,
+      24,
+      720,
+      620
+    )!;
+    expect(model.images).toHaveLength(2);
+    expect(model.collisionRectangles).toHaveLength(2);
+    expect(rectanglesOverlap(
+      model.collisionRectangles[0],
+      model.collisionRectangles[1]
+    )).toBe(false);
+    expect(model.images[0].attributes.horizontalPlacement).toBe('left');
+    expect(model.images[0].imageLeftPx).toBe(0);
+    expect(model.images[1].attributes.horizontalPlacement).toBe('right');
+    expect(
+      model.images[1].imageLeftPx + model.images[1].renderedImageWidthPx
+    ).toBeCloseTo(720, 5);
+    expect(model.exclusions.map((rectangle) => rectangle.widthPx))
+      .toEqual(model.images.map((image) => image.renderedImageWidthPx));
+    const rendered = model.textBands.map((band) => band.html).join('');
+    for (let index = 1; index <= 10; index += 1) {
+      expect(countTextOccurrences(rendered, `MULTI-${index} `)).toBe(1);
+    }
+    expect(rendered).toContain('data-font-size-px="18"');
+    expect(container.querySelectorAll(
+      '[data-layout-role="occupied-columns"]'
+    )).toHaveLength(2);
+    expect(container.querySelector<HTMLElement>(
+      '[data-document-span-layout]'
+    )!.dataset.structuredImageCount).toBe('2');
+    const storedImages = (editor!.getJSON().content || []).filter(
+      (node) => node.type === 'documentFlowImage'
+    );
+    expect(storedImages).toHaveLength(2);
+    expect(storedImages.every(
+      (node) => node.attrs?.wrap === 'span-columns'
+    )).toBe(true);
+
+    let imageSlots = container.querySelectorAll<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    );
+    fireEvent.click(imageSlots[1]);
+    await waitFor(() => {
+      expect(
+        (editor!.state.selection as NodeSelection).node.attrs.id
+      ).toBe('span-right');
+    });
+    fireEvent.click(container.querySelector(
+      '[data-layout-role="explicit-text-column"]'
+    )!);
+    await waitFor(() => {
+      expect(container.querySelector<HTMLElement>(
+        '[data-document-span-layout]'
+      )!.dataset.textEditing).toBe('true');
+    });
+    expect(container.querySelectorAll(
+      '[data-layout-role="occupied-columns"]'
+    )).toHaveLength(2);
+    imageSlots = container.querySelectorAll<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    );
+    fireEvent.click(imageSlots[0]);
+    await waitFor(() => {
+      expect(
+        (editor!.state.selection as NodeSelection).node.attrs.id
+      ).toBe('span-left');
+      expect(container.querySelectorAll(
+        '[data-layout-role="occupied-columns"] '
+        + '.document-image__resize-handle'
+      )).toHaveLength(1);
+    });
+
+    const firstBefore = (editor!.getJSON().content || []).find(
+      (node) => node.attrs?.id === 'span-left'
+    )!.attrs!;
+    const secondBefore = (editor!.getJSON().content || []).find(
+      (node) => node.attrs?.id === 'span-right'
+    )!.attrs!;
+    const firstSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="span-left"]'
+    )!;
+    dispatchTestPointer(firstSlot, 'pointerdown', {
+      pointerId: 81,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchTestPointer(firstSlot, 'pointermove', {
+      pointerId: 81,
+      clientX: 140,
+      clientY: 100,
+    });
+    dispatchTestPointer(firstSlot, 'pointerup', {
+      pointerId: 81,
+      clientX: 140,
+      clientY: 100,
+    });
+    await waitFor(() => {
+      const images = editor!.getJSON().content || [];
+      expect(images.find(
+        (node) => node.attrs?.id === 'span-left'
+      )?.attrs?.xOffsetPx).toBe(40);
+      expect(images.find(
+        (node) => node.attrs?.id === 'span-right'
+      )?.attrs).toEqual(secondBefore);
+    });
+    editor!.commands.undo();
+    expect((editor!.getJSON().content || []).find(
+      (node) => node.attrs?.id === 'span-left'
+    )?.attrs).toEqual(firstBefore);
+    editor!.commands.redo();
+    expect((editor!.getJSON().content || []).find(
+      (node) => node.attrs?.id === 'span-left'
+    )?.attrs?.xOffsetPx).toBe(40);
+  });
+
+  it('stops two-dimensional movement at the nearest image collision', () => {
+    const start = {
+      imageId: 'moving',
+      leftPx: 0,
+      topPx: 100,
+      widthPx: 100,
+      heightPx: 100,
+    };
+    const moved = moveRectangleWithoutCollisions({
+      start,
+      desiredLeftPx: 300,
+      desiredTopPx: 100,
+      obstacles: [{
+        imageId: 'fixed',
+        leftPx: 180,
+        topPx: 100,
+        widthPx: 100,
+        heightPx: 100,
+      }],
+    });
+    expect(moved).toEqual({ leftPx: 80, topPx: 100 });
+    expect(rectanglesOverlap(
+      { ...start, leftPx: moved.leftPx, topPx: moved.topPx },
+      {
+        imageId: 'fixed',
+        leftPx: 180,
+        topPx: 100,
+        widthPx: 100,
+        heightPx: 100,
+      }
+    )).toBe(false);
+  });
 
   it('normalizes spanning images without losing content when column count shrinks', async () => {
     let editor: Editor | null = null;

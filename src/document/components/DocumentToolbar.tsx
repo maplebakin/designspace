@@ -33,6 +33,8 @@ export type DocumentImageInspectorValue = {
   xPx?: number;
   yPx?: number;
   verticalAnchor?: 'flow' | 'page-position';
+  horizontalPlacement?: 'left' | 'center' | 'right' | 'custom';
+  xOffsetPx?: number;
   wrap: DocumentFlowImageWrap | DocumentOverlayPlacement;
   wrapPaddingPx?: number;
   verticalSpacingPx?: number;
@@ -292,6 +294,46 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
           {props.selectedImage.kind === 'flow'
             && props.selectedImage.wrap === 'span-columns' && (
               <>
+                <label className="document-context-field">
+                  <span>Horizontal placement</span>
+                  <select
+                    aria-label="Image horizontal placement"
+                    data-testid="document-image-horizontal-placement"
+                    value={props.selectedImage.horizontalPlacement || 'left'}
+                    onChange={(event) => props.onSelectedImageChange({
+                      horizontalPlacement: event.target.value as
+                        NonNullable<
+                          DocumentImageInspectorValue['horizontalPlacement']
+                        >,
+                    })}
+                  >
+                    <option value="left">Left</option>
+                    <option value="center">Centre</option>
+                    <option value="right">Right</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                {props.selectedImage.horizontalPlacement === 'custom' && (
+                  <label className="document-context-field">
+                    <span>Horizontal offset</span>
+                    <input
+                      aria-label="Image horizontal offset"
+                      data-testid="document-image-x-offset"
+                      type="number"
+                      min="0"
+                      value={Math.round(props.selectedImage.xOffsetPx || 0)}
+                      onChange={(event) => props.onSelectedImageChange({
+                        xOffsetPx: Math.max(
+                          0,
+                          numericValue(
+                            event.target.value,
+                            props.selectedImage!.xOffsetPx || 0
+                          )
+                        ),
+                      })}
+                    />
+                  </label>
+                )}
                 <label className="document-context-field">
                   <span>Vertical placement</span>
                   <select

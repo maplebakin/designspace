@@ -30,6 +30,11 @@ export type DocumentImageWrap =
   | 'span-columns';
 
 export type DocumentImageVerticalAnchor = 'flow' | 'page-position';
+export type DocumentImageHorizontalPlacement =
+  | 'left'
+  | 'center'
+  | 'right'
+  | 'custom';
 
 export interface DocumentImageAttributes {
   id: string;
@@ -46,6 +51,8 @@ export interface DocumentImageAttributes {
   verticalSpacingPx: number;
   verticalAnchor: DocumentImageVerticalAnchor;
   yPx: number;
+  horizontalPlacement: DocumentImageHorizontalPlacement;
+  xOffsetPx: number;
   caption: string;
 }
 
@@ -116,11 +123,20 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   verticalSpacingPx: 12,
   verticalAnchor: 'flow',
   yPx: 0,
+  horizontalPlacement: 'left',
+  xOffsetPx: 0,
   caption: '',
 };
 
 const DOCUMENT_IMAGE_VERTICAL_ANCHORS =
   new Set<DocumentImageVerticalAnchor>(['flow', 'page-position']);
+const DOCUMENT_IMAGE_HORIZONTAL_PLACEMENTS =
+  new Set<DocumentImageHorizontalPlacement>([
+    'left',
+    'center',
+    'right',
+    'custom',
+  ]);
 
 const numericAttribute = (
   value: unknown,
@@ -131,6 +147,14 @@ const numericAttribute = (
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.round(numeric)));
+};
+
+const nonNegativeNumberAttribute = (
+  value: unknown,
+  fallback = 0
+) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : fallback;
 };
 
 const spanAttribute = (
@@ -159,6 +183,116 @@ export const normalizeDocumentImageVerticalAnchor = (
   )
     ? value as DocumentImageVerticalAnchor
     : 'flow';
+
+export const normalizeDocumentImageHorizontalPlacement = (
+  value: unknown
+): DocumentImageHorizontalPlacement =>
+  typeof value === 'string'
+  && DOCUMENT_IMAGE_HORIZONTAL_PLACEMENTS.has(
+    value as DocumentImageHorizontalPlacement
+  )
+    ? value as DocumentImageHorizontalPlacement
+    : 'left';
+
+export const clampDocumentImageXOffset = (
+  value: unknown,
+  spanWidthPx: number,
+  imageWidthPx: number
+) => {
+  const maximum = Math.max(
+    0,
+    (Number.isFinite(spanWidthPx) ? spanWidthPx : 0)
+    - (Number.isFinite(imageWidthPx) ? imageWidthPx : 0)
+  );
+  const numeric = Number(value);
+  return Math.min(maximum, Math.max(0, Number.isFinite(numeric) ? numeric : 0));
+};
+
+export const calculateDocumentImageXOffset = ({
+  placement,
+  xOffsetPx,
+  spanWidthPx,
+  imageWidthPx,
+}: {
+  placement: DocumentImageHorizontalPlacement;
+  xOffsetPx: number;
+  spanWidthPx: number;
+  imageWidthPx: number;
+}) => {
+  const maximum = Math.max(0, spanWidthPx - imageWidthPx);
+  if (placement === 'center') return maximum / 2;
+  if (placement === 'right') return maximum;
+  if (placement === 'custom') {
+    return clampDocumentImageXOffset(xOffsetPx, spanWidthPx, imageWidthPx);
+  }
+  return 0;
+};
+
+export const getDocumentImageAspectRatio = (
+  attributes: Pick<
+    DocumentImageAttributes,
+    'naturalWidth' | 'naturalHeight' | 'widthPx' | 'heightPx'
+  >
+) => (
+  attributes.naturalWidth > 0 && attributes.naturalHeight > 0
+    ? attributes.naturalWidth / attributes.naturalHeight
+    : attributes.widthPx / Math.max(1, attributes.heightPx)
+);
+
+export const calculateDocumentImageHeight = (
+  widthPx: number,
+  aspectRatio: number
+) => Math.max(
+  1,
+  Math.round(
+    Math.max(1, Number.isFinite(widthPx) ? widthPx : 1)
+    / Math.max(0.0001, Number.isFinite(aspectRatio) ? aspectRatio : 1)
+  )
+);
+
+export const clampDocumentImageWidth = (
+  value: unknown,
+  minimumWidthPx: number,
+  maximumWidthPx: number,
+  fallbackWidthPx: number
+) => {
+  const minimum = Math.max(
+    1,
+    Number.isFinite(minimumWidthPx) ? minimumWidthPx : 48
+  );
+  const maximum = Math.max(
+    minimum,
+    Number.isFinite(maximumWidthPx) ? maximumWidthPx : minimum
+  );
+  const numeric = Number(value);
+  const requested = Number.isFinite(numeric) ? numeric : fallbackWidthPx;
+  return Math.min(maximum, Math.max(minimum, requested));
+};
+
+export const calculateDocumentImageResizeWidth = ({
+  startWidthPx,
+  pointerDeltaX,
+  viewScale,
+  minimumWidthPx,
+  maximumWidthPx,
+}: {
+  startWidthPx: number;
+  pointerDeltaX: number;
+  viewScale: number;
+  minimumWidthPx: number;
+  maximumWidthPx: number;
+}) => {
+  const scale = Math.max(
+    0.05,
+    Number.isFinite(viewScale) ? viewScale : 1
+  );
+  return clampDocumentImageWidth(
+    startWidthPx + pointerDeltaX / scale,
+    minimumWidthPx,
+    maximumWidthPx,
+    startWidthPx
+  );
+};
 
 export const clampDocumentImageY = (
   value: unknown,
@@ -261,6 +395,13 @@ export const normalizeDocumentImageAttributes = (
       value.verticalAnchor
     ),
     yPx: numericAttribute(value.yPx, DEFAULT_IMAGE_ATTRIBUTES.yPx, 0),
+    horizontalPlacement: normalizeDocumentImageHorizontalPlacement(
+      value.horizontalPlacement
+    ),
+    xOffsetPx: nonNegativeNumberAttribute(
+      value.xOffsetPx,
+      DEFAULT_IMAGE_ATTRIBUTES.xOffsetPx
+    ),
     caption: typeof value.caption === 'string' ? value.caption : '',
   };
 };
@@ -511,6 +652,36 @@ const createDocumentImageAttributes = (
     renderHTML: (attributes: Record<string, unknown>) => ({
       'data-y-px': String(
         numericAttribute(attributes.yPx, DEFAULT_IMAGE_ATTRIBUTES.yPx, 0)
+      ),
+    }),
+  },
+  horizontalPlacement: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.horizontalPlacement,
+    parseHTML: (element: HTMLElement) =>
+      normalizeDocumentImageHorizontalPlacement(
+        element.getAttribute('data-horizontal-placement')
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-horizontal-placement':
+        normalizeDocumentImageHorizontalPlacement(
+          attributes.horizontalPlacement
+        ),
+    }),
+  },
+  xOffsetPx: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.xOffsetPx,
+    parseHTML: (element: HTMLElement) =>
+      getDataNumber(
+        element,
+        'data-x-offset-px',
+        DEFAULT_IMAGE_ATTRIBUTES.xOffsetPx
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-x-offset-px': String(
+        nonNegativeNumberAttribute(
+          attributes.xOffsetPx,
+          DEFAULT_IMAGE_ATTRIBUTES.xOffsetPx
+        )
       ),
     }),
   },

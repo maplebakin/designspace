@@ -119,6 +119,8 @@ describe('document export', () => {
         data-span-start-column="2"
         data-vertical-anchor="page-position"
         data-image-top-px="286"
+        data-image-left-px="398"
+        data-image-x-offset-px="150"
         data-layout-content-height-px="612"
         style="display:none; --document-span-image-top: 286px"
       >
@@ -153,11 +155,19 @@ describe('document export', () => {
           data-layout-role="occupied-columns"
           data-start-column="2"
           data-end-column="3"
+          data-image-left-px="398"
+          data-image-x-offset-px="150"
+          style="left:398px;top:286px;width:322px"
         >
           <figure data-document-image="true" data-wrap="span-columns">
             <img src="data:image/png;base64,photo" alt="Family">
             <figcaption>Attached caption</figcaption>
           </figure>
+          <button
+            class="document-image__resize-handle"
+            data-document-editor-only="true"
+            data-document-export-exclude="true"
+          ></button>
         </div>
       </div>
     `;
@@ -176,6 +186,12 @@ describe('document export', () => {
     expect(layout?.getAttribute('data-layout-content-height-px')).toBe('612');
     expect(layout?.getAttribute('data-vertical-anchor')).toBe('page-position');
     expect(layout?.getAttribute('data-image-top-px')).toBe('286');
+    expect(layout?.getAttribute('data-image-left-px')).toBe('398');
+    const imageSlot = layout?.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"]'
+    );
+    expect(imageSlot?.style.left).toBe('398px');
+    expect(imageSlot?.getAttribute('data-image-x-offset-px')).toBe('150');
     expect(layout?.style.getPropertyValue('--document-span-image-top'))
       .toBe('286px');
     expect(layout?.querySelector(
@@ -187,6 +203,7 @@ describe('document export', () => {
     expect(layout?.querySelector(
       '[data-layout-role="occupied-columns"][data-start-column="2"][data-end-column="3"]'
     )?.textContent).toContain('Attached caption');
+    expect(clone.querySelector('.document-image__resize-handle')).toBeNull();
 
     const svg = createDocumentSvgMarkup(
       clone,
