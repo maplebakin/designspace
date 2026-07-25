@@ -508,7 +508,7 @@ type StructuredDocumentSpanLayoutProps = {
   availableWidthPx: number;
   availableHeightPx: number;
   revision: number;
-  hidden: boolean;
+  textEditing: boolean;
   viewScale: number;
   onSelectImage: (position: number) => void;
   onCommitImageY: (position: number, yPx: number) => void;
@@ -522,7 +522,7 @@ export const StructuredDocumentSpanLayout = ({
   availableWidthPx,
   availableHeightPx,
   revision,
-  hidden,
+  textEditing,
   viewScale,
   onSelectImage,
   onCommitImageY,
@@ -592,10 +592,10 @@ export const StructuredDocumentSpanLayout = ({
   } as CSSProperties;
 
   const handleImagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    onSelectImage(model.imagePosition);
-    if (model.attributes.verticalAnchor !== 'page-position') return;
     event.preventDefault();
     event.stopPropagation();
+    onSelectImage(model.imagePosition);
+    if (model.attributes.verticalAnchor !== 'page-position') return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -663,7 +663,23 @@ export const StructuredDocumentSpanLayout = ({
       onSelectImage(model.imagePosition);
       return;
     }
+    event.preventDefault();
+    event.stopPropagation();
     onEditText();
+  };
+
+  const handleLayoutPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('[data-layout-role="occupied-columns"]')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onEditText();
+  };
+
+  const handleImageClick = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectImage(model.imagePosition);
   };
 
   return (
@@ -681,8 +697,10 @@ export const StructuredDocumentSpanLayout = ({
       data-image-top-px={displayedImageY}
       data-image-y-max-px={model.maximumImageYPx}
       data-vertical-anchor={model.attributes.verticalAnchor}
-      data-hidden-for-editing={hidden ? 'true' : 'false'}
+      data-text-editing={textEditing ? 'true' : 'false'}
+      data-hidden-for-editing={textEditing ? 'true' : 'false'}
       style={style}
+      onPointerDown={handleLayoutPointerDown}
       onClick={handleClick}
     >
       <div className="document-span-layout__column-stacks">
@@ -756,6 +774,7 @@ export const StructuredDocumentSpanLayout = ({
         onPointerMove={handleImagePointerMove}
         onPointerUp={handleImagePointerEnd}
         onPointerCancel={handleImagePointerCancel}
+        onClick={handleImageClick}
       />
     </div>
   );

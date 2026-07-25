@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Editor, JSONContent } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
 import {
   act,
   cleanup,
@@ -1729,6 +1730,106 @@ describe('live document editor UI', () => {
       (node) => node.type === 'documentFlowImage'
     )).toHaveLength(1);
   });
+
+  it.each([
+    ['page-position', 0.5],
+    ['flow', 0.75],
+  ] as const)(
+    'keeps a %s spanning image selectable over structured text editing at %d scale',
+    async (verticalAnchor, viewScale) => {
+      let editor: Editor | null = null;
+      const content = spanningBodyContent(2, 2);
+      content.content![1] = {
+        ...content.content![1],
+        attrs: {
+          ...content.content![1].attrs,
+          verticalAnchor,
+          yPx: verticalAnchor === 'page-position' ? 120 : 0,
+          widthPx: 360,
+        },
+      };
+      const { container } = render(React.createElement(FlowEditor, {
+        content,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        viewScale,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => expect(editor).not.toBeNull());
+
+      const layout = container.querySelector<HTMLElement>(
+        '[data-document-span-layout]'
+      )!;
+      let imageSlot = container.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"]'
+      )!;
+      fireEvent.click(imageSlot);
+      await waitFor(() => {
+        expect(editor!.state.selection).toBeInstanceOf(NodeSelection);
+      });
+
+      const originalAttributes = {
+        ...findDocumentImageNode(editor!.getJSON())!.attrs,
+      };
+      fireEvent.click(container.querySelector(
+        '[data-layout-role="explicit-text-column"]'
+      )!);
+      await waitFor(() => {
+        expect(layout.dataset.textEditing).toBe('true');
+      });
+      const source = container.querySelector<HTMLElement>(
+        '.document-flow-editor__content--structured-text-editing'
+      )!;
+      const sourceImage = source.querySelector<HTMLElement>(
+        '.document-image-node[data-wrap="span-columns"]'
+      )!;
+      expect(sourceImage.matches(
+        '.document-flow-editor__content--structured-text-editing '
+        + '.document-image-node[data-wrap="span-columns"]'
+      )).toBe(true);
+      expect(imageSlot.querySelectorAll(
+        '[data-document-image="true"]'
+      )).toHaveLength(1);
+
+      const dispatchPointer = (type: string, clientY: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, {
+          pointerId: { value: 11 },
+          clientY: { value: clientY },
+        });
+        fireEvent(imageSlot, event);
+      };
+      dispatchPointer('pointerdown', 100);
+      dispatchPointer('pointerup', 100);
+      fireEvent.click(imageSlot);
+      await waitFor(() => {
+        expect(layout.dataset.textEditing).toBe('false');
+        expect(editor!.state.selection).toBeInstanceOf(NodeSelection);
+      });
+      expect(findDocumentImageNode(editor!.getJSON())!.attrs)
+        .toEqual(originalAttributes);
+      expect(container.querySelector(
+        '.document-flow-editor__content--structured-source'
+      )).not.toBeNull();
+
+      if (verticalAnchor === 'page-position') {
+        imageSlot = container.querySelector<HTMLElement>(
+          '[data-layout-role="occupied-columns"]'
+        )!;
+        dispatchPointer('pointerdown', 100);
+        dispatchPointer('pointermove', 130);
+        dispatchPointer('pointerup', 130);
+        await waitFor(() => {
+          expect(findDocumentImageNode(editor!.getJSON())!.attrs?.yPx)
+            .toBe(180);
+        });
+      }
+    }
+  );
 
   it('normalizes spanning images without losing content when column count shrinks', async () => {
     let editor: Editor | null = null;

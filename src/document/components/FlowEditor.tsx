@@ -178,6 +178,7 @@ export const FlowEditor = ({
   const rootRef = useRef<HTMLElement | null>(null);
   const editorInstanceRef = useRef<Editor | null>(null);
   const frameRef = useRef<number | null>(null);
+  const enteringStructuredTextRef = useRef(false);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [layoutHeightPx, setLayoutHeightPx] = useState(720);
   const [editingStructuredText, setEditingStructuredText] = useState(false);
@@ -377,16 +378,21 @@ export const FlowEditor = ({
         callbacksRef.current.onFocusChange?.(true, focusedEditor);
       },
       onBlur: ({ editor: blurredEditor }) => {
-        setEditingStructuredText(false);
+        if (!enteringStructuredTextRef.current) {
+          setEditingStructuredText(false);
+        }
         callbacksRef.current.onFocusChange?.(false, blurredEditor);
       },
       onSelectionUpdate: ({ editor: updatedEditor }) => {
         const selectedImage = getSelectedDocumentImage(updatedEditor);
         setEditingStructuredText(
-          updatedEditor.isFocused
+          enteringStructuredTextRef.current
+          || (
+            updatedEditor.isFocused
           && (
             !selectedImage
             || selectedImage.attributes.wrap !== 'span-columns'
+          )
           )
         );
         callbacksRef.current.onSelectionChange?.(updatedEditor);
@@ -416,6 +422,20 @@ export const FlowEditor = ({
     if (!editor || editor.isDestroyed) return;
     editor.setEditable(editable);
   }, [editable, editor]);
+
+  useEffect(() => {
+    if (!editingStructuredText || !editor || editor.isDestroyed) return;
+    const focusTextEditor = () => {
+      if (!editor.isDestroyed) editor.commands.focus();
+      enteringStructuredTextRef.current = false;
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+      const frame = window.requestAnimationFrame(focusTextEditor);
+      return () => window.cancelAnimationFrame(frame);
+    }
+    const timeout = window.setTimeout(focusTextEditor, 0);
+    return () => window.clearTimeout(timeout);
+  }, [editingStructuredText, editor]);
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -587,6 +607,9 @@ export const FlowEditor = ({
           hasStructuredSpan
             ? 'document-flow-editor__content--span-source'
             : '',
+          hasStructuredSpan && editingStructuredText
+            ? 'document-flow-editor__content--structured-text-editing'
+            : '',
         ].filter(Boolean).join(' ')}
       />
       {editor && hasStructuredSpan && (
@@ -597,9 +620,11 @@ export const FlowEditor = ({
           availableWidthPx={maxSpanImageWidthPx}
           availableHeightPx={layoutHeightPx}
           revision={layoutRevision}
-          hidden={editingStructuredText}
+          textEditing={editingStructuredText}
           viewScale={viewScale}
           onSelectImage={(position) => {
+            enteringStructuredTextRef.current = false;
+            setEditingStructuredText(false);
             editor.commands.setNodeSelection(position);
             editor.commands.focus();
           }}
@@ -614,8 +639,20 @@ export const FlowEditor = ({
               .run();
           }}
           onEditText={() => {
+            enteringStructuredTextRef.current = true;
             setEditingStructuredText(true);
-            editor.commands.focus();
+            const { selection, doc } = editor.state;
+            const textPosition = selection instanceof NodeSelection
+              ? (
+                  selection.from > 1
+                    ? selection.from - 1
+                    : Math.min(doc.content.size - 1, selection.to)
+                )
+              : selection.from;
+            editor.chain()
+              .setTextSelection(Math.max(1, textPosition))
+              .focus()
+              .run();
           }}
         />
       )}

@@ -236,6 +236,7 @@ export const createCleanDocumentClone = (
   clone.querySelectorAll<HTMLElement>('[data-document-span-layout]').forEach(
     (layout) => {
       layout.style.display = 'block';
+      layout.setAttribute('data-text-editing', 'false');
       layout.setAttribute('data-hidden-for-editing', 'false');
     }
   );

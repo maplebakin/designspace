@@ -113,6 +113,7 @@ describe('document export', () => {
       </div>
       <div
         data-document-span-layout="true"
+        data-text-editing="true"
         data-hidden-for-editing="true"
         data-span-count="2"
         data-span-start-column="2"
@@ -171,6 +172,7 @@ describe('document export', () => {
     expect(layout).not.toBeNull();
     expect(layout?.style.display).toBe('block');
     expect(layout?.getAttribute('data-hidden-for-editing')).toBe('false');
+    expect(layout?.getAttribute('data-text-editing')).toBe('false');
     expect(layout?.getAttribute('data-layout-content-height-px')).toBe('612');
     expect(layout?.getAttribute('data-vertical-anchor')).toBe('page-position');
     expect(layout?.getAttribute('data-image-top-px')).toBe('286');

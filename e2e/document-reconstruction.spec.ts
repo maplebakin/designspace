@@ -435,6 +435,48 @@ test.describe('document reconstruction MVP', () => {
     const imageSlot = layout.locator(
       '[data-layout-role="occupied-columns"]'
     );
+    const sourceImage = page.locator(
+      '.document-flow-prosemirror '
+      + '.document-image-node[data-wrap="span-columns"]'
+    );
+    const originalImageState = await sourceImage.evaluate((node) => ({
+      attributes: Object.fromEntries(
+        Array.from(node.attributes)
+          .filter((attribute) => attribute.name.startsWith('data-'))
+          .map((attribute) => [attribute.name, attribute.value])
+      ),
+      caption: node.querySelector('figcaption')?.textContent || '',
+    }));
+    await columnOne.click();
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    const sourceBody = page.locator(
+      '.document-flow-editor__content--structured-text-editing '
+      + '.document-flow-prosemirror'
+    );
+    await expect(sourceBody).toBeVisible();
+    await sourceBody.locator('p').first().click();
+    await expect(page.getByTestId('document-image-inspector')).toHaveCount(0);
+    await expect(imageSlot).toBeVisible();
+    await expect(sourceImage).toBeHidden();
+    await expect(page.locator(
+      '[data-document-image="true"]:visible'
+    )).toHaveCount(1);
+
+    await imageSlot.click();
+    await expect(layout).toHaveAttribute('data-text-editing', 'false');
+    await expect(page.getByTestId('document-image-inspector')).toBeVisible();
+    await expect.poll(async () => sourceImage.evaluate((node) => ({
+      attributes: Object.fromEntries(
+        Array.from(node.attributes)
+          .filter((attribute) => attribute.name.startsWith('data-'))
+          .map((attribute) => [attribute.name, attribute.value])
+      ),
+      caption: node.querySelector('figcaption')?.textContent || '',
+    }))).toEqual(originalImageState);
+    await expect(page.locator(
+      '[data-document-image="true"]:visible'
+    )).toHaveCount(1);
+
     const slotBox = await imageSlot.boundingBox();
     expect(slotBox).not.toBeNull();
     const imageYBeforeDrag = Number(
