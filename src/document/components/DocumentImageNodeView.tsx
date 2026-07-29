@@ -267,6 +267,7 @@ export const DocumentImageNodeView = ({
       data-document-image="true"
       data-image-id={attributes.id}
       data-wrap={attributes.wrap}
+      data-coordinate-space={attributes.coordinateSpace}
       data-vertical-anchor={attributes.verticalAnchor}
       data-y-px={attributes.yPx}
       data-horizontal-placement={attributes.horizontalPlacement}
@@ -278,7 +279,14 @@ export const DocumentImageNodeView = ({
         width: `${renderedWidth}px`,
         '--document-image-width': `${renderedWidth}px`,
         '--document-image-height': `${renderedHeight}px`,
-        '--document-image-wrap-padding': `${attributes.wrapPaddingPx}px`,
+        '--document-image-wrap-padding-top':
+          `${attributes.wrapPaddingTopPx}px`,
+        '--document-image-wrap-padding-right':
+          `${attributes.wrapPaddingRightPx}px`,
+        '--document-image-wrap-padding-bottom':
+          `${attributes.wrapPaddingBottomPx}px`,
+        '--document-image-wrap-padding-left':
+          `${attributes.wrapPaddingLeftPx}px`,
         ...captionStyle,
       } as CSSProperties}
     >

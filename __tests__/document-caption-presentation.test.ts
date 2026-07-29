@@ -213,6 +213,8 @@ describe('document image caption presentation', () => {
       },
       selectedId: null,
       zoom: 1,
+      pageWidthPx: 816,
+      pageHeightPx: 1056,
       onSelect: () => undefined,
       onChange: () => undefined,
     }));

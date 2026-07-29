@@ -15,6 +15,7 @@ import type {
 import {
   CURRENT_DOCUMENT_SCHEMA_VERSION,
   DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+  normalizeDocumentContentStyles,
   normalizeDocumentProjectPage,
 } from '../src/editor/project/projectSchema';
 import {
@@ -62,6 +63,10 @@ const spanningBodyContent = (): DocumentContentJson => ({
   content: [
     {
       type: 'paragraph',
+      attrs: {
+        documentStyleId: 'body',
+        documentStyleFontSizePx: null,
+      },
       content: [{ type: 'text', text: 'Article before image' }],
     },
     {
@@ -77,15 +82,25 @@ const spanningBodyContent = (): DocumentContentJson => ({
         wrap: 'span-columns',
         spanCount: 2,
         spanStartColumn: 2,
-        wrapPaddingPx: 12,
-        verticalSpacingPx: 20,
+        wrapPaddingTopPx: 20,
+        wrapPaddingRightPx: 12,
+        wrapPaddingBottomPx: 20,
+        wrapPaddingLeftPx: 12,
+        coordinateSpace: 'body-span',
         verticalAnchor: 'page-position',
         yPx: 286,
         caption: 'Family photograph caption',
+        captionAlignment: 'inherit',
+        captionItalic: 'inherit',
+        captionSpacingPx: 'inherit',
       },
     },
     {
       type: 'paragraph',
+      attrs: {
+        documentStyleId: 'body',
+        documentStyleFontSizePx: null,
+      },
       content: [{ type: 'text', text: 'Article after image' }],
     },
   ],
@@ -835,6 +850,11 @@ describe('document project store', () => {
       },
       lastUpdated: '2025-01-15T12:00:00.000Z',
     };
+    const canonicalLegacyBody = normalizeDocumentContentStyles(
+      legacyBody,
+      'body',
+      { legacyCaptionPresentation: true }
+    );
 
     dbMocks.loadProject.mockResolvedValueOnce({
       project: {
@@ -860,7 +880,7 @@ describe('document project store', () => {
         heightIn: 11,
       },
       columnCount: 3,
-      bodyContent: legacyBody,
+      bodyContent: canonicalLegacyBody,
     });
 
     useDocumentStore.getState().reset();
@@ -881,7 +901,7 @@ describe('document project store', () => {
       size: {
         orientation: 'portrait',
       },
-      bodyContent: legacyBody,
+      bodyContent: canonicalLegacyBody,
     });
   });
 
@@ -942,7 +962,13 @@ describe('document project store', () => {
     await store.saveProject();
     const serialized = dbMocks.saveProject.mock.calls[0][1] as string;
     const persisted = JSON.parse(serialized);
-    expect(persisted.pages[0].bodyContent).toEqual(anchoredContent);
+    const canonicalAnchoredContent = normalizeDocumentContentStyles(
+      anchoredContent,
+      'body'
+    );
+    expect(persisted.pages[0].bodyContent).toEqual(
+      canonicalAnchoredContent
+    );
 
     dbMocks.loadProject.mockResolvedValueOnce({
       project: { id: 'library-document-1', name: 'Spanning Article' },
@@ -953,7 +979,7 @@ describe('document project store', () => {
 
     expect(useDocumentStore.getState().project?.pages[0]).toMatchObject({
       columnCount: 3,
-      bodyContent: anchoredContent,
+      bodyContent: canonicalAnchoredContent,
     });
   });
 

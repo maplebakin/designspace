@@ -26,8 +26,8 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 |---|---|---|
 | S0 — Authoritative paper background | Complete | `4e4e4809` |
 | P1 — Multi-page documents and folios | Complete | `9505d48e` |
-| P2 — Historical typography styles | Complete | Pending phase commit |
-| P3 — Shared layout and image geometry | Pending | — |
+| P2 — Historical typography styles | Complete | `86ba84a1` |
+| P3 — Shared layout and image geometry | Complete | pending phase commit |
 | P4 — Image rows and stacks | Pending | — |
 | P5 — Persistence, migrations, assets, recovery | Pending | — |
 | P6 — Committed multi-page export | Pending | — |
@@ -296,3 +296,106 @@ Deviations and limitations:
   owns all flow decisions.
 - Active-page PNG and print still originate from the mounted export root.
   Committed-snapshot PNG/print is intentionally completed in P6.
+
+## P3 — Shared layout and image geometry
+
+Status: Complete
+
+Schema changes:
+
+- The nested document schema is now version 3.
+- Image nodes canonically store four independent wrap-padding sides and an
+  explicit `flow` or `body-span` coordinate-space tag.
+- Positioned spanning images retain unzoomed body-relative Y and
+  span-relative X coordinates; page overlays retain unzoomed page-relative
+  coordinates.
+- Legacy scalar `wrapPaddingPx` and `verticalSpacingPx` remain parse-only
+  compatibility inputs and are not emitted by project or HTML serialization.
+
+Migration behaviour:
+
+- Schema-v2 span padding maps horizontal padding to left/right and vertical
+  spacing to top/bottom.
+- Float, inline, and top/bottom images receive mode-compatible four-sided
+  padding without visually changing existing documents.
+- Coordinate space is derived from active image mode instead of trusting an
+  arbitrary persisted value.
+- The schema-v2 typography migration is explicitly bounded to versions below
+  2, so the v3 geometry migration cannot reapply legacy caption or title
+  presentation.
+- Canonical comparison prevents Tiptap's parse-only compatibility attributes
+  from triggering an external-content reset while an inspector field is being
+  edited.
+
+Files changed:
+
+- `src/document/layout/coordinateSpaces.ts`
+- `src/document/layout/layoutKernel.ts`
+- `src/document/layout/overlayGeometry.ts`
+- `src/document/layout/index.ts`
+- `src/document/types/documentProject.ts`
+- `src/editor/project/projectSchema.ts`
+- `src/document/extensions/DocumentImageExtension.ts`
+- `src/document/state/documentStore.ts`
+- `src/document/components/DocumentEditorShell.tsx`
+- `src/document/components/DocumentImageNodeView.tsx`
+- `src/document/components/DocumentOverlayLayer.tsx`
+- `src/document/components/DocumentPageView.tsx`
+- `src/document/components/DocumentToolbar.tsx`
+- `src/document/components/FlowEditor.tsx`
+- `src/document/components/StructuredDocumentSpanLayout.tsx`
+- `src/document/styles/document-page.css`
+- `docs/architecture/document-layout-and-image-geometry.md`
+- P3 geometry, schema, interaction, store, editor, and Playwright tests
+- this implementation journal
+
+Implemented behaviour:
+
+- Branded page, body, and viewport coordinate types centralize conversions and
+  make zoom a presentation-only transform.
+- A pure layout kernel owns page/body/column rectangles, four-sided
+  caption-aware exclusions, boundaries, overflow, collision detection,
+  collision-constrained movement and resize, and deterministic initial overlap
+  resolution.
+- Structured layout consumes every positioned spanning image, creates
+  simultaneous exclusion rectangles, includes caption height, and reports
+  unresolved collisions as overflow.
+- Page overlays and structured images use transient pointer previews and
+  commit once on pointer-up; cancellation and blur do not dirty the project.
+- Stable image IDs recover move and resize targets after stale ProseMirror
+  positions. Overlay commits capture both page ID and object ID.
+- New and resized images are clamped to printable/body boundaries and avoid
+  peers under the documented same-layer collision policy.
+- The inspector exposes numeric X/Y/width/height where applicable, four
+  independent wrap paddings, aspect-ratio-preserving size changes, and
+  1px/10px keyboard nudging.
+- The second-spanning-image toolbar guard is removed. Import selects the new
+  stable-ID node even under an existing structured overlay, and importing
+  during another image NodeSelection inserts instead of replacing.
+
+Tests and verification:
+
+- Focused P3 geometry, schema, overlay interaction/store, structured image,
+  and editor suite — 152 tests passed before final regression additions
+- `npm test -- --reporter=dot` — 28 files, 360 tests passed
+- `npm run build` — passed (lint, TypeScript, and production bundle)
+- `npx playwright test e2e/document-reconstruction.spec.ts --grep
+  "two independently positioned|family-history span"` — 2 tests passed
+- `git diff --check` — passed
+
+Deviations and limitations:
+
+- Ordinary inline/float/top-bottom layout remains browser CSS flow. The pure
+  kernel owns explicit rectangles, while DOM text and caption measurement are
+  injected renderer adapters rather than a standalone typesetting engine.
+- Structured initial-overlap correction is deterministic transient render
+  geometry and does not silently dirty old projects; a subsequent interaction
+  commits the displayed geometry.
+- Overlay pointer interaction measures caption height. Store-only numeric
+  commits cannot reproduce DOM caption metrics and conservatively collide on
+  image rectangles.
+- Front and behind overlay layers intentionally do not collide with each
+  other; peers within the same layer do.
+- Selected-page PNG and print still use the mounted live root. P6 will route
+  those workflows through the committed offscreen renderer already used by
+  multi-page PDF.

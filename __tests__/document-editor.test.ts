@@ -1367,14 +1367,92 @@ describe('live document editor UI', () => {
       expect(nodeView.getAttribute('data-width-px')).toBe('240');
       expect(nodeView.getAttribute('data-height-px')).toBe('160');
       expect(imageElement.style.width).toBe('240px');
-      expect(
-        imageElement.style.getPropertyValue('--document-image-wrap-padding')
-      ).toBe('18px');
+      const expectedPadding = wrap === 'inline'
+        ? ['18px', '18px', '18px', '18px']
+        : wrap === 'float-left'
+          ? ['0px', '18px', '18px', '0px']
+          : wrap === 'float-right'
+            ? ['0px', '0px', '18px', '18px']
+            : ['18px', '0px', '18px', '0px'];
+      expect([
+        imageElement.style.getPropertyValue(
+          '--document-image-wrap-padding-top'
+        ),
+        imageElement.style.getPropertyValue(
+          '--document-image-wrap-padding-right'
+        ),
+        imageElement.style.getPropertyValue(
+          '--document-image-wrap-padding-bottom'
+        ),
+        imageElement.style.getPropertyValue(
+          '--document-image-wrap-padding-left'
+        ),
+      ]).toEqual(expectedPadding);
+      expect(imageElement.getAttribute('data-coordinate-space')).toBe('flow');
       expect(imageElement.querySelector('img')?.getAttribute('alt')).toBe(
         `${wrap} diagram`
       );
       expect(imageElement.textContent).toContain(`${wrap} caption`);
     }
+  });
+
+  it('adds a second photo after an image NodeSelection without replacing the first', async () => {
+    let editor: Editor | null = null;
+    render(React.createElement(FlowEditor, {
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph' }],
+      } as JSONContent,
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,MULTI',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    const insert = (id: string) => editor!.commands.insertDocumentImage({
+      id,
+      assetId: `asset-${id}`,
+      altText: id,
+      widthPx: 240,
+      heightPx: 160,
+      naturalWidth: 1200,
+      naturalHeight: 800,
+      wrap: 'span-columns',
+      spanCount: 2,
+      verticalAnchor: 'page-position',
+      yPx: id === 'first-photo' ? 120 : 390,
+    });
+
+    await act(async () => {
+      insert('first-photo');
+      let firstPosition = -1;
+      editor!.state.doc.descendants((node, position) => {
+        if (node.attrs.id === 'first-photo') {
+          firstPosition = position;
+          return false;
+        }
+        return true;
+      });
+      editor!.commands.setNodeSelection(firstPosition);
+      insert('second-photo');
+      await Promise.resolve();
+    });
+
+    const ids: string[] = [];
+    editor!.state.doc.descendants((node) => {
+      if (
+        node.type.name === 'documentFlowImage'
+        || node.type.name === 'documentInlineImage'
+      ) {
+        ids.push(node.attrs.id);
+      }
+      return true;
+    });
+    expect(ids).toEqual(['first-photo', 'second-photo']);
   });
 
   it('opens legacy document content whose image nodes predate structured spans', async () => {

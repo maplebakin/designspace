@@ -50,6 +50,9 @@ import {
   normalizeDocumentDropCap,
   type DocumentDropCapSettings,
 } from '../typography/documentTypography';
+import {
+  normalizeDocumentImageContentGeometry,
+} from '../types/documentProject';
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: 'doc',
@@ -142,6 +145,63 @@ export const commitStructuredDocumentImagePosition = (
     && committedNode.attrs.horizontalPlacement === 'custom'
     && committedNode.attrs.xOffsetPx === nextAttributes.xOffsetPx
     && committedNode.attrs.yPx === nextAttributes.yPx
+  );
+};
+
+export const commitStructuredDocumentImageSize = (
+  editor: Editor,
+  expectedPosition: number,
+  imageId: string,
+  widthPx: number,
+  heightPx: number,
+  xOffsetPx: number
+) => {
+  if (editor.isDestroyed) return false;
+  const nodeAtExpectedPosition = editor.state.doc.nodeAt(expectedPosition);
+  let targetPosition = (
+    nodeAtExpectedPosition?.type.name === 'documentFlowImage'
+    && nodeAtExpectedPosition.attrs.id === imageId
+  )
+    ? expectedPosition
+    : -1;
+  if (targetPosition < 0) {
+    editor.state.doc.descendants((node, position) => {
+      if (targetPosition >= 0) return false;
+      if (
+        node.type.name === 'documentFlowImage'
+        && node.attrs.id === imageId
+      ) {
+        targetPosition = position;
+        return false;
+      }
+      return true;
+    });
+  }
+  if (targetPosition < 0) return false;
+  const targetNode = editor.state.doc.nodeAt(targetPosition);
+  if (!targetNode) return false;
+
+  const nextAttributes = normalizeDocumentImageAttributes({
+    ...(targetNode.attrs as Partial<DocumentImageAttributes>),
+    widthPx,
+    heightPx,
+    xOffsetPx,
+  });
+  const transaction = editor.state.tr
+    .setNodeMarkup(targetPosition, undefined, nextAttributes);
+  transaction.setSelection(
+    NodeSelection.create(transaction.doc, targetPosition)
+  );
+  editor.view.dispatch(transaction);
+  editor.view.focus();
+
+  const committedNode = editor.state.doc.nodeAt(targetPosition);
+  return (
+    committedNode?.type.name === 'documentFlowImage'
+    && committedNode.attrs.id === imageId
+    && committedNode.attrs.widthPx === nextAttributes.widthPx
+    && committedNode.attrs.heightPx === nextAttributes.heightPx
+    && committedNode.attrs.xOffsetPx === nextAttributes.xOffsetPx
   );
 };
 
@@ -573,8 +633,9 @@ export const FlowEditor = ({
 
   useEffect(() => {
     if (!editor || editor.isDestroyed || editor.isFocused) return;
-    const current = editor.getJSON();
-    if (!jsonEquals(current, content)) {
+    const current = normalizeDocumentImageContentGeometry(editor.getJSON());
+    const next = normalizeDocumentImageContentGeometry(content);
+    if (!jsonEquals(current, next)) {
       editor.commands.setContent(content, {
         emitUpdate: false,
         errorOnInvalidContent: true,
@@ -726,20 +787,18 @@ export const FlowEditor = ({
           )}
           onCommitImageSize={(
             position,
+            imageId,
             widthPx,
             heightPx,
             xOffsetPx
-          ) => {
-            editor.chain()
-              .focus()
-              .setNodeSelection(position)
-              .updateSelectedDocumentImage({
-                widthPx,
-                heightPx,
-                xOffsetPx,
-              })
-              .run();
-          }}
+          ) => commitStructuredDocumentImageSize(
+            editor,
+            position,
+            imageId,
+            widthPx,
+            heightPx,
+            xOffsetPx
+          )}
           onEditText={() => {
             enteringStructuredTextRef.current = true;
             setEditingStructuredText(true);

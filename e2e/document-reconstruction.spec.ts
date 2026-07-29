@@ -836,6 +836,70 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.locator('canvas.upper-canvas')).toHaveCount(0);
   });
 
+  test('creates and reloads two independently positioned spanning images', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/');
+    await page.getByTestId('dashboard-new-document').click();
+    await page.getByTestId('document-project-name').fill(
+      'Two Positioned Photographs'
+    );
+    await page.getByRole('button', { name: '3 columns' }).click();
+    await page.locator('.document-flow-prosemirror').fill(
+      `${'Historical article text flows around both photographs. '.repeat(40)}`
+    );
+
+    const insertPhoto = async (name: string, yPx: string) => {
+      await page.getByTestId('document-image-file-input').setInputFiles({
+        name,
+        mimeType: 'image/png',
+        buffer: Buffer.from(PHOTO_PNG_BASE64, 'base64'),
+      });
+      // Import selects the new stable-ID node even when an existing structured
+      // image visually covers the source Tiptap figure.
+      await expect(page.getByTestId('document-image-wrap')).toHaveValue(
+        'float-left'
+      );
+      await page.getByTestId('document-image-wrap').selectOption('span-2');
+      await page.getByTestId('document-image-vertical-anchor')
+        .selectOption('page-position');
+      await page.getByTestId('document-image-y-position').fill(yPx);
+    };
+
+    await insertPhoto('first-family-photo.png', '120');
+    const layout = page.locator('[data-document-span-layout]');
+    await expect(layout).toHaveAttribute('data-structured-image-count', '1');
+
+    await layout.locator(
+      '[data-layout-role="explicit-text-column"]'
+    ).first().click();
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    await insertPhoto('second-family-photo.png', '390');
+
+    await expect(layout).toHaveAttribute('data-structured-image-count', '2');
+    await expect(layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    )).toHaveCount(2);
+    const committedIds = await layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    ).evaluateAll((slots) => slots.map(
+      (slot) => slot.getAttribute('data-image-id')
+    ));
+    expect(new Set(committedIds).size).toBe(2);
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    const card = page.getByTestId('dashboard-project-card')
+      .filter({ hasText: 'Two Positioned Photographs' });
+    await card.getByRole('button').first().click();
+
+    const reloaded = page.locator('[data-document-span-layout]');
+    await expect(reloaded).toHaveAttribute('data-structured-image-count', '2');
+    await expect(reloaded.locator(
+      '[data-layout-role="occupied-columns"]'
+    )).toHaveCount(2);
+  });
+
   test('reconstructs, persists, and exports a scanned three-column article', async ({ page }) => {
     test.slow();
     test.setTimeout(120_000);
@@ -877,7 +941,8 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.locator('[data-document-image="true"]')).toHaveAttribute('data-wrap', 'inline');
     await page.locator('[data-document-image="true"]').click();
     await page.getByTestId('document-image-wrap').selectOption('float-left');
-    await page.getByTestId('document-image-padding').fill('14');
+    await page.getByTestId('document-image-wrap-padding-right').fill('14');
+    await page.getByTestId('document-image-wrap-padding-bottom').fill('14');
     await page.getByTestId('document-image-caption').fill('Granddad beside the family home');
     await page.getByTestId('document-image-alt').fill('Granddad standing beside a farmhouse');
     await expect(page.locator('[data-document-image="true"]')).toHaveAttribute('data-wrap', 'float-left');

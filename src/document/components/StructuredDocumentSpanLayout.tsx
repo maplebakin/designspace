@@ -14,14 +14,27 @@ import type {
 } from '../extensions/DocumentImageExtension';
 import {
   calculateDocumentImageHeight,
-  calculateDocumentImageDragY,
-  calculateDocumentImageResizeWidth,
   calculateDocumentImageXOffset,
   clampDocumentImageXOffset,
+  clampDocumentImageWidth,
   getDocumentImageAspectRatio,
   clampDocumentImageY,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
+import {
+  bodyPoint,
+  bodyRectangle,
+  buildExclusionRectangle,
+  findRectangleCollisions as findKernelRectangleCollisions,
+  getDocumentColumnRectangles,
+  moveRectangleWithoutCollisions as moveKernelRectangleWithoutCollisions,
+  rectanglesOverlap as kernelRectanglesOverlap,
+  resolveInitialRectangleOverlaps,
+  viewportDelta,
+  viewportDeltaToLayoutDelta,
+  type BodyRectangle,
+  type CollisionObstacle,
+} from '../layout';
 import {
   normalizeDocumentDropCap,
   type DocumentDropCapSettings,
@@ -102,10 +115,51 @@ export type MultiDocumentSpanLayoutModel = {
   collisionRectangles: DocumentImageRectangle[];
   textBands: StructuredTextBand[];
   columnWidthPx: number;
+  columnGapPx: number;
   availableWidthPx: number;
   availableHeightPx: number;
   layoutContentHeightPx: number;
   overflowing: boolean;
+  unresolvedCollisionIds: readonly string[];
+};
+
+const toBodyRectangle = (
+  rectangle: DocumentImageRectangle
+): BodyRectangle => bodyRectangle(
+  rectangle.leftPx,
+  rectangle.topPx,
+  rectangle.widthPx,
+  rectangle.heightPx
+);
+
+const toCollisionObstacle = (
+  rectangle: DocumentImageRectangle
+): CollisionObstacle<'body'> => ({
+  id: rectangle.imageId,
+  rectangle: toBodyRectangle(rectangle),
+});
+
+const clampStructuredImageTop = ({
+  value,
+  availableHeightPx,
+  imageRegionHeightPx,
+  topPaddingPx,
+  bottomPaddingPx,
+}: {
+  value: number;
+  availableHeightPx: number;
+  imageRegionHeightPx: number;
+  topPaddingPx: number;
+  bottomPaddingPx: number;
+}) => {
+  const minimum = Math.max(0, topPaddingPx);
+  const maximum = Math.max(
+    minimum,
+    availableHeightPx
+      - imageRegionHeightPx
+      - Math.max(0, bottomPaddingPx)
+  );
+  return Math.min(maximum, Math.max(minimum, value));
 };
 
 export const buildPhysicalColumnSegments = (
@@ -721,11 +775,9 @@ const intervalsAroundExclusions = (
 export const rectanglesOverlap = (
   left: DocumentImageRectangle,
   right: DocumentImageRectangle
-) => (
-  left.leftPx < right.leftPx + right.widthPx
-  && left.leftPx + left.widthPx > right.leftPx
-  && left.topPx < right.topPx + right.heightPx
-  && left.topPx + left.heightPx > right.topPx
+) => kernelRectanglesOverlap(
+  toBodyRectangle(left),
+  toBodyRectangle(right)
 );
 
 export const moveRectangleWithoutCollisions = ({
@@ -733,74 +785,23 @@ export const moveRectangleWithoutCollisions = ({
   desiredLeftPx,
   desiredTopPx,
   obstacles,
+  bounds,
 }: {
   start: DocumentImageRectangle;
   desiredLeftPx: number;
   desiredTopPx: number;
   obstacles: DocumentImageRectangle[];
+  bounds?: DocumentImageRectangle;
 }) => {
-  const deltaX = desiredLeftPx - start.leftPx;
-  const deltaY = desiredTopPx - start.topPx;
-  let travel = 1;
-  obstacles.forEach((obstacle) => {
-    if (rectanglesOverlap(start, obstacle)) return;
-    const horizontallySeparated = (
-      start.leftPx + start.widthPx <= obstacle.leftPx
-      || start.leftPx >= obstacle.leftPx + obstacle.widthPx
-    );
-    const verticallySeparated = (
-      start.topPx + start.heightPx <= obstacle.topPx
-      || start.topPx >= obstacle.topPx + obstacle.heightPx
-    );
-    if (deltaX === 0 && horizontallySeparated) return;
-    if (deltaY === 0 && verticallySeparated) return;
-    const xEntry = deltaX > 0
-      ? (obstacle.leftPx - (start.leftPx + start.widthPx)) / deltaX
-      : deltaX < 0
-        ? (
-            obstacle.leftPx + obstacle.widthPx - start.leftPx
-          ) / deltaX
-        : Number.NEGATIVE_INFINITY;
-    const xExit = deltaX > 0
-      ? (
-          obstacle.leftPx + obstacle.widthPx - start.leftPx
-        ) / deltaX
-      : deltaX < 0
-        ? (
-            obstacle.leftPx - (start.leftPx + start.widthPx)
-          ) / deltaX
-        : Number.POSITIVE_INFINITY;
-    const yEntry = deltaY > 0
-      ? (obstacle.topPx - (start.topPx + start.heightPx)) / deltaY
-      : deltaY < 0
-        ? (
-            obstacle.topPx + obstacle.heightPx - start.topPx
-          ) / deltaY
-        : Number.NEGATIVE_INFINITY;
-    const yExit = deltaY > 0
-      ? (
-          obstacle.topPx + obstacle.heightPx - start.topPx
-        ) / deltaY
-      : deltaY < 0
-        ? (
-            obstacle.topPx - (start.topPx + start.heightPx)
-          ) / deltaY
-        : Number.POSITIVE_INFINITY;
-    const entry = Math.max(
-      Math.min(xEntry, xExit),
-      Math.min(yEntry, yExit)
-    );
-    const exit = Math.min(
-      Math.max(xEntry, xExit),
-      Math.max(yEntry, yExit)
-    );
-    if (entry <= exit && entry >= 0 && entry <= travel) {
-      travel = entry;
-    }
+  const moved = moveKernelRectangleWithoutCollisions({
+    start: toBodyRectangle(start),
+    desiredOrigin: bodyPoint(desiredLeftPx, desiredTopPx),
+    obstacles: obstacles.map(toCollisionObstacle),
+    bounds: bounds ? toBodyRectangle(bounds) : undefined,
   });
   return {
-    leftPx: start.leftPx + deltaX * travel,
-    topPx: start.topPx + deltaY * travel,
+    leftPx: moved.rectangle.leftPx,
+    topPx: moved.rectangle.topPx,
   };
 };
 
@@ -856,16 +857,23 @@ export const buildMultiDocumentSpanLayoutModel = (
   );
   const safeWidth = Math.max(1, availableWidthPx);
   const safeHeight = Math.max(1, availableHeightPx);
-  const safeGap = Math.max(0, columnGapPx);
-  const columnWidthPx = Math.max(
-    1,
-    (safeWidth - safeGap * (columnCount - 1)) / columnCount
-  );
+  const bodyBounds = bodyRectangle(0, 0, safeWidth, safeHeight);
+  const columnGeometry = getDocumentColumnRectangles({
+    bodyWidthPx: safeWidth,
+    bodyHeightPx: safeHeight,
+    columnCount,
+    columnGapPx,
+  });
+  const safeGap = columnGeometry.columnGapPx;
+  const columnWidthPx = columnGeometry.columnWidthPx;
+  const columnRectangles = columnGeometry.columns;
   const measurer = createStructuredContentMeasurer({
     ...typographyOptions,
     dropCap,
   });
   try {
+    const unresolvedCollisionIds = new Set<string>();
+    const resolvedObstacles: CollisionObstacle<'body'>[] = [];
     const images = positionedNodes.flatMap((entry) => {
       const attributes = entry.attributes;
       const imageElement = children.find((element) =>
@@ -881,10 +889,12 @@ export const buildMultiDocumentSpanLayoutModel = (
         Math.max(1, attributes.spanStartColumn),
         Math.max(1, columnCount - spanCount + 1)
       );
-      const spanLeftPx =
-        (startColumn - 1) * (columnWidthPx + safeGap);
-      const spanWidthPx =
-        columnWidthPx * spanCount + safeGap * (spanCount - 1);
+      const firstColumn = columnRectangles[startColumn - 1];
+      const lastColumn = columnRectangles[
+        startColumn + spanCount - 2
+      ];
+      const spanLeftPx = firstColumn.leftPx;
+      const spanWidthPx = lastColumn.rightPx - firstColumn.leftPx;
       const renderedImageWidthPx = Math.min(
         spanWidthPx,
         attributes.widthPx
@@ -923,19 +933,15 @@ export const buildMultiDocumentSpanLayoutModel = (
         measurer.measure(semanticElements, columnWidthPx)
         - (startColumn - 1) * safeHeight
       );
-      const imageTopPx = attributes.verticalAnchor === 'page-position'
-        ? clampDocumentImageY(
-            attributes.yPx,
-            safeHeight,
-            imageRegionHeightPx,
-            attributes.verticalSpacingPx
-          )
-        : clampDocumentImageY(
-            flowTop,
-            safeHeight,
-            imageRegionHeightPx,
-            attributes.verticalSpacingPx
-          );
+      const imageTopPx = clampStructuredImageTop({
+        value: attributes.verticalAnchor === 'page-position'
+          ? attributes.yPx
+          : flowTop,
+        availableHeightPx: safeHeight,
+        imageRegionHeightPx,
+        topPaddingPx: attributes.wrapPaddingTopPx,
+        bottomPaddingPx: attributes.wrapPaddingBottomPx,
+      });
       imageElement.classList.add(
         'document-span-layout__image',
         'document-span-layout__image--structured'
@@ -958,6 +964,45 @@ export const buildMultiDocumentSpanLayoutModel = (
         media.style.width = `${renderedImageWidthPx}px`;
         media.style.height = `${renderedImageHeightPx}px`;
       }
+      const requestedRectangle = bodyRectangle(
+        spanLeftPx + xOffsetPx,
+        imageTopPx,
+        renderedImageWidthPx,
+        imageRegionHeightPx
+      );
+      const placementBounds = bodyRectangle(
+        spanLeftPx,
+        attributes.wrapPaddingTopPx,
+        spanWidthPx,
+        Math.max(
+          0,
+          safeHeight
+            - attributes.wrapPaddingTopPx
+            - attributes.wrapPaddingBottomPx
+        )
+      );
+      const overlapResolution = resolveInitialRectangleOverlaps({
+        rectangle: requestedRectangle,
+        obstacles: resolvedObstacles,
+        bounds: placementBounds,
+      });
+      if (!overlapResolution.resolved) {
+        unresolvedCollisionIds.add(attributes.id);
+        overlapResolution.collisionIds.forEach((id) => {
+          unresolvedCollisionIds.add(id);
+        });
+      }
+      const resolvedRectangle = overlapResolution.rectangle;
+      resolvedObstacles.push({
+        id: attributes.id,
+        rectangle: resolvedRectangle,
+      });
+      const resolvedXOffsetPx = clampDocumentImageXOffset(
+        resolvedRectangle.leftPx - spanLeftPx,
+        spanWidthPx,
+        renderedImageWidthPx
+      );
+      const resolvedTopPx = resolvedRectangle.topPx;
       return [{
         imageId: attributes.id,
         imagePosition: entry.position,
@@ -965,8 +1010,8 @@ export const buildMultiDocumentSpanLayoutModel = (
           ...attributes,
           spanCount: spanCount as 1 | 2 | 3,
           spanStartColumn: startColumn as 1 | 2 | 3,
-          xOffsetPx,
-          yPx: imageTopPx,
+          xOffsetPx: resolvedXOffsetPx,
+          yPx: resolvedTopPx,
         },
         imageHtml: imageElement.outerHTML,
         spanLeftPx,
@@ -974,17 +1019,17 @@ export const buildMultiDocumentSpanLayoutModel = (
         renderedImageWidthPx,
         renderedImageHeightPx,
         imageRegionHeightPx,
-        imageLeftPx: spanLeftPx + xOffsetPx,
-        imageTopPx,
+        imageLeftPx: resolvedRectangle.leftPx,
+        imageTopPx: resolvedTopPx,
         maximumXOffsetPx: Math.max(
           0,
           spanWidthPx - renderedImageWidthPx
         ),
         maximumImageYPx: Math.max(
-          attributes.verticalSpacingPx,
+          attributes.wrapPaddingTopPx,
           safeHeight
           - imageRegionHeightPx
-          - attributes.verticalSpacingPx
+          - attributes.wrapPaddingBottomPx
         ),
       }];
     });
@@ -995,37 +1040,38 @@ export const buildMultiDocumentSpanLayoutModel = (
       widthPx: image.renderedImageWidthPx,
       heightPx: image.imageRegionHeightPx,
     }));
-    const exclusions = images.map((image) => {
-      const horizontalPadding = image.attributes.wrapPaddingPx;
-      const verticalSpacing = image.attributes.verticalSpacingPx;
-      const left = Math.max(0, image.imageLeftPx - horizontalPadding);
-      const right = Math.min(
-        safeWidth,
-        image.imageLeftPx
-        + image.renderedImageWidthPx
-        + horizontalPadding
-      );
-      const top = Math.max(0, image.imageTopPx - verticalSpacing);
-      const bottom = Math.min(
-        safeHeight,
-        image.imageTopPx
-        + image.imageRegionHeightPx
-        + verticalSpacing
-      );
-      return {
-        imageId: image.imageId,
-        leftPx: left,
-        topPx: top,
-        widthPx: Math.max(0, right - left),
-        heightPx: Math.max(0, bottom - top),
-      };
+    const exclusions = images.flatMap((image) => {
+      const exclusion = buildExclusionRectangle({
+        occupiedRectangles: [bodyRectangle(
+          image.imageLeftPx,
+          image.imageTopPx,
+          image.renderedImageWidthPx,
+          image.imageRegionHeightPx
+        )],
+        padding: {
+          topPx: image.attributes.wrapPaddingTopPx,
+          rightPx: image.attributes.wrapPaddingRightPx,
+          bottomPx: image.attributes.wrapPaddingBottomPx,
+          leftPx: image.attributes.wrapPaddingLeftPx,
+        },
+        bounds: bodyBounds,
+      });
+      return exclusion
+        ? [{
+            imageId: image.imageId,
+            leftPx: exclusion.leftPx,
+            topPx: exclusion.topPx,
+            widthPx: exclusion.widthPx,
+            heightPx: exclusion.heightPx,
+          }]
+        : [];
     });
     const candidateBands: Omit<StructuredTextBand, 'html'>[] = [];
     for (let column = 1; column <= columnCount; column += 1) {
-      const columnLeftPx =
-        (column - 1) * (columnWidthPx + safeGap);
+      const columnRectangle = columnRectangles[column - 1];
+      const columnLeftPx = columnRectangle.leftPx;
       const intersecting = exclusions.filter((rectangle) => (
-        rectangle.leftPx < columnLeftPx + columnWidthPx
+        rectangle.leftPx < columnRectangle.rightPx
         && rectangle.leftPx + rectangle.widthPx > columnLeftPx
       ));
       const boundaries = Array.from(new Set([
@@ -1049,7 +1095,7 @@ export const buildMultiDocumentSpanLayoutModel = (
         ));
         intervalsAroundExclusions(
           columnLeftPx,
-          columnWidthPx,
+          columnRectangle.widthPx,
           active
         ).forEach(([left, right], intervalIndex) => {
           const widthPx = right - left;
@@ -1079,7 +1125,10 @@ export const buildMultiDocumentSpanLayoutModel = (
         html: serializeElements(allocation.allocated),
       };
     });
-    const overflowing = remaining.length > 0;
+    const overflowing = (
+      remaining.length > 0
+      || unresolvedCollisionIds.size > 0
+    );
     if (overflowing && textBands.length > 0) {
       textBands[textBands.length - 1].html += serializeElements(remaining);
     }
@@ -1092,10 +1141,12 @@ export const buildMultiDocumentSpanLayoutModel = (
       collisionRectangles,
       textBands,
       columnWidthPx,
+      columnGapPx: safeGap,
       availableWidthPx: safeWidth,
       availableHeightPx: safeHeight,
       layoutContentHeightPx: safeHeight + overflowHeightPx,
       overflowing,
+      unresolvedCollisionIds: [...unresolvedCollisionIds].sort(),
     };
   } finally {
     measurer.dispose();
@@ -1124,17 +1175,21 @@ type StructuredDocumentSpanLayoutProps = {
   ) => boolean;
   onCommitImageSize: (
     position: number,
+    imageId: string,
     widthPx: number,
     heightPx: number,
     xOffsetPx: number
-  ) => void;
+  ) => boolean;
   onEditText: () => void;
 };
 
 const rectangleCollides = (
   rectangle: DocumentImageRectangle,
   obstacles: DocumentImageRectangle[]
-) => obstacles.some((obstacle) => rectanglesOverlap(rectangle, obstacle));
+) => findKernelRectangleCollisions(
+  toBodyRectangle(rectangle),
+  obstacles.map(toCollisionObstacle)
+).length > 0;
 
 export const clampResizeWidthWithoutCollisions = ({
   startWidthPx,
@@ -1232,6 +1287,8 @@ export const StructuredDocumentSpanLayout = ({
     startImageY: number;
     spanLeftPx: number;
     maximumXOffsetPx: number;
+    topPaddingPx: number;
+    bottomPaddingPx: number;
     startRectangle: DocumentImageRectangle;
     obstacles: DocumentImageRectangle[];
     captureElement: HTMLElement;
@@ -1343,7 +1400,7 @@ export const StructuredDocumentSpanLayout = ({
   const style = {
     ...getStructuredDocumentTypographyVariables(typographyStyle),
     '--document-span-column-count': columnCount,
-    '--document-span-column-gap': `${columnGapPx}px`,
+    '--document-span-column-gap': `${model.columnGapPx}px`,
     '--document-span-column-width': `${model.columnWidthPx}px`,
     '--document-span-available-height': `${model.availableHeightPx}px`,
   } as CSSProperties;
@@ -1417,6 +1474,8 @@ export const StructuredDocumentSpanLayout = ({
       startImageY: image.imageTopPx,
       spanLeftPx: image.spanLeftPx,
       maximumXOffsetPx: image.maximumXOffsetPx,
+      topPaddingPx: image.attributes.wrapPaddingTopPx,
+      bottomPaddingPx: image.attributes.wrapPaddingBottomPx,
       startRectangle,
       obstacles: model.collisionRectangles.filter(
         (rectangle) => rectangle.imageId !== image.imageId
@@ -1470,6 +1529,25 @@ export const StructuredDocumentSpanLayout = ({
       captureElement: event.currentTarget,
       moved: false,
     };
+    const maximumImageHeightPx = Math.max(
+      1,
+      availableHeightPx
+        - image.imageTopPx
+        - image.attributes.wrapPaddingBottomPx
+        - (
+          image.imageRegionHeightPx
+          - image.renderedImageHeightPx
+        )
+    );
+    resizeRef.current.maximumWidth = Math.min(
+      resizeRef.current.maximumWidth,
+      maximumImageHeightPx
+        * resizeRef.current.aspectRatio
+    );
+    resizeRef.current.minimumWidth = Math.min(
+      resizeRef.current.minimumWidth,
+      resizeRef.current.maximumWidth
+    );
     previewResizeRef.current = {
       widthPx: startWidth,
       heightPx: image.renderedImageHeightPx,
@@ -1484,13 +1562,17 @@ export const StructuredDocumentSpanLayout = ({
     if (!resize || resize.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    const width = calculateDocumentImageResizeWidth({
-      startWidthPx: resize.startWidth,
-      pointerDeltaX: event.clientX - resize.startClientX,
+    const pointerDelta = viewportDeltaToLayoutDelta(
+      viewportDelta(event.clientX - resize.startClientX, 0),
       viewScale,
-      minimumWidthPx: resize.minimumWidth,
-      maximumWidthPx: resize.maximumWidth,
-    });
+      'body'
+    );
+    const width = clampDocumentImageWidth(
+      resize.startWidth + pointerDelta.xPx,
+      resize.minimumWidth,
+      resize.maximumWidth,
+      resize.startWidth
+    );
     const buildRectangle = (candidateWidth: number) => {
       const xOffsetPx = calculateDocumentImageXOffset({
         placement: resize.attributes.horizontalPlacement,
@@ -1552,6 +1634,7 @@ export const StructuredDocumentSpanLayout = ({
     if (resize.moved && !cancelled && preview) {
       onCommitImageSize(
         resize.position,
+        resize.imageId,
         preview.widthPx,
         preview.heightPx,
         preview.xOffsetPx
@@ -1588,29 +1671,36 @@ export const StructuredDocumentSpanLayout = ({
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    const desiredXOffset = clampDocumentImageXOffset(
-      drag.startImageX
-        + (event.clientX - drag.startClientX) / Math.max(viewScale, 0.01)
-        - drag.spanLeftPx,
-      drag.maximumXOffsetPx + drag.startRectangle.widthPx,
-      drag.startRectangle.widthPx
-    );
-    const desiredY = calculateDocumentImageDragY({
-      startY: drag.startImageY,
-      pointerDeltaY: event.clientY - drag.startClientY,
+    const pointerDelta = viewportDeltaToLayoutDelta(
+      viewportDelta(
+        event.clientX - drag.startClientX,
+        event.clientY - drag.startClientY
+      ),
       viewScale,
-      availableHeightPx: model.availableHeightPx,
-      imageRegionHeightPx: drag.startRectangle.heightPx,
-      verticalSpacingPx: 0,
-    });
-    const next = moveRectangleWithoutCollisions({
-      start: drag.startRectangle,
-      desiredLeftPx: drag.spanLeftPx + desiredXOffset,
-      desiredTopPx: desiredY,
-      obstacles: drag.obstacles,
+      'body'
+    );
+    const movementBounds = bodyRectangle(
+      drag.spanLeftPx,
+      drag.topPaddingPx,
+      drag.maximumXOffsetPx + drag.startRectangle.widthPx,
+      Math.max(
+        0,
+        model.availableHeightPx
+          - drag.topPaddingPx
+          - drag.bottomPaddingPx
+      )
+    );
+    const nextMovement = moveKernelRectangleWithoutCollisions({
+      start: toBodyRectangle(drag.startRectangle),
+      desiredOrigin: bodyPoint(
+        drag.startImageX + pointerDelta.xPx,
+        drag.startImageY + pointerDelta.yPx
+      ),
+      obstacles: drag.obstacles.map(toCollisionObstacle),
+      bounds: movementBounds,
     });
     const xOffsetPx = clampDocumentImageXOffset(
-      next.leftPx - drag.spanLeftPx,
+      nextMovement.rectangle.leftPx - drag.spanLeftPx,
       drag.maximumXOffsetPx + drag.startRectangle.widthPx,
       drag.startRectangle.widthPx
     );
@@ -1618,13 +1708,21 @@ export const StructuredDocumentSpanLayout = ({
       || Math.abs(xOffsetPx - (
         drag.startImageX - drag.spanLeftPx
       )) > 0.5
-      || Math.abs(next.topPx - drag.startImageY) > 0.5;
-    previewPositionRef.current = { xOffsetPx, yPx: next.topPx };
-    drag.latestPreviewPosition = { xOffsetPx, yPx: next.topPx };
+      || Math.abs(
+        nextMovement.rectangle.topPx - drag.startImageY
+      ) > 0.5;
+    previewPositionRef.current = {
+      xOffsetPx,
+      yPx: nextMovement.rectangle.topPx,
+    };
+    drag.latestPreviewPosition = {
+      xOffsetPx,
+      yPx: nextMovement.rectangle.topPx,
+    };
     schedulePreview(drag.imageId, {
       horizontalPlacement: 'custom',
       xOffsetPx,
-      yPx: next.topPx,
+      yPx: nextMovement.rectangle.topPx,
     });
   };
 
@@ -1769,7 +1867,7 @@ export const StructuredDocumentSpanLayout = ({
                   left: `${
                     band.leftPx
                     - (column - 1) * (
-                      model.columnWidthPx + columnGapPx
+                      model.columnWidthPx + model.columnGapPx
                     )
                   }px`,
                   top: `${band.topPx}px`,

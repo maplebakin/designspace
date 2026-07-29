@@ -44,6 +44,10 @@ export type DocumentImageInspectorValue = {
   wrap: DocumentFlowImageWrap | DocumentOverlayPlacement;
   wrapPaddingPx?: number;
   verticalSpacingPx?: number;
+  wrapPaddingTopPx?: number;
+  wrapPaddingRightPx?: number;
+  wrapPaddingBottomPx?: number;
+  wrapPaddingLeftPx?: number;
   spanCount?: 1 | 2 | 3;
   spanStartColumn?: 1 | 2 | 3;
   caption: string;
@@ -53,7 +57,6 @@ export type DocumentImageInspectorValue = {
   altText: string;
   naturalWidth?: number;
   naturalHeight?: number;
-  canSpanColumns?: boolean;
   canMoveEarlier?: boolean;
   canMoveLater?: boolean;
 };
@@ -266,16 +269,14 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               <option value="float-left">Float left</option>
               <option value="float-right">Float right</option>
               <option value="top-bottom">Single column (top and bottom)</option>
-              {props.page.columnCount >= 2
-                && props.selectedImage.canSpanColumns !== false && (
+              {props.page.columnCount >= 2 && (
                 <option value="span-2">
                   {props.page.columnCount === 2
                     ? 'Span both columns'
                     : 'Span 2 columns'}
                 </option>
               )}
-              {props.page.columnCount === 3
-                && props.selectedImage.canSpanColumns !== false && (
+              {props.page.columnCount === 3 && (
                 <option value="span-3">Span all 3 columns</option>
               )}
               <option value="front">In front of text</option>
@@ -434,62 +435,57 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               })}
             />
           </label>
-          {props.selectedImage.kind === 'flow'
-            && props.selectedImage.wrap === 'span-columns' ? (
-            <>
-              <label className="document-context-field">
-                <span>Text wrap padding</span>
+          <label className="document-context-field">
+            <span>Height</span>
+            <input
+              aria-label="Image height"
+              data-testid="document-image-height"
+              type="number"
+              min="1"
+              max="2000"
+              value={Math.round(props.selectedImage.heightPx)}
+              onChange={(event) => props.onSelectedImageChange({
+                heightPx: Math.max(
+                  1,
+                  numericValue(
+                    event.target.value,
+                    props.selectedImage!.heightPx
+                  )
+                ),
+              })}
+            />
+          </label>
+          {props.selectedImage.kind === 'flow' ? (
+            ([
+              ['Top', 'wrapPaddingTopPx'],
+              ['Right', 'wrapPaddingRightPx'],
+              ['Bottom', 'wrapPaddingBottomPx'],
+              ['Left', 'wrapPaddingLeftPx'],
+            ] as const).map(([label, key]) => (
+              <label className="document-context-field" key={key}>
+                <span>Wrap {label.toLowerCase()}</span>
                 <input
-                  aria-label="Image wrap padding"
-                  data-testid="document-image-wrap-padding"
+                  aria-label={`Image wrap padding ${label.toLowerCase()}`}
+                  data-testid={`document-image-wrap-padding-${label.toLowerCase()}`}
                   type="number"
                   min="0"
                   max="96"
-                  value={props.selectedImage.wrapPaddingPx || 0}
+                  value={props.selectedImage?.[key] || 0}
                   onChange={(event) => props.onSelectedImageChange({
-                    wrapPaddingPx: Math.max(
-                      0,
-                      numericValue(event.target.value, 0)
+                    [key]: Math.min(
+                      96,
+                      Math.max(
+                        0,
+                        numericValue(
+                          event.target.value,
+                          props.selectedImage?.[key] || 0
+                        )
+                      )
                     ),
                   })}
                 />
               </label>
-              <label className="document-context-field">
-                <span>Space above and below</span>
-                <input
-                  aria-label="Spanning image vertical spacing"
-                  data-testid="document-image-vertical-spacing"
-                  type="number"
-                  min="0"
-                  max="96"
-                  value={props.selectedImage.verticalSpacingPx || 0}
-                  onChange={(event) => props.onSelectedImageChange({
-                    verticalSpacingPx: Math.max(
-                      0,
-                      numericValue(event.target.value, 0)
-                    ),
-                  })}
-                />
-              </label>
-            </>
-          ) : props.selectedImage.kind === 'flow' ? (
-            <label className="document-context-field">
-              <span>Text wrap padding</span>
-              <input
-                aria-label="Image wrap padding"
-                data-testid="document-image-padding"
-                type="number"
-                min="0"
-                max="96"
-                value={props.selectedImage.wrapPaddingPx || 0}
-                onChange={(event) => props.onSelectedImageChange({
-                  wrapPaddingPx: Math.max(
-                    0,
-                    numericValue(event.target.value, 0)
-                  ),
-                })}
-              />
-            </label>
+            ))
           ) : (
             <>
               <label className="document-context-field">

@@ -29,6 +29,12 @@ import { parseDocumentColor } from '../utils/documentColor';
 import {
   normalizeDocumentFolioNumber,
 } from '../layout/pageGeometry';
+import {
+  commitDocumentOverlayGeometry,
+  getDocumentOverlayPageBounds,
+  resolveNewDocumentOverlayGeometry,
+  type DocumentOverlayGeometry,
+} from '../layout/overlayGeometry';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
@@ -75,9 +81,24 @@ type DocumentStoreState = {
     pageId?: string
   ) => void;
   addAsset: (assetId: string, source: string) => void;
-  addOverlay: (overlay: DocumentOverlayImage) => void;
-  updateOverlay: (id: string, update: Partial<DocumentOverlayImage>) => void;
-  removeOverlay: (id: string) => void;
+  addOverlay: (overlay: DocumentOverlayImage, pageId?: string) => void;
+  updateOverlay: (
+    id: string,
+    update: Partial<DocumentOverlayImage>,
+    pageId?: string
+  ) => void;
+  commitOverlayGeometry: (
+    pageId: string,
+    id: string,
+    update: Partial<DocumentOverlayGeometry>
+  ) => boolean;
+  nudgeOverlay: (
+    pageId: string,
+    id: string,
+    deltaXPx: number,
+    deltaYPx: number
+  ) => boolean;
+  removeOverlay: (id: string, pageId?: string) => void;
   setReference: (reference?: ScanReference) => void;
   setZoom: (zoom: number) => void;
   setReferenceAdjustMode: (enabled: boolean) => void;
@@ -759,9 +780,24 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const targetId = pageId || activePage?.id;
     const page = project.pages.find((candidate) => candidate.id === targetId);
     if (!page) return;
-    const nextPage = typeof update === 'function'
+    const requestedPage = typeof update === 'function'
       ? update(page)
       : { ...page, ...update };
+    const nextPage = {
+      ...requestedPage,
+      titleContent: requestedPage.titleContent === page.titleContent
+        ? requestedPage.titleContent
+        : normalizeDocumentContentStyles(
+            requestedPage.titleContent,
+            'article-title'
+          ),
+      bodyContent: requestedPage.bodyContent === page.bodyContent
+        ? requestedPage.bodyContent
+        : normalizeDocumentContentStyles(
+            requestedPage.bodyContent,
+            'body'
+          ),
+    };
     if (documentPagesAreEquivalent(nextPage, page)) return;
     set({
       project: withDerivedDocumentPageSize({
@@ -823,26 +859,81 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     markDirty(set);
   },
 
-  addOverlay: (overlay) => {
-    get().updatePage((page) => ({
-      ...page,
-      overlayObjects: [...page.overlayObjects, overlay],
-    }));
+  addOverlay: (overlay, pageId) => {
+    get().updatePage((page) => {
+      const geometry = resolveNewDocumentOverlayGeometry({
+        overlay,
+        objects: page.overlayObjects,
+        bounds: getDocumentOverlayPageBounds(
+          page.size.widthIn,
+          page.size.heightIn
+        ),
+      });
+      return {
+        ...page,
+        overlayObjects: [
+          ...page.overlayObjects,
+          { ...overlay, ...geometry },
+        ],
+      };
+    }, pageId);
     set({ selectedOverlayId: overlay.id, selectedFlowImageId: null });
   },
 
-  updateOverlay: (id, update) => get().updatePage((page) => ({
+  updateOverlay: (id, update, pageId) => get().updatePage((page) => ({
     ...page,
     overlayObjects: page.overlayObjects.map((overlay) =>
       overlay.id === id ? { ...overlay, ...update } : overlay
     ),
-  })),
+  }), pageId),
 
-  removeOverlay: (id) => {
+  commitOverlayGeometry: (pageId, id, update) => {
+    const project = get().project;
+    if (!project) return false;
+    const page = project.pages.find((candidate) => candidate.id === pageId);
+    const overlay = page?.overlayObjects.find(
+      (candidate) => candidate.id === id
+    );
+    if (!page || !overlay) return false;
+    const geometry = commitDocumentOverlayGeometry({
+      overlay,
+      update,
+      objects: page.overlayObjects,
+      bounds: getDocumentOverlayPageBounds(
+        page.size.widthIn,
+        page.size.heightIn
+      ),
+    });
+    get().updatePage((currentPage) => ({
+      ...currentPage,
+      overlayObjects: currentPage.overlayObjects.map((candidate) =>
+        candidate.id === id ? { ...candidate, ...geometry } : candidate
+      ),
+    }), pageId);
+    return true;
+  },
+
+  nudgeOverlay: (pageId, id, deltaXPx, deltaYPx) => {
+    const project = get().project;
+    if (!project) return false;
+    const page = project.pages.find((candidate) => candidate.id === pageId);
+    const overlay = page?.overlayObjects.find(
+      (candidate) => candidate.id === id
+    );
+    if (!page || !overlay) return false;
+    const safeDeltaX = Number.isFinite(deltaXPx) ? deltaXPx : 0;
+    const safeDeltaY = Number.isFinite(deltaYPx) ? deltaYPx : 0;
+    return get().commitOverlayGeometry(pageId, id, {
+      xPx: overlay.xPx + safeDeltaX,
+      yPx: overlay.yPx + safeDeltaY,
+    });
+  },
+
+  removeOverlay: (id, pageId) => {
     get().updatePage((page) => ({
       ...page,
       overlayObjects: page.overlayObjects.filter((overlay) => overlay.id !== id),
-    }));
+    }), pageId);
     if (get().selectedOverlayId === id) set({ selectedOverlayId: null });
   },
 

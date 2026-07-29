@@ -161,6 +161,8 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               assetSources={assetSources}
               selectedId={selectedOverlayId}
               zoom={zoom}
+              pageWidthPx={widthPx}
+              pageHeightPx={heightPx}
               onSelect={onSelectOverlay}
               onChange={onUpdateOverlay}
             />
@@ -216,6 +218,8 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               assetSources={assetSources}
               selectedId={selectedOverlayId}
               zoom={zoom}
+              pageWidthPx={widthPx}
+              pageHeightPx={heightPx}
               onSelect={onSelectOverlay}
               onChange={onUpdateOverlay}
             />

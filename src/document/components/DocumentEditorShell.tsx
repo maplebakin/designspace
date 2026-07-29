@@ -24,6 +24,7 @@ import { ingestDocumentReference } from '../services/documentReferenceService';
 import { documentExportService } from '../services/documentExportService';
 import {
   canMoveSelectedStructuredImage,
+  clampDocumentImageXOffset,
   type DocumentImageAttributes,
   type DocumentImageMoveDirection,
   type DocumentImageReplaceRequest,
@@ -38,10 +39,15 @@ import {
   type DocumentBlockStyleId,
 } from '../extensions/DocumentBlockStyleExtension';
 import {
+  commitStructuredDocumentImagePosition,
   FlowEditor,
   type DocumentDropContext,
   type SelectedDocumentImage,
 } from './FlowEditor';
+import {
+  buildMultiDocumentSpanLayoutModel,
+  moveRectangleWithoutCollisions,
+} from './StructuredDocumentSpanLayout';
 import {
   TitleEditor,
   type DocumentEditorRegion,
@@ -217,6 +223,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const addAsset = useDocumentStore((state) => state.addAsset);
   const addOverlay = useDocumentStore((state) => state.addOverlay);
   const updateOverlay = useDocumentStore((state) => state.updateOverlay);
+  const commitOverlayGeometry = useDocumentStore(
+    (state) => state.commitOverlayGeometry
+  );
+  const nudgeOverlay = useDocumentStore((state) => state.nudgeOverlay);
   const removeOverlay = useDocumentStore((state) => state.removeOverlay);
   const setReference = useDocumentStore((state) => state.setReference);
   const setZoom = useDocumentStore((state) => state.setZoom);
@@ -320,7 +330,131 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       if (editable) return;
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedOverlayId) {
         event.preventDefault();
-        removeOverlay(selectedOverlayId);
+        removeOverlay(selectedOverlayId, page?.id);
+        return;
+      }
+      if (
+        selectedOverlayId
+        && page
+        && (
+          event.key === 'ArrowLeft'
+          || event.key === 'ArrowRight'
+          || event.key === 'ArrowUp'
+          || event.key === 'ArrowDown'
+        )
+      ) {
+        const distance = event.shiftKey ? 10 : 1;
+        const deltaXPx = event.key === 'ArrowLeft'
+          ? -distance
+          : event.key === 'ArrowRight' ? distance : 0;
+        const deltaYPx = event.key === 'ArrowUp'
+          ? -distance
+          : event.key === 'ArrowDown' ? distance : 0;
+        event.preventDefault();
+        nudgeOverlay(
+          page.id,
+          selectedOverlayId,
+          deltaXPx,
+          deltaYPx
+        );
+        return;
+      }
+      if (
+        selectedFlowImage
+        && selectedFlowImage.attributes.wrap === 'span-columns'
+        && selectedFlowImage.attributes.verticalAnchor === 'page-position'
+        && page
+        && physicalMargins
+        && (
+          event.key === 'ArrowLeft'
+          || event.key === 'ArrowRight'
+          || event.key === 'ArrowUp'
+          || event.key === 'ArrowDown'
+        )
+      ) {
+        const editor = bodyEditorRef.current;
+        if (!editor || editor.isDestroyed) return;
+        const bodyWidthPx = Math.max(
+          1,
+          (
+            page.size.widthIn
+            - physicalMargins.leftIn
+            - physicalMargins.rightIn
+          ) * 96
+        );
+        const editorRoot = editor.view.dom.closest<HTMLElement>(
+          '.document-flow-editor'
+        );
+        const bodyHeightPx = Math.max(
+          1,
+          editorRoot?.clientHeight
+          || (
+            page.size.heightIn
+            - physicalMargins.topIn
+            - physicalMargins.bottomIn
+          ) * 96
+        );
+        const model = buildMultiDocumentSpanLayoutModel(
+          editor,
+          page.columnCount,
+          page.columnGapPx,
+          bodyWidthPx,
+          bodyHeightPx,
+          {},
+          {
+            typographyStyle,
+            dropCap: page.dropCap,
+            language: page.language || project?.document.language,
+          }
+        );
+        const image = model?.images.find(
+          (candidate) =>
+            candidate.imageId === selectedFlowImage.attributes.id
+        );
+        const start = model?.collisionRectangles.find(
+          (candidate) =>
+            candidate.imageId === selectedFlowImage.attributes.id
+        );
+        if (!model || !image || !start) return;
+        const distance = event.shiftKey ? 10 : 1;
+        const deltaXPx = event.key === 'ArrowLeft'
+          ? -distance
+          : event.key === 'ArrowRight' ? distance : 0;
+        const deltaYPx = event.key === 'ArrowUp'
+          ? -distance
+          : event.key === 'ArrowDown' ? distance : 0;
+        const moved = moveRectangleWithoutCollisions({
+          start,
+          desiredLeftPx: start.leftPx + deltaXPx,
+          desiredTopPx: start.topPx + deltaYPx,
+          obstacles: model.collisionRectangles.filter(
+            (candidate) => candidate.imageId !== image.imageId
+          ),
+          bounds: {
+            imageId: 'span-bounds',
+            leftPx: image.spanLeftPx,
+            topPx: image.attributes.wrapPaddingTopPx,
+            widthPx: image.spanWidthPx,
+            heightPx: Math.max(
+              0,
+              model.availableHeightPx
+                - image.attributes.wrapPaddingTopPx
+                - image.attributes.wrapPaddingBottomPx
+            ),
+          },
+        });
+        event.preventDefault();
+        commitStructuredDocumentImagePosition(
+          editor,
+          image.imagePosition,
+          image.imageId,
+          clampDocumentImageXOffset(
+            moved.leftPx - image.spanLeftPx,
+            image.spanWidthPx,
+            image.renderedImageWidthPx
+          ),
+          moved.topPx
+        );
         return;
       }
       if (event.key === 'Escape') {
@@ -333,12 +467,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
+    nudgeOverlay,
+    page,
+    physicalMargins,
+    project?.document.language,
     removeOverlay,
     saveProject,
+    selectedFlowImage,
     selectedOverlayId,
     setReferenceAdjustMode,
     setSelectedFlowImageId,
     setSelectedOverlayId,
+    typographyStyle,
   ]);
 
   const availableColumnWidth = useMemo(() => {
@@ -366,8 +506,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     addAsset(asset.id, asset.source);
     const widthPx = getInitialImageWidth(asset, availableColumnWidth);
     const heightPx = widthPx * asset.naturalHeight / asset.naturalWidth;
-    editor.commands.insertDocumentImage({
-      id: uuidv4(),
+    const imageId = uuidv4();
+    const inserted = editor.commands.insertDocumentImage({
+      id: imageId,
       assetId: asset.id,
       altText: '',
       widthPx,
@@ -381,7 +522,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionItalic: 'inherit',
       captionSpacingPx: 'inherit',
     }, position);
-    editor.commands.focus();
+    if (!inserted) return;
+    let imagePosition = -1;
+    editor.state.doc.descendants((node, nodePosition) => {
+      if (
+        imagePosition < 0
+        && (
+          node.type.name === 'documentFlowImage'
+          || node.type.name === 'documentInlineImage'
+        )
+        && node.attrs.id === imageId
+      ) {
+        imagePosition = nodePosition;
+        return false;
+      }
+      return true;
+    });
+    if (imagePosition >= 0) {
+      editor.chain().focus().setNodeSelection(imagePosition).run();
+    } else {
+      editor.commands.focus();
+    }
   }, [addAsset, availableColumnWidth, setToastMessage]);
 
   const importImages = useCallback(async (
@@ -546,23 +707,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const selectedOverlay = page?.overlayObjects.find(
     (object) => object.id === selectedOverlayId
   ) || null;
-  const canSelectedImageSpan = (() => {
-    const editor = bodyEditorRef.current;
-    if (!editor) return true;
-    let otherSpanExists = false;
-    editor.state.doc.descendants((node) => {
-      if (
-        node.type.name === 'documentFlowImage'
-        && node.attrs.wrap === 'span-columns'
-        && node.attrs.id !== selectedFlowImage?.attributes.id
-      ) {
-        otherSpanExists = true;
-        return false;
-      }
-      return !otherSpanExists;
-    });
-    return !otherSpanExists;
-  })();
   const selectedInspector: DocumentImageInspectorValue | null =
     selectedFlowImage
       ? {
@@ -573,6 +717,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           wrap: selectedFlowImage.attributes.wrap,
           wrapPaddingPx: selectedFlowImage.attributes.wrapPaddingPx,
           verticalSpacingPx: selectedFlowImage.attributes.verticalSpacingPx,
+          wrapPaddingTopPx:
+            selectedFlowImage.attributes.wrapPaddingTopPx,
+          wrapPaddingRightPx:
+            selectedFlowImage.attributes.wrapPaddingRightPx,
+          wrapPaddingBottomPx:
+            selectedFlowImage.attributes.wrapPaddingBottomPx,
+          wrapPaddingLeftPx:
+            selectedFlowImage.attributes.wrapPaddingLeftPx,
           verticalAnchor: selectedFlowImage.attributes.verticalAnchor,
           yPx: selectedFlowImage.attributes.yPx,
           horizontalPlacement:
@@ -589,7 +741,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           altText: selectedFlowImage.attributes.altText,
           naturalWidth: selectedFlowImage.attributes.naturalWidth,
           naturalHeight: selectedFlowImage.attributes.naturalHeight,
-          canSpanColumns: canSelectedImageSpan,
           canMoveEarlier:
             selectedFlowImage.attributes.wrap === 'span-columns'
             && !!bodyEditorRef.current
@@ -639,7 +790,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             altText: selectedOverlay.altText,
             naturalWidth: selectedOverlay.naturalWidth,
             naturalHeight: selectedOverlay.naturalHeight,
-            canSpanColumns: canSelectedImageSpan,
           }
         : null;
 
@@ -678,6 +828,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         ...(typeof update.verticalSpacingPx === 'number'
           ? { verticalSpacingPx: update.verticalSpacingPx }
           : {}),
+        ...(typeof update.wrapPaddingTopPx === 'number'
+          ? { wrapPaddingTopPx: update.wrapPaddingTopPx }
+          : {}),
+        ...(typeof update.wrapPaddingRightPx === 'number'
+          ? { wrapPaddingRightPx: update.wrapPaddingRightPx }
+          : {}),
+        ...(typeof update.wrapPaddingBottomPx === 'number'
+          ? { wrapPaddingBottomPx: update.wrapPaddingBottomPx }
+          : {}),
+        ...(typeof update.wrapPaddingLeftPx === 'number'
+          ? { wrapPaddingLeftPx: update.wrapPaddingLeftPx }
+          : {}),
         ...(update.verticalAnchor === 'flow'
           || update.verticalAnchor === 'page-position'
           ? { verticalAnchor: update.verticalAnchor }
@@ -711,19 +873,34 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           / Math.max(1, selectedFlowImage.attributes.naturalWidth);
         next.widthPx = widthPx;
         next.heightPx = widthPx * ratio;
+      } else if (typeof update.heightPx === 'number') {
+        const aspectRatio =
+          selectedFlowImage.attributes.naturalWidth
+          / Math.max(1, selectedFlowImage.attributes.naturalHeight);
+        const desiredWidthPx = update.heightPx * aspectRatio;
+        const maximumWidth =
+          selectedFlowImage.attributes.wrap === 'span-columns' && page
+            ? (
+                availableColumnWidth * selectedFlowImage.attributes.spanCount
+                + page.columnGapPx
+                  * (selectedFlowImage.attributes.spanCount - 1)
+              )
+            : Number.POSITIVE_INFINITY;
+        const widthPx = Math.min(desiredWidthPx, maximumWidth);
+        next.widthPx = widthPx;
+        next.heightPx = widthPx / Math.max(0.0001, aspectRatio);
       }
       editor.chain()
-        .focus()
         .setNodeSelection(selectedFlowImage.position)
         .updateSelectedDocumentImage(next)
         .run();
       return;
     }
-    if (!selectedOverlay) return;
-    const next: Partial<DocumentOverlayImage> = {
+    if (!selectedOverlay || !page) return;
+    const metadata: Partial<DocumentOverlayImage> = {
       ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
-        ...(update.captionAlignment === 'inherit'
-          || update.captionAlignment === 'left'
+      ...(update.captionAlignment === 'inherit'
+        || update.captionAlignment === 'left'
         || update.captionAlignment === 'center'
         || update.captionAlignment === 'right'
         ? { captionAlignment: update.captionAlignment }
@@ -743,17 +920,32 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           }
         : {}),
       ...(typeof update.altText === 'string' ? { altText: update.altText } : {}),
+    };
+    const geometry: Partial<Pick<
+      DocumentOverlayImage,
+      'xPx' | 'yPx' | 'widthPx' | 'heightPx'
+    >> = {
       ...(typeof update.xPx === 'number' ? { xPx: update.xPx } : {}),
       ...(typeof update.yPx === 'number' ? { yPx: update.yPx } : {}),
     };
     if (typeof update.widthPx === 'number') {
       const ratio = selectedOverlay.heightPx / Math.max(1, selectedOverlay.widthPx);
-      next.widthPx = update.widthPx;
-      next.heightPx = update.widthPx * ratio;
+      geometry.widthPx = update.widthPx;
+      geometry.heightPx = update.widthPx * ratio;
+    } else if (typeof update.heightPx === 'number') {
+      const ratio = selectedOverlay.widthPx / Math.max(1, selectedOverlay.heightPx);
+      geometry.widthPx = update.heightPx * ratio;
+      geometry.heightPx = update.heightPx;
     }
-    updateOverlay(selectedOverlay.id, next);
+    if (Object.keys(metadata).length > 0) {
+      updateOverlay(selectedOverlay.id, metadata, page.id);
+    }
+    if (Object.keys(geometry).length > 0) {
+      commitOverlayGeometry(page.id, selectedOverlay.id, geometry);
+    }
   }, [
     availableColumnWidth,
+    commitOverlayGeometry,
     page,
     selectedFlowImage,
     selectedOverlay,
@@ -788,7 +980,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       naturalWidth: attributes.naturalWidth,
       naturalHeight: attributes.naturalHeight,
       locked: false,
-    });
+    }, page.id);
     setSelectedOverlayId(overlayId);
     setSelectedFlowImage(null);
     setSelectedFlowImageId(null);
@@ -807,7 +999,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   ) => {
     const editor = bodyEditorRef.current;
     if (!editor) return;
-    removeOverlay(overlay.id);
+    removeOverlay(overlay.id, page?.id);
     editor.commands.insertDocumentImage({
       id: overlay.id,
       assetId: overlay.assetId,
@@ -824,7 +1016,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionSpacingPx: overlay.captionSpacingPx,
     });
     editor.commands.focus();
-  }, [removeOverlay]);
+  }, [page?.id, removeOverlay]);
 
   const handleLayoutChange = useCallback((
     layout: DocumentImageLayoutMode
@@ -876,13 +1068,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
     if (!selectedOverlay) return;
     if (wrap === 'front' || wrap === 'behind') {
-      updateOverlay(selectedOverlay.id, { placement: wrap });
+      updateOverlay(selectedOverlay.id, { placement: wrap }, page?.id);
     } else if (isSpan && page) {
       const widthPx = (
         availableColumnWidth * spanCount
         + page.columnGapPx * (spanCount - 1)
       );
-      removeOverlay(selectedOverlay.id);
+      removeOverlay(selectedOverlay.id, page.id);
       bodyEditorRef.current?.commands.insertDocumentImage({
         id: selectedOverlay.id,
         assetId: selectedOverlay.assetId,
@@ -974,13 +1166,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           naturalWidth: asset.naturalWidth,
           naturalHeight: asset.naturalHeight,
           heightPx: selectedOverlay.widthPx * asset.naturalHeight / asset.naturalWidth,
-        });
+        }, page?.id);
       }
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Could not replace the image.');
     }
   }, [
     addAsset,
+    page?.id,
     selectedFlowImage,
     selectedOverlay,
     setToastMessage,
@@ -997,9 +1190,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setSelectedFlowImage(null);
       setSelectedFlowImageId(null);
     } else if (selectedOverlay) {
-      removeOverlay(selectedOverlay.id);
+      removeOverlay(selectedOverlay.id, page?.id);
     }
-  }, [removeOverlay, selectedFlowImage, selectedOverlay, setSelectedFlowImageId]);
+  }, [
+    page?.id,
+    removeOverlay,
+    selectedFlowImage,
+    selectedOverlay,
+    setSelectedFlowImageId,
+  ]);
 
   const resetSelectedImageSize = useCallback(() => {
     const selected = selectedInspector;
@@ -1340,7 +1539,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   setSelectedFlowImageId(null);
                 }
               }}
-              onUpdateOverlay={updateOverlay}
+              onUpdateOverlay={(id, geometry) => {
+                commitOverlayGeometry(page.id, id, geometry);
+              }}
               titleEditor={(
                 <TitleEditor
                   key={`title-${page.id}`}

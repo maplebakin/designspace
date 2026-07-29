@@ -1679,20 +1679,20 @@
   float: left;
   clear: left;
   margin:
-    0
-    var(--document-image-wrap-padding, 12px)
-    var(--document-image-wrap-padding, 12px)
-    0;
+    var(--document-image-wrap-padding-top, 0)
+    var(--document-image-wrap-padding-right, 12px)
+    var(--document-image-wrap-padding-bottom, 12px)
+    var(--document-image-wrap-padding-left, 0);
 }
 
 .document-image-node--flow[data-wrap="float-right"] {
   float: right;
   clear: right;
   margin:
-    0
-    0
-    var(--document-image-wrap-padding, 12px)
-    var(--document-image-wrap-padding, 12px);
+    var(--document-image-wrap-padding-top, 0)
+    var(--document-image-wrap-padding-right, 0)
+    var(--document-image-wrap-padding-bottom, 12px)
+    var(--document-image-wrap-padding-left, 12px);
 }
 
 .document-image-node--flow[data-wrap="top-bottom"] {
@@ -1700,8 +1700,10 @@
   clear: both;
   width: 100%;
   margin:
-    var(--document-image-wrap-padding, 12px)
-    0;
+    var(--document-image-wrap-padding-top, 12px)
+    var(--document-image-wrap-padding-right, 0)
+    var(--document-image-wrap-padding-bottom, 12px)
+    var(--document-image-wrap-padding-left, 0);
 }
 
 .document-image-node--flow[data-wrap="top-bottom"] > .document-image {

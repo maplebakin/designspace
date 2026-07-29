@@ -9,6 +9,12 @@ import type {
   DocumentPage,
   ScanReference,
 } from '../../document/types/documentProject';
+import {
+  normalizeDocumentImageNodeGeometryAttributes,
+} from '../../document/types/documentProject';
+export {
+  normalizeDocumentImageContentGeometry,
+} from '../../document/types/documentProject';
 import type {
   DocumentNamedStyleRegistry,
   DocumentStyleId,
@@ -42,7 +48,8 @@ import {
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 2 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 3 as const;
+const DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION = 2;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
 export type SupportedDesignSpaceProjectSchemaVersion =
@@ -636,7 +643,10 @@ const normalizeDocumentContentNode = (
       })()
     : isImage
       ? {
-          ...sourceAttrs,
+          ...normalizeDocumentImageNodeGeometryAttributes(
+            sourceAttrs,
+            nodeType
+          ),
           captionAlignment: normalizeCaptionAlignment(
             sourceAttrs.captionAlignment,
             options.legacyCaptionPresentation ? 'left' : 'inherit'
@@ -1005,7 +1015,7 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
   const documentLanguage = normalizeDocumentLanguage(rawDocument.language);
   const legacyArticleTitleFontSizePx = (
     editorMode === 'document'
-    && requestedDocumentSchemaVersion < CURRENT_DOCUMENT_SCHEMA_VERSION
+    && requestedDocumentSchemaVersion < DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION
   )
     ? clamp(
         normalizePositiveNumber(firstPage?.titleFontSizePx, 42),
@@ -1015,7 +1025,7 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     : undefined;
   const migrateLegacyTypography = (
     editorMode === 'document'
-    && requestedDocumentSchemaVersion < CURRENT_DOCUMENT_SCHEMA_VERSION
+    && requestedDocumentSchemaVersion < DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION
   );
   const normalizedPages = editorMode === 'document'
     ? (

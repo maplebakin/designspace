@@ -11,16 +11,25 @@ import {
 } from '@tiptap/pm/state';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 import { DocumentImageNodeView } from '../components/DocumentImageNodeView';
+import {
+  DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
+  normalizeDocumentFlowImageWrap,
+  normalizeDocumentImageGeometry,
+  normalizeDocumentImageVerticalAnchor as normalizeProjectDocumentImageVerticalAnchor,
+} from '../types/documentProject';
 import type {
   DocumentCaptionAlignment,
   DocumentCaptionItalic,
   DocumentCaptionSpacing,
+  DocumentImageCoordinateSpace,
+  DocumentImageVerticalAnchor as ProjectDocumentImageVerticalAnchor,
 } from '../types/documentProject';
 
 export type {
   DocumentCaptionAlignment,
   DocumentCaptionItalic,
   DocumentCaptionSpacing,
+  DocumentImageCoordinateSpace,
 } from '../types/documentProject';
 
 export const DOCUMENT_IMAGE_NODE_NAMES = [
@@ -40,7 +49,8 @@ export type DocumentImageWrap =
   | 'top-bottom'
   | 'span-columns';
 
-export type DocumentImageVerticalAnchor = 'flow' | 'page-position';
+export type DocumentImageVerticalAnchor =
+  ProjectDocumentImageVerticalAnchor;
 export type DocumentImageHorizontalPlacement =
   | 'left'
   | 'center'
@@ -58,7 +68,21 @@ export interface DocumentImageAttributes {
   wrap: DocumentImageWrap;
   spanCount: 1 | 2 | 3;
   spanStartColumn: 1 | 2 | 3;
+  wrapPaddingTopPx: number;
+  wrapPaddingRightPx: number;
+  wrapPaddingBottomPx: number;
+  wrapPaddingLeftPx: number;
+  coordinateSpace: DocumentImageCoordinateSpace;
+  /**
+   * @deprecated Runtime compatibility alias for adapters that have not yet
+   * moved to four-sided padding. It is derived from left/right canonical
+   * padding and is not emitted by project or HTML serialization.
+   */
   wrapPaddingPx: number;
+  /**
+   * @deprecated Runtime compatibility alias derived from top/bottom canonical
+   * padding. It is not emitted by project or HTML serialization.
+   */
   verticalSpacingPx: number;
   verticalAnchor: DocumentImageVerticalAnchor;
   yPx: number;
@@ -114,14 +138,6 @@ export const canMoveSelectedStructuredImage = (
   return !!next.node && !isTrailingCursorParagraph;
 };
 
-const DOCUMENT_IMAGE_WRAPS = new Set<DocumentImageWrap>([
-  'inline',
-  'float-left',
-  'float-right',
-  'top-bottom',
-  'span-columns',
-]);
-
 const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   id: '',
   assetId: '',
@@ -133,8 +149,13 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   wrap: 'float-left',
   spanCount: 1,
   spanStartColumn: 1,
-  wrapPaddingPx: 12,
-  verticalSpacingPx: 12,
+  wrapPaddingTopPx: 0,
+  wrapPaddingRightPx: DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
+  wrapPaddingBottomPx: DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
+  wrapPaddingLeftPx: 0,
+  coordinateSpace: 'flow',
+  wrapPaddingPx: DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
+  verticalSpacingPx: DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
   verticalAnchor: 'flow',
   yPx: 0,
   horizontalPlacement: 'left',
@@ -145,8 +166,6 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   captionSpacingPx: 'inherit',
 };
 
-const DOCUMENT_IMAGE_VERTICAL_ANCHORS =
-  new Set<DocumentImageVerticalAnchor>(['flow', 'page-position']);
 const DOCUMENT_IMAGE_HORIZONTAL_PLACEMENTS =
   new Set<DocumentImageHorizontalPlacement>([
     'left',
@@ -191,21 +210,12 @@ const spanAttribute = (
 export const normalizeDocumentImageWrap = (
   value: unknown,
   fallback: DocumentImageWrap = 'float-left'
-): DocumentImageWrap =>
-  typeof value === 'string'
-  && DOCUMENT_IMAGE_WRAPS.has(value as DocumentImageWrap)
-    ? value as DocumentImageWrap
-    : fallback;
+): DocumentImageWrap => normalizeDocumentFlowImageWrap(value, fallback);
 
 export const normalizeDocumentImageVerticalAnchor = (
   value: unknown
 ): DocumentImageVerticalAnchor =>
-  typeof value === 'string'
-  && DOCUMENT_IMAGE_VERTICAL_ANCHORS.has(
-    value as DocumentImageVerticalAnchor
-  )
-    ? value as DocumentImageVerticalAnchor
-    : 'flow';
+  normalizeProjectDocumentImageVerticalAnchor(value);
 
 export const normalizeDocumentImageHorizontalPlacement = (
   value: unknown
@@ -394,10 +404,43 @@ export const calculateDocumentImageDragY = ({
   );
 };
 
+const getDocumentImageCompatibilityWrapPadding = (
+  geometry: ReturnType<typeof normalizeDocumentImageGeometry>
+) => geometry.wrap === 'span-columns'
+  ? Math.max(
+      geometry.wrapPaddingLeftPx,
+      geometry.wrapPaddingRightPx
+    )
+  : geometry.wrap === 'float-left'
+    ? Math.max(
+        geometry.wrapPaddingRightPx,
+        geometry.wrapPaddingBottomPx
+      )
+    : geometry.wrap === 'float-right'
+      ? Math.max(
+          geometry.wrapPaddingLeftPx,
+          geometry.wrapPaddingBottomPx
+        )
+      : geometry.wrap === 'top-bottom'
+        ? Math.max(
+            geometry.wrapPaddingTopPx,
+            geometry.wrapPaddingBottomPx
+          )
+        : Math.max(
+            geometry.wrapPaddingTopPx,
+            geometry.wrapPaddingRightPx,
+            geometry.wrapPaddingBottomPx,
+            geometry.wrapPaddingLeftPx
+          );
+
 export const normalizeDocumentImageAttributes = (
   value: Partial<DocumentImageAttributes>,
   fallbackWrap: DocumentImageWrap = 'float-left'
 ): DocumentImageAttributes => {
+  const geometry = normalizeDocumentImageGeometry(
+    value as Record<string, unknown>,
+    fallbackWrap
+  );
   const naturalWidth = numericAttribute(
     value.naturalWidth,
     DEFAULT_IMAGE_ATTRIBUTES.naturalWidth,
@@ -428,24 +471,20 @@ export const normalizeDocumentImageAttributes = (
     heightPx,
     naturalWidth,
     naturalHeight,
-    wrap: normalizeDocumentImageWrap(value.wrap, fallbackWrap),
+    wrap: geometry.wrap,
     spanCount: spanAttribute(value.spanCount, 1),
     spanStartColumn: spanAttribute(value.spanStartColumn, 1),
-    wrapPaddingPx: numericAttribute(
-      value.wrapPaddingPx,
-      DEFAULT_IMAGE_ATTRIBUTES.wrapPaddingPx,
-      0,
-      96
+    wrapPaddingTopPx: geometry.wrapPaddingTopPx,
+    wrapPaddingRightPx: geometry.wrapPaddingRightPx,
+    wrapPaddingBottomPx: geometry.wrapPaddingBottomPx,
+    wrapPaddingLeftPx: geometry.wrapPaddingLeftPx,
+    coordinateSpace: geometry.coordinateSpace,
+    wrapPaddingPx: getDocumentImageCompatibilityWrapPadding(geometry),
+    verticalSpacingPx: Math.max(
+      geometry.wrapPaddingTopPx,
+      geometry.wrapPaddingBottomPx
     ),
-    verticalSpacingPx: numericAttribute(
-      value.verticalSpacingPx,
-      DEFAULT_IMAGE_ATTRIBUTES.verticalSpacingPx,
-      0,
-      96
-    ),
-    verticalAnchor: normalizeDocumentImageVerticalAnchor(
-      value.verticalAnchor
-    ),
+    verticalAnchor: geometry.verticalAnchor,
     yPx: numericAttribute(value.yPx, DEFAULT_IMAGE_ATTRIBUTES.yPx, 0),
     horizontalPlacement: normalizeDocumentImageHorizontalPlacement(
       value.horizontalPlacement
@@ -505,6 +544,57 @@ const getDataNumber = (
 
 const getImageElement = (element: HTMLElement) =>
   element.matches('img') ? element : element.querySelector('img');
+
+const getDocumentImageGeometryFromElement = (
+  element: HTMLElement,
+  defaultWrap: DocumentImageWrap
+) => normalizeDocumentImageGeometry({
+  wrap: element.getAttribute('data-wrap'),
+  verticalAnchor: element.getAttribute('data-vertical-anchor'),
+  coordinateSpace: element.getAttribute('data-coordinate-space'),
+  wrapPaddingTopPx: element.getAttribute('data-wrap-padding-top-px'),
+  wrapPaddingRightPx: element.getAttribute('data-wrap-padding-right-px'),
+  wrapPaddingBottomPx: element.getAttribute('data-wrap-padding-bottom-px'),
+  wrapPaddingLeftPx: element.getAttribute('data-wrap-padding-left-px'),
+  wrapPaddingPx: element.getAttribute('data-wrap-padding-px'),
+  verticalSpacingPx: element.getAttribute('data-vertical-spacing-px'),
+}, defaultWrap);
+
+type DocumentImageWrapPaddingAttribute =
+  | 'wrapPaddingTopPx'
+  | 'wrapPaddingRightPx'
+  | 'wrapPaddingBottomPx'
+  | 'wrapPaddingLeftPx';
+
+const createDocumentImageWrapPaddingAttribute = (
+  defaultWrap: DocumentImageWrap,
+  key: DocumentImageWrapPaddingAttribute,
+  htmlAttribute: string,
+  cssProperty: string,
+  includeCompatibilityCssAlias = false
+) => ({
+  default: null,
+  parseHTML: (element: HTMLElement) =>
+    getDocumentImageGeometryFromElement(element, defaultWrap)[key],
+  renderHTML: (attributes: Record<string, unknown>) => {
+    const geometry = normalizeDocumentImageGeometry(
+      attributes,
+      defaultWrap
+    );
+    const padding = geometry[key];
+    return {
+      [htmlAttribute]: String(padding),
+      style: [
+        `${cssProperty}: ${padding}px`,
+        includeCompatibilityCssAlias
+          ? `--document-image-wrap-padding: ${
+              getDocumentImageCompatibilityWrapPadding(geometry)
+            }px`
+          : null,
+      ].filter((value): value is string => value !== null).join('; '),
+    };
+  },
+});
 
 const createDocumentImageAttributes = (
   defaultWrap: DocumentImageWrap
@@ -618,26 +708,61 @@ const createDocumentImageAttributes = (
       'data-wrap': normalizeDocumentImageWrap(attributes.wrap, defaultWrap),
     }),
   },
+  wrapPaddingTopPx: createDocumentImageWrapPaddingAttribute(
+    defaultWrap,
+    'wrapPaddingTopPx',
+    'data-wrap-padding-top-px',
+    '--document-image-wrap-padding-top'
+  ),
+  wrapPaddingRightPx: createDocumentImageWrapPaddingAttribute(
+    defaultWrap,
+    'wrapPaddingRightPx',
+    'data-wrap-padding-right-px',
+    '--document-image-wrap-padding-right'
+  ),
+  wrapPaddingBottomPx: createDocumentImageWrapPaddingAttribute(
+    defaultWrap,
+    'wrapPaddingBottomPx',
+    'data-wrap-padding-bottom-px',
+    '--document-image-wrap-padding-bottom'
+  ),
+  wrapPaddingLeftPx: createDocumentImageWrapPaddingAttribute(
+    defaultWrap,
+    'wrapPaddingLeftPx',
+    'data-wrap-padding-left-px',
+    '--document-image-wrap-padding-left',
+    true
+  ),
+  coordinateSpace: {
+    default: null,
+    parseHTML: (element: HTMLElement) =>
+      getDocumentImageGeometryFromElement(
+        element,
+        defaultWrap
+      ).coordinateSpace,
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-coordinate-space': normalizeDocumentImageGeometry(
+        attributes,
+        defaultWrap
+      ).coordinateSpace,
+    }),
+  },
+  // Parse-only runtime aliases retain direct v2 Tiptap JSON compatibility.
+  // Project and HTML serializers intentionally emit only canonical v3 attrs.
   wrapPaddingPx: {
     default: DEFAULT_IMAGE_ATTRIBUTES.wrapPaddingPx,
-    parseHTML: (element: HTMLElement) =>
-      getDataNumber(
-        element,
-        'data-wrap-padding-px',
-        DEFAULT_IMAGE_ATTRIBUTES.wrapPaddingPx
-      ),
-    renderHTML: (attributes: Record<string, unknown>) => {
-      const padding = numericAttribute(
-        attributes.wrapPaddingPx,
-        DEFAULT_IMAGE_ATTRIBUTES.wrapPaddingPx,
-        0,
-        96
-      );
-      return {
-        'data-wrap-padding-px': String(padding),
-        style: `--document-image-wrap-padding: ${padding}px`,
-      };
+    parseHTML: (element: HTMLElement) => {
+      const value = element.getAttribute('data-wrap-padding-px');
+      return value === null
+        ? null
+        : numericAttribute(
+            value,
+            DEFAULT_IMAGE_ATTRIBUTES.wrapPaddingPx,
+            0,
+            96
+          );
     },
+    renderHTML: () => ({}),
   },
   spanCount: {
     default: DEFAULT_IMAGE_ATTRIBUTES.spanCount,
@@ -673,24 +798,18 @@ const createDocumentImageAttributes = (
   },
   verticalSpacingPx: {
     default: DEFAULT_IMAGE_ATTRIBUTES.verticalSpacingPx,
-    parseHTML: (element: HTMLElement) =>
-      getDataNumber(
-        element,
-        'data-vertical-spacing-px',
-        DEFAULT_IMAGE_ATTRIBUTES.verticalSpacingPx
-      ),
-    renderHTML: (attributes: Record<string, unknown>) => {
-      const spacing = numericAttribute(
-        attributes.verticalSpacingPx,
-        DEFAULT_IMAGE_ATTRIBUTES.verticalSpacingPx,
-        0,
-        96
-      );
-      return {
-        'data-vertical-spacing-px': String(spacing),
-        style: `--document-image-vertical-spacing: ${spacing}px`,
-      };
+    parseHTML: (element: HTMLElement) => {
+      const value = element.getAttribute('data-vertical-spacing-px');
+      return value === null
+        ? null
+        : numericAttribute(
+            value,
+            DEFAULT_IMAGE_ATTRIBUTES.verticalSpacingPx,
+            0,
+            96
+          );
     },
+    renderHTML: () => ({}),
   },
   verticalAnchor: {
     default: DEFAULT_IMAGE_ATTRIBUTES.verticalAnchor,
@@ -985,7 +1104,7 @@ export const DocumentImageCommandsExtension = Extension.create({
     return {
       insertDocumentImage:
         (attributes, position) =>
-        ({ commands }) => {
+        ({ commands, state }) => {
           const normalized = normalizeDocumentImageAttributes(
             attributes,
             attributes.wrap === 'inline' ? 'inline' : 'float-left'
@@ -994,9 +1113,16 @@ export const DocumentImageCommandsExtension = Extension.create({
             ? 'documentInlineImage'
             : 'documentFlowImage';
           const content = { type, attrs: normalized };
-          return typeof position === 'number'
-            ? commands.insertContentAt(position, content)
-            : commands.insertContent(content);
+          if (typeof position === 'number') {
+            return commands.insertContentAt(position, content);
+          }
+          // "Add photo" is an insertion workflow even while another image is
+          // selected. Tiptap's insertContent replaces a NodeSelection, which
+          // made a second import silently overwrite the first image.
+          if (state.selection instanceof NodeSelection) {
+            return commands.insertContentAt(state.selection.to, content);
+          }
+          return commands.insertContent(content);
         },
       setDocumentImageWrap:
         (wrap) =>
