@@ -10,6 +10,10 @@ import {
   constrainDocumentReferenceToPage,
   getDocumentPaperDimensions,
 } from '../../document/utils/documentPageOrientation';
+import {
+  DEFAULT_DOCUMENT_PAPER_COLOR,
+  normalizeDocumentPaperColor,
+} from '../../document/utils/documentColor';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
@@ -169,7 +173,7 @@ export type DocumentProjectPayload = ProductAwareProjectPayload<DocumentPage> & 
 export type DesignSpaceProjectPayload = CanvasProjectPayload | DocumentProjectPayload;
 
 const DEFAULT_PAGE_SIZE = { width: 2550, height: 3300 };
-const DEFAULT_BACKGROUND = '#FAF8F5';
+const DEFAULT_BACKGROUND = DEFAULT_DOCUMENT_PAPER_COLOR;
 
 const isObject = (value: unknown): value is Record<string, any> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -614,13 +618,25 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
   const pages = normalizedPages as TPage[];
   const unitMode = normalizeUnitMode(raw.unitMode, options.unitMode || 'in');
   const activeTheme = raw.activeTheme ?? options.activeTheme ?? (isObject(raw.theme) ? raw.theme.tokens : undefined);
-  const document = normalizeDocument(
+  const normalizedDocument = normalizeDocument(
     raw,
     pages as unknown[],
     fallbackSize,
     unitMode,
     options.defaultBackground || DEFAULT_BACKGROUND
   );
+  const document = editorMode === 'document'
+    ? {
+        ...normalizedDocument,
+        background: {
+          ...normalizedDocument.background,
+          value: normalizeDocumentPaperColor(
+            normalizedDocument.background?.value,
+            options.defaultBackground || DEFAULT_BACKGROUND
+          ),
+        },
+      }
+    : normalizedDocument;
   const theme = normalizeTheme(raw.theme, activeTheme);
   const projectId =
     safeString(raw.projectId)

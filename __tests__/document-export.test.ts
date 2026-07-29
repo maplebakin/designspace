@@ -2,6 +2,7 @@ import { PDFDocument } from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CSS_PIXELS_PER_INCH,
+  DOCUMENT_PRINT_HOST_ATTRIBUTE,
   DocumentExportService,
   calculateDocumentCssDimensions,
   calculateDocumentPixelDimensions,
@@ -11,6 +12,7 @@ import {
   triggerDocumentDownload,
   waitForDocumentResources,
 } from '../src/document/services/documentExportService';
+import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../src/document/utils/documentColor';
 
 const tinyPng = new Blob([
   Buffer.from(
@@ -330,21 +332,66 @@ describe('document export', () => {
     expect(document.querySelector('a[download]')).toBeNull();
   });
 
-  it('builds print CSS with an exact page box and hard reference exclusion', () => {
+  it('builds print CSS with an exact page box, authoritative paper colour, and hard reference exclusion', () => {
     const css = createDocumentPrintCss({ widthIn: 8.5, heightIn: 11 });
 
     expect(css).toContain('size: 8.5in 11in');
     expect(css).toContain('width: 8.5in !important');
     expect(css).toContain('height: 11in !important');
+    expect(css).toContain(`background: ${DEFAULT_DOCUMENT_PAPER_COLOR} !important`);
+    expect(css).not.toContain('background: #fff !important');
     expect(css).toContain('[data-document-export-exclude]');
     expect(css).toContain('display: none !important');
 
     const landscapeCss = createDocumentPrintCss({
       widthIn: 11,
       heightIn: 8.5,
-    });
+    }, '#e7dcc8');
     expect(landscapeCss).toContain('size: 11in 8.5in');
     expect(landscapeCss).toContain('width: 11in !important');
     expect(landscapeCss).toContain('height: 8.5in !important');
+    expect(landscapeCss).toContain('background: #E7DCC8 !important');
+
+    const malformedCss = createDocumentPrintCss(
+      { widthIn: 8.5, heightIn: 11 },
+      'url(javascript:alert(1))'
+    );
+    expect(malformedCss).toContain(
+      `background: ${DEFAULT_DOCUMENT_PAPER_COLOR} !important`
+    );
+    expect(malformedCss).not.toContain('javascript');
+  });
+
+  it('creates the print host from a normalized paper colour and removes it on cleanup', async () => {
+    const service = new DocumentExportService();
+    const print = vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    const source = document.createElement('main');
+    source.innerHTML = '<p>Printable article</p>';
+
+    const cleanupPrint = await service.print(source, {
+      widthIn: 8.5,
+      heightIn: 11,
+      dpi: 300,
+      backgroundColor: '#e7dcc8',
+    });
+
+    const host = document.querySelector<HTMLElement>(
+      `[${DOCUMENT_PRINT_HOST_ATTRIBUTE}]`
+    );
+    const clone = host?.firstElementChild as HTMLElement | null;
+    const printStyle = document.querySelector<HTMLStyleElement>(
+      'style[data-document-print-style]'
+    );
+    expect(print).toHaveBeenCalledTimes(1);
+    expect(clone?.style.backgroundColor).toBe('rgb(231, 220, 200)');
+    expect(clone?.textContent).toContain('Printable article');
+    expect(printStyle?.textContent).toContain(
+      'background: #E7DCC8 !important'
+    );
+
+    cleanupPrint();
+
+    expect(document.querySelector(`[${DOCUMENT_PRINT_HOST_ATTRIBUTE}]`)).toBeNull();
+    expect(document.querySelector('style[data-document-print-style]')).toBeNull();
   });
 });

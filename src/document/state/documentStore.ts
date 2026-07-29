@@ -11,6 +11,7 @@ import type {
   DocumentPage,
   ScanReference,
 } from '../types/documentProject';
+import { parseDocumentColor } from '../utils/documentColor';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
@@ -33,6 +34,7 @@ type DocumentStoreState = {
   saveProject: (name?: string) => Promise<void>;
   downloadProjectFile: () => Promise<void>;
   renameProject: (name: string) => void;
+  updateDocumentBackground: (value: string) => void;
   updatePage: (update: Partial<DocumentPage> | ((page: DocumentPage) => DocumentPage)) => void;
   updateTitleContent: (content: DocumentContentJson) => void;
   updateBodyContent: (content: DocumentContentJson) => void;
@@ -332,6 +334,32 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const safeName = name.trim() || 'Untitled Document';
     if (!project || project.projectName === safeName) return;
     set({ project: updateProjectTimestamp(project, safeName) });
+    markDirty(set);
+  },
+
+  updateDocumentBackground: (value) => {
+    const project = get().project;
+    if (!project) return;
+    const normalized = parseDocumentColor(value);
+    if (!normalized) {
+      set({
+        toastMessage: 'Paper colour must be a three- or six-digit hex colour.',
+      });
+      return;
+    }
+    if (project.document.background?.value === normalized) return;
+    set({
+      project: {
+        ...project,
+        document: {
+          ...project.document,
+          background: {
+            ...project.document.background,
+            value: normalized,
+          },
+        },
+      },
+    });
     markDirty(set);
   },
 

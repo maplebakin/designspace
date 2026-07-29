@@ -29,6 +29,7 @@ export const hasMeaningfulDocumentContent = (
 type DocumentPageViewProps = {
   page: DocumentPage;
   assetSources: Record<string, string>;
+  paperColor: string;
   zoom: number;
   titleEditor: React.ReactNode;
   bodyEditor: React.ReactNode;
@@ -44,6 +45,7 @@ type DocumentPageViewProps = {
 export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   page,
   assetSources,
+  paperColor,
   zoom,
   titleEditor,
   bodyEditor,
@@ -83,7 +85,11 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
         <div
           className="document-page-sheet"
           data-testid="document-page"
-          style={{ width: widthPx, height: heightPx }}
+          style={{
+            width: widthPx,
+            height: heightPx,
+            backgroundColor: paperColor,
+          }}
           onPointerDown={(event) => {
             if (event.target === event.currentTarget) onSelectOverlay(null);
           }}
@@ -104,7 +110,12 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
             data-page-width-in={page.size.widthIn}
             data-page-height-in={page.size.heightIn}
             data-page-orientation={page.size.orientation}
-            style={{ width: widthPx, height: heightPx }}
+            data-paper-color={paperColor}
+            style={{
+              width: widthPx,
+              height: heightPx,
+              backgroundColor: paperColor,
+            }}
           >
             <DocumentOverlayLayer
               placement="behind"

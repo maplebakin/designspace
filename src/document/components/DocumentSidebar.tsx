@@ -19,12 +19,14 @@ import type {
 
 type DocumentSidebarProps = {
   page: DocumentPage;
+  paperColor: string;
   isOverflowing: boolean;
   collapsed: boolean;
   selectedOverlayId: string | null;
   onCollapsedChange: (collapsed: boolean) => void;
   onPresetChange: (preset: 'letter' | 'a4') => void;
   onOrientationChange: (orientation: DocumentPageOrientation) => void;
+  onPaperColorChange: (value: string) => void;
   onMarginChange: (side: keyof DocumentPage['margins'], value: number) => void;
   onColumnCountChange: (count: 1 | 2 | 3) => void;
   onColumnGapChange: (gapPx: number) => void;
@@ -194,6 +196,20 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               ))}
             </div>
           </div>
+
+          <label className="document-field document-paper-color-field">
+            <span>
+              Paper colour
+              <output>{props.paperColor}</output>
+            </span>
+            <input
+              aria-label="Paper colour"
+              data-testid="document-paper-color"
+              type="color"
+              value={props.paperColor}
+              onChange={(event) => props.onPaperColorChange(event.target.value)}
+            />
+          </label>
 
           <fieldset className="document-margin-fieldset">
             <legend>Margins <span>inches</span></legend>

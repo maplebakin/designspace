@@ -60,6 +60,14 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.getByTestId('document-body-placeholder')).toContainText(
       'Start writing or paste translated text'
     );
+    await expect(page.getByTestId('document-paper-color')).toHaveValue('#faf8f5');
+    await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+      'data-paper-color',
+      '#FAF8F5'
+    );
+    expect(await page.getByTestId('document-page').evaluate(
+      (element) => window.getComputedStyle(element).backgroundColor
+    )).toBe('rgb(250, 248, 245)');
 
     await expect.poll(async () => {
       const value = await page.getByTestId('document-zoom-indicator').textContent();
@@ -700,6 +708,14 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.getByTestId('design-canvas')).toHaveCount(0);
 
     await page.getByTestId('document-project-name').fill('Granddad Reconstruction');
+    await page.getByTestId('document-paper-color').fill('#e7dcc8');
+    await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+      'data-paper-color',
+      '#E7DCC8'
+    );
+    expect(await page.getByTestId('document-page').evaluate(
+      (element) => window.getComputedStyle(element).backgroundColor
+    )).toBe('rgb(231, 220, 200)');
     await page.locator('.document-title-prosemirror').fill('The Harwood Family Chronicle');
     await page.locator('.document-flow-prosemirror').fill(bodyCopy);
     await page.getByRole('button', { name: '3 columns' }).click();
@@ -762,6 +778,11 @@ test.describe('document reconstruction MVP', () => {
     await expect(page.getByTestId('document-column-count')).toHaveAttribute('data-value', '3');
     await expect(page.getByTestId('document-column-gap')).toHaveValue('28');
     await expect(page.getByTestId('document-drop-cap-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('document-paper-color')).toHaveValue('#e7dcc8');
+    await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+      'data-paper-color',
+      '#E7DCC8'
+    );
     await expect(page.locator('[data-document-image="true"]')).toHaveCount(1);
     await page.locator('[data-document-image="true"]').click();
     await expect(page.getByTestId('document-image-caption')).toHaveValue('Granddad beside the family home');
@@ -791,7 +812,7 @@ test.describe('document reconstruction MVP', () => {
     expect(pngInspection).toMatchObject({
       width: 2550,
       height: 3300,
-      corner: [255, 255, 255, 255],
+      corner: [231, 220, 200, 255],
     });
 
     await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);

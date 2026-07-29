@@ -55,6 +55,8 @@ import {
   getDocumentImageAspectRatio,
   normalizeDocumentImageAttributes,
 } from '../src/document/extensions/DocumentImageExtension';
+import { documentExportService } from '../src/document/services/documentExportService';
+import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../src/document/utils/documentColor';
 
 vi.mock('../src/document/services/documentReferenceService', () => ({
   ingestDocumentReference: vi.fn(),
@@ -292,6 +294,7 @@ describe('live document editor UI', () => {
   afterEach(() => {
     cleanup();
     useDocumentStore.getState().reset();
+    vi.restoreAllMocks();
   });
 
   it('renders the document shell with separate title and body editors and no Fabric canvas', async () => {
@@ -382,6 +385,70 @@ describe('live document editor UI', () => {
     expect(screen.getByTestId('document-flow-editor').getAttribute(
       'data-column-count'
     )).toBe('3');
+  });
+
+  it('renders, edits, and forwards the authoritative project paper colour to export and print', async () => {
+    const downloadPng = vi.spyOn(documentExportService, 'downloadPng')
+      .mockResolvedValue({
+        blob: new Blob(['png'], { type: 'image/png' }),
+        fileName: 'archive-notes.png',
+      });
+    const print = vi.spyOn(documentExportService, 'print')
+      .mockResolvedValue(() => undefined);
+
+    await renderShell();
+
+    const paperInput = screen.getByTestId(
+      'document-paper-color'
+    ) as HTMLInputElement;
+    const pageSheet = screen.getByTestId('document-page');
+    const exportRoot = screen.getByTestId('document-export-root');
+
+    expect(
+      useDocumentStore.getState().project?.document.background?.value
+    ).toBe(DEFAULT_DOCUMENT_PAPER_COLOR);
+    expect(paperInput.value.toUpperCase()).toBe(DEFAULT_DOCUMENT_PAPER_COLOR);
+    expect(pageSheet.style.backgroundColor).toBe('rgb(250, 248, 245)');
+    expect(exportRoot.getAttribute('data-paper-color')).toBe(
+      DEFAULT_DOCUMENT_PAPER_COLOR
+    );
+    expect(exportRoot.style.backgroundColor).toBe('rgb(250, 248, 245)');
+
+    fireEvent.change(paperInput, {
+      target: { value: '#e7dcc8' },
+    });
+
+    expect(
+      useDocumentStore.getState().project?.document.background?.value
+    ).toBe('#E7DCC8');
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+    });
+    expect(pageSheet.style.backgroundColor).toBe('rgb(231, 220, 200)');
+    expect(exportRoot.getAttribute('data-paper-color')).toBe('#E7DCC8');
+    expect(exportRoot.style.backgroundColor).toBe('rgb(231, 220, 200)');
+
+    fireEvent.click(screen.getByText('Export', { exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'PNG', exact: true }));
+    await waitFor(() => {
+      expect(downloadPng).toHaveBeenCalledWith(
+        exportRoot,
+        expect.objectContaining({
+          backgroundColor: '#E7DCC8',
+        })
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print', exact: true }));
+    await waitFor(() => {
+      expect(print).toHaveBeenCalledWith(
+        exportRoot,
+        expect.objectContaining({
+          backgroundColor: '#E7DCC8',
+        })
+      );
+    });
   });
 
   it('keeps all four margin fields readable and persists their page values', async () => {

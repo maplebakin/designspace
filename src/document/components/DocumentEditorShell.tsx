@@ -57,6 +57,7 @@ import {
   updateDocumentPagePaper,
   type DocumentPageOrientation,
 } from '../utils/documentPageOrientation';
+import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../utils/documentColor';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -159,6 +160,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const isOverflowing = useDocumentStore((state) => state.isOverflowing);
   const toastMessage = useDocumentStore((state) => state.toastMessage);
   const updatePage = useDocumentStore((state) => state.updatePage);
+  const updateDocumentBackground = useDocumentStore(
+    (state) => state.updateDocumentBackground
+  );
   const updateTitleContent = useDocumentStore((state) => state.updateTitleContent);
   const updateBodyContent = useDocumentStore((state) => state.updateBodyContent);
   const addAsset = useDocumentStore((state) => state.addAsset);
@@ -193,6 +197,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     useState<DocumentTextFormatState>(DEFAULT_TEXT_FORMAT_STATE);
 
   const page = project?.pages[0];
+  const paperColor = project?.document.background?.value
+    || DEFAULT_DOCUMENT_PAPER_COLOR;
   const assetSources = useMemo(() => project?.assets || {}, [project?.assets]);
 
   useEffect(() => {
@@ -905,6 +911,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         heightIn: page.size.heightIn,
         dpi: page.size.dpi,
         fileName: project.projectName,
+        backgroundColor: paperColor,
       };
       if (format === 'png') {
         await documentExportService.downloadPng(exportRootRef.current, options);
@@ -917,7 +924,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     } finally {
       setIsExporting(false);
     }
-  }, [isExporting, page, project, setToastMessage]);
+  }, [isExporting, page, paperColor, project, setToastMessage]);
 
   if (!project || !page) {
     return (
@@ -950,6 +957,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             heightIn: page.size.heightIn,
             dpi: page.size.dpi,
             fileName: project.projectName,
+            backgroundColor: paperColor,
           }).catch((error) => {
             setToastMessage(error instanceof Error ? error.message : 'Printing failed.');
           });
@@ -959,6 +967,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       <div className="document-editor-layout">
         <DocumentSidebar
           page={page}
+          paperColor={paperColor}
           isOverflowing={isOverflowing}
           collapsed={sidebarCollapsed}
           selectedOverlayId={selectedOverlayId}
@@ -970,6 +979,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             setFitMode(true);
             updatePage(updateDocumentPagePaper(page, { orientation }));
           }}
+          onPaperColorChange={updateDocumentBackground}
           onMarginChange={(side, value) => updatePage({
             margins: { ...page.margins, [side]: value },
           })}
@@ -1054,6 +1064,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             <DocumentPageView
               page={page}
               assetSources={assetSources}
+              paperColor={paperColor}
               zoom={zoom}
               exportRootRef={exportRootRef}
               referenceAdjustMode={isReferenceAdjustMode}

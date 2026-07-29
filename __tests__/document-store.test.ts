@@ -19,6 +19,11 @@ import {
 import {
   updateDocumentPagePaper,
 } from '../src/document/utils/documentPageOrientation';
+import {
+  DEFAULT_DOCUMENT_PAPER_COLOR,
+  normalizeDocumentPaperColor,
+  parseDocumentColor,
+} from '../src/document/utils/documentColor';
 
 const dbMocks = vi.hoisted(() => ({
   loadProject: vi.fn(),
@@ -134,6 +139,11 @@ describe('document project store', () => {
         sourceApp: 'design-space',
       },
       assets: {},
+      document: {
+        background: {
+          value: DEFAULT_DOCUMENT_PAPER_COLOR,
+        },
+      },
     });
     expect(project.projectId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -175,6 +185,118 @@ describe('document project store', () => {
       saveStatus: 'saved',
       revision: 0,
       zoom: 0.75,
+    });
+  });
+
+  it('accepts only bounded hex paper colours and marks valid changes dirty', () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Paper Test');
+
+    expect(parseDocumentColor('#abc')).toBe('#AABBCC');
+    expect(parseDocumentColor(' #e7dcc8 ')).toBe('#E7DCC8');
+    expect(parseDocumentColor('rgb(231, 220, 200)')).toBeNull();
+    expect(parseDocumentColor('url(javascript:alert(1))')).toBeNull();
+    expect(normalizeDocumentPaperColor('not-a-colour')).toBe(
+      DEFAULT_DOCUMENT_PAPER_COLOR
+    );
+    expect(normalizeDocumentPaperColor(null, '#abc')).toBe('#AABBCC');
+
+    store.updateDocumentBackground('#e7dcc8');
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      project: {
+        document: {
+          background: {
+            value: '#E7DCC8',
+          },
+        },
+      },
+      isDirty: true,
+      saveStatus: 'unsaved',
+      revision: 1,
+    });
+
+    store.updateDocumentBackground('linear-gradient(red, blue)');
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      project: {
+        document: {
+          background: {
+            value: '#E7DCC8',
+          },
+        },
+      },
+      isDirty: true,
+      saveStatus: 'unsaved',
+      revision: 1,
+      toastMessage: 'Paper colour must be a three- or six-digit hex colour.',
+    });
+  });
+
+  it('persists paper colour through save, library reload, and portable project reopen', async () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Cream Archive');
+    store.updateDocumentBackground('#e7dcc8');
+
+    await store.saveProject();
+
+    const serialized = dbMocks.saveProject.mock.calls[0][1] as string;
+    expect(JSON.parse(serialized).document.background.value).toBe('#E7DCC8');
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'library-document-1',
+        name: 'Cream Archive',
+      },
+      canvasData: serialized,
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('library-document-1');
+
+    expect(
+      useDocumentStore.getState().project?.document.background?.value
+    ).toBe('#E7DCC8');
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+    });
+
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadProjectFile({
+      name: 'cream-archive.apocaproject.json',
+      size: serialized.length,
+      text: vi.fn().mockResolvedValue(serialized),
+    } as unknown as File);
+
+    expect(
+      useDocumentStore.getState().project?.document.background?.value
+    ).toBe('#E7DCC8');
+    expect(useDocumentStore.getState()).toMatchObject({
+      currentLibraryProjectId: null,
+      isDirty: false,
+      saveStatus: 'saved',
+    });
+  });
+
+  it('safely normalizes malformed persisted document paper colours', () => {
+    const project = createBlankDocumentProject('Malformed Paper');
+    const hydrated = useDocumentStore.getState().hydrateProject({
+      ...project,
+      document: {
+        ...project.document,
+        background: {
+          value: 'url(javascript:alert(1))',
+        },
+      },
+    });
+
+    expect(hydrated.document.background?.value).toBe(
+      DEFAULT_DOCUMENT_PAPER_COLOR
+    );
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      revision: 0,
     });
   });
 
@@ -491,6 +613,7 @@ describe('document project store', () => {
     useDocumentStore.getState().updatePage((page) =>
       updateDocumentPagePaper(page, { orientation: 'landscape' })
     );
+    useDocumentStore.getState().updateDocumentBackground('#e7dcc8');
 
     await vi.advanceTimersByTimeAsync(899);
     expect(dbMocks.updateProject).not.toHaveBeenCalled();
@@ -520,6 +643,11 @@ describe('document project store', () => {
           heightIn: 8.5,
         },
       }],
+      document: {
+        background: {
+          value: '#E7DCC8',
+        },
+      },
     });
     expect(useDocumentStore.getState()).toMatchObject({
       isDirty: false,

@@ -1,5 +1,9 @@
 import { jsPDF } from 'jspdf';
 import { sanitizeExportBaseName } from '../../editor/utils/exportFileName';
+import {
+  DEFAULT_DOCUMENT_PAPER_COLOR,
+  normalizeDocumentPaperColor,
+} from '../utils/documentColor';
 
 export const DOCUMENT_EXPORT_EXCLUDE_ATTRIBUTE = 'data-document-export-exclude';
 export const DOCUMENT_PRINT_HOST_ATTRIBUTE = 'data-document-print-host';
@@ -514,8 +518,12 @@ export const triggerDocumentDownload = (blob: Blob, fileName: string) => {
   }
 };
 
-export const createDocumentPrintCss = (size: DocumentPhysicalSize) => {
+export const createDocumentPrintCss = (
+  size: DocumentPhysicalSize,
+  backgroundColor = DEFAULT_DOCUMENT_PAPER_COLOR
+) => {
   const normalizedSize = normalizePhysicalSize(size);
+  const normalizedBackgroundColor = normalizeDocumentPaperColor(backgroundColor);
   return `
 @page {
   size: ${normalizedSize.widthIn}in ${normalizedSize.heightIn}in;
@@ -536,7 +544,7 @@ export const createDocumentPrintCss = (size: DocumentPhysicalSize) => {
     height: ${normalizedSize.heightIn}in !important;
     margin: 0 !important;
     padding: 0 !important;
-    background: #fff !important;
+    background: ${normalizedBackgroundColor} !important;
   }
   body > :not([${DOCUMENT_PRINT_HOST_ATTRIBUTE}]) {
     display: none !important;
@@ -569,8 +577,9 @@ export class DocumentExportService {
   ): Promise<Blob> {
     const normalizedSize = normalizePhysicalSize(options);
     const dpi = finitePositive(options.dpi ?? DEFAULT_DOCUMENT_EXPORT_DPI, DEFAULT_DOCUMENT_EXPORT_DPI);
+    const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
     const clone = await prepareDocumentExportClone(pageElement, normalizedSize);
-    clone.style.backgroundColor = options.backgroundColor || '#ffffff';
+    clone.style.backgroundColor = backgroundColor;
 
     const svgMarkup = createDocumentSvgMarkup(
       clone,
@@ -589,7 +598,7 @@ export class DocumentExportService {
     }
 
     context.save();
-    context.fillStyle = options.backgroundColor || '#ffffff';
+    context.fillStyle = backgroundColor;
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = 'high';
@@ -656,10 +665,11 @@ export class DocumentExportService {
       throw new Error('Printing is unavailable in this environment.');
     }
     const normalizedSize = normalizePhysicalSize(options);
+    const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
     const clone = await prepareDocumentExportClone(pageElement, normalizedSize);
     clone.style.width = `${normalizedSize.widthIn}in`;
     clone.style.height = `${normalizedSize.heightIn}in`;
-    clone.style.backgroundColor = options.backgroundColor || '#ffffff';
+    clone.style.backgroundColor = backgroundColor;
 
     const host = document.createElement('div');
     host.setAttribute(DOCUMENT_PRINT_HOST_ATTRIBUTE, 'true');
@@ -668,7 +678,7 @@ export class DocumentExportService {
 
     const style = document.createElement('style');
     style.setAttribute('data-document-print-style', 'true');
-    style.textContent = createDocumentPrintCss(normalizedSize);
+    style.textContent = createDocumentPrintCss(normalizedSize, backgroundColor);
     document.head.appendChild(style);
     document.body.appendChild(host);
 
