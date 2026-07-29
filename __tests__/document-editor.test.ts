@@ -376,7 +376,7 @@ describe('live document editor UI', () => {
     const page = useDocumentStore.getState().project?.pages[0];
     expect(page?.columnCount).toBe(3);
     expect(page?.columnGapPx).toBe(40);
-    expect(page?.dropCap).toBe(true);
+    expect(page?.dropCap.enabled).toBe(true);
     expect(useDocumentStore.getState().isDirty).toBe(true);
     expect(screen.getByTestId('document-flow-editor').getAttribute('data-column-count')).toBe('3');
     expect(screen.getByTestId('document-flow-editor').getAttribute('data-drop-cap')).toBe('true');
@@ -881,11 +881,15 @@ describe('live document editor UI', () => {
     const textNodes = findTextNodes(editor!.getJSON());
     expect(textNodes.find((node) => node.text === 'Body')?.marks).toContainEqual({
       type: 'documentTextStyle',
-      attrs: { fontSizePx: documentPointsToPixels(16) },
+      attrs: expect.objectContaining({
+        fontSizePx: documentPointsToPixels(16),
+      }),
     });
     expect(textNodes.find((node) => node.text === ' typed')?.marks).toContainEqual({
       type: 'documentTextStyle',
-      attrs: { fontSizePx: documentPointsToPixels(12) },
+      attrs: expect.objectContaining({
+        fontSizePx: documentPointsToPixels(12),
+      }),
     });
     expect(
       screen.getByLabelText('Document body').querySelector(
@@ -917,7 +921,9 @@ describe('live document editor UI', () => {
 
     expect(findTextNodes(editor!.getJSON())[0]?.marks).toContainEqual({
       type: 'documentTextStyle',
-      attrs: { fontSizePx: documentPointsToPixels(24) },
+      attrs: expect.objectContaining({
+        fontSizePx: documentPointsToPixels(24),
+      }),
     });
     expect(
       screen.getByLabelText('Document title').querySelector(
@@ -1980,7 +1986,7 @@ describe('live document editor UI', () => {
       (node) => node.text === 'Second paragraph.'
     )?.marks).toContainEqual({
       type: 'documentTextStyle',
-      attrs: { fontSizePx: 18 },
+      attrs: expect.objectContaining({ fontSizePx: 18 }),
     });
 
     expect(canMoveSelectedStructuredImage(editor!.state, 'earlier')).toBe(true);

@@ -34,6 +34,10 @@ import {
   normalizeDocumentFontSize,
 } from '../extensions/DocumentTextStyleExtension';
 import {
+  normalizeDocumentBlockStyleId,
+  type DocumentBlockStyleId,
+} from '../extensions/DocumentBlockStyleExtension';
+import {
   FlowEditor,
   type DocumentDropContext,
   type SelectedDocumentImage,
@@ -67,6 +71,12 @@ import {
   getDocumentFolioNumber,
   resolveDocumentPhysicalMargins,
 } from '../layout/pageGeometry';
+import {
+  getDocumentTypographyCssVariables,
+} from '../typography/documentTypographyCss';
+import type {
+  DocumentNamedStyleRegistry,
+} from '../typography/documentTypography';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -101,6 +111,7 @@ const DEFAULT_TEXT_FORMAT_STATE: DocumentTextFormatState = {
   underline: false,
   alignment: 'left',
   fontSizePt: documentPixelsToPoints(14),
+  blockStyleId: 'body',
 };
 
 const readSelectionFontSize = (
@@ -140,21 +151,32 @@ const readSelectionFontSize = (
 
 const readTextFormatState = (
   editor: Editor,
-  defaultFontSizePx: number
+  styles: DocumentNamedStyleRegistry,
+  defaultBlockStyleId: DocumentBlockStyleId
 ): DocumentTextFormatState => {
-  const paragraphAlignment = editor.getAttributes('paragraph').textAlign;
+  const paragraphAttributes = editor.getAttributes('paragraph');
+  const blockStyleId = normalizeDocumentBlockStyleId(
+    paragraphAttributes.documentStyleId,
+    defaultBlockStyleId
+  );
+  const paragraphAlignment = paragraphAttributes.textAlign;
   const alignment =
-    paragraphAlignment === 'center'
+    paragraphAlignment === 'left'
+    || paragraphAlignment === 'center'
     || paragraphAlignment === 'right'
     || paragraphAlignment === 'justify'
       ? paragraphAlignment
-      : 'left';
+      : styles[blockStyleId].alignment;
   return {
     bold: editor.isActive('bold'),
     italic: editor.isActive('italic'),
     underline: editor.isActive('underline'),
     alignment,
-    fontSizePt: readSelectionFontSize(editor, defaultFontSizePx),
+    fontSizePt: readSelectionFontSize(
+      editor,
+      styles[blockStyleId].fontSizePx
+    ),
+    blockStyleId,
   };
 };
 
@@ -172,6 +194,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const updateDocumentBackground = useDocumentStore(
     (state) => state.updateDocumentBackground
   );
+  const updateDocumentLanguage = useDocumentStore(
+    (state) => state.updateDocumentLanguage
+  );
+  const updateDocumentStyle = useDocumentStore(
+    (state) => state.updateDocumentStyle
+  );
+  const updatePageLanguage = useDocumentStore(
+    (state) => state.updatePageLanguage
+  );
+  const updateDropCap = useDocumentStore((state) => state.updateDropCap);
   const updateFolioSettings = useDocumentStore(
     (state) => state.updateFolioSettings
   );
@@ -234,6 +266,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     : null;
   const previousPageIdRef = useRef(page?.id);
   const assetSources = useMemo(() => project?.assets || {}, [project?.assets]);
+  const typographyStyle = useMemo(
+    () => (
+      project && page
+        ? getDocumentTypographyCssVariables(
+            project.document.styles,
+            page.dropCap
+          )
+        : {}
+    ),
+    [page, project]
+  );
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -334,6 +377,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       wrap,
       wrapPaddingPx: 12,
       caption: '',
+      captionAlignment: 'inherit',
+      captionItalic: 'inherit',
+      captionSpacingPx: 'inherit',
     }, position);
     editor.commands.focus();
   }, [addAsset, availableColumnWidth, setToastMessage]);
@@ -421,11 +467,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     region: DocumentEditorRegion
   ) => {
     setActiveTextRegion(region);
+    if (!project) return;
     setTextFormatState(readTextFormatState(
       editor,
-      region === 'title' ? page?.titleFontSizePx ?? 38 : 14
+      project.document.styles,
+      region === 'title' ? 'article-title' : 'body'
     ));
-  }, [page?.titleFontSizePx]);
+  }, [project]);
 
   const handleFormat = useCallback((
     command:
@@ -453,11 +501,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (command === 'align-center') chain.setDocumentTextAlign('center').run();
     if (command === 'align-right') chain.setDocumentTextAlign('right').run();
     if (command === 'align-justify') chain.setDocumentTextAlign('justify').run();
-    setTextFormatState(readTextFormatState(
-      editor,
-      activeTextRegion === 'title' ? page?.titleFontSizePx ?? 38 : 14
-    ));
-  }, [activeTextRegion, page?.titleFontSizePx]);
+    if (project) {
+      setTextFormatState(readTextFormatState(
+        editor,
+        project.document.styles,
+        activeTextRegion === 'title' ? 'article-title' : 'body'
+      ));
+    }
+  }, [activeTextRegion, project]);
 
   const handleFontSizeChange = useCallback((fontSizePt: number) => {
     const editor = activeTextRegion === 'title'
@@ -468,11 +519,29 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       .focus()
       .setDocumentFontSize(documentPointsToPixels(fontSizePt))
       .run();
-    setTextFormatState(readTextFormatState(
-      editor,
-      activeTextRegion === 'title' ? page?.titleFontSizePx ?? 38 : 14
-    ));
-  }, [activeTextRegion, page?.titleFontSizePx]);
+    if (project) {
+      setTextFormatState(readTextFormatState(
+        editor,
+        project.document.styles,
+        activeTextRegion === 'title' ? 'article-title' : 'body'
+      ));
+    }
+  }, [activeTextRegion, project]);
+
+  const handleBlockStyleChange = useCallback((
+    styleId: DocumentBlockStyleId
+  ) => {
+    const editor = bodyEditorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    editor.chain().focus().setDocumentBlockStyle(styleId).run();
+    if (project) {
+      setTextFormatState(readTextFormatState(
+        editor,
+        project.document.styles,
+        styleId
+      ));
+    }
+  }, [project]);
 
   const selectedOverlay = page?.overlayObjects.find(
     (object) => object.id === selectedOverlayId
@@ -512,6 +581,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           spanCount: selectedFlowImage.attributes.spanCount,
           spanStartColumn: selectedFlowImage.attributes.spanStartColumn,
           caption: selectedFlowImage.attributes.caption,
+          captionAlignment:
+            selectedFlowImage.attributes.captionAlignment,
+          captionItalic: selectedFlowImage.attributes.captionItalic,
+          captionSpacingPx:
+            selectedFlowImage.attributes.captionSpacingPx,
           altText: selectedFlowImage.attributes.altText,
           naturalWidth: selectedFlowImage.attributes.naturalWidth,
           naturalHeight: selectedFlowImage.attributes.naturalHeight,
@@ -541,6 +615,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             yPx: selectedOverlay.yPx,
             wrap: selectedOverlay.placement,
             caption: selectedOverlay.caption || '',
+            captionAlignment:
+              selectedOverlay.captionAlignment === 'inherit'
+              || selectedOverlay.captionAlignment === 'left'
+              || selectedOverlay.captionAlignment === 'center'
+              || selectedOverlay.captionAlignment === 'right'
+                ? selectedOverlay.captionAlignment
+                : 'inherit',
+            captionItalic:
+              typeof selectedOverlay.captionItalic === 'boolean'
+              || selectedOverlay.captionItalic === 'inherit'
+                ? selectedOverlay.captionItalic
+                : 'inherit',
+            captionSpacingPx:
+              selectedOverlay.captionSpacingPx === 'inherit'
+                ? 'inherit'
+                : Number.isFinite(selectedOverlay.captionSpacingPx)
+                  ? Math.min(
+                      96,
+                      Math.max(0, Number(selectedOverlay.captionSpacingPx))
+                    )
+                  : 'inherit',
             altText: selectedOverlay.altText,
             naturalWidth: selectedOverlay.naturalWidth,
             naturalHeight: selectedOverlay.naturalHeight,
@@ -556,6 +651,26 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       if (!editor) return;
       const next: Partial<DocumentImageAttributes> = {
         ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
+        ...(update.captionAlignment === 'inherit'
+          || update.captionAlignment === 'left'
+          || update.captionAlignment === 'center'
+          || update.captionAlignment === 'right'
+          ? { captionAlignment: update.captionAlignment }
+          : {}),
+        ...(typeof update.captionItalic === 'boolean'
+          || update.captionItalic === 'inherit'
+          ? { captionItalic: update.captionItalic }
+          : {}),
+        ...(update.captionSpacingPx === 'inherit'
+          ? { captionSpacingPx: 'inherit' }
+          : typeof update.captionSpacingPx === 'number'
+          ? {
+              captionSpacingPx: Math.min(
+                96,
+                Math.max(0, update.captionSpacingPx)
+              ),
+            }
+          : {}),
         ...(typeof update.altText === 'string' ? { altText: update.altText } : {}),
         ...(typeof update.wrapPaddingPx === 'number'
           ? { wrapPaddingPx: update.wrapPaddingPx }
@@ -607,6 +722,26 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (!selectedOverlay) return;
     const next: Partial<DocumentOverlayImage> = {
       ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
+        ...(update.captionAlignment === 'inherit'
+          || update.captionAlignment === 'left'
+        || update.captionAlignment === 'center'
+        || update.captionAlignment === 'right'
+        ? { captionAlignment: update.captionAlignment }
+        : {}),
+      ...(typeof update.captionItalic === 'boolean'
+        || update.captionItalic === 'inherit'
+        ? { captionItalic: update.captionItalic }
+        : {}),
+      ...(update.captionSpacingPx === 'inherit'
+        ? { captionSpacingPx: 'inherit' }
+        : typeof update.captionSpacingPx === 'number'
+        ? {
+            captionSpacingPx: Math.min(
+              96,
+              Math.max(0, update.captionSpacingPx)
+            ),
+          }
+        : {}),
       ...(typeof update.altText === 'string' ? { altText: update.altText } : {}),
       ...(typeof update.xPx === 'number' ? { xPx: update.xPx } : {}),
       ...(typeof update.yPx === 'number' ? { yPx: update.yPx } : {}),
@@ -647,6 +782,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       heightPx: attributes.heightPx,
       placement,
       caption: attributes.caption,
+      captionAlignment: attributes.captionAlignment,
+      captionItalic: attributes.captionItalic,
+      captionSpacingPx: attributes.captionSpacingPx,
       naturalWidth: attributes.naturalWidth,
       naturalHeight: attributes.naturalHeight,
       locked: false,
@@ -681,6 +819,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       wrap,
       wrapPaddingPx: 12,
       caption: overlay.caption || '',
+      captionAlignment: overlay.captionAlignment,
+      captionItalic: overlay.captionItalic,
+      captionSpacingPx: overlay.captionSpacingPx,
     });
     editor.commands.focus();
   }, [removeOverlay]);
@@ -763,6 +904,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             - (physicalMargins?.topIn ?? page.margins.topIn) * 96
         ),
         caption: selectedOverlay.caption || '',
+        captionAlignment: selectedOverlay.captionAlignment,
+        captionItalic: selectedOverlay.captionItalic,
+        captionSpacingPx: selectedOverlay.captionSpacingPx,
       });
       bodyEditorRef.current?.commands.focus();
     } else {
@@ -1032,6 +1176,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         <DocumentSidebar
           page={page}
           folios={project.document.folios}
+          documentLanguage={project.document.language}
+          styles={project.document.styles}
           paperColor={paperColor}
           isOverflowing={isOverflowing}
           collapsed={sidebarCollapsed}
@@ -1064,8 +1210,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           })}
           onColumnCountChange={(columnCount) => updatePage({ columnCount })}
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
-          onTitleFontSizeChange={(titleFontSizePx) => updatePage({ titleFontSizePx })}
-          onToggleDropCap={() => updatePage({ dropCap: !page.dropCap })}
+          onDocumentLanguageChange={updateDocumentLanguage}
+          onPageLanguageChange={(language) =>
+            updatePageLanguage(language, page.id)}
+          onStyleChange={updateDocumentStyle}
+          onDropCapChange={(update) => updateDropCap(update, page.id)}
           onImportImages={(files) => void importImages(files)}
           onImportReference={(file) => void handleReferenceImport(file)}
           onToggleReferenceVisibility={() => {
@@ -1107,6 +1256,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             textFormatState={textFormatState}
             onFormat={handleFormat}
             onFontSizeChange={handleFontSizeChange}
+            onBlockStyleChange={handleBlockStyleChange}
             onImportImages={(files) => void importImages(files)}
             onReferenceAdjustModeChange={handleReferenceAdjustModeChange}
             onReferenceChange={(update) => {
@@ -1171,6 +1321,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               paperColor={paperColor}
               folioNumber={folioNumber}
               showFolio={project.document.folios.visible}
+              documentLanguage={project.document.language}
+              typographyStyles={project.document.styles}
               zoom={zoom}
               exportRootRef={exportRootRef}
               referenceAdjustMode={isReferenceAdjustMode}
@@ -1193,7 +1345,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 <TitleEditor
                   key={`title-${page.id}`}
                   content={page.titleContent as JSONContent}
-                  baseFontSizePx={page.titleFontSizePx}
+                  baseFontSizePx={
+                    project.document.styles['article-title'].fontSizePx
+                  }
+                  language={page.language || project.document.language}
                   onEditorReady={(editor) => {
                     titleEditorRef.current = editor;
                   }}
@@ -1221,6 +1376,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   columnCount={page.columnCount}
                   columnGapPx={page.columnGapPx}
                   dropCap={page.dropCap}
+                  language={page.language || project.document.language}
+                  typographyStyle={typographyStyle}
                   viewScale={zoom}
                   maxImageWidthPx={Math.max(180, availableColumnWidth)}
                   maxSpanImageWidthPx={

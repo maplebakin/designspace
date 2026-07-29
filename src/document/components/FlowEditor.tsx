@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -31,6 +32,9 @@ import {
   DocumentTextStyleExtension,
 } from '../extensions/DocumentTextStyleExtension';
 import {
+  DocumentBlockStyleExtension,
+} from '../extensions/DocumentBlockStyleExtension';
+import {
   SanitizedPasteExtension,
   sanitizeDocumentPastedText,
 } from '../extensions/SanitizedPasteExtension';
@@ -42,6 +46,10 @@ import '../styles/document-print.css';
 import {
   StructuredDocumentSpanLayout,
 } from './StructuredDocumentSpanLayout';
+import {
+  normalizeDocumentDropCap,
+  type DocumentDropCapSettings,
+} from '../typography/documentTypography';
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: 'doc',
@@ -155,7 +163,9 @@ export interface FlowEditorProps {
   className?: string;
   columnCount: DocumentColumnCount;
   columnGapPx: number;
-  dropCap: boolean;
+  dropCap: DocumentDropCapSettings | boolean;
+  language?: string;
+  typographyStyle?: CSSProperties;
   viewScale?: number;
   minImageWidthPx?: number;
   maxImageWidthPx?: number;
@@ -219,6 +229,8 @@ export const FlowEditor = ({
   columnCount,
   columnGapPx,
   dropCap,
+  language = 'en',
+  typographyStyle,
   viewScale = 1,
   minImageWidthPx = 48,
   maxImageWidthPx = 720,
@@ -234,6 +246,10 @@ export const FlowEditor = ({
   onDropDispatch,
   onOverflowChange,
 }: FlowEditorProps) => {
+  const normalizedDropCap = useMemo(
+    () => normalizeDocumentDropCap(dropCap),
+    [dropCap]
+  );
   const rootRef = useRef<HTMLElement | null>(null);
   const editorInstanceRef = useRef<Editor | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -367,6 +383,9 @@ export const FlowEditor = ({
           types: ['paragraph'],
         }),
         DocumentTextStyleExtension,
+        DocumentBlockStyleExtension.configure({
+          defaultStyleId: 'body',
+        }),
         SanitizedPasteExtension,
         DocumentInlineImageExtension.configure(imageExtensionOptions),
         DocumentFlowImageExtension.configure(imageExtensionOptions),
@@ -569,7 +588,7 @@ export const FlowEditor = ({
   }, [
     columnCount,
     columnGapPx,
-    dropCap,
+    normalizedDropCap,
     scheduleOverflowMeasure,
   ]);
 
@@ -626,6 +645,7 @@ export const FlowEditor = ({
   }, []);
 
   const style = {
+    ...typographyStyle,
     '--document-column-count': columnCount,
     '--document-column-gap': `${Math.max(0, columnGapPx)}px`,
   } as CSSProperties;
@@ -646,13 +666,15 @@ export const FlowEditor = ({
       ref={rootRef}
       className={[
         'document-flow-editor',
-        dropCap ? 'document-flow-editor--drop-cap' : '',
+        normalizedDropCap.enabled ? 'document-flow-editor--drop-cap' : '',
         className,
       ].filter(Boolean).join(' ')}
       data-testid="document-flow-editor"
       data-document-region="body"
       data-column-count={columnCount}
-      data-drop-cap={dropCap ? 'true' : 'false'}
+      data-drop-cap={normalizedDropCap.enabled ? 'true' : 'false'}
+      data-drop-cap-line-span={normalizedDropCap.lineSpan}
+      lang={language}
       style={style}
     >
       <EditorContent
@@ -681,6 +703,9 @@ export const FlowEditor = ({
           textEditing={editingStructuredText}
           viewScale={viewScale}
           minimumImageWidthPx={minImageWidthPx}
+          typographyStyle={typographyStyle}
+          dropCap={normalizedDropCap}
+          language={language}
           onSelectImage={(position) => {
             enteringStructuredTextRef.current = false;
             setEditingStructuredText(false);

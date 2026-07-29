@@ -40,6 +40,7 @@ const EDITING_STATE_CLASSES = [
 const DROP_CAP_SELECTOR = [
   '[data-drop-cap="true"]',
   '[data-document-drop-cap="true"]',
+  '[data-document-drop-cap-target="true"]',
   '.document-drop-cap',
 ].join(',');
 

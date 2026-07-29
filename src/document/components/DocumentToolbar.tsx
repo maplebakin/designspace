@@ -17,6 +17,9 @@ import {
   Upload,
 } from 'lucide-react';
 import type {
+  DocumentCaptionAlignment,
+  DocumentCaptionItalic,
+  DocumentCaptionSpacing,
   DocumentFlowImageWrap,
   DocumentOverlayPlacement,
   DocumentPage,
@@ -24,6 +27,9 @@ import type {
 import {
   DOCUMENT_FONT_SIZES_PT,
 } from '../extensions/DocumentTextStyleExtension';
+import type {
+  DocumentBlockStyleId,
+} from '../extensions/DocumentBlockStyleExtension';
 
 export type DocumentImageInspectorValue = {
   id: string;
@@ -41,6 +47,9 @@ export type DocumentImageInspectorValue = {
   spanCount?: 1 | 2 | 3;
   spanStartColumn?: 1 | 2 | 3;
   caption: string;
+  captionAlignment: DocumentCaptionAlignment;
+  captionItalic: DocumentCaptionItalic;
+  captionSpacingPx: DocumentCaptionSpacing;
   altText: string;
   naturalWidth?: number;
   naturalHeight?: number;
@@ -61,6 +70,7 @@ export type DocumentTextFormatState = {
   underline: boolean;
   alignment: 'left' | 'center' | 'right' | 'justify';
   fontSizePt: number | 'mixed';
+  blockStyleId: DocumentBlockStyleId | 'mixed';
 };
 
 type DocumentToolbarProps = {
@@ -82,6 +92,7 @@ type DocumentToolbarProps = {
       | 'align-justify'
   ) => void;
   onFontSizeChange: (fontSizePt: number) => void;
+  onBlockStyleChange: (styleId: DocumentBlockStyleId) => void;
   onImportImages: (files: File[]) => void;
   onReferenceAdjustModeChange: (enabled: boolean) => void;
   onReferenceChange: (
@@ -523,6 +534,71 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               })}
             />
           </label>
+          <label className="document-context-field">
+            <span>Caption alignment</span>
+            <select
+              aria-label="Caption alignment"
+              data-testid="document-image-caption-alignment"
+              value={props.selectedImage.captionAlignment}
+              onChange={(event) => props.onSelectedImageChange({
+                captionAlignment: event.target.value as
+                  DocumentImageInspectorValue['captionAlignment'],
+              })}
+            >
+              <option value="inherit">Named caption style</option>
+              <option value="left">Left</option>
+              <option value="center">Centre</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+          <label className="document-context-field">
+            <span>Caption style</span>
+            <select
+              aria-label="Caption italic style"
+              data-testid="document-image-caption-italic"
+              value={
+                props.selectedImage.captionItalic === 'inherit'
+                  ? 'inherit'
+                  : props.selectedImage.captionItalic ? 'italic' : 'roman'
+              }
+              onChange={(event) => props.onSelectedImageChange({
+                captionItalic: event.target.value === 'inherit'
+                  ? 'inherit'
+                  : event.target.value === 'italic',
+              })}
+            >
+              <option value="inherit">Named caption style</option>
+              <option value="italic">Italic</option>
+              <option value="roman">Roman</option>
+            </select>
+          </label>
+          <label className="document-context-field">
+            <span>Caption spacing</span>
+            <input
+              aria-label="Caption spacing"
+              data-testid="document-image-caption-spacing"
+              type="number"
+              min="0"
+              max="96"
+              value={
+                props.selectedImage.captionSpacingPx === 'inherit'
+                  ? ''
+                  : props.selectedImage.captionSpacingPx
+              }
+              placeholder="Style"
+              onChange={(event) => props.onSelectedImageChange({
+                captionSpacingPx: event.target.value === ''
+                  ? 'inherit'
+                  : Math.min(
+                      96,
+                      Math.max(
+                        0,
+                        numericValue(event.target.value, 5)
+                      )
+                    ),
+              })}
+            />
+          </label>
           <label className="document-context-field document-context-field--wide">
             <span>Alt text</span>
             <input
@@ -585,6 +661,30 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             </FormatButton>
           </div>
           <div className="document-context-divider" aria-hidden="true" />
+          {props.activeTextRegion === 'body' && (
+            <label className="document-context-field">
+              <span>Block style</span>
+              <select
+                aria-label="Body block style"
+                data-testid="document-block-style"
+                value={props.textFormatState.blockStyleId}
+                onChange={(event) => props.onBlockStyleChange(
+                  event.target.value as DocumentBlockStyleId
+                )}
+              >
+                {props.textFormatState.blockStyleId === 'mixed' && (
+                  <option value="mixed" disabled>Mixed</option>
+                )}
+                <option value="body">Body</option>
+                <option value="subsection-heading">Subsection heading</option>
+                <option value="quotation">Quotation / scripture</option>
+                <option value="author-signature">Author / signature</option>
+              </select>
+            </label>
+          )}
+          {props.activeTextRegion === 'body' && (
+            <div className="document-context-divider" aria-hidden="true" />
+          )}
           <label className="document-context-field document-context-field--font-size">
             <span>
               {props.activeTextRegion === 'title' ? 'Title size' : 'Body size'}

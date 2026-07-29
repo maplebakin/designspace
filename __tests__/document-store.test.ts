@@ -13,9 +13,14 @@ import type {
   ScanReference,
 } from '../src/document/types/documentProject';
 import {
+  CURRENT_DOCUMENT_SCHEMA_VERSION,
   DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
   normalizeDocumentProjectPage,
 } from '../src/editor/project/projectSchema';
+import {
+  DEFAULT_DOCUMENT_DROP_CAP,
+  type DocumentStyleId,
+} from '../src/document/typography/documentTypography';
 import {
   updateDocumentPagePaper,
 } from '../src/document/utils/documentPageOrientation';
@@ -37,10 +42,17 @@ vi.mock('../src/editor/db', () => ({
 
 const NOW = '2026-07-20T14:30:00.000Z';
 
-const bodyContent = (text: string): DocumentContentJson => ({
+const bodyContent = (
+  text: string,
+  documentStyleId: DocumentStyleId = 'body'
+): DocumentContentJson => ({
   type: 'doc',
   content: [{
     type: 'paragraph',
+    attrs: {
+      documentStyleId,
+      documentStyleFontSizePx: null,
+    },
     content: [{ type: 'text', text }],
   }],
 });
@@ -175,7 +187,7 @@ describe('document project store', () => {
       },
       assets: {},
       document: {
-        schemaVersion: 1,
+        schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
         background: {
           value: DEFAULT_DOCUMENT_PAPER_COLOR,
         },
@@ -209,16 +221,21 @@ describe('document project store', () => {
       },
       titleContent: {
         type: 'doc',
-        content: [{ type: 'paragraph' }],
+        content: [{
+          type: 'paragraph',
+          attrs: { documentStyleId: 'article-title' },
+        }],
       },
       bodyContent: {
         type: 'doc',
-        content: [{ type: 'paragraph' }],
+        content: [{
+          type: 'paragraph',
+          attrs: { documentStyleId: 'body' },
+        }],
       },
-      titleFontSizePx: 38,
       columnCount: 1,
       columnGapPx: 24,
-      dropCap: false,
+      dropCap: DEFAULT_DOCUMENT_DROP_CAP,
       suppressFolio: false,
       overlayObjects: [],
     });
@@ -347,13 +364,19 @@ describe('document project store', () => {
     const store = useDocumentStore.getState();
     const project = store.createBlankProject('Independent Stories');
     const firstPageId = project.pages[0].id;
-    store.updateTitleContent(bodyContent('Page 1 title'), firstPageId);
+    store.updateTitleContent(
+      bodyContent('Page 1 title', 'article-title'),
+      firstPageId
+    );
     store.updateBodyContent(bodyContent('Page 1 body'), firstPageId);
     store.addPage();
 
     const secondPageId = useDocumentStore.getState().project!.pages[1].id;
     expect(useDocumentStore.getState().project?.activePageIndex).toBe(1);
-    store.updateTitleContent(bodyContent('Page 2 title'), secondPageId);
+    store.updateTitleContent(
+      bodyContent('Page 2 title', 'article-title'),
+      secondPageId
+    );
     store.updateBodyContent(bodyContent('Page 2 body'), secondPageId);
 
     // This models a delayed Tiptap onUpdate from page 1 after page 2 mounted.
@@ -363,13 +386,13 @@ describe('document project store', () => {
     const pages = useDocumentStore.getState().project!.pages;
     expect(pages[0]).toMatchObject({
       id: firstPageId,
-      titleContent: bodyContent('Page 1 title'),
+      titleContent: bodyContent('Page 1 title', 'article-title'),
       bodyContent: bodyContent('Late page 1 body'),
       columnCount: 3,
     });
     expect(pages[1]).toMatchObject({
       id: secondPageId,
-      titleContent: bodyContent('Page 2 title'),
+      titleContent: bodyContent('Page 2 title', 'article-title'),
       bodyContent: bodyContent('Page 2 body'),
       columnCount: 1,
     });
@@ -534,7 +557,10 @@ describe('document project store', () => {
       columnCount: 3,
       suppressFolio: false,
     }, pageIds[0]);
-    store.updateTitleContent(bodyContent('Historical page 49'), pageIds[0]);
+    store.updateTitleContent(
+      bodyContent('Historical page 49', 'article-title'),
+      pageIds[0]
+    );
     store.updateBodyContent(bodyContent('Story 49'), pageIds[0]);
 
     for (const folio of [50, 51, 52]) {
@@ -546,7 +572,10 @@ describe('document project store', () => {
         columnCount: folio === 51 ? 1 : 3,
         suppressFolio: folio === 51,
       }, page.id);
-      store.updateTitleContent(bodyContent(`Historical page ${folio}`), page.id);
+      store.updateTitleContent(
+        bodyContent(`Historical page ${folio}`, 'article-title'),
+        page.id
+      );
       store.updateBodyContent(bodyContent(`Story ${folio}`), page.id);
     }
 
@@ -557,7 +586,7 @@ describe('document project store', () => {
     expect(persisted).toMatchObject({
       activePageIndex: 3,
       document: {
-        schemaVersion: 1,
+        schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
         folios: {
           startingNumber: 49,
           visible: true,
@@ -637,7 +666,9 @@ describe('document project store', () => {
       columnGapPx: 30,
       dropCap: true,
     });
-    store.updateTitleContent(bodyContent('Our Family History'));
+    store.updateTitleContent(
+      bodyContent('Our Family History', 'article-title')
+    );
     store.updateBodyContent(bodyContent('The translated article.'));
     store.addAsset('asset-family', 'data:image/png;base64,PHOTO');
     store.addAsset('asset-scan', 'data:image/jpeg;base64,SCAN');
@@ -662,7 +693,7 @@ describe('document project store', () => {
       columnCount: 3,
       columnGapPx: 30,
       dropCap: true,
-      titleContent: bodyContent('Our Family History'),
+      titleContent: bodyContent('Our Family History', 'article-title'),
       bodyContent: bodyContent('The translated article.'),
       overlayObjects: [{
         ...overlay,
@@ -792,7 +823,7 @@ describe('document project store', () => {
           bottomIn: 0.65,
           leftIn: 0.65,
         },
-        titleContent: bodyContent('A Previous Project'),
+        titleContent: bodyContent('A Previous Project', 'article-title'),
         bodyContent: legacyBody,
         columnCount: 3,
         columnGapPx: 24,
@@ -828,7 +859,6 @@ describe('document project store', () => {
         widthIn: 8.5,
         heightIn: 11,
       },
-      titleFontSizePx: 42,
       columnCount: 3,
       bodyContent: legacyBody,
     });

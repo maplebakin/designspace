@@ -2,6 +2,7 @@ import {
   useEffect,
   useState,
   useRef,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
@@ -65,6 +66,25 @@ export const DocumentImageNodeView = ({
     renderedWidth,
     aspectRatio
   );
+  const captionStyle = {
+    ...(attributes.captionAlignment === 'inherit'
+      ? {}
+      : {
+          '--document-caption-alignment': attributes.captionAlignment,
+        }),
+    ...(attributes.captionItalic === 'inherit'
+      ? {}
+      : {
+          '--document-caption-font-style':
+            attributes.captionItalic ? 'italic' : 'normal',
+        }),
+    ...(attributes.captionSpacingPx === 'inherit'
+      ? {}
+      : {
+          '--document-caption-spacing':
+            `${attributes.captionSpacingPx}px`,
+        }),
+  } as CSSProperties;
 
   const minimumWidthPx = Math.max(options.minWidthPx, 32);
   const maximumWidthPx = Math.max(
@@ -187,11 +207,23 @@ export const DocumentImageNodeView = ({
       )}
       {attributes.caption && (
         nodeType === 'documentInlineImage' ? (
-          <span className="document-image__caption">
+          <span
+            className="document-image__caption"
+            data-caption-alignment={attributes.captionAlignment}
+            data-caption-italic={String(attributes.captionItalic)}
+            data-caption-spacing-px={attributes.captionSpacingPx}
+            style={captionStyle}
+          >
             {attributes.caption}
           </span>
         ) : (
-          <figcaption className="document-image__caption">
+          <figcaption
+            className="document-image__caption"
+            data-caption-alignment={attributes.captionAlignment}
+            data-caption-italic={String(attributes.captionItalic)}
+            data-caption-spacing-px={attributes.captionSpacingPx}
+            style={captionStyle}
+          >
             {attributes.caption}
           </figcaption>
         )
@@ -239,12 +271,16 @@ export const DocumentImageNodeView = ({
       data-y-px={attributes.yPx}
       data-horizontal-placement={attributes.horizontalPlacement}
       data-x-offset-px={attributes.xOffsetPx}
+      data-caption-alignment={attributes.captionAlignment}
+      data-caption-italic={String(attributes.captionItalic)}
+      data-caption-spacing-px={attributes.captionSpacingPx}
       style={{
         width: `${renderedWidth}px`,
         '--document-image-width': `${renderedWidth}px`,
         '--document-image-height': `${renderedHeight}px`,
         '--document-image-wrap-padding': `${attributes.wrapPaddingPx}px`,
-      }}
+        ...captionStyle,
+      } as CSSProperties}
     >
       {imageContent}
     </NodeViewWrapper>

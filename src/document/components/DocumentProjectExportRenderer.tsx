@@ -11,6 +11,9 @@ import {
   resolveDocumentPhysicalMargins,
 } from '../layout/pageGeometry';
 import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../utils/documentColor';
+import {
+  getDocumentTypographyCssVariables,
+} from '../typography/documentTypographyCss';
 import { DocumentPageView } from './DocumentPageView';
 import { TitleEditor } from './TitleEditor';
 import { FlowEditor } from './FlowEditor';
@@ -52,6 +55,14 @@ const ExportPageSurface = ({
     ) / page.columnCount
   );
   const assetSources = useMemo(() => project.assets || {}, [project.assets]);
+  const language = page.language || project.document.language;
+  const typographyStyle = useMemo(
+    () => getDocumentTypographyCssVariables(
+      project.document.styles,
+      page.dropCap
+    ),
+    [page.dropCap, project.document.styles]
+  );
 
   useEffect(() => {
     if (exportRootRef.current) {
@@ -68,6 +79,8 @@ const ExportPageSurface = ({
       }
       folioNumber={folioNumber}
       showFolio={project.document.folios.visible}
+      documentLanguage={project.document.language}
+      typographyStyles={project.document.styles}
       zoom={1}
       exportRootRef={exportRootRef}
       referenceAdjustMode={false}
@@ -81,7 +94,10 @@ const ExportPageSurface = ({
           content={page.titleContent as JSONContent}
           editable={false}
           ariaLabel={`Export title for page ${folioNumber}`}
-          baseFontSizePx={page.titleFontSizePx}
+          baseFontSizePx={
+            project.document.styles['article-title'].fontSizePx
+          }
+          language={language}
         />
       )}
       bodyEditor={(
@@ -92,6 +108,8 @@ const ExportPageSurface = ({
           columnCount={page.columnCount}
           columnGapPx={page.columnGapPx}
           dropCap={page.dropCap}
+          language={language}
+          typographyStyle={typographyStyle}
           viewScale={1}
           maxImageWidthPx={Math.max(180, columnWidthPx)}
           maxSpanImageWidthPx={bodyWidthPx}

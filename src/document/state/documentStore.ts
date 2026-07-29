@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  CURRENT_DOCUMENT_SCHEMA_VERSION,
   DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+  normalizeDocumentContentStyles,
   normalizeDesignSpaceProjectPayload,
   type DocumentProjectPayload,
 } from '../../editor/project/projectSchema';
@@ -12,6 +14,17 @@ import type {
   DocumentPage,
   ScanReference,
 } from '../types/documentProject';
+import type {
+  DocumentDropCapSettings,
+  DocumentNamedStyleDefinition,
+  DocumentStyleId,
+} from '../typography/documentTypography';
+import {
+  DEFAULT_DOCUMENT_DROP_CAP,
+  normalizeDocumentDropCap,
+  normalizeDocumentLanguage,
+  normalizeDocumentStyleDefinition,
+} from '../typography/documentTypography';
 import { parseDocumentColor } from '../utils/documentColor';
 import {
   normalizeDocumentFolioNumber,
@@ -39,6 +52,11 @@ type DocumentStoreState = {
   downloadProjectFile: () => Promise<void>;
   renameProject: (name: string) => void;
   updateDocumentBackground: (value: string) => void;
+  updateDocumentLanguage: (language: string) => void;
+  updateDocumentStyle: (
+    styleId: DocumentStyleId,
+    update: Partial<DocumentNamedStyleDefinition>
+  ) => void;
   updateFolioSettings: (update: Partial<DocumentFolioSettings>) => void;
   selectPage: (index: number) => void;
   addPage: () => void;
@@ -51,6 +69,11 @@ type DocumentStoreState = {
   ) => void;
   updateTitleContent: (content: DocumentContentJson, pageId?: string) => void;
   updateBodyContent: (content: DocumentContentJson, pageId?: string) => void;
+  updatePageLanguage: (language?: string, pageId?: string) => void;
+  updateDropCap: (
+    update: Partial<DocumentDropCapSettings>,
+    pageId?: string
+  ) => void;
   addAsset: (assetId: string, source: string) => void;
   addOverlay: (overlay: DocumentOverlayImage) => void;
   updateOverlay: (id: string, update: Partial<DocumentOverlayImage>) => void;
@@ -66,9 +89,11 @@ type DocumentStoreState = {
   reset: () => void;
 };
 
-const emptyDocumentContent = (): DocumentContentJson => ({
+const emptyDocumentContent = (
+  documentStyleId: DocumentStyleId
+): DocumentContentJson => ({
   type: 'doc',
-  content: [{ type: 'paragraph' }],
+  content: [{ type: 'paragraph', attrs: { documentStyleId } }],
 });
 
 export const createBlankDocumentPage = (name = 'Page 1'): DocumentPage => ({
@@ -88,12 +113,11 @@ export const createBlankDocumentPage = (name = 'Page 1'): DocumentPage => ({
     innerIn: 0.65,
     outerIn: 0.65,
   },
-  titleContent: emptyDocumentContent(),
-  bodyContent: emptyDocumentContent(),
-  titleFontSizePx: 38,
+  titleContent: emptyDocumentContent('article-title'),
+  bodyContent: emptyDocumentContent('body'),
   columnCount: 1,
   columnGapPx: 24,
-  dropCap: false,
+  dropCap: { ...DEFAULT_DOCUMENT_DROP_CAP },
   suppressFolio: false,
   overlayObjects: [],
 });
@@ -115,6 +139,9 @@ export const createBlankDocumentProject = (
     createdAt: now,
     updatedAt: now,
     lastUpdated: now,
+    document: {
+      schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+    },
     pages: [createBlankDocumentPage()],
     assets: {},
   }, {
@@ -200,6 +227,7 @@ const duplicateDocumentPage = (
   name,
   size: { ...page.size },
   margins: { ...page.margins },
+  dropCap: { ...page.dropCap },
   titleContent: cloneDocumentContentWithFreshImageIds(page.titleContent),
   bodyContent: cloneDocumentContentWithFreshImageIds(page.bodyContent),
   overlayObjects: page.overlayObjects.map((overlay) => ({
@@ -218,10 +246,10 @@ const createPageAfter = (
     ...blank,
     size: { ...page.size },
     margins: { ...page.margins },
-    titleFontSizePx: page.titleFontSizePx,
     columnCount: page.columnCount,
     columnGapPx: page.columnGapPx,
-    dropCap: page.dropCap,
+    language: page.language,
+    dropCap: { ...page.dropCap },
   };
 };
 
@@ -262,7 +290,8 @@ const omitEmptyDocumentJsonMetadata = (value: unknown): unknown => {
       || typeof entry !== 'object'
       || entry === null
       || Object.keys(entry as Record<string, unknown>).length > 0
-    ));
+    ))
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
   return Object.fromEntries(entries);
 };
 
@@ -508,6 +537,50 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     markDirty(set);
   },
 
+  updateDocumentLanguage: (language) => {
+    const project = get().project;
+    if (!project) return;
+    const normalized = normalizeDocumentLanguage(
+      language,
+      project.document.language
+    );
+    if (normalized === project.document.language) return;
+    set({
+      project: {
+        ...project,
+        document: {
+          ...project.document,
+          language: normalized,
+        },
+      },
+    });
+    markDirty(set);
+  },
+
+  updateDocumentStyle: (styleId, update) => {
+    const project = get().project;
+    if (!project) return;
+    const current = project.document.styles[styleId];
+    const next = normalizeDocumentStyleDefinition(
+      { ...current, ...update },
+      current
+    );
+    if (JSON.stringify(next) === JSON.stringify(current)) return;
+    set({
+      project: {
+        ...project,
+        document: {
+          ...project.document,
+          styles: {
+            ...project.document.styles,
+            [styleId]: next,
+          },
+        },
+      },
+    });
+    markDirty(set);
+  },
+
   updateFolioSettings: (update) => {
     const project = get().project;
     if (!project) return;
@@ -702,9 +775,38 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   updateTitleContent: (titleContent, pageId) =>
-    get().updatePage({ titleContent }, pageId),
+    get().updatePage({
+      titleContent: normalizeDocumentContentStyles(
+        titleContent,
+        'article-title'
+      ),
+    }, pageId),
   updateBodyContent: (bodyContent, pageId) =>
-    get().updatePage({ bodyContent }, pageId),
+    get().updatePage({
+      bodyContent: normalizeDocumentContentStyles(bodyContent, 'body'),
+    }, pageId),
+  updatePageLanguage: (language, pageId) => {
+    const project = get().project;
+    if (!project) return;
+    const normalized = language === undefined
+      ? undefined
+      : normalizeDocumentLanguage(language, project.document.language);
+    get().updatePage({ language: normalized }, pageId);
+  },
+  updateDropCap: (update, pageId) => {
+    const project = get().project;
+    if (!project) return;
+    const activePage = project.pages[getActivePageIndex(project)];
+    const targetId = pageId || activePage?.id;
+    const page = project.pages.find((candidate) => candidate.id === targetId);
+    if (!page) return;
+    get().updatePage({
+      dropCap: normalizeDocumentDropCap(
+        { ...page.dropCap, ...update },
+        page.dropCap
+      ),
+    }, targetId);
+  },
 
   addAsset: (assetId, source) => {
     const project = get().project;

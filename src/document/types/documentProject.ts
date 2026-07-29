@@ -1,3 +1,7 @@
+import type {
+  DocumentDropCapSettings,
+} from '../typography/documentTypography';
+
 export type DocumentContentJson = {
   type?: string;
   attrs?: Record<string, unknown>;
@@ -17,6 +21,14 @@ export type DocumentFlowImageWrap =
   | 'top-bottom'
   | 'span-columns';
 
+export type DocumentCaptionAlignment =
+  | 'inherit'
+  | 'left'
+  | 'center'
+  | 'right';
+export type DocumentCaptionItalic = boolean | 'inherit';
+export type DocumentCaptionSpacing = number | 'inherit';
+
 export type DocumentFlowImage = {
   id: string;
   assetId: string;
@@ -33,6 +45,9 @@ export type DocumentFlowImage = {
   horizontalPlacement?: 'left' | 'center' | 'right' | 'custom';
   xOffsetPx?: number;
   caption?: string;
+  captionAlignment?: DocumentCaptionAlignment;
+  captionItalic?: DocumentCaptionItalic;
+  captionSpacingPx?: DocumentCaptionSpacing;
   naturalWidth?: number;
   naturalHeight?: number;
 };
@@ -49,6 +64,9 @@ export type DocumentOverlayImage = {
   heightPx: number;
   placement: DocumentOverlayPlacement;
   caption?: string;
+  captionAlignment?: DocumentCaptionAlignment;
+  captionItalic?: DocumentCaptionItalic;
+  captionSpacingPx?: DocumentCaptionSpacing;
   naturalWidth?: number;
   naturalHeight?: number;
   locked?: boolean;
@@ -95,10 +113,10 @@ export type DocumentPage = {
   margins: DocumentPageMargins;
   titleContent: DocumentContentJson;
   bodyContent: DocumentContentJson;
-  titleFontSizePx: number;
   columnCount: 1 | 2 | 3;
   columnGapPx: number;
-  dropCap: boolean;
+  language?: string;
+  dropCap: DocumentDropCapSettings;
   suppressFolio: boolean;
   overlayObjects: DocumentOverlayImage[];
   reference?: ScanReference;

@@ -22,6 +22,10 @@ import {
   clampDocumentImageY,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
+import {
+  normalizeDocumentDropCap,
+  type DocumentDropCapSettings,
+} from '../typography/documentTypography';
 
 export type DocumentSpanLayoutModel = {
   imageId: string;
@@ -141,6 +145,74 @@ type StructuredContentMeasurer = {
   dispose: () => void;
 };
 
+export type StructuredDocumentTypographyOptions = {
+  typographyStyle?: CSSProperties;
+  dropCap?: DocumentDropCapSettings | boolean;
+  language?: string;
+};
+
+const DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE =
+  'data-document-drop-cap-target';
+
+export const getStructuredDocumentTypographyVariables = (
+  style?: CSSProperties
+): CSSProperties => Object.fromEntries(
+  Object.entries(style || {}).filter(([property, value]) => (
+    property.startsWith('--document-')
+    && (typeof value === 'string' || typeof value === 'number')
+  ))
+) as CSSProperties;
+
+const applyStructuredDocumentTypographyVariables = (
+  element: HTMLElement,
+  style?: CSSProperties
+) => {
+  Object.entries(getStructuredDocumentTypographyVariables(style))
+    .forEach(([property, value]) => {
+      element.style.setProperty(property, String(value));
+    });
+};
+
+const removeDocumentDropCapTargets = (element: Element) => {
+  if (element.hasAttribute(DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE)) {
+    element.removeAttribute(DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE);
+  }
+  element.querySelectorAll(`[${DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE}]`)
+    .forEach((target) => {
+      target.removeAttribute(DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE);
+    });
+};
+
+const isEligibleDocumentDropCapParagraph = (element: Element) => (
+  element.tagName.toLowerCase() === 'p'
+  && (
+    !element.hasAttribute('data-document-style-id')
+    || element.getAttribute('data-document-style-id') === 'body'
+  )
+  && (element.textContent || '').trim().length > 0
+);
+
+export const markFirstEligibleDocumentDropCapParagraph = (
+  elements: Element[],
+  enabled: boolean
+): Element | null => {
+  elements.forEach(removeDocumentDropCapTargets);
+  if (!enabled) return null;
+
+  for (const element of elements) {
+    const candidates = [
+      ...(isEligibleDocumentDropCapParagraph(element) ? [element] : []),
+      ...Array.from(element.querySelectorAll('p'))
+        .filter(isEligibleDocumentDropCapParagraph),
+    ];
+    const target = candidates[0];
+    if (!target) continue;
+    target.setAttribute(DOCUMENT_DROP_CAP_TARGET_ATTRIBUTE, 'true');
+    return target;
+  }
+  return null;
+};
+
 const serializeElements = (elements: Element[]) =>
   elements.map((element) => element.outerHTML).join('');
 
@@ -161,7 +233,9 @@ const estimateElementHeight = (element: Element, widthPx: number) => {
   return lineCount * fontSize * 1.42 + fontSize * 0.72;
 };
 
-const createStructuredContentMeasurer = (): StructuredContentMeasurer => {
+const createStructuredContentMeasurer = (
+  options: StructuredDocumentTypographyOptions = {}
+): StructuredContentMeasurer => {
   if (typeof document === 'undefined' || !document.body) {
     return {
       measure: (elements, widthPx) => elements.reduce(
@@ -174,6 +248,16 @@ const createStructuredContentMeasurer = (): StructuredContentMeasurer => {
 
   const host = document.createElement('div');
   host.className = 'document-spanning-layout document-span-layout__measure';
+  if (options.language) host.lang = options.language;
+  const dropCap = normalizeDocumentDropCap(options.dropCap ?? false);
+  host.setAttribute(
+    'data-document-drop-cap',
+    dropCap.enabled ? 'true' : 'false'
+  );
+  applyStructuredDocumentTypographyVariables(
+    host,
+    options.typographyStyle
+  );
   Object.assign(host.style, {
     position: 'fixed',
     left: '-100000px',
@@ -184,7 +268,7 @@ const createStructuredContentMeasurer = (): StructuredContentMeasurer => {
     visibility: 'hidden',
     pointerEvents: 'none',
   });
-  document.body.append(host);
+  document.body.appendChild(host);
 
   return {
     measure: (elements, widthPx) => {
@@ -205,6 +289,18 @@ const createStructuredContentMeasurer = (): StructuredContentMeasurer => {
     },
     dispose: () => host.remove(),
   };
+};
+
+const resolveStructuredCaptionSpacingPx = (
+  value: DocumentImageAttributes['captionSpacingPx'],
+  options: StructuredDocumentTypographyOptions
+) => {
+  if (typeof value === 'number') return value;
+  const rawValue = (
+    options.typographyStyle as Record<string, unknown> | undefined
+  )?.['--document-style-caption-paragraph-spacing'];
+  const parsed = Number.parseFloat(String(rawValue ?? '5'));
+  return Number.isFinite(parsed) ? Math.min(96, Math.max(0, parsed)) : 5;
 };
 
 const cloneElementRange = (
@@ -250,7 +346,10 @@ const cloneElementRange = (
   };
 
   const clone = cloneNodeRange(element);
-  return clone?.nodeType === 1 ? clone as Element : null;
+  if (clone?.nodeType !== 1) return null;
+  const cloneElement = clone as Element;
+  if (from > 0) removeDocumentDropCapTargets(cloneElement);
+  return cloneElement;
 };
 
 const splitElementToFit = (
@@ -346,7 +445,8 @@ export const buildDocumentSpanLayoutModel = (
   columnGapPx = 24,
   availableWidthPx = 720,
   availableHeightPx = 720,
-  attributeOverrides: Partial<DocumentImageAttributes> = {}
+  attributeOverrides: Partial<DocumentImageAttributes> = {},
+  typographyOptions: StructuredDocumentTypographyOptions = {}
 ): DocumentSpanLayoutModel | null => {
   let imagePosition: number | null = null;
   let attributes: DocumentImageAttributes | null = null;
@@ -388,6 +488,13 @@ export const buildDocumentSpanLayoutModel = (
 
   const before = children.slice(0, imageIndex);
   const after = children.slice(imageIndex + 1);
+  const dropCap = normalizeDocumentDropCap(
+    typographyOptions.dropCap ?? false
+  );
+  markFirstEligibleDocumentDropCapParagraph(
+    [...before, ...after],
+    dropCap.enabled
+  );
   const spanCount = Math.min(
     columnCount,
     Math.max(1, spanAttributes.spanCount)
@@ -447,14 +554,24 @@ export const buildDocumentSpanLayoutModel = (
     image.style.height = `${renderedImageHeightPx}px`;
   }
 
-  const measurer = createStructuredContentMeasurer();
+  const measurer = createStructuredContentMeasurer({
+    ...typographyOptions,
+    dropCap,
+  });
   try {
     const caption = imageElement.querySelector('figcaption');
     const captionHeightPx = caption
       ? measurer.measure([caption], renderedImageWidthPx)
       : 0;
     const imageRegionHeightPx = renderedImageHeightPx
-      + (captionHeightPx > 0 ? captionHeightPx + 5 : 0);
+      + (
+        captionHeightPx > 0
+          ? captionHeightPx + resolveStructuredCaptionSpacingPx(
+              spanAttributes.captionSpacingPx,
+              typographyOptions
+            )
+          : 0
+      );
     const verticalSpacingPx = Math.max(
       0,
       spanAttributes.verticalSpacingPx
@@ -693,7 +810,8 @@ export const buildMultiDocumentSpanLayoutModel = (
   columnGapPx = 24,
   availableWidthPx = 720,
   availableHeightPx = 720,
-  attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {}
+  attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {},
+  typographyOptions: StructuredDocumentTypographyOptions = {}
 ): MultiDocumentSpanLayoutModel | null => {
   const positionedNodes: Array<{
     position: number;
@@ -729,6 +847,13 @@ export const buildMultiDocumentSpanLayoutModel = (
     element.getAttribute('data-wrap') === 'span-columns'
     && structuredIds.has(element.getAttribute('data-image-id') || '')
   ));
+  const dropCap = normalizeDocumentDropCap(
+    typographyOptions.dropCap ?? false
+  );
+  markFirstEligibleDocumentDropCapParagraph(
+    textElements,
+    dropCap.enabled
+  );
   const safeWidth = Math.max(1, availableWidthPx);
   const safeHeight = Math.max(1, availableHeightPx);
   const safeGap = Math.max(0, columnGapPx);
@@ -736,7 +861,10 @@ export const buildMultiDocumentSpanLayoutModel = (
     1,
     (safeWidth - safeGap * (columnCount - 1)) / columnCount
   );
-  const measurer = createStructuredContentMeasurer();
+  const measurer = createStructuredContentMeasurer({
+    ...typographyOptions,
+    dropCap,
+  });
   try {
     const images = positionedNodes.flatMap((entry) => {
       const attributes = entry.attributes;
@@ -769,7 +897,14 @@ export const buildMultiDocumentSpanLayoutModel = (
         ? measurer.measure([caption], renderedImageWidthPx)
         : 0;
       const imageRegionHeightPx = renderedImageHeightPx
-        + (captionHeightPx > 0 ? captionHeightPx + 5 : 0);
+        + (
+          captionHeightPx > 0
+            ? captionHeightPx + resolveStructuredCaptionSpacingPx(
+                attributes.captionSpacingPx,
+                typographyOptions
+              )
+            : 0
+        );
       const placement = attributes.horizontalPlacement;
       const xOffsetPx = calculateDocumentImageXOffset({
         placement,
@@ -977,6 +1112,9 @@ type StructuredDocumentSpanLayoutProps = {
   textEditing: boolean;
   viewScale: number;
   minimumImageWidthPx: number;
+  typographyStyle?: CSSProperties;
+  dropCap?: DocumentDropCapSettings | boolean;
+  language?: string;
   onSelectImage: (position: number) => void;
   onCommitImagePosition: (
     position: number,
@@ -1045,6 +1183,9 @@ export const StructuredDocumentSpanLayout = ({
   textEditing,
   viewScale,
   minimumImageWidthPx,
+  typographyStyle,
+  dropCap = false,
+  language,
   onSelectImage,
   onCommitImagePosition,
   onCommitImageSize,
@@ -1061,7 +1202,12 @@ export const StructuredDocumentSpanLayout = ({
       columnGapPx,
       availableWidthPx,
       availableHeightPx,
-      previewOverrides
+      previewOverrides,
+      {
+        typographyStyle,
+        dropCap,
+        language,
+      }
     ),
     [
       availableHeightPx,
@@ -1069,8 +1215,11 @@ export const StructuredDocumentSpanLayout = ({
       columnCount,
       columnGapPx,
       editor,
+      dropCap,
       previewOverrides,
       revision,
+      typographyStyle,
+      language,
     ]
   );
   const dragRef = useRef<{
@@ -1190,7 +1339,9 @@ export const StructuredDocumentSpanLayout = ({
   const selectedImage = model.images.find(
     (image) => image.imagePosition === selectedPosition
   );
+  const normalizedDropCap = normalizeDocumentDropCap(dropCap);
   const style = {
+    ...getStructuredDocumentTypographyVariables(typographyStyle),
     '--document-span-column-count': columnCount,
     '--document-span-column-gap': `${columnGapPx}px`,
     '--document-span-column-width': `${model.columnWidthPx}px`,
@@ -1558,6 +1709,11 @@ export const StructuredDocumentSpanLayout = ({
       ref={layoutRef}
       className="document-spanning-layout"
       data-document-span-layout="true"
+      lang={language}
+      data-document-drop-cap={
+        normalizedDropCap.enabled ? 'true' : 'false'
+      }
+      data-drop-cap-line-span={normalizedDropCap.lineSpan}
       data-span-count={representativeImage?.attributes.spanCount}
       data-span-start-column={representativeImage?.attributes.spanStartColumn}
       data-span-image-id={representativeImage?.imageId}

@@ -1,11 +1,29 @@
 import type { UnitMode } from '../utils/units';
 import type {
   DocumentContentJson,
+  DocumentCaptionAlignment,
+  DocumentCaptionItalic,
+  DocumentCaptionSpacing,
   DocumentFolioSettings,
   DocumentOverlayImage,
   DocumentPage,
   ScanReference,
 } from '../../document/types/documentProject';
+import type {
+  DocumentNamedStyleRegistry,
+  DocumentStyleId,
+} from '../../document/typography/documentTypography';
+import {
+  normalizeDocumentBlockFontSizePx,
+  normalizeDocumentDropCap,
+  normalizeDocumentInlineFontFamilyId,
+  normalizeDocumentInlineFontSizePx,
+  normalizeDocumentInlineTextColor,
+  normalizeDocumentInlineTrackingEm,
+  normalizeDocumentLanguage,
+  normalizeDocumentStyleId,
+  normalizeDocumentStyleRegistry,
+} from '../../document/typography/documentTypography';
 import {
   constrainDocumentPageMargins,
   constrainDocumentOverlayToPage,
@@ -24,7 +42,7 @@ import {
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 1 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 2 as const;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
 export type SupportedDesignSpaceProjectSchemaVersion =
@@ -65,6 +83,8 @@ export type ProjectPageSize = {
 
 export type ProjectDocument = {
   schemaVersion?: number;
+  language?: string;
+  styles?: DocumentNamedStyleRegistry;
   pageSize: ProjectPageSize;
   background?: {
     tokenRole?: string;
@@ -180,6 +200,8 @@ export type DocumentProjectPayload = ProductAwareProjectPayload<DocumentPage> & 
   editorMode: 'document';
   document: ProjectDocument & {
     schemaVersion: typeof CURRENT_DOCUMENT_SCHEMA_VERSION;
+    language: string;
+    styles: DocumentNamedStyleRegistry;
     folios: DocumentFolioSettings;
   };
 };
@@ -376,9 +398,48 @@ const normalizeDocument = (
     || getFirstPageBackground(pages)
     || getCanvasDataBackground(raw.canvasData)
     || defaultBackground;
+  const legacyStyles = normalizeDocumentStyleRegistry(undefined);
+  const legacyFirstPage = Array.isArray(raw.pages) && isObject(raw.pages[0])
+    ? raw.pages[0]
+    : null;
+  const isLegacyDocument = Number(document.schemaVersion ?? 0) < 2;
+  if (isLegacyDocument) {
+    legacyStyles['article-title'] = {
+      ...legacyStyles['article-title'],
+      fontSizePx: 42,
+      color: '#1F1C18',
+      paragraphSpacingPx: 0,
+    };
+    legacyStyles.body = {
+      ...legacyStyles.body,
+      color: '#1F1C18',
+      alignment: 'left',
+    };
+    legacyStyles.caption = {
+      ...legacyStyles.caption,
+      fontSizePx: 10,
+      color: '#48433D',
+      alignment: 'left',
+    };
+  }
+  if (isLegacyDocument && legacyFirstPage?.titleFontSizePx !== undefined) {
+    legacyStyles['article-title'] = {
+      ...legacyStyles['article-title'],
+      fontSizePx: clamp(
+        normalizePositiveNumber(
+          legacyFirstPage.titleFontSizePx,
+          42
+        ),
+        8,
+        240
+      ),
+    };
+  }
 
   return {
     pageSize,
+    language: normalizeDocumentLanguage(document.language),
+    styles: normalizeDocumentStyleRegistry(document.styles, legacyStyles),
     background: backgroundValue
       ? {
           tokenRole: safeString(backgroundCandidate?.tokenRole),
@@ -497,14 +558,204 @@ const createEmptyDocumentContent = (): DocumentContentJson => ({
   content: [{ type: 'paragraph' }],
 });
 
-const normalizeDocumentContent = (value: unknown): DocumentContentJson =>
-  isObject(value) && value.type === 'doc'
-    ? value as DocumentContentJson
-    : createEmptyDocumentContent();
+const normalizeCaptionAlignment = (
+  value: unknown,
+  fallback: DocumentCaptionAlignment = 'inherit'
+): DocumentCaptionAlignment => (
+  value === 'inherit'
+  || value === 'left'
+  || value === 'center'
+  || value === 'right'
+    ? value
+    : fallback
+);
+
+const normalizeCaptionItalic = (
+  value: unknown,
+  fallback: DocumentCaptionItalic = 'inherit'
+): DocumentCaptionItalic => (
+  typeof value === 'boolean' || value === 'inherit'
+    ? value
+    : fallback
+);
+
+const normalizeCaptionSpacing = (
+  value: unknown,
+  fallback: DocumentCaptionSpacing = 'inherit'
+): DocumentCaptionSpacing => {
+  if (value === 'inherit') return 'inherit';
+  if (value === undefined || value === null || value === '') return fallback;
+  return clamp(normalizeNonNegativeNumber(value, 5), 0, 96);
+};
+
+type NormalizeDocumentContentOptions = {
+  legacyCaptionPresentation?: boolean;
+};
+
+const getDefaultStyleIdForNode = (
+  nodeType: unknown,
+  inheritedStyleId: DocumentStyleId
+): DocumentStyleId => {
+  if (nodeType === 'heading') return 'subsection-heading';
+  if (nodeType === 'blockquote') return 'quotation';
+  if (nodeType === 'documentSignature') return 'author-signature';
+  return inheritedStyleId;
+};
+
+const normalizeDocumentContentNode = (
+  value: unknown,
+  inheritedStyleId: DocumentStyleId,
+  options: NormalizeDocumentContentOptions
+): DocumentContentJson | null => {
+  if (!isObject(value)) return null;
+  const nodeType = typeof value.type === 'string' ? value.type : undefined;
+  const defaultStyleId = getDefaultStyleIdForNode(nodeType, inheritedStyleId);
+  const isStyledBlock =
+    nodeType === 'paragraph'
+    || nodeType === 'heading'
+    || nodeType === 'blockquote'
+    || nodeType === 'documentSignature';
+  const isImage =
+    nodeType === 'documentInlineImage'
+    || nodeType === 'documentFlowImage';
+  const sourceAttrs = isObject(value.attrs) ? value.attrs : {};
+  const attrs = isStyledBlock
+    ? (() => {
+        const normalized: Record<string, unknown> = {
+          ...sourceAttrs,
+          documentStyleId: normalizeDocumentStyleId(
+            sourceAttrs.documentStyleId,
+            defaultStyleId
+          ),
+        };
+        const fontSizePx = normalizeDocumentBlockFontSizePx(
+          sourceAttrs.documentStyleFontSizePx
+        );
+        normalized.documentStyleFontSizePx = fontSizePx;
+        return normalized;
+      })()
+    : isImage
+      ? {
+          ...sourceAttrs,
+          captionAlignment: normalizeCaptionAlignment(
+            sourceAttrs.captionAlignment,
+            options.legacyCaptionPresentation ? 'left' : 'inherit'
+          ),
+          captionItalic: normalizeCaptionItalic(
+            sourceAttrs.captionItalic,
+            options.legacyCaptionPresentation ? true : 'inherit'
+          ),
+          captionSpacingPx: normalizeCaptionSpacing(
+            sourceAttrs.captionSpacingPx,
+            options.legacyCaptionPresentation ? 5 : 'inherit'
+          ),
+        }
+      : value.attrs === undefined
+        ? undefined
+        : { ...sourceAttrs };
+  const childStyleId = nodeType === 'blockquote'
+    ? 'quotation'
+    : defaultStyleId;
+  const content = Array.isArray(value.content)
+    ? value.content
+        .map((child) => normalizeDocumentContentNode(
+          child,
+          childStyleId,
+          options
+        ))
+        .filter((child): child is DocumentContentJson => child !== null)
+    : undefined;
+  const marks = Array.isArray(value.marks)
+    ? value.marks
+        .filter((
+          mark
+        ): mark is Record<string, unknown> & { type: string } => (
+          isObject(mark) && typeof mark.type === 'string'
+        ))
+        .map((mark) => {
+          if (mark.type !== 'documentTextStyle') {
+            return {
+              ...mark,
+              ...(isObject(mark.attrs) ? { attrs: { ...mark.attrs } } : {}),
+            };
+          }
+          const markAttrs = isObject(mark.attrs) ? mark.attrs : {};
+          return {
+            type: mark.type,
+            attrs: {
+              fontSizePx: normalizeDocumentInlineFontSizePx(
+                markAttrs.fontSizePx
+              ),
+              fontFamilyId: normalizeDocumentInlineFontFamilyId(
+                markAttrs.fontFamilyId
+              ),
+              textColor: normalizeDocumentInlineTextColor(
+                markAttrs.textColor
+              ),
+              trackingEm: normalizeDocumentInlineTrackingEm(
+                markAttrs.trackingEm
+              ),
+            },
+          };
+        })
+    : undefined;
+
+  return {
+    ...value,
+    ...(attrs === undefined ? {} : { attrs }),
+    ...(content === undefined ? {} : { content }),
+    ...(marks === undefined ? {} : { marks }),
+  };
+};
+
+export const normalizeDocumentContentStyles = (
+  value: unknown,
+  defaultStyleId: DocumentStyleId,
+  options: NormalizeDocumentContentOptions = {}
+): DocumentContentJson => {
+  const normalized = normalizeDocumentContentNode(
+    value,
+    defaultStyleId,
+    options
+  );
+  return normalized?.type === 'doc'
+    ? normalized
+    : normalizeDocumentContentNode(
+        createEmptyDocumentContent(),
+        defaultStyleId,
+        options
+      ) as DocumentContentJson;
+};
+
+const applyLegacyTitleFontSize = (
+  content: DocumentContentJson,
+  fontSizePx: number
+): DocumentContentJson => {
+  const applyNode = (node: DocumentContentJson): DocumentContentJson => {
+    const contentNodes = node.content?.map(applyNode);
+    const existingFontSize = normalizeDocumentBlockFontSizePx(
+      node.attrs?.documentStyleFontSizePx
+    );
+    return {
+      ...node,
+      ...(node.type === 'paragraph'
+        ? {
+            attrs: {
+              ...(node.attrs || {}),
+              documentStyleFontSizePx: existingFontSize ?? fontSizePx,
+            },
+          }
+        : {}),
+      ...(contentNodes ? { content: contentNodes } : {}),
+    };
+  };
+  return applyNode(content);
+};
 
 const normalizeOverlayImage = (
   value: unknown,
-  index: number
+  index: number,
+  legacyCaptionPresentation = false
 ): DocumentOverlayImage | null => {
   if (!isObject(value)) return null;
   const assetId = safeString(value.assetId);
@@ -520,6 +771,18 @@ const normalizeOverlayImage = (
     heightPx: normalizePositiveNumber(value.heightPx, 180),
     placement: value.placement === 'behind' ? 'behind' : 'front',
     caption: safeString(value.caption),
+    captionAlignment: normalizeCaptionAlignment(
+      value.captionAlignment,
+      legacyCaptionPresentation ? 'left' : 'inherit'
+    ),
+    captionItalic: normalizeCaptionItalic(
+      value.captionItalic,
+      legacyCaptionPresentation ? true : 'inherit'
+    ),
+    captionSpacingPx: normalizeCaptionSpacing(
+      value.captionSpacingPx,
+      legacyCaptionPresentation ? 5 : 'inherit'
+    ),
     naturalWidth: value.naturalWidth === undefined
       ? undefined
       : normalizePositiveNumber(value.naturalWidth, 1),
@@ -553,7 +816,10 @@ const normalizeScanReference = (value: unknown): ScanReference | undefined => {
 export const normalizeDocumentProjectPage = (
   value: unknown,
   index = 0,
-  folioNumber = index + 1
+  folioNumber = index + 1,
+  documentLanguage = normalizeDocumentLanguage(undefined),
+  legacyArticleTitleFontSizePx?: number,
+  migrateLegacyTypography = false
 ): DocumentPage => {
   const source = isObject(value) ? value : {};
   const size = isObject(source.size) ? source.size : {};
@@ -595,7 +861,11 @@ export const normalizeDocumentProjectPage = (
       : legacyLeftIn;
   const rawOverlays = Array.isArray(source.overlayObjects) ? source.overlayObjects : [];
   const overlayObjects = rawOverlays
-    .map(normalizeOverlayImage)
+    .map((overlay, overlayIndex) => normalizeOverlayImage(
+      overlay,
+      overlayIndex,
+      migrateLegacyTypography
+    ))
     .filter((image): image is DocumentOverlayImage => image !== null)
     .map((image) => constrainDocumentOverlayToPage(image, widthIn, heightIn));
   const rawColumnCount = Number(source.columnCount);
@@ -616,6 +886,22 @@ export const normalizeDocumentProjectPage = (
     outerIn,
   }, widthIn, heightIn);
 
+  const normalizedTitleContent = normalizeDocumentContentStyles(
+    source.titleContent,
+    'article-title',
+    { legacyCaptionPresentation: migrateLegacyTypography }
+  );
+  const sourceTitleFontSizePx = source.titleFontSizePx === undefined
+    ? legacyArticleTitleFontSizePx
+    : clamp(normalizePositiveNumber(source.titleFontSizePx, 42), 8, 240);
+  const titleContent = (
+    legacyArticleTitleFontSizePx !== undefined
+    && sourceTitleFontSizePx !== undefined
+    && Math.abs(sourceTitleFontSizePx - legacyArticleTitleFontSizePx) > 0.001
+  )
+    ? applyLegacyTitleFontSize(normalizedTitleContent, sourceTitleFontSizePx)
+    : normalizedTitleContent;
+
   return {
     kind: 'document',
     id: safeString(source.id) || `document-page-${index + 1}`,
@@ -628,12 +914,18 @@ export const normalizeDocumentProjectPage = (
       dpi: normalizeDimension(size.dpi, 300),
     },
     margins: normalizedMargins,
-    titleContent: normalizeDocumentContent(source.titleContent),
-    bodyContent: normalizeDocumentContent(source.bodyContent),
-    titleFontSizePx: clamp(normalizePositiveNumber(source.titleFontSizePx, 42), 8, 240),
+    titleContent,
+    bodyContent: normalizeDocumentContentStyles(
+      source.bodyContent,
+      'body',
+      { legacyCaptionPresentation: migrateLegacyTypography }
+    ),
     columnCount,
     columnGapPx: clamp(normalizeNonNegativeNumber(source.columnGapPx, 24), 0, 480),
-    dropCap: source.dropCap === true,
+    language: source.language === undefined
+      ? undefined
+      : normalizeDocumentLanguage(source.language, documentLanguage),
+    dropCap: normalizeDocumentDropCap(source.dropCap),
     suppressFolio: source.suppressFolio === true,
     overlayObjects,
     reference: constrainDocumentReferenceToPage(
@@ -710,15 +1002,40 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     );
   }
   const folios = normalizeDocumentFolioSettings(rawDocument.folios);
+  const documentLanguage = normalizeDocumentLanguage(rawDocument.language);
+  const legacyArticleTitleFontSizePx = (
+    editorMode === 'document'
+    && requestedDocumentSchemaVersion < CURRENT_DOCUMENT_SCHEMA_VERSION
+  )
+    ? clamp(
+        normalizePositiveNumber(firstPage?.titleFontSizePx, 42),
+        8,
+        240
+      )
+    : undefined;
+  const migrateLegacyTypography = (
+    editorMode === 'document'
+    && requestedDocumentSchemaVersion < CURRENT_DOCUMENT_SCHEMA_VERSION
+  );
   const normalizedPages = editorMode === 'document'
     ? (
         pageCandidates.length > 0
           ? pageCandidates.map((page, index) => normalizeDocumentProjectPage(
               page,
               index,
-              folios.startingNumber + index
+              folios.startingNumber + index,
+              documentLanguage,
+              legacyArticleTitleFontSizePx,
+              migrateLegacyTypography
             ))
-          : [normalizeDocumentProjectPage(undefined, 0, folios.startingNumber)]
+          : [normalizeDocumentProjectPage(
+              undefined,
+              0,
+              folios.startingNumber,
+              documentLanguage,
+              legacyArticleTitleFontSizePx,
+              migrateLegacyTypography
+            )]
       )
     : pageCandidates.map((page, index) => normalizeCanvasProjectPage(page, index, fallbackSize));
   const pages = normalizedPages as TPage[];

@@ -16,6 +16,9 @@ import {
   DocumentTextStyleExtension,
 } from '../extensions/DocumentTextStyleExtension';
 import {
+  DocumentBlockStyleExtension,
+} from '../extensions/DocumentBlockStyleExtension';
+import {
   SanitizedPasteExtension,
   sanitizeDocumentPastedText,
 } from '../extensions/SanitizedPasteExtension';
@@ -41,6 +44,7 @@ export interface TitleEditorProps {
   ariaLabel?: string;
   className?: string;
   baseFontSizePx?: number;
+  language?: string;
   onUpdate?: (content: JSONContent, editor: Editor) => void;
   onEditorReady?: (editor: Editor | null) => void;
   onFocusChange?: (focused: boolean, editor: Editor) => void;
@@ -57,6 +61,7 @@ export const TitleEditor = ({
   ariaLabel = 'Document title',
   className = '',
   baseFontSizePx = 36,
+  language = 'en',
   onUpdate,
   onEditorReady,
   onFocusChange,
@@ -100,6 +105,9 @@ export const TitleEditor = ({
           types: ['paragraph'],
         }),
         DocumentTextStyleExtension,
+        DocumentBlockStyleExtension.configure({
+          defaultStyleId: 'article-title',
+        }),
         SanitizedPasteExtension,
       ],
       editorProps: {
@@ -184,6 +192,7 @@ export const TitleEditor = ({
       className={`document-title-editor ${className}`.trim()}
       data-testid="document-title-editor"
       data-document-region="title"
+      lang={language}
       style={style}
     >
       <EditorContent

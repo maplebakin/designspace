@@ -98,17 +98,55 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
         const source = assetSources[object.assetId];
         if (!source) return null;
         const selected = object.id === selectedId;
+        const captionAlignment =
+          object.captionAlignment === 'inherit'
+          || object.captionAlignment === 'left'
+          || object.captionAlignment === 'center'
+          || object.captionAlignment === 'right'
+            ? object.captionAlignment
+            : 'inherit';
+        const captionItalic =
+          typeof object.captionItalic === 'boolean'
+          || object.captionItalic === 'inherit'
+            ? object.captionItalic
+            : 'inherit';
+        const captionSpacingPx =
+          object.captionSpacingPx === 'inherit'
+            ? 'inherit'
+            : Number.isFinite(object.captionSpacingPx)
+              ? Math.min(96, Math.max(0, Number(object.captionSpacingPx)))
+              : 'inherit';
+        const captionStyle = {
+          ...(captionAlignment === 'inherit'
+            ? {}
+            : { '--document-caption-alignment': captionAlignment }),
+          ...(captionItalic === 'inherit'
+            ? {}
+            : {
+                '--document-caption-font-style':
+                  captionItalic ? 'italic' : 'normal',
+              }),
+          ...(captionSpacingPx === 'inherit'
+            ? {}
+            : {
+                '--document-caption-spacing': `${captionSpacingPx}px`,
+              }),
+        } as React.CSSProperties;
         return (
           <figure
             key={object.id}
             className={`document-overlay-image ${selected ? 'is-selected' : ''}`}
             data-document-overlay-id={object.id}
             data-testid="document-overlay-image"
+            data-caption-alignment={captionAlignment}
+            data-caption-italic={String(captionItalic)}
+            data-caption-spacing-px={captionSpacingPx}
             style={{
               left: object.xPx,
               top: object.yPx,
               width: object.widthPx,
-            }}
+              ...captionStyle,
+            } as React.CSSProperties}
             onPointerDown={(event) => beginInteraction(event, object, 'move')}
             onPointerMove={moveInteraction}
             onPointerUp={endInteraction}
@@ -123,7 +161,15 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
                 height: object.heightPx,
               }}
             />
-            {object.caption && <figcaption>{object.caption}</figcaption>}
+            {object.caption && (
+              <figcaption
+                data-caption-alignment={captionAlignment}
+                data-caption-italic={String(captionItalic)}
+                data-caption-spacing-px={captionSpacingPx}
+              >
+                {object.caption}
+              </figcaption>
+            )}
             {selected && !object.locked && (
               <button
                 type="button"

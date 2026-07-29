@@ -11,6 +11,9 @@ import {
   inspectLibraryProject,
 } from '../src/editor/project/projectOpenService';
 import type { DocumentPage } from '../src/document/types/documentProject';
+import {
+  DEFAULT_DOCUMENT_DROP_CAP,
+} from '../src/document/typography/documentTypography';
 
 describe('project schema normalization', () => {
   it('wraps old editor-centric payloads into the product-aware schema', () => {
@@ -248,6 +251,11 @@ describe('project schema normalization', () => {
     expect(normalized.editorMode).toBe('document');
     expect(normalized.document).toMatchObject({
       schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+      styles: {
+        'article-title': {
+          fontSizePx: 48,
+        },
+      },
       folios: {
         startingNumber: 1,
         visible: false,
@@ -261,10 +269,12 @@ describe('project schema normalization', () => {
     expect(normalized.pages[0]).toMatchObject({
       kind: 'document',
       id: 'document-page',
-      titleFontSizePx: 48,
       columnCount: 3,
       columnGapPx: 28,
-      dropCap: true,
+      dropCap: {
+        ...DEFAULT_DOCUMENT_DROP_CAP,
+        enabled: true,
+      },
       suppressFolio: false,
       margins: {
         topIn: 0.6,
@@ -287,7 +297,7 @@ describe('project schema normalization', () => {
     });
   });
 
-  it('migrates a one-page document to document schema v1 without changing its story', () => {
+  it('migrates a one-page document to document schema v2 without losing its story', () => {
     const titleContent = {
       type: 'doc',
       content: [{
@@ -358,7 +368,10 @@ describe('project schema normalization', () => {
       bodyContent,
       columnCount: 3,
       columnGapPx: 22,
-      dropCap: true,
+      dropCap: {
+        ...DEFAULT_DOCUMENT_DROP_CAP,
+        enabled: true,
+      },
       suppressFolio: false,
       margins: {
         topIn: 0.6,
@@ -455,8 +468,22 @@ describe('project schema normalization', () => {
     // Page 50 is verso: physical right becomes inner.
     expect(normalized.pages[1].margins.innerIn).toBeCloseTo(0.41, 8);
     expect(normalized.pages[1].margins.outerIn).toBeCloseTo(0.81, 8);
-    expect(normalized.pages[2].bodyContent).toEqual(pages[2].bodyContent);
-    expect(normalized.pages[3].bodyContent).toEqual(pages[3].bodyContent);
+    expect(normalized.pages[2].bodyContent).toMatchObject({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        attrs: { documentStyleId: 'body' },
+        content: [{ type: 'text', text: 'Body 51' }],
+      }],
+    });
+    expect(normalized.pages[3].bodyContent).toMatchObject({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        attrs: { documentStyleId: 'body' },
+        content: [{ type: 'text', text: 'Body 52' }],
+      }],
+    });
   });
 
   it('preserves bounded custom physical page dimensions', () => {

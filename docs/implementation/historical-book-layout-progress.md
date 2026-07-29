@@ -25,8 +25,8 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | Phase | Status | Commit |
 |---|---|---|
 | S0 — Authoritative paper background | Complete | `4e4e4809` |
-| P1 — Multi-page documents and folios | Complete | Pending phase commit |
-| P2 — Historical typography styles | Pending | — |
+| P1 — Multi-page documents and folios | Complete | `9505d48e` |
+| P2 — Historical typography styles | Complete | Pending phase commit |
 | P3 — Shared layout and image geometry | Pending | — |
 | P4 — Image rows and stacks | Pending | — |
 | P5 — Persistence, migrations, assets, recovery | Pending | — |
@@ -187,3 +187,112 @@ Deviations and limitations:
   PDF assembly.
 - Non-finite page indexes are ignored, and derived folios remain consecutive
   even when subsequent page numbers exceed the bounded starting-folio input.
+
+## P2 — Historical typography styles
+
+Status: Complete
+
+Schema changes:
+
+- The nested document schema is now version 2.
+- The document owns a validated language tag and a complete named-style
+  registry for article title, body, subsection heading, caption, quotation,
+  and author/signature roles.
+- Paragraph JSON carries a bounded `documentStyleId`; a bounded
+  `documentStyleFontSizePx` block override exists only to preserve differing
+  per-page legacy title sizes without reintroducing a page-level style source.
+- Each page owns a validated drop-cap settings object and may override the
+  document language.
+- Image and overlay captions store explicit presentation overrides or the
+  `inherit` sentinel, so the named caption style remains functional.
+
+Migration behaviour:
+
+- Schema-v1 title and body appearance is preserved: the former 42px title,
+  dark text colours, left-aligned body, and legacy caption presentation are
+  retained.
+- The first legacy page title size becomes the article-title named style.
+  Differing later-page sizes become safe block overrides, including empty
+  titles and paragraphs created after reopening.
+- `dropCap: true` becomes an enabled bounded settings object.
+- Title, body, heading, quotation, and signature content receives a semantic
+  role while inline marks and unknown structural content remain intact.
+- Persisted inline typography marks are reduced to bounded font size, trusted
+  font-family IDs, validated hex colours, and bounded tracking; hostile or
+  arbitrary CSS-bearing values normalize to `null`.
+- Legacy captions receive explicit left/italic/5px overrides. New captions
+  inherit the centered italic named caption style unless the user chooses an
+  image-specific override.
+
+Files changed:
+
+- `src/document/typography/documentTypography.ts`
+- `src/document/typography/documentTypographyCss.ts`
+- `src/document/extensions/DocumentBlockStyleExtension.ts`
+- `src/document/extensions/DocumentTextStyleExtension.ts`
+- `src/document/extensions/DocumentImageExtension.ts`
+- `src/document/types/documentProject.ts`
+- `src/editor/project/projectSchema.ts`
+- `src/document/state/documentStore.ts`
+- `src/document/components/TitleEditor.tsx`
+- `src/document/components/FlowEditor.tsx`
+- `src/document/components/StructuredDocumentSpanLayout.tsx`
+- `src/document/components/DocumentPageView.tsx`
+- `src/document/components/DocumentProjectExportRenderer.tsx`
+- `src/document/components/DocumentEditorShell.tsx`
+- `src/document/components/DocumentSidebar.tsx`
+- `src/document/components/DocumentToolbar.tsx`
+- `src/document/components/DocumentImageNodeView.tsx`
+- `src/document/components/DocumentOverlayLayer.tsx`
+- `src/document/styles/document-page.css`
+- `docs/architecture/document-typography.md`
+- P2 unit, integration, export-reconstruction, and Playwright tests
+- this implementation journal
+
+Implemented behaviour:
+
+- Users can edit every named style through bounded controls for family, size,
+  colour, line height, paragraph spacing, first-line indent, alignment, weight,
+  italic, tracking, and hyphenation.
+- The body toolbar assigns durable body, subsection, quotation/scripture, and
+  author/signature roles instead of relying on incidental bold text.
+- Document and page language metadata reaches live editors, structured
+  measurement hosts, committed offscreen pages, and export clones.
+- Drop caps have page-level enablement plus bounded family, colour, size,
+  line-span, and spacing controls. The same target and CSS contract is used by
+  ordinary flow, structured flow, and export pseudo-style capture.
+- Browser hyphenation uses the stored language and `hyphens` policy; normal
+  word breaking remains the explicit fallback. Paragraphs retain
+  `widows: 2`/`orphans: 2`.
+- The live page and committed offscreen renderer consume one
+  `getDocumentTypographyCssVariables` adapter; persisted projects contain
+  model values, never CSS stacks or arbitrary declarations.
+- Caption-specific alignment, italic, and spacing controls override the named
+  caption style only when explicitly set.
+
+Tests and verification:
+
+- Focused P2 model, extension, caption, structured-layout, schema, store, and
+  export-renderer suite — 62 tests passed
+- `npm test -- --run` — 23 files, 313 tests passed
+- `npx tsc --noEmit` — passed
+- `npm run lint` — passed
+- `npm run build` — passed
+- `npm run test:e2e -- e2e/document-reconstruction.spec.ts
+  e2e/document-typography.spec.ts` — 7 tests passed
+- Both previously sensitive structured-image Playwright workflows pass after
+  verifying that normalized null block attributes do not reset selection when
+  focus moves to the image inspector.
+
+Deviations and limitations:
+
+- Semantic roles are bounded attributes on Tiptap paragraphs rather than
+  enabling arbitrary HTML heading/blockquote nodes. This preserves the
+  existing editor schema while providing durable roles to all renderers.
+- Named fonts currently resolve to trusted system serif/sans stacks. P6 will
+  add pinned fixture fonts, font readiness, and substitution diagnostics.
+- Keep-with-next is not yet exposed as a model control; subsection roles are
+  ready for a bounded pagination policy when the consolidated P3 layout kernel
+  owns all flow decisions.
+- Active-page PNG and print still originate from the mounted export root.
+  Committed-snapshot PNG/print is intentionally completed in P6.

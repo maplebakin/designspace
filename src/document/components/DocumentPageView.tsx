@@ -13,6 +13,12 @@ import {
   getDocumentPageParity,
   resolveDocumentPhysicalMargins,
 } from '../layout/pageGeometry';
+import type {
+  DocumentNamedStyleRegistry,
+} from '../typography/documentTypography';
+import {
+  getDocumentTypographyCssVariables,
+} from '../typography/documentTypographyCss';
 
 export const hasMeaningfulDocumentContent = (
   content?: DocumentContentJson
@@ -36,6 +42,8 @@ type DocumentPageViewProps = {
   paperColor: string;
   folioNumber: number;
   showFolio: boolean;
+  documentLanguage: string;
+  typographyStyles: DocumentNamedStyleRegistry;
   zoom: number;
   titleEditor: React.ReactNode;
   bodyEditor: React.ReactNode;
@@ -54,6 +62,8 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   paperColor,
   folioNumber,
   showFolio,
+  documentLanguage,
+  typographyStyles,
   zoom,
   titleEditor,
   bodyEditor,
@@ -79,6 +89,11 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
     paddingBottom: `${physicalMargins.bottomIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
     paddingLeft: `${physicalMargins.leftIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
   };
+  const language = page.language || documentLanguage;
+  const typographyStyle = getDocumentTypographyCssVariables(
+    typographyStyles,
+    page.dropCap
+  );
 
   return (
     <div
@@ -99,7 +114,9 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
         <div
           className="document-page-sheet"
           data-testid="document-page"
+          lang={language}
           style={{
+            ...typographyStyle,
             width: widthPx,
             height: heightPx,
             backgroundColor: paperColor,
@@ -129,7 +146,10 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
             data-page-parity={parity}
             data-folio-side={outsideEdge}
             data-paper-color={paperColor}
+            data-document-language={language}
+            lang={language}
             style={{
+              ...typographyStyle,
               width: widthPx,
               height: heightPx,
               backgroundColor: paperColor,
@@ -149,7 +169,6 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               <section
                 className="document-title-region"
                 data-testid="document-title-region"
-                style={{ fontSize: page.titleFontSizePx }}
               >
                 {!hasMeaningfulDocumentContent(page.titleContent) && (
                   <span
@@ -164,8 +183,13 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
                 {titleEditor}
               </section>
               <section
-                className={`document-body-region ${page.dropCap ? 'document-drop-cap' : ''}`}
-                data-document-drop-cap={page.dropCap ? 'true' : 'false'}
+                className={`document-body-region ${
+                  page.dropCap.enabled ? 'document-drop-cap' : ''
+                }`}
+                data-document-drop-cap={
+                  page.dropCap.enabled ? 'true' : 'false'
+                }
+                data-drop-cap-line-span={page.dropCap.lineSpan}
                 data-testid="document-body-region"
                 style={{
                   '--document-column-count': page.columnCount,

@@ -11,6 +11,17 @@ import {
 } from '@tiptap/pm/state';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 import { DocumentImageNodeView } from '../components/DocumentImageNodeView';
+import type {
+  DocumentCaptionAlignment,
+  DocumentCaptionItalic,
+  DocumentCaptionSpacing,
+} from '../types/documentProject';
+
+export type {
+  DocumentCaptionAlignment,
+  DocumentCaptionItalic,
+  DocumentCaptionSpacing,
+} from '../types/documentProject';
 
 export const DOCUMENT_IMAGE_NODE_NAMES = [
   'documentInlineImage',
@@ -54,6 +65,9 @@ export interface DocumentImageAttributes {
   horizontalPlacement: DocumentImageHorizontalPlacement;
   xOffsetPx: number;
   caption: string;
+  captionAlignment: DocumentCaptionAlignment;
+  captionItalic: DocumentCaptionItalic;
+  captionSpacingPx: DocumentCaptionSpacing;
 }
 
 export interface DocumentImageReplaceRequest {
@@ -126,6 +140,9 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   horizontalPlacement: 'left',
   xOffsetPx: 0,
   caption: '',
+  captionAlignment: 'inherit',
+  captionItalic: 'inherit',
+  captionSpacingPx: 'inherit',
 };
 
 const DOCUMENT_IMAGE_VERTICAL_ANCHORS =
@@ -137,6 +154,12 @@ const DOCUMENT_IMAGE_HORIZONTAL_PLACEMENTS =
     'right',
     'custom',
   ]);
+const DOCUMENT_CAPTION_ALIGNMENTS = new Set<DocumentCaptionAlignment>([
+  'inherit',
+  'left',
+  'center',
+  'right',
+]);
 
 const numericAttribute = (
   value: unknown,
@@ -193,6 +216,35 @@ export const normalizeDocumentImageHorizontalPlacement = (
   )
     ? value as DocumentImageHorizontalPlacement
     : 'left';
+
+export const normalizeDocumentCaptionAlignment = (
+  value: unknown
+): DocumentCaptionAlignment =>
+  typeof value === 'string'
+  && DOCUMENT_CAPTION_ALIGNMENTS.has(value as DocumentCaptionAlignment)
+    ? value as DocumentCaptionAlignment
+    : DEFAULT_IMAGE_ATTRIBUTES.captionAlignment;
+
+export const normalizeDocumentCaptionItalic = (
+  value: unknown
+): DocumentCaptionItalic => (
+  value === true || value === 'true'
+    ? true
+    : value === false || value === 'false'
+      ? false
+      : value === 'inherit'
+        ? 'inherit'
+        : DEFAULT_IMAGE_ATTRIBUTES.captionItalic
+);
+
+export const normalizeDocumentCaptionSpacing = (
+  value: unknown
+): DocumentCaptionSpacing => {
+  if (value === 'inherit' || value === undefined || value === null) {
+    return DEFAULT_IMAGE_ATTRIBUTES.captionSpacingPx;
+  }
+  return numericAttribute(value, 5, 0, 96);
+};
 
 export const clampDocumentImageXOffset = (
   value: unknown,
@@ -403,6 +455,13 @@ export const normalizeDocumentImageAttributes = (
       DEFAULT_IMAGE_ATTRIBUTES.xOffsetPx
     ),
     caption: typeof value.caption === 'string' ? value.caption : '',
+    captionAlignment: normalizeDocumentCaptionAlignment(
+      value.captionAlignment
+    ),
+    captionItalic: normalizeDocumentCaptionItalic(value.captionItalic),
+    captionSpacingPx: normalizeDocumentCaptionSpacing(
+      value.captionSpacingPx
+    ),
   };
 };
 
@@ -691,6 +750,45 @@ const createDocumentImageAttributes = (
       element.querySelector('.document-image__caption')?.textContent || '',
     renderHTML: () => ({}),
   },
+  captionAlignment: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.captionAlignment,
+    parseHTML: (element: HTMLElement) =>
+      normalizeDocumentCaptionAlignment(
+        element.getAttribute('data-caption-alignment')
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-caption-alignment': normalizeDocumentCaptionAlignment(
+        attributes.captionAlignment
+      ),
+    }),
+  },
+  captionItalic: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.captionItalic,
+    parseHTML: (element: HTMLElement) =>
+      normalizeDocumentCaptionItalic(
+        element.getAttribute('data-caption-italic')
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-caption-italic': String(
+        normalizeDocumentCaptionItalic(attributes.captionItalic)
+      ),
+    }),
+  },
+  captionSpacingPx: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.captionSpacingPx,
+    parseHTML: (element: HTMLElement) =>
+      normalizeDocumentCaptionSpacing(
+        element.getAttribute('data-caption-spacing-px')
+      ),
+    renderHTML: (attributes: Record<string, unknown>) => {
+      const spacing = normalizeDocumentCaptionSpacing(
+        attributes.captionSpacingPx
+      );
+      return {
+        'data-caption-spacing-px': String(spacing),
+      };
+    },
+  },
 });
 
 const getDefaultOptions = (): DocumentImageExtensionOptions => ({
@@ -725,11 +823,36 @@ const renderImageHtml = (
     },
   ];
   const caption: DOMOutputSpec | null = attributes.caption
-    ? [
-        isInline ? 'span' : 'figcaption',
-        { class: 'document-image__caption' },
-        attributes.caption,
-      ]
+    ? (() => {
+        const captionStyles = [
+          attributes.captionAlignment === 'inherit'
+            ? null
+            : `--document-caption-alignment: ${attributes.captionAlignment}`,
+          attributes.captionItalic === 'inherit'
+            ? null
+            : `--document-caption-font-style: ${
+                attributes.captionItalic ? 'italic' : 'normal'
+              }`,
+          attributes.captionSpacingPx === 'inherit'
+            ? null
+            : `--document-caption-spacing: ${
+                attributes.captionSpacingPx
+              }px`,
+        ].filter((value): value is string => value !== null);
+        return [
+          isInline ? 'span' : 'figcaption',
+          {
+            class: 'document-image__caption',
+            'data-caption-alignment': attributes.captionAlignment,
+            'data-caption-italic': String(attributes.captionItalic),
+            'data-caption-spacing-px': String(attributes.captionSpacingPx),
+            ...(captionStyles.length > 0
+              ? { style: captionStyles.join('; ') }
+              : {}),
+          },
+          attributes.caption,
+        ];
+      })()
     : null;
 
   if (isInline) {

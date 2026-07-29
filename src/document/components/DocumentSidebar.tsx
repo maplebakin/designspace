@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -17,10 +17,20 @@ import type {
 import type {
   DocumentPageOrientation,
 } from '../utils/documentPageOrientation';
+import {
+  DOCUMENT_FONT_FAMILY_IDS,
+  DOCUMENT_STYLE_IDS,
+  type DocumentDropCapSettings,
+  type DocumentNamedStyleDefinition,
+  type DocumentNamedStyleRegistry,
+  type DocumentStyleId,
+} from '../typography/documentTypography';
 
 type DocumentSidebarProps = {
   page: DocumentPage;
   folios: DocumentFolioSettings;
+  documentLanguage: string;
+  styles: DocumentNamedStyleRegistry;
   paperColor: string;
   isOverflowing: boolean;
   collapsed: boolean;
@@ -35,8 +45,13 @@ type DocumentSidebarProps = {
   onMarginChange: (side: keyof DocumentPage['margins'], value: number) => void;
   onColumnCountChange: (count: 1 | 2 | 3) => void;
   onColumnGapChange: (gapPx: number) => void;
-  onTitleFontSizeChange: (sizePx: number) => void;
-  onToggleDropCap: () => void;
+  onDocumentLanguageChange: (language: string) => void;
+  onPageLanguageChange: (language?: string) => void;
+  onStyleChange: (
+    styleId: DocumentStyleId,
+    update: Partial<DocumentNamedStyleDefinition>
+  ) => void;
+  onDropCapChange: (update: Partial<DocumentDropCapSettings>) => void;
   onImportImages: (files: File[]) => void;
   onImportReference: (file: File) => void;
   onToggleReferenceVisibility: () => void;
@@ -63,6 +78,23 @@ const MARGIN_FIELDS: Array<{
   { key: 'innerIn', label: 'Inner' },
   { key: 'outerIn', label: 'Outer' },
 ];
+
+const STYLE_LABELS: Record<DocumentStyleId, string> = {
+  'article-title': 'Article title',
+  body: 'Body',
+  'subsection-heading': 'Subsection heading',
+  caption: 'Caption',
+  quotation: 'Quotation / scripture',
+  'author-signature': 'Author / signature',
+};
+
+const FONT_LABELS = {
+  'historical-serif': 'Historical serif',
+  'book-serif': 'Book serif',
+  'classic-serif': 'Classic serif',
+  'humanist-sans': 'Humanist sans',
+  'system-sans': 'System sans',
+} as const;
 
 const PositionedPhotoList = ({
   overlays,
@@ -99,6 +131,9 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const reference = props.page.reference;
+  const [selectedStyleId, setSelectedStyleId] =
+    useState<DocumentStyleId>('body');
+  const selectedStyle = props.styles[selectedStyleId];
 
   if (props.collapsed) {
     return (
@@ -393,37 +428,6 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             />
           </label>
 
-          <label className="document-field">
-            <span>Title size <small>px</small></span>
-            <input
-              aria-label="Title font size"
-              type="number"
-              min="12"
-              max="120"
-              value={props.page.titleFontSizePx}
-              onChange={(event) => props.onTitleFontSizeChange(
-                Math.max(
-                  12,
-                  numberValue(event.target.value, props.page.titleFontSizePx)
-                )
-              )}
-            />
-          </label>
-
-          <button
-            type="button"
-            data-testid="document-drop-cap-toggle"
-            className={`document-toggle-row ${props.page.dropCap ? 'is-selected' : ''}`}
-            aria-pressed={props.page.dropCap}
-            onClick={props.onToggleDropCap}
-          >
-            <span>
-              <strong>Drop cap</strong>
-              <small>Enlarge the first body letter</small>
-            </span>
-            <span className="document-switch" aria-hidden="true" />
-          </button>
-
           <div
             className={`document-overflow-status ${props.isOverflowing ? 'is-warning' : ''}`}
             data-testid="document-sidebar-overflow-status"
@@ -434,6 +438,391 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               ? 'Content exceeds this page'
               : 'Content fits on this page'}
           </div>
+        </section>
+
+        <section
+          className="document-sidebar-section"
+          aria-labelledby="document-typography-settings"
+        >
+          <h2 id="document-typography-settings">Typography</h2>
+
+          <label className="document-field">
+            <span>Document language</span>
+            <select
+              aria-label="Document language"
+              data-testid="document-language"
+              value={props.documentLanguage}
+              onChange={(event) => props.onDocumentLanguageChange(
+                event.target.value
+              )}
+            >
+              {!['en', 'de', 'fr', 'nl'].includes(
+                props.documentLanguage
+              ) && (
+                <option value={props.documentLanguage}>
+                  {props.documentLanguage}
+                </option>
+              )}
+              <option value="en">English</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="nl">Dutch</option>
+            </select>
+          </label>
+
+          <label className="document-field">
+            <span>This page language</span>
+            <select
+              aria-label="Page language"
+              data-testid="document-page-language"
+              value={props.page.language || ''}
+              onChange={(event) => props.onPageLanguageChange(
+                event.target.value || undefined
+              )}
+            >
+              <option value="">Inherit document ({props.documentLanguage})</option>
+              {props.page.language
+                && !['en', 'de', 'fr', 'nl'].includes(
+                  props.page.language
+                ) && (
+                  <option value={props.page.language}>
+                    {props.page.language}
+                  </option>
+                )}
+              <option value="en">English</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="nl">Dutch</option>
+            </select>
+          </label>
+
+          <label className="document-field">
+            <span>Named style</span>
+            <select
+              aria-label="Named typography style"
+              data-testid="document-named-style"
+              value={selectedStyleId}
+              onChange={(event) => setSelectedStyleId(
+                event.target.value as DocumentStyleId
+              )}
+            >
+              {DOCUMENT_STYLE_IDS.map((styleId) => (
+                <option key={styleId} value={styleId}>
+                  {STYLE_LABELS[styleId]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="document-field">
+            <span>Font family</span>
+            <select
+              aria-label="Named style font family"
+              value={selectedStyle.fontFamilyId}
+              onChange={(event) => props.onStyleChange(selectedStyleId, {
+                fontFamilyId: event.target.value as
+                  DocumentNamedStyleDefinition['fontFamilyId'],
+              })}
+            >
+              {DOCUMENT_FONT_FAMILY_IDS.map((fontId) => (
+                <option key={fontId} value={fontId}>
+                  {FONT_LABELS[fontId]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="document-margin-grid">
+            <label className="document-field">
+              <span>Size <small>px</small></span>
+              <input
+                aria-label="Named style font size"
+                type="number"
+                min="6"
+                max="240"
+                step="0.5"
+                value={selectedStyle.fontSizePx}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  fontSizePx: numberValue(
+                    event.target.value,
+                    selectedStyle.fontSizePx
+                  ),
+                })}
+              />
+            </label>
+            <label className="document-field">
+              <span>Line height</span>
+              <input
+                aria-label="Named style line height"
+                type="number"
+                min="0.75"
+                max="3"
+                step="0.05"
+                value={selectedStyle.lineHeight}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  lineHeight: numberValue(
+                    event.target.value,
+                    selectedStyle.lineHeight
+                  ),
+                })}
+              />
+            </label>
+            <label className="document-field">
+              <span>After <small>px</small></span>
+              <input
+                aria-label="Named style paragraph spacing"
+                type="number"
+                min="0"
+                max="192"
+                value={selectedStyle.paragraphSpacingPx}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  paragraphSpacingPx: numberValue(
+                    event.target.value,
+                    selectedStyle.paragraphSpacingPx
+                  ),
+                })}
+              />
+            </label>
+            <label className="document-field">
+              <span>Indent <small>px</small></span>
+              <input
+                aria-label="Named style first line indent"
+                type="number"
+                min="0"
+                max="480"
+                value={selectedStyle.firstLineIndentPx}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  firstLineIndentPx: numberValue(
+                    event.target.value,
+                    selectedStyle.firstLineIndentPx
+                  ),
+                })}
+              />
+            </label>
+            <label className="document-field">
+              <span>Tracking <small>em</small></span>
+              <input
+                aria-label="Named style tracking"
+                type="number"
+                min="-0.15"
+                max="0.5"
+                step="0.01"
+                value={selectedStyle.trackingEm}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  trackingEm: numberValue(
+                    event.target.value,
+                    selectedStyle.trackingEm
+                  ),
+                })}
+              />
+            </label>
+            <label className="document-field">
+              <span>Weight</span>
+              <select
+                aria-label="Named style font weight"
+                value={selectedStyle.fontWeight}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  fontWeight: Number(event.target.value) as
+                    DocumentNamedStyleDefinition['fontWeight'],
+                })}
+              >
+                <option value="400">Regular</option>
+                <option value="500">Medium</option>
+                <option value="600">Semibold</option>
+                <option value="700">Bold</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="document-field document-paper-color-field">
+            <span>Text colour <output>{selectedStyle.color}</output></span>
+            <input
+              aria-label="Named style text colour"
+              type="color"
+              value={selectedStyle.color}
+              onChange={(event) => props.onStyleChange(selectedStyleId, {
+                color: event.target.value,
+              })}
+            />
+          </label>
+
+          <div className="document-margin-grid">
+            <label className="document-field">
+              <span>Alignment</span>
+              <select
+                aria-label="Named style alignment"
+                value={selectedStyle.alignment}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  alignment: event.target.value as
+                    DocumentNamedStyleDefinition['alignment'],
+                })}
+              >
+                <option value="left">Left</option>
+                <option value="center">Centre</option>
+                <option value="right">Right</option>
+                <option value="justify">Justify</option>
+              </select>
+            </label>
+            <label className="document-field">
+              <span>Hyphenation</span>
+              <select
+                aria-label="Named style hyphenation"
+                value={selectedStyle.hyphenation}
+                onChange={(event) => props.onStyleChange(selectedStyleId, {
+                  hyphenation: event.target.value as
+                    DocumentNamedStyleDefinition['hyphenation'],
+                })}
+              >
+                <option value="auto">Automatic</option>
+                <option value="manual">Manual only</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+          </div>
+
+          <button
+            type="button"
+            data-testid="document-style-italic"
+            className={`document-toggle-row ${
+              selectedStyle.italic ? 'is-selected' : ''
+            }`}
+            aria-pressed={selectedStyle.italic}
+            onClick={() => props.onStyleChange(selectedStyleId, {
+              italic: !selectedStyle.italic,
+            })}
+          >
+            <span>
+              <strong>Italic named style</strong>
+              <small>Applies wherever this semantic role is used</small>
+            </span>
+            <span className="document-switch" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="document-drop-cap-toggle"
+            className={`document-toggle-row ${
+              props.page.dropCap.enabled ? 'is-selected' : ''
+            }`}
+            aria-pressed={props.page.dropCap.enabled}
+            onClick={() => props.onDropCapChange({
+              enabled: !props.page.dropCap.enabled,
+            })}
+          >
+            <span>
+              <strong>Drop cap on this page</strong>
+              <small>Enlarge the first body letter</small>
+            </span>
+            <span className="document-switch" aria-hidden="true" />
+          </button>
+
+          {props.page.dropCap.enabled && (
+            <div
+              className="document-margin-grid"
+              data-testid="document-drop-cap-settings"
+            >
+              <label className="document-field">
+                <span>Size <small>em</small></span>
+                <input
+                  aria-label="Drop cap size"
+                  type="number"
+                  min="1"
+                  max="12"
+                  step="0.05"
+                  value={props.page.dropCap.sizeEm}
+                  onChange={(event) => props.onDropCapChange({
+                    sizeEm: numberValue(
+                      event.target.value,
+                      props.page.dropCap.sizeEm
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-field">
+                <span>Lines</span>
+                <input
+                  aria-label="Drop cap line span"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={props.page.dropCap.lineSpan}
+                  onChange={(event) => props.onDropCapChange({
+                    lineSpan: numberValue(
+                      event.target.value,
+                      props.page.dropCap.lineSpan
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-field">
+                <span>Gap <small>px</small></span>
+                <input
+                  aria-label="Drop cap spacing"
+                  type="number"
+                  min="0"
+                  max="96"
+                  value={props.page.dropCap.spacingPx}
+                  onChange={(event) => props.onDropCapChange({
+                    spacingPx: numberValue(
+                      event.target.value,
+                      props.page.dropCap.spacingPx
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-field">
+                <span>Font</span>
+                <select
+                  aria-label="Drop cap font family"
+                  value={props.page.dropCap.fontFamilyId}
+                  onChange={(event) => props.onDropCapChange({
+                    fontFamilyId: event.target.value as
+                      DocumentDropCapSettings['fontFamilyId'],
+                  })}
+                >
+                  <option value="inherit">Inherit body</option>
+                  {DOCUMENT_FONT_FAMILY_IDS.map((fontId) => (
+                    <option key={fontId} value={fontId}>
+                      {FONT_LABELS[fontId]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="document-field">
+                <span>Colour</span>
+                <select
+                  aria-label="Drop cap colour mode"
+                  value={
+                    props.page.dropCap.color === 'inherit'
+                      ? 'inherit'
+                      : 'custom'
+                  }
+                  onChange={(event) => props.onDropCapChange({
+                    color: event.target.value === 'inherit'
+                      ? 'inherit'
+                      : props.styles.body.color,
+                  })}
+                >
+                  <option value="inherit">Inherit body</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              {props.page.dropCap.color !== 'inherit' && (
+                <label className="document-field document-paper-color-field">
+                  <span>Drop cap colour</span>
+                  <input
+                    aria-label="Drop cap custom colour"
+                    type="color"
+                    value={props.page.dropCap.color}
+                    onChange={(event) => props.onDropCapChange({
+                      color: event.target.value,
+                    })}
+                  />
+                </label>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="document-sidebar-section" aria-labelledby="document-insert-settings">
