@@ -10,6 +10,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import type {
+  DocumentFolioSettings,
   DocumentOverlayImage,
   DocumentPage,
 } from '../types/documentProject';
@@ -19,14 +20,18 @@ import type {
 
 type DocumentSidebarProps = {
   page: DocumentPage;
+  folios: DocumentFolioSettings;
   paperColor: string;
   isOverflowing: boolean;
   collapsed: boolean;
   selectedOverlayId: string | null;
   onCollapsedChange: (collapsed: boolean) => void;
-  onPresetChange: (preset: 'letter' | 'a4') => void;
+  onPresetChange: (preset: 'letter' | 'a4' | 'custom') => void;
   onOrientationChange: (orientation: DocumentPageOrientation) => void;
+  onCustomSizeChange: (update: { widthIn?: number; heightIn?: number }) => void;
   onPaperColorChange: (value: string) => void;
+  onFolioSettingsChange: (update: Partial<DocumentFolioSettings>) => void;
+  onSuppressFolioChange: (suppressed: boolean) => void;
   onMarginChange: (side: keyof DocumentPage['margins'], value: number) => void;
   onColumnCountChange: (count: 1 | 2 | 3) => void;
   onColumnGapChange: (gapPx: number) => void;
@@ -54,9 +59,9 @@ const MARGIN_FIELDS: Array<{
   label: string;
 }> = [
   { key: 'topIn', label: 'Top' },
-  { key: 'rightIn', label: 'Right' },
   { key: 'bottomIn', label: 'Bottom' },
-  { key: 'leftIn', label: 'Left' },
+  { key: 'innerIn', label: 'Inner' },
+  { key: 'outerIn', label: 'Outer' },
 ];
 
 const PositionedPhotoList = ({
@@ -155,15 +160,70 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             <select
               aria-label="Page preset"
               data-testid="document-page-preset"
-              value={props.page.size.presetId === 'a4' ? 'a4' : 'letter'}
+              value={props.page.size.presetId}
               onChange={(event) => props.onPresetChange(
-                event.target.value as 'letter' | 'a4'
+                event.target.value as 'letter' | 'a4' | 'custom'
               )}
             >
               <option value="letter">Letter — 8.5 × 11 in</option>
               <option value="a4">A4 — 210 × 297 mm</option>
+              <option value="custom">Custom dimensions</option>
             </select>
           </label>
+
+          {props.page.size.presetId === 'custom' && (
+            <div
+              className="document-margin-grid"
+              data-testid="document-custom-page-size"
+            >
+              <label className="document-field">
+                <span>Width <small>inches</small></span>
+                <input
+                  aria-label="Custom page width in inches"
+                  type="number"
+                  min="1"
+                  max="24"
+                  step="0.05"
+                  value={props.page.size.widthIn}
+                  onChange={(event) => props.onCustomSizeChange({
+                    widthIn: Math.min(
+                      24,
+                      Math.max(
+                        1,
+                        numberValue(
+                          event.target.value,
+                          props.page.size.widthIn
+                        )
+                      )
+                    ),
+                  })}
+                />
+              </label>
+              <label className="document-field">
+                <span>Height <small>inches</small></span>
+                <input
+                  aria-label="Custom page height in inches"
+                  type="number"
+                  min="1"
+                  max="24"
+                  step="0.05"
+                  value={props.page.size.heightIn}
+                  onChange={(event) => props.onCustomSizeChange({
+                    heightIn: Math.min(
+                      24,
+                      Math.max(
+                        1,
+                        numberValue(
+                          event.target.value,
+                          props.page.size.heightIn
+                        )
+                      )
+                    ),
+                  })}
+                />
+              </label>
+            </div>
+          )}
 
           <div className="document-field">
             <span>Orientation</span>
@@ -236,6 +296,57 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               ))}
             </div>
           </fieldset>
+
+          <label className="document-field">
+            <span>Starting folio</span>
+            <input
+              aria-label="Starting folio number"
+              data-testid="document-starting-folio"
+              type="number"
+              min="1"
+              max="999999"
+              step="1"
+              value={props.folios.startingNumber}
+              onChange={(event) => props.onFolioSettingsChange({
+                startingNumber: numberValue(
+                  event.target.value,
+                  props.folios.startingNumber
+                ),
+              })}
+            />
+          </label>
+
+          <button
+            type="button"
+            data-testid="document-show-folios"
+            className={`document-toggle-row ${props.folios.visible ? 'is-selected' : ''}`}
+            aria-pressed={props.folios.visible}
+            onClick={() => props.onFolioSettingsChange({
+              visible: !props.folios.visible,
+            })}
+          >
+            <span>
+              <strong>Show page numbers</strong>
+              <small>Place folios at the outside bottom edge</small>
+            </span>
+            <span className="document-switch" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="document-suppress-folio"
+            className={`document-toggle-row ${props.page.suppressFolio ? 'is-selected' : ''}`}
+            aria-pressed={props.page.suppressFolio}
+            onClick={() => props.onSuppressFolioChange(
+              !props.page.suppressFolio
+            )}
+          >
+            <span>
+              <strong>Hide number on this page</strong>
+              <small>Keep numbering for the following pages</small>
+            </span>
+            <span className="document-switch" aria-hidden="true" />
+          </button>
         </section>
 
         <section className="document-sidebar-section" aria-labelledby="document-layout-settings">

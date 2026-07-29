@@ -1,4 +1,4 @@
-import { PDFDocument } from 'pdf-lib';
+import { PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CSS_PIXELS_PER_INCH,
@@ -33,6 +33,16 @@ const blobToBytes = (blob: Blob) => new Promise<Uint8Array>((resolve, reject) =>
   reader.onerror = () => reject(reader.error || new Error('Failed to read Blob.'));
   reader.readAsArrayBuffer(blob);
 });
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
 
 describe('document export', () => {
   afterEach(() => {
@@ -317,6 +327,141 @@ describe('document export', () => {
     expect(a4LandscapePdf.getPage(0).getHeight())
       .toBeCloseTo((210 / 25.4) * 72, 4);
     expect(pngSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it('exports four ordered pages with independent physical sizes and image resources', async () => {
+    const service = new DocumentExportService();
+    const pageIds = ['page-49', 'page-50', 'page-51', 'page-52'];
+    const elements = pageIds.map((pageId) => {
+      const element = document.createElement('main');
+      element.dataset.pageId = pageId;
+      return element;
+    });
+    const options = [
+      { widthIn: 8.5, heightIn: 11, dpi: 300, backgroundColor: '#FAF8F5' },
+      { widthIn: 8.27, heightIn: 11.69, dpi: 300, backgroundColor: '#F4EBD8' },
+      { widthIn: 11, heightIn: 8.5, dpi: 300, backgroundColor: '#FAF8F5' },
+      { widthIn: 7.25, heightIn: 10.5, dpi: 300, backgroundColor: '#FAF8F5' },
+    ];
+    const rasterizedPageIds: string[] = [];
+    const pngSpy = vi.spyOn(service, 'exportPngBlob').mockImplementation(
+      async (element, pageOptions) => {
+        rasterizedPageIds.push(element.dataset.pageId ?? '');
+        const pageIndex = elements.indexOf(element);
+        expect(pageOptions).toBe(options[pageIndex]);
+        return tinyPng;
+      }
+    );
+
+    const pdfBlob = await service.exportPdfPagesBlob(
+      pageIds.map((pageId, pageIndex) => ({
+        pageId,
+        element: elements[pageIndex],
+        options: options[pageIndex],
+      }))
+    );
+    const pdf = await PDFDocument.load(await blobToBytes(pdfBlob));
+    const pages = pdf.getPages();
+
+    expect(rasterizedPageIds).toEqual(pageIds);
+    expect(pngSpy).toHaveBeenCalledTimes(4);
+    expect(pages).toHaveLength(4);
+    expect(pages.map((page) => [page.getWidth(), page.getHeight()])).toEqual([
+      [8.5 * 72, 11 * 72],
+      [8.27 * 72, 11.69 * 72],
+      [11 * 72, 8.5 * 72],
+      [7.25 * 72, 10.5 * 72],
+    ]);
+
+    const resources = pages[0].node.Resources();
+    expect(resources).toBeDefined();
+    const imageResources = resources?.lookup(PDFName.of('XObject'), PDFDict);
+    expect(imageResources).toBeDefined();
+    expect(new Set(
+      imageResources?.entries().map(([, reference]) => reference.toString())
+    ).size).toBe(4);
+
+    expect(pages.map((page) => {
+      const contents = page.node.Contents();
+      expect(contents).toBeInstanceOf(PDFRawStream);
+      return (contents as PDFRawStream).getContentsString().match(/\/I\d+ Do/)?.[0];
+    })).toEqual(['/I0 Do', '/I1 Do', '/I2 Do', '/I3 Do']);
+  });
+
+  it('rejects a multi-page PDF export with no page sources', async () => {
+    const service = new DocumentExportService();
+    const pngSpy = vi.spyOn(service, 'exportPngBlob');
+
+    await expect(service.exportPdfPagesBlob([])).rejects.toThrow(
+      /at least one document page/i
+    );
+    expect(pngSpy).not.toHaveBeenCalled();
+  });
+
+  it('rasterizes multi-page PDF sources sequentially', async () => {
+    const service = new DocumentExportService();
+    const elements = Array.from({ length: 3 }, (_, index) => {
+      const element = document.createElement('main');
+      element.dataset.pageId = `page-${index + 1}`;
+      return element;
+    });
+    const pendingPages = elements.map(() => createDeferred<Blob>());
+    let rasterizationIndex = 0;
+    const pngSpy = vi.spyOn(service, 'exportPngBlob').mockImplementation(() => {
+      const pendingPage = pendingPages[rasterizationIndex];
+      rasterizationIndex += 1;
+      return pendingPage.promise;
+    });
+    const sources = elements.map((element, index) => ({
+      pageId: element.dataset.pageId ?? `page-${index + 1}`,
+      element,
+      options: { widthIn: 8.5, heightIn: 11 },
+    }));
+
+    const exporting = service.exportPdfPagesBlob(sources);
+    expect(pngSpy).toHaveBeenCalledTimes(1);
+    expect(pngSpy.mock.calls[0][0]).toBe(elements[0]);
+
+    pendingPages[0].resolve(tinyPng);
+    await vi.waitFor(() => expect(pngSpy).toHaveBeenCalledTimes(2));
+    expect(pngSpy.mock.calls[1][0]).toBe(elements[1]);
+
+    pendingPages[1].resolve(tinyPng);
+    await vi.waitFor(() => expect(pngSpy).toHaveBeenCalledTimes(3));
+    expect(pngSpy.mock.calls[2][0]).toBe(elements[2]);
+
+    pendingPages[2].resolve(tinyPng);
+    const pdf = await PDFDocument.load(await blobToBytes(await exporting));
+    expect(pdf.getPageCount()).toBe(3);
+  });
+
+  it('downloads a multi-page PDF with a sanitized filename', async () => {
+    const service = new DocumentExportService();
+    const source = {
+      pageId: 'page-49',
+      element: document.createElement('main'),
+      options: { widthIn: 8.5, heightIn: 11 },
+    };
+    vi.spyOn(service, 'exportPdfPagesBlob').mockResolvedValue(tinyPng);
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:multi-page-document');
+    const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL')
+      .mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    const result = await service.downloadPdfPages(
+      [source],
+      'Historical Pages 49–52'
+    );
+
+    expect(result).toEqual({
+      blob: tinyPng,
+      fileName: 'historical-pages-4952.pdf',
+    });
+    expect(createObjectUrl).toHaveBeenCalledWith(tinyPng);
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:multi-page-document');
   });
 
   it('downloads sanitized filenames and revokes the temporary URL', () => {

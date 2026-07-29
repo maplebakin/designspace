@@ -219,6 +219,150 @@ test.describe('document reconstruction MVP', () => {
     }).toBe(true);
   });
 
+  test('edits, reorders, persists, and exports four independently numbered pages', async ({ page }) => {
+    test.slow();
+    test.setTimeout(180_000);
+
+    await page.goto('/');
+    await page.getByTestId('dashboard-new-document').click();
+    await page.getByTestId('document-project-name').fill(
+      'Historical Four Page Article'
+    );
+    await page.getByTestId('document-starting-folio').fill('49');
+    await expect(page.getByTestId('document-show-folios')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    await page.getByTestId('document-show-folios').click();
+    await expect(page.getByTestId('document-show-folios')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+
+    const title = page.locator('.document-title-prosemirror');
+    const body = page.locator('.document-flow-prosemirror');
+    const editActivePage = async (folio: number) => {
+      await title.fill(`Historical title ${folio}`);
+      await body.fill(`Independent story for source page ${folio}.`);
+      await expect(title).toContainText(`Historical title ${folio}`);
+      await expect(body).toContainText(
+        `Independent story for source page ${folio}.`
+      );
+    };
+
+    await editActivePage(49);
+    for (const folio of [50, 51, 52]) {
+      await page.getByTestId('document-add-page').click();
+      const pageIndex = folio - 49;
+      await expect(page.getByTestId(
+        `document-page-tab-${pageIndex}`
+      )).toHaveAttribute('aria-selected', 'true');
+      await editActivePage(folio);
+    }
+    await expect(page.getByTestId('document-page-navigation').getByRole(
+      'tab'
+    )).toHaveCount(4);
+
+    const sourceStoryByIndex = [49, 50, 51, 52];
+    const verifyPage = async (
+      pageIndex: number,
+      folio: number,
+      sourceStory: number,
+      side: 'left' | 'right'
+    ) => {
+      await page.getByTestId(`document-page-tab-${pageIndex}`).click();
+      await expect(page.getByTestId(
+        `document-page-tab-${pageIndex}`
+      )).toHaveAttribute('aria-selected', 'true');
+      await expect(title).toContainText(`Historical title ${sourceStory}`);
+      await expect(body).toContainText(
+        `Independent story for source page ${sourceStory}.`
+      );
+      await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+        'data-folio-number',
+        String(folio)
+      );
+      await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+        'data-page-parity',
+        folio % 2 === 0 ? 'verso' : 'recto'
+      );
+      await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+        'data-folio-side',
+        side
+      );
+      await expect(page.getByTestId('document-folio')).toHaveText(
+        String(folio)
+      );
+      await expect(page.getByTestId('document-folio')).toHaveAttribute(
+        'data-folio-side',
+        side
+      );
+    };
+
+    for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+      const folio = 49 + pageIndex;
+      await verifyPage(
+        pageIndex,
+        folio,
+        sourceStoryByIndex[pageIndex],
+        folio % 2 === 0 ? 'left' : 'right'
+      );
+    }
+
+    await page.getByTestId('document-page-tab-2').click();
+    await page.getByTestId('document-suppress-folio').click();
+    await expect(page.getByTestId('document-folio')).toHaveCount(0);
+    await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+      'data-folio-number',
+      '51'
+    );
+    await page.getByTestId('document-suppress-folio').click();
+    await expect(page.getByTestId('document-folio')).toHaveText('51');
+
+    // Move source page 51 one slot left. Its story follows the page, while
+    // folios are derived from the new order.
+    await page.getByTestId('document-move-page-left').click();
+    await verifyPage(1, 50, 51, 'left');
+    await verifyPage(2, 51, 50, 'right');
+    const reorderedSourceStories = [49, 51, 50, 52];
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    const savedCard = page.getByTestId('dashboard-project-card').filter({
+      hasText: 'Historical Four Page Article',
+    });
+    await expect(savedCard).toBeVisible();
+    await savedCard.getByRole('button').first().click();
+
+    await expect(page.getByTestId('document-editor-shell')).toBeVisible();
+    await expect(page.getByTestId('document-page-navigation').getByRole(
+      'tab'
+    )).toHaveCount(4);
+    for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+      const folio = 49 + pageIndex;
+      await verifyPage(
+        pageIndex,
+        folio,
+        reorderedSourceStories[pageIndex],
+        folio % 2 === 0 ? 'left' : 'right'
+      );
+    }
+
+    const pdfDownloadPromise = page.waitForEvent('download');
+    await (await openExportFormat(page, 'PDF')).click();
+    const pdfDownload = await pdfDownloadPromise;
+    const pdfPath = await pdfDownload.path();
+    expect(pdfPath).not.toBeNull();
+    const pdf = await PDFDocument.load(await readFile(pdfPath!));
+    const pdfPages = pdf.getPages();
+    expect(pdfPages).toHaveLength(4);
+    for (const pdfPage of pdfPages) {
+      expect(pdfPage.getWidth()).toBeCloseTo(8.5 * 72, 1);
+      expect(pdfPage.getHeight()).toBeCloseTo(11 * 72, 1);
+    }
+  });
+
   test('builds and persists the family-history span across columns 2–3', async ({ page }) => {
     test.slow();
     test.setTimeout(120_000);

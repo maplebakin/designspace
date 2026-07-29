@@ -1,11 +1,13 @@
 import type { UnitMode } from '../utils/units';
 import type {
   DocumentContentJson,
+  DocumentFolioSettings,
   DocumentOverlayImage,
   DocumentPage,
   ScanReference,
 } from '../../document/types/documentProject';
 import {
+  constrainDocumentPageMargins,
   constrainDocumentOverlayToPage,
   constrainDocumentReferenceToPage,
   getDocumentPaperDimensions,
@@ -14,9 +16,15 @@ import {
   DEFAULT_DOCUMENT_PAPER_COLOR,
   normalizeDocumentPaperColor,
 } from '../../document/utils/documentColor';
+import {
+  MAX_DOCUMENT_FOLIO_NUMBER,
+  MIN_DOCUMENT_FOLIO_NUMBER,
+  getDocumentPageParity,
+} from '../../document/layout/pageGeometry';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 1 as const;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
 export type SupportedDesignSpaceProjectSchemaVersion =
@@ -56,11 +64,13 @@ export type ProjectPageSize = {
 };
 
 export type ProjectDocument = {
+  schemaVersion?: number;
   pageSize: ProjectPageSize;
   background?: {
     tokenRole?: string;
     value: string;
   };
+  folios?: DocumentFolioSettings;
   bleedPx?: number;
   safeMarginPx?: number;
 };
@@ -168,6 +178,10 @@ export type CanvasProjectPayload = ProductAwareProjectPayload<CanvasProjectPage>
 
 export type DocumentProjectPayload = ProductAwareProjectPayload<DocumentPage> & {
   editorMode: 'document';
+  document: ProjectDocument & {
+    schemaVersion: typeof CURRENT_DOCUMENT_SCHEMA_VERSION;
+    folios: DocumentFolioSettings;
+  };
 };
 
 export type DesignSpaceProjectPayload = CanvasProjectPayload | DocumentProjectPayload;
@@ -254,6 +268,18 @@ const normalizeNonNegativeNumber = (value: unknown, fallback: number) => {
 const normalizeFiniteNumber = (value: unknown, fallback: number) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const normalizeInteger = (
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number
+) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric)
+    ? clamp(Math.trunc(numeric), minimum, maximum)
+    : fallback;
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -361,6 +387,22 @@ const normalizeDocument = (
       : undefined,
     bleedPx: typeof document.bleedPx === 'number' ? document.bleedPx : undefined,
     safeMarginPx: typeof document.safeMarginPx === 'number' ? document.safeMarginPx : undefined,
+  };
+};
+
+const normalizeDocumentFolioSettings = (
+  value: unknown
+): DocumentFolioSettings => {
+  const source = isObject(value) ? value : {};
+  return {
+    startingNumber: normalizeInteger(
+      source.startingNumber,
+      MIN_DOCUMENT_FOLIO_NUMBER,
+      MIN_DOCUMENT_FOLIO_NUMBER,
+      MAX_DOCUMENT_FOLIO_NUMBER
+    ),
+    visible: source.visible === true,
+    placement: 'outside-bottom',
   };
 };
 
@@ -510,17 +552,47 @@ const normalizeScanReference = (value: unknown): ScanReference | undefined => {
 
 export const normalizeDocumentProjectPage = (
   value: unknown,
-  index = 0
+  index = 0,
+  folioNumber = index + 1
 ): DocumentPage => {
   const source = isObject(value) ? value : {};
   const size = isObject(source.size) ? source.size : {};
-  const presetId = size.presetId === 'a4' ? 'a4' : 'letter';
+  const presetId =
+    size.presetId === 'a4'
+      ? 'a4'
+      : size.presetId === 'custom'
+        ? 'custom'
+        : 'letter';
   const orientation = size.orientation === 'landscape' ? 'landscape' : 'portrait';
-  const { widthIn, heightIn } = getDocumentPaperDimensions(
-    presetId,
-    orientation
-  );
+  const presetDimensions = presetId === 'custom'
+    ? null
+    : getDocumentPaperDimensions(presetId, orientation);
+  const widthIn = presetDimensions?.widthIn
+    ?? clamp(normalizePositiveNumber(size.widthIn, 8.5), 1, 24);
+  const heightIn = presetDimensions?.heightIn
+    ?? clamp(normalizePositiveNumber(size.heightIn, 11), 1, 24);
   const margins = isObject(source.margins) ? source.margins : {};
+  const legacyLeftIn = clamp(
+    normalizeNonNegativeNumber(margins.leftIn, 0.5),
+    0,
+    widthIn
+  );
+  const legacyRightIn = clamp(
+    normalizeNonNegativeNumber(margins.rightIn, 0.5),
+    0,
+    widthIn
+  );
+  const isRecto = getDocumentPageParity(folioNumber) === 'recto';
+  const innerIn = margins.innerIn !== undefined
+    ? clamp(normalizeNonNegativeNumber(margins.innerIn, 0.5), 0, widthIn)
+    : isRecto
+      ? legacyLeftIn
+      : legacyRightIn;
+  const outerIn = margins.outerIn !== undefined
+    ? clamp(normalizeNonNegativeNumber(margins.outerIn, 0.5), 0, widthIn)
+    : isRecto
+      ? legacyRightIn
+      : legacyLeftIn;
   const rawOverlays = Array.isArray(source.overlayObjects) ? source.overlayObjects : [];
   const overlayObjects = rawOverlays
     .map(normalizeOverlayImage)
@@ -529,6 +601,20 @@ export const normalizeDocumentProjectPage = (
   const rawColumnCount = Number(source.columnCount);
   const columnCount: 1 | 2 | 3 =
     rawColumnCount === 2 || rawColumnCount === 3 ? rawColumnCount : 1;
+  const normalizedMargins = constrainDocumentPageMargins({
+    topIn: clamp(
+      normalizeNonNegativeNumber(margins.topIn, 0.5),
+      0,
+      heightIn
+    ),
+    bottomIn: clamp(
+      normalizeNonNegativeNumber(margins.bottomIn, 0.5),
+      0,
+      heightIn
+    ),
+    innerIn,
+    outerIn,
+  }, widthIn, heightIn);
 
   return {
     kind: 'document',
@@ -541,18 +627,14 @@ export const normalizeDocumentProjectPage = (
       heightIn,
       dpi: normalizeDimension(size.dpi, 300),
     },
-    margins: {
-      topIn: clamp(normalizeNonNegativeNumber(margins.topIn, 0.5), 0, heightIn),
-      rightIn: clamp(normalizeNonNegativeNumber(margins.rightIn, 0.5), 0, widthIn),
-      bottomIn: clamp(normalizeNonNegativeNumber(margins.bottomIn, 0.5), 0, heightIn),
-      leftIn: clamp(normalizeNonNegativeNumber(margins.leftIn, 0.5), 0, widthIn),
-    },
+    margins: normalizedMargins,
     titleContent: normalizeDocumentContent(source.titleContent),
     bodyContent: normalizeDocumentContent(source.bodyContent),
     titleFontSizePx: clamp(normalizePositiveNumber(source.titleFontSizePx, 42), 8, 240),
     columnCount,
     columnGapPx: clamp(normalizeNonNegativeNumber(source.columnGapPx, 24), 0, 480),
     dropCap: source.dropCap === true,
+    suppressFolio: source.suppressFolio === true,
     overlayObjects,
     reference: constrainDocumentReferenceToPage(
       normalizeScanReference(source.reference),
@@ -608,11 +690,35 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     width: normalizeDimension((fallbackCanvasSize as any)?.width, DEFAULT_PAGE_SIZE.width),
     height: normalizeDimension((fallbackCanvasSize as any)?.height, DEFAULT_PAGE_SIZE.height),
   };
+  const rawDocument = isObject(raw.document) ? raw.document : {};
+  const hasExplicitDocumentSchemaVersion =
+    rawDocument.schemaVersion !== undefined;
+  const requestedDocumentSchemaVersion = hasExplicitDocumentSchemaVersion
+    ? rawDocument.schemaVersion
+    : 0;
+  if (
+    editorMode === 'document'
+    && (
+      typeof requestedDocumentSchemaVersion !== 'number'
+      || !Number.isInteger(requestedDocumentSchemaVersion)
+      || requestedDocumentSchemaVersion < 0
+      || requestedDocumentSchemaVersion > CURRENT_DOCUMENT_SCHEMA_VERSION
+    )
+  ) {
+    throw new Error(
+      `Unsupported document schema: ${String(rawDocument.schemaVersion)}`
+    );
+  }
+  const folios = normalizeDocumentFolioSettings(rawDocument.folios);
   const normalizedPages = editorMode === 'document'
     ? (
         pageCandidates.length > 0
-          ? pageCandidates.map((page, index) => normalizeDocumentProjectPage(page, index))
-          : [normalizeDocumentProjectPage(undefined, 0)]
+          ? pageCandidates.map((page, index) => normalizeDocumentProjectPage(
+              page,
+              index,
+              folios.startingNumber + index
+            ))
+          : [normalizeDocumentProjectPage(undefined, 0, folios.startingNumber)]
       )
     : pageCandidates.map((page, index) => normalizeCanvasProjectPage(page, index, fallbackSize));
   const pages = normalizedPages as TPage[];
@@ -625,9 +731,25 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     unitMode,
     options.defaultBackground || DEFAULT_BACKGROUND
   );
+  const firstDocumentPage = editorMode === 'document'
+    ? pages[0] as unknown as DocumentPage | undefined
+    : undefined;
   const document = editorMode === 'document'
     ? {
         ...normalizedDocument,
+        pageSize: firstDocumentPage
+          ? {
+              presetId: firstDocumentPage.size.presetId,
+              width: Math.round(
+                firstDocumentPage.size.widthIn * firstDocumentPage.size.dpi
+              ),
+              height: Math.round(
+                firstDocumentPage.size.heightIn * firstDocumentPage.size.dpi
+              ),
+              unitMode: 'px' as const,
+              dpi: firstDocumentPage.size.dpi,
+            }
+          : normalizedDocument.pageSize,
         background: {
           ...normalizedDocument.background,
           value: normalizeDocumentPaperColor(
@@ -635,6 +757,8 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
             options.defaultBackground || DEFAULT_BACKGROUND
           ),
         },
+        schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+        folios,
       }
     : normalizedDocument;
   const theme = normalizeTheme(raw.theme, activeTheme);
@@ -664,7 +788,11 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     recovery: normalizeRecoveryMetadata(raw.recovery),
 
     projectName: name,
-    activePageIndex: typeof raw.activePageIndex === 'number' ? raw.activePageIndex : undefined,
+    activePageIndex: editorMode === 'document'
+      ? normalizeInteger(raw.activePageIndex, 0, 0, Math.max(0, pages.length - 1))
+      : typeof raw.activePageIndex === 'number'
+        ? raw.activePageIndex
+        : undefined,
     canvasData: raw.canvasData,
     assets: isObject(raw.assets) ? raw.assets as Record<string, string> : undefined,
     activeTheme,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CURRENT_DOCUMENT_SCHEMA_VERSION,
   DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
   LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
   normalizeDesignSpaceProjectPayload,
@@ -245,6 +246,14 @@ describe('project schema normalization', () => {
 
     expect(normalized.schemaVersion).toBe(DESIGN_SPACE_PROJECT_SCHEMA_VERSION);
     expect(normalized.editorMode).toBe('document');
+    expect(normalized.document).toMatchObject({
+      schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+      folios: {
+        startingNumber: 1,
+        visible: false,
+        placement: 'outside-bottom',
+      },
+    });
     expect(normalized.assets).toEqual({
       photo: 'data:image/png;base64,AAAA',
       scan: 'data:image/jpeg;base64,BBBB',
@@ -256,6 +265,13 @@ describe('project schema normalization', () => {
       columnCount: 3,
       columnGapPx: 28,
       dropCap: true,
+      suppressFolio: false,
+      margins: {
+        topIn: 0.6,
+        bottomIn: 0.6,
+        innerIn: 0.5,
+        outerIn: 0.5,
+      },
       overlayObjects: [{
         id: 'overlay-photo',
         assetId: 'photo',
@@ -271,6 +287,269 @@ describe('project schema normalization', () => {
     });
   });
 
+  it('migrates a one-page document to document schema v1 without changing its story', () => {
+    const titleContent = {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Legacy title' }],
+      }],
+    };
+    const bodyContent = {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Legacy body' }],
+      }],
+    };
+    const normalized = normalizeDesignSpaceProjectPayload<DocumentPage>({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      projectId: 'legacy-one-page',
+      projectName: 'Legacy one-page story',
+      document: {
+        pageSize: {
+          width: 2550,
+          height: 3300,
+          unitMode: 'in',
+          dpi: 300,
+        },
+        background: { value: '#FAF8F5' },
+      },
+      pages: [{
+        kind: 'document',
+        id: 'legacy-page',
+        name: 'Article',
+        size: {
+          presetId: 'letter',
+          widthIn: 8.5,
+          heightIn: 11,
+          dpi: 300,
+        },
+        margins: {
+          topIn: 0.6,
+          rightIn: 0.45,
+          bottomIn: 0.7,
+          leftIn: 0.8,
+        },
+        titleContent,
+        bodyContent,
+        columnCount: 3,
+        columnGapPx: 22,
+        dropCap: true,
+        overlayObjects: [],
+      }],
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(normalized.pages).toHaveLength(1);
+    expect(normalized.activePageIndex).toBe(0);
+    expect(normalized.document).toMatchObject({
+      schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+      folios: {
+        startingNumber: 1,
+        visible: false,
+        placement: 'outside-bottom',
+      },
+    });
+    expect(normalized.pages[0]).toMatchObject({
+      id: 'legacy-page',
+      titleContent,
+      bodyContent,
+      columnCount: 3,
+      columnGapPx: 22,
+      dropCap: true,
+      suppressFolio: false,
+      margins: {
+        topIn: 0.6,
+        bottomIn: 0.7,
+        // The first migrated page is recto: physical left becomes inner.
+        innerIn: 0.8,
+        outerIn: 0.45,
+      },
+    });
+  });
+
+  it('normalizes four independent pages, folios, parity-aware legacy margins, and active selection', () => {
+    const pages = Array.from({ length: 4 }, (_, index) => ({
+      kind: 'document',
+      id: `historical-page-${49 + index}`,
+      name: `Page ${49 + index}`,
+      size: {
+        presetId: 'letter',
+        widthIn: 8.5,
+        heightIn: 11,
+        dpi: 300,
+      },
+      margins: {
+        topIn: 0.5,
+        rightIn: 0.4 + index * 0.01,
+        bottomIn: 0.55,
+        leftIn: 0.8 + index * 0.01,
+      },
+      titleContent: {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [{ type: 'text', text: `Title ${49 + index}` }],
+        }],
+      },
+      bodyContent: {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [{ type: 'text', text: `Body ${49 + index}` }],
+        }],
+      },
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: index === 0,
+      suppressFolio: index === 2,
+      overlayObjects: [],
+    }));
+    const normalized = normalizeDesignSpaceProjectPayload<DocumentPage>({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      projectId: 'historical-four-pages',
+      projectName: 'Historical pages 49–52',
+      activePageIndex: 99,
+      document: {
+        schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
+        pageSize: {
+          width: 2550,
+          height: 3300,
+          unitMode: 'in',
+          dpi: 300,
+        },
+        background: { value: '#FAF8F5' },
+        folios: {
+          startingNumber: 49.9,
+          visible: true,
+          placement: 'inside-top',
+        },
+      },
+      pages,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(normalized.pages).toHaveLength(4);
+    expect(normalized.activePageIndex).toBe(3);
+    expect(normalized.document.folios).toEqual({
+      startingNumber: 49,
+      visible: true,
+      placement: 'outside-bottom',
+    });
+    expect(normalized.pages.map((page) => page.id)).toEqual(
+      pages.map((page) => page.id)
+    );
+    expect(normalized.pages.map((page) => page.suppressFolio)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(normalized.pages[0].margins).toMatchObject({
+      innerIn: 0.8,
+      outerIn: 0.4,
+    });
+    // Page 50 is verso: physical right becomes inner.
+    expect(normalized.pages[1].margins.innerIn).toBeCloseTo(0.41, 8);
+    expect(normalized.pages[1].margins.outerIn).toBeCloseTo(0.81, 8);
+    expect(normalized.pages[2].bodyContent).toEqual(pages[2].bodyContent);
+    expect(normalized.pages[3].bodyContent).toEqual(pages[3].bodyContent);
+  });
+
+  it('preserves bounded custom physical page dimensions', () => {
+    const normalized = normalizeDesignSpaceProjectPayload<DocumentPage>({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      projectName: 'Custom trim',
+      pages: [{
+        kind: 'document',
+        id: 'custom-page',
+        name: 'Custom page',
+        size: {
+          presetId: 'custom',
+          orientation: 'portrait',
+          widthIn: 6.25,
+          heightIn: 9.5,
+          dpi: 300,
+        },
+        margins: {
+          topIn: 0.5,
+          bottomIn: 0.6,
+          innerIn: 0.7,
+          outerIn: 0.45,
+        },
+        titleContent: { type: 'doc', content: [{ type: 'paragraph' }] },
+        bodyContent: { type: 'doc', content: [{ type: 'paragraph' }] },
+        columnCount: 1,
+        columnGapPx: 24,
+        dropCap: false,
+        suppressFolio: false,
+        overlayObjects: [],
+      }],
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(normalized.pages[0]).toMatchObject({
+      size: {
+        presetId: 'custom',
+        orientation: 'portrait',
+        widthIn: 6.25,
+        heightIn: 9.5,
+      },
+      margins: {
+        topIn: 0.5,
+        bottomIn: 0.6,
+        innerIn: 0.7,
+        outerIn: 0.45,
+      },
+    });
+
+    const bounded = normalizeDesignSpaceProjectPayload<DocumentPage>({
+      ...normalized,
+      pages: [{
+        ...normalized.pages[0],
+        size: {
+          ...normalized.pages[0].size,
+          widthIn: 0.1,
+          heightIn: 300,
+        },
+      }],
+    });
+    expect(bounded.pages[0].size.widthIn).toBe(1);
+    expect(bounded.pages[0].size.heightIn).toBe(24);
+  });
+
+  it('migrates semantic margins independently from parity-aware legacy sides', () => {
+    const normalized = normalizeDesignSpaceProjectPayload<DocumentPage>({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      projectName: 'Partial semantic margins',
+      document: {
+        folios: { startingNumber: 50, visible: true },
+      },
+      pages: [{
+        kind: 'document',
+        size: { presetId: 'letter', widthIn: 8.5, heightIn: 11, dpi: 300 },
+        margins: {
+          topIn: 0.5,
+          bottomIn: 0.5,
+          leftIn: 0.35,
+          rightIn: 0.8,
+          innerIn: 0.72,
+        },
+      }],
+    });
+
+    // Page 50 is verso: the missing outer margin comes from physical left.
+    expect(normalized.pages[0].margins).toMatchObject({
+      innerIn: 0.72,
+      outerIn: 0.35,
+    });
+  });
+
   it('rejects unknown project schemas and editor modes', () => {
     expect(() => normalizeDesignSpaceProjectPayload({
       schemaVersion: 'design-space-project-v99',
@@ -280,6 +559,22 @@ describe('project schema normalization', () => {
       schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
       editorMode: 'mixed',
     })).toThrow('Unsupported editor mode: mixed');
+
+    expect(() => normalizeDesignSpaceProjectPayload({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      document: {
+        schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION + 1,
+      },
+    })).toThrow(/unsupported document schema/i);
+
+    expect(() => normalizeDesignSpaceProjectPayload({
+      schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
+      editorMode: 'document',
+      document: {
+        schemaVersion: 'future-v2',
+      },
+    })).toThrow(/unsupported document schema/i);
   });
 });
 

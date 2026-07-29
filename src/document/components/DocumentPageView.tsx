@@ -7,8 +7,12 @@ import type {
 } from '../types/documentProject';
 import { DocumentOverlayLayer } from './DocumentOverlayLayer';
 import { ScanReferenceLayer } from './ScanReferenceLayer';
-
-const CSS_PIXELS_PER_INCH = 96;
+import {
+  DOCUMENT_CSS_PIXELS_PER_INCH,
+  getDocumentOutsideEdge,
+  getDocumentPageParity,
+  resolveDocumentPhysicalMargins,
+} from '../layout/pageGeometry';
 
 export const hasMeaningfulDocumentContent = (
   content?: DocumentContentJson
@@ -30,6 +34,8 @@ type DocumentPageViewProps = {
   page: DocumentPage;
   assetSources: Record<string, string>;
   paperColor: string;
+  folioNumber: number;
+  showFolio: boolean;
   zoom: number;
   titleEditor: React.ReactNode;
   bodyEditor: React.ReactNode;
@@ -46,6 +52,8 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   page,
   assetSources,
   paperColor,
+  folioNumber,
+  showFolio,
   zoom,
   titleEditor,
   bodyEditor,
@@ -57,13 +65,19 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   onSelectOverlay,
   onUpdateOverlay,
 }) => {
-  const widthPx = page.size.widthIn * CSS_PIXELS_PER_INCH;
-  const heightPx = page.size.heightIn * CSS_PIXELS_PER_INCH;
+  const widthPx = page.size.widthIn * DOCUMENT_CSS_PIXELS_PER_INCH;
+  const heightPx = page.size.heightIn * DOCUMENT_CSS_PIXELS_PER_INCH;
+  const physicalMargins = resolveDocumentPhysicalMargins(
+    page.margins,
+    folioNumber
+  );
+  const parity = getDocumentPageParity(folioNumber);
+  const outsideEdge = getDocumentOutsideEdge(folioNumber);
   const marginStyle = {
-    paddingTop: `${page.margins.topIn * CSS_PIXELS_PER_INCH}px`,
-    paddingRight: `${page.margins.rightIn * CSS_PIXELS_PER_INCH}px`,
-    paddingBottom: `${page.margins.bottomIn * CSS_PIXELS_PER_INCH}px`,
-    paddingLeft: `${page.margins.leftIn * CSS_PIXELS_PER_INCH}px`,
+    paddingTop: `${physicalMargins.topIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+    paddingRight: `${physicalMargins.rightIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+    paddingBottom: `${physicalMargins.bottomIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+    paddingLeft: `${physicalMargins.leftIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
   };
 
   return (
@@ -110,6 +124,10 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
             data-page-width-in={page.size.widthIn}
             data-page-height-in={page.size.heightIn}
             data-page-orientation={page.size.orientation}
+            data-page-id={page.id}
+            data-folio-number={folioNumber}
+            data-page-parity={parity}
+            data-folio-side={outsideEdge}
             data-paper-color={paperColor}
             style={{
               width: widthPx,
@@ -177,6 +195,36 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               onSelect={onSelectOverlay}
               onChange={onUpdateOverlay}
             />
+
+            {showFolio && !page.suppressFolio && (
+              <div
+                className={`document-page-folio document-page-folio--${outsideEdge}`}
+                data-testid="document-folio"
+                data-folio-number={folioNumber}
+                data-folio-side={outsideEdge}
+                aria-label={`Page ${folioNumber}`}
+                style={{
+                  bottom: `${
+                    Math.max(
+                      12,
+                      physicalMargins.bottomIn
+                        * DOCUMENT_CSS_PIXELS_PER_INCH
+                        * 0.5
+                    )
+                  }px`,
+                  [outsideEdge]: `${
+                    Math.max(
+                      12,
+                      physicalMargins[outsideEdge === 'left' ? 'leftIn' : 'rightIn']
+                        * DOCUMENT_CSS_PIXELS_PER_INCH
+                        * 0.5
+                    )
+                  }px`,
+                }}
+              >
+                {folioNumber}
+              </div>
+            )}
           </div>
         </div>
       </div>

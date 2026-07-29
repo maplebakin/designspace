@@ -79,6 +79,41 @@ const spanningBodyContent = (): DocumentContentJson => ({
   ],
 });
 
+const collectDocumentNodeIds = (
+  content: DocumentContentJson | undefined,
+  nodeType: string
+): string[] => {
+  if (!content) return [];
+  return [
+    ...(content.type === nodeType && typeof content.attrs?.id === 'string'
+      ? [content.attrs.id]
+      : []),
+    ...(content.content || []).flatMap((child) =>
+      collectDocumentNodeIds(child, nodeType)
+    ),
+  ];
+};
+
+const withoutCanonicalDocumentNodeIds = (
+  content: DocumentContentJson
+): DocumentContentJson => {
+  const clone = structuredClone(content);
+  const visit = (node: DocumentContentJson) => {
+    if (
+      (
+        node.type === 'documentInlineImage'
+        || node.type === 'documentFlowImage'
+      )
+      && node.attrs
+    ) {
+      delete node.attrs.id;
+    }
+    (node.content || []).forEach(visit);
+  };
+  visit(clone);
+  return clone;
+};
+
 const overlay: DocumentOverlayImage = {
   id: 'overlay-family',
   assetId: 'asset-family',
@@ -140,10 +175,17 @@ describe('document project store', () => {
       },
       assets: {},
       document: {
+        schemaVersion: 1,
         background: {
           value: DEFAULT_DOCUMENT_PAPER_COLOR,
         },
+        folios: {
+          startingNumber: 1,
+          visible: false,
+          placement: 'outside-bottom',
+        },
       },
+      activePageIndex: 0,
     });
     expect(project.projectId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -161,9 +203,9 @@ describe('document project store', () => {
       },
       margins: {
         topIn: 0.65,
-        rightIn: 0.65,
         bottomIn: 0.65,
-        leftIn: 0.65,
+        innerIn: 0.65,
+        outerIn: 0.65,
       },
       titleContent: {
         type: 'doc',
@@ -177,6 +219,7 @@ describe('document project store', () => {
       columnCount: 1,
       columnGapPx: 24,
       dropCap: false,
+      suppressFolio: false,
       overlayObjects: [],
     });
     expect(page.reference).toBeUndefined();
@@ -300,6 +343,287 @@ describe('document project store', () => {
     });
   });
 
+  it('updates independent page stories by ID so stale editor callbacks cannot overwrite the active page', () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Independent Stories');
+    const firstPageId = project.pages[0].id;
+    store.updateTitleContent(bodyContent('Page 1 title'), firstPageId);
+    store.updateBodyContent(bodyContent('Page 1 body'), firstPageId);
+    store.addPage();
+
+    const secondPageId = useDocumentStore.getState().project!.pages[1].id;
+    expect(useDocumentStore.getState().project?.activePageIndex).toBe(1);
+    store.updateTitleContent(bodyContent('Page 2 title'), secondPageId);
+    store.updateBodyContent(bodyContent('Page 2 body'), secondPageId);
+
+    // This models a delayed Tiptap onUpdate from page 1 after page 2 mounted.
+    store.updateBodyContent(bodyContent('Late page 1 body'), firstPageId);
+    store.updatePage({ columnCount: 3 }, firstPageId);
+
+    const pages = useDocumentStore.getState().project!.pages;
+    expect(pages[0]).toMatchObject({
+      id: firstPageId,
+      titleContent: bodyContent('Page 1 title'),
+      bodyContent: bodyContent('Late page 1 body'),
+      columnCount: 3,
+    });
+    expect(pages[1]).toMatchObject({
+      id: secondPageId,
+      titleContent: bodyContent('Page 2 title'),
+      bodyContent: bodyContent('Page 2 body'),
+      columnCount: 1,
+    });
+    expect(useDocumentStore.getState().project?.activePageIndex).toBe(1);
+  });
+
+  it('persists active page selection through the bounded autosave', async () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Selection Only');
+    store.addPage();
+    const snapshot = useDocumentStore.getState().project!;
+    store.hydrateProject(snapshot, 'selection-library-id');
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      revision: 0,
+      project: { activePageIndex: 1 },
+    });
+
+    store.selectPage(0);
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+      revision: 1,
+      project: { activePageIndex: 0 },
+    });
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(dbMocks.updateProject).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(dbMocks.updateProject.mock.calls[0][2] as string);
+    expect(saved.activePageIndex).toBe(0);
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      project: { activePageIndex: 0 },
+    });
+  });
+
+  it('does not roll active page selection back when a manual save is in flight', async () => {
+    let finishWrite: (() => void) | undefined;
+    dbMocks.saveProject.mockReturnValueOnce(new Promise<string>((resolve) => {
+      finishWrite = () => resolve('selection-race-library-id');
+    }));
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Selection Race');
+    store.addPage();
+    store.selectPage(0);
+
+    const save = useDocumentStore.getState().saveProject();
+    useDocumentStore.getState().selectPage(1);
+    finishWrite?.();
+    await save;
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+      project: { activePageIndex: 1 },
+    });
+  });
+
+  it('ignores non-finite page action indexes without dirtying the project', () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Safe page indexes');
+    store.addPage();
+    const snapshot = useDocumentStore.getState().project!;
+    store.hydrateProject(snapshot, 'safe-index-library-id');
+
+    store.selectPage(Number.NaN);
+    store.duplicatePage(Number.NaN);
+    store.removePage(Number.POSITIVE_INFINITY);
+    store.reorderPages(Number.NaN, 0);
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      revision: 0,
+      isDirty: false,
+      project: {
+        activePageIndex: 1,
+        pages: [{}, {}],
+      },
+    });
+  });
+
+  it('adds, duplicates, reorders, and removes pages while remapping canonical IDs', () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Page Operations');
+    const sourcePageId = project.pages[0].id;
+    store.updatePage({
+      bodyContent: spanningBodyContent(),
+      overlayObjects: [overlay],
+      reference,
+    }, sourcePageId);
+
+    store.duplicatePage(0);
+
+    let state = useDocumentStore.getState();
+    expect(state.project?.pages).toHaveLength(2);
+    expect(state.project?.activePageIndex).toBe(1);
+    const source = state.project!.pages[0];
+    const duplicate = state.project!.pages[1];
+    expect(duplicate.id).not.toBe(source.id);
+    expect(duplicate.bodyContent).not.toBe(source.bodyContent);
+    expect(withoutCanonicalDocumentNodeIds(duplicate.bodyContent)).toEqual(
+      withoutCanonicalDocumentNodeIds(source.bodyContent)
+    );
+    expect(duplicate.overlayObjects[0].id).not.toBe(
+      source.overlayObjects[0].id
+    );
+    expect(duplicate.overlayObjects[0].assetId).toBe(
+      source.overlayObjects[0].assetId
+    );
+    expect(duplicate.reference).toEqual(source.reference);
+    expect(
+      collectDocumentNodeIds(duplicate.bodyContent, 'documentFlowImage')
+    ).not.toEqual(
+      collectDocumentNodeIds(source.bodyContent, 'documentFlowImage')
+    );
+    expect(
+      collectDocumentNodeIds(duplicate.bodyContent, 'documentFlowImage')
+    ).toHaveLength(1);
+
+    const duplicateId = duplicate.id;
+    store.addPage();
+    state = useDocumentStore.getState();
+    expect(state.project?.pages).toHaveLength(3);
+    expect(state.project?.activePageIndex).toBe(2);
+    expect(new Set(state.project?.pages.map((page) => page.id)).size).toBe(3);
+
+    store.reorderPages(1, 0);
+    state = useDocumentStore.getState();
+    expect(state.project?.pages[0].id).toBe(duplicateId);
+    expect(state.project?.activePageIndex).toBe(2);
+
+    store.selectPage(0);
+    const revisionBeforeSelection = useDocumentStore.getState().revision;
+    store.selectPage(1);
+    expect(useDocumentStore.getState().revision).toBe(revisionBeforeSelection + 1);
+
+    store.removePage(0);
+    expect(useDocumentStore.getState().project?.pages).toHaveLength(2);
+    store.removePage(0);
+    expect(useDocumentStore.getState().project?.pages).toHaveLength(1);
+    const lastPageId = useDocumentStore.getState().project!.pages[0].id;
+    store.removePage(0);
+    expect(useDocumentStore.getState().project?.pages).toHaveLength(1);
+    expect(useDocumentStore.getState().project?.pages[0].id).toBe(lastPageId);
+    expect(useDocumentStore.getState().project?.activePageIndex).toBe(0);
+  });
+
+  it('round-trips four page stories, active selection, and folio settings', async () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Pages 49–52');
+    const pageIds = [project.pages[0].id];
+
+    store.updateFolioSettings({
+      startingNumber: 49,
+      visible: true,
+      placement: 'outside-bottom',
+    });
+    store.updatePage({
+      name: 'Page 49',
+      columnCount: 3,
+      suppressFolio: false,
+    }, pageIds[0]);
+    store.updateTitleContent(bodyContent('Historical page 49'), pageIds[0]);
+    store.updateBodyContent(bodyContent('Story 49'), pageIds[0]);
+
+    for (const folio of [50, 51, 52]) {
+      store.addPage();
+      const page = useDocumentStore.getState().project!.pages.at(-1)!;
+      pageIds.push(page.id);
+      store.updatePage({
+        name: `Page ${folio}`,
+        columnCount: folio === 51 ? 1 : 3,
+        suppressFolio: folio === 51,
+      }, page.id);
+      store.updateTitleContent(bodyContent(`Historical page ${folio}`), page.id);
+      store.updateBodyContent(bodyContent(`Story ${folio}`), page.id);
+    }
+
+    await store.saveProject();
+
+    const serialized = dbMocks.saveProject.mock.calls[0][1] as string;
+    const persisted = JSON.parse(serialized);
+    expect(persisted).toMatchObject({
+      activePageIndex: 3,
+      document: {
+        schemaVersion: 1,
+        folios: {
+          startingNumber: 49,
+          visible: true,
+          placement: 'outside-bottom',
+        },
+      },
+    });
+    expect(persisted.pages).toHaveLength(4);
+    expect(persisted.pages.map((page: { id: string }) => page.id)).toEqual(
+      pageIds
+    );
+    expect(persisted.pages.map((
+      page: { bodyContent: DocumentContentJson }
+    ) => page.bodyContent)).toEqual(
+      [49, 50, 51, 52].map((folio) => bodyContent(`Story ${folio}`))
+    );
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'library-document-1',
+        name: 'Pages 49–52',
+      },
+      canvasData: serialized,
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('library-document-1');
+
+    const reloaded = useDocumentStore.getState();
+    expect(reloaded.project?.pages).toHaveLength(4);
+    expect(reloaded.project?.pages.map((page) => page.id)).toEqual(pageIds);
+    expect(reloaded.project?.pages.map((page) => page.bodyContent)).toEqual(
+      [49, 50, 51, 52].map((folio) => bodyContent(`Story ${folio}`))
+    );
+    expect(reloaded.project?.pages[2].suppressFolio).toBe(true);
+    expect(reloaded.project?.activePageIndex).toBe(3);
+    expect(reloaded.project?.document.folios).toEqual({
+      startingNumber: 49,
+      visible: true,
+      placement: 'outside-bottom',
+    });
+    expect(reloaded).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+    });
+
+    reloaded.updateBodyContent(bodyContent('Story 49 revised'), pageIds[0]);
+    await vi.advanceTimersByTimeAsync(900);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dbMocks.updateProject).toHaveBeenCalledTimes(1);
+    const autosaved = JSON.parse(
+      dbMocks.updateProject.mock.calls[0][2] as string
+    );
+    expect(autosaved.pages).toHaveLength(4);
+    expect(autosaved.pages.map((
+      page: { bodyContent: DocumentContentJson }
+    ) => page.bodyContent)).toEqual([
+      bodyContent('Story 49 revised'),
+      bodyContent('Story 50'),
+      bodyContent('Story 51'),
+      bodyContent('Story 52'),
+    ]);
+    expect(autosaved.activePageIndex).toBe(3);
+  });
+
   it('mutates page settings, content, overlays, references, and assets as project data', () => {
     const store = useDocumentStore.getState();
     store.createBlankProject('Family Archive');
@@ -307,7 +631,7 @@ describe('document project store', () => {
     store.updatePage({
       name: 'Translated article',
       size: { presetId: 'a4', widthIn: 8.27, heightIn: 11.69, dpi: 300 },
-      margins: { topIn: 0.8, rightIn: 0.7, bottomIn: 0.75, leftIn: 0.7 },
+      margins: { topIn: 0.8, bottomIn: 0.75, innerIn: 0.7, outerIn: 0.7 },
       titleFontSizePx: 52,
       columnCount: 3,
       columnGapPx: 30,
@@ -333,7 +657,7 @@ describe('document project store', () => {
     expect(state.project?.pages[0]).toMatchObject({
       name: 'Translated article',
       size: { presetId: 'a4', widthIn: 8.27, heightIn: 11.69, dpi: 300 },
-      margins: { topIn: 0.8, rightIn: 0.7, bottomIn: 0.75, leftIn: 0.7 },
+      margins: { topIn: 0.8, bottomIn: 0.75, innerIn: 0.7, outerIn: 0.7 },
       titleFontSizePx: 52,
       columnCount: 3,
       columnGapPx: 30,

@@ -10,6 +10,7 @@ import {
 
 type DocumentTopBarProps = {
   projectName: string;
+  pageCount: number;
   saveStatus: string;
   exportBusy: boolean;
   onBack: () => void;
@@ -30,6 +31,7 @@ const SAVE_STATUS_LABELS: Record<string, string> = {
 
 export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
   projectName,
+  pageCount,
   saveStatus,
   exportBusy,
   onBack,
@@ -110,7 +112,7 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
             onClick={() => onExport('png')}
           >
             PNG
-            <span>300 DPI image</span>
+            <span>Current page · 300 DPI</span>
           </button>
           <button
             type="button"
@@ -119,7 +121,7 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
             onClick={() => onExport('pdf')}
           >
             PDF
-            <span>Print-sized page</span>
+            <span>All {pageCount} {pageCount === 1 ? 'page' : 'pages'}</span>
           </button>
         </div>
       </details>

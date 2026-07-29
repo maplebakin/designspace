@@ -55,6 +55,12 @@ export type DocumentExportOptions = DocumentPhysicalSize & {
   cssPixelsPerInch?: number;
 };
 
+export type DocumentExportPageSource = {
+  pageId: string;
+  element: HTMLElement;
+  options: DocumentExportOptions;
+};
+
 export type DocumentPixelDimensions = {
   width: number;
   height: number;
@@ -86,6 +92,18 @@ const normalizePhysicalSize = (size: DocumentPhysicalSize): DocumentPhysicalSize
   widthIn: finitePositive(size.widthIn, 8.5),
   heightIn: finitePositive(size.heightIn, 11),
 });
+
+const documentPdfOrientation = (size: DocumentPhysicalSize) =>
+  size.widthIn >= size.heightIn ? 'landscape' as const : 'portrait' as const;
+
+const documentPdfImageAlias = (pageId: string, pageIndex: number) => {
+  const normalizedPageId = pageId
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'page';
+  return `document-page-${pageIndex + 1}-${normalizedPageId}`;
+};
 
 export const calculateDocumentPixelDimensions = (
   size: DocumentPhysicalSize,
@@ -618,24 +636,53 @@ export class DocumentExportService {
     pageElement: HTMLElement,
     options: DocumentExportOptions
   ): Promise<Blob> {
-    const normalizedSize = normalizePhysicalSize(options);
-    const pngBlob = await this.exportPngBlob(pageElement, options);
-    const imageBytes = await readBlobBytes(pngBlob);
+    return this.exportPdfPagesBlob([{
+      pageId: 'document-page',
+      element: pageElement,
+      options,
+    }]);
+  }
+
+  async exportPdfPagesBlob(
+    sources: readonly DocumentExportPageSource[]
+  ): Promise<Blob> {
+    if (sources.length === 0) {
+      throw new Error('At least one document page is required for PDF export.');
+    }
+
+    const firstSize = normalizePhysicalSize(sources[0].options);
     const pdf = new jsPDF({
-      orientation: normalizedSize.widthIn >= normalizedSize.heightIn ? 'landscape' : 'portrait',
+      orientation: documentPdfOrientation(firstSize),
       unit: 'in',
-      format: [normalizedSize.widthIn, normalizedSize.heightIn],
+      format: [firstSize.widthIn, firstSize.heightIn],
     });
-    pdf.addImage(
-      imageBytes,
-      'PNG',
-      0,
-      0,
-      normalizedSize.widthIn,
-      normalizedSize.heightIn,
-      'document-page',
-      'FAST'
-    );
+
+    for (let pageIndex = 0; pageIndex < sources.length; pageIndex += 1) {
+      const source = sources[pageIndex];
+      const normalizedSize = normalizePhysicalSize(source.options);
+      if (pageIndex > 0) {
+        pdf.addPage(
+          [normalizedSize.widthIn, normalizedSize.heightIn],
+          documentPdfOrientation(normalizedSize)
+        );
+      }
+
+      // Rasterize one page at a time. exportPngBlob releases its temporary
+      // image and canvas before this loop advances to the next source.
+      const pngBlob = await this.exportPngBlob(source.element, source.options);
+      const imageBytes = await readBlobBytes(pngBlob);
+      pdf.addImage(
+        imageBytes,
+        'PNG',
+        0,
+        0,
+        normalizedSize.widthIn,
+        normalizedSize.heightIn,
+        documentPdfImageAlias(source.pageId, pageIndex),
+        'FAST'
+      );
+    }
+
     const blob = pdf.output('blob');
     if (!blob || blob.size <= 0) {
       throw new Error('PDF export did not produce a nonzero Blob.');
@@ -655,6 +702,16 @@ export class DocumentExportService {
     const fileName = `${sanitizeExportBaseName(options.fileName)}.pdf`;
     triggerDocumentDownload(blob, fileName);
     return { blob, fileName };
+  }
+
+  async downloadPdfPages(
+    sources: readonly DocumentExportPageSource[],
+    fileName?: string
+  ) {
+    const blob = await this.exportPdfPagesBlob(sources);
+    const sanitizedFileName = `${sanitizeExportBaseName(fileName)}.pdf`;
+    triggerDocumentDownload(blob, sanitizedFileName);
+    return { blob, fileName: sanitizedFileName };
   }
 
   async print(

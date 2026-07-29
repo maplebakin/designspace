@@ -22,6 +22,9 @@ import {
 } from 'vitest';
 import { DocumentEditorShell } from '../src/document/components/DocumentEditorShell';
 import {
+  mountCommittedDocumentExportPages,
+} from '../src/document/components/DocumentProjectExportRenderer';
+import {
   commitStructuredDocumentImagePosition,
   FlowEditor,
   isDocumentFlowOverflowing,
@@ -101,6 +104,50 @@ const readDocumentText = (content?: DocumentContentJson): string => [
   content?.text || '',
   ...(content?.content || []).map(readDocumentText),
 ].join('');
+
+const plainDocumentContent = (text: string): DocumentContentJson => ({
+  type: 'doc',
+  content: [{
+    type: 'paragraph',
+    content: [{ type: 'text', text }],
+  }],
+});
+
+const seedHistoricalFourPageProject = () => {
+  const store = useDocumentStore.getState();
+  const firstPage = store.project!.pages[0];
+  const pageIds = [firstPage.id];
+  store.updateFolioSettings({
+    startingNumber: 49,
+    visible: true,
+    placement: 'outside-bottom',
+  });
+
+  [49, 50, 51, 52].forEach((folio, index) => {
+    if (index > 0) {
+      store.addPage();
+      pageIds.push(useDocumentStore.getState().project!.pages[index].id);
+    }
+    const pageId = pageIds[index];
+    store.updatePage({
+      name: `Page ${folio}`,
+      margins: {
+        topIn: 0.5,
+        bottomIn: 0.75,
+        innerIn: 0.8,
+        outerIn: 0.45,
+      },
+      suppressFolio: folio === 51,
+    }, pageId);
+    store.updateTitleContent(
+      plainDocumentContent(`Historical title ${folio}`),
+      pageId
+    );
+    store.updateBodyContent(plainDocumentContent(`Story ${folio}`), pageId);
+  });
+  store.selectPage(0);
+  return pageIds;
+};
 
 const findDocumentImageNode = (content?: JSONContent): JSONContent | undefined => {
   if (
@@ -340,7 +387,7 @@ describe('live document editor UI', () => {
     expect(screen.getByTestId('document-drop-cap-toggle').getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('switches Letter and A4 between portrait and landscape and reflows columns', async () => {
+  it('switches Letter, A4, and custom pages between orientations and reflows columns', async () => {
     await renderShell();
     fireEvent.click(screen.getByRole('button', { name: '3 columns' }));
 
@@ -385,6 +432,36 @@ describe('live document editor UI', () => {
     expect(screen.getByTestId('document-flow-editor').getAttribute(
       'data-column-count'
     )).toBe('3');
+
+    fireEvent.change(screen.getByLabelText('Page preset'), {
+      target: { value: 'custom' },
+    });
+    expect(screen.queryByTestId('document-custom-page-size')).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('Custom page width in inches'), {
+      target: { value: '6.25' },
+    });
+    fireEvent.change(screen.getByLabelText('Custom page height in inches'), {
+      target: { value: '9.5' },
+    });
+    size = useDocumentStore.getState().project!.pages[0].size;
+    expect(size).toMatchObject({
+      presetId: 'custom',
+      orientation: 'portrait',
+      widthIn: 6.25,
+      heightIn: 9.5,
+    });
+    expect(exportRoot.getAttribute('data-page-width-in')).toBe('6.25');
+    expect(exportRoot.getAttribute('data-page-height-in')).toBe('9.5');
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Landscape orientation',
+    }));
+    expect(useDocumentStore.getState().project?.pages[0].size).toMatchObject({
+      presetId: 'custom',
+      orientation: 'landscape',
+      widthIn: 9.5,
+      heightIn: 6.25,
+    });
   });
 
   it('renders, edits, and forwards the authoritative project paper colour to export and print', async () => {
@@ -451,28 +528,266 @@ describe('live document editor UI', () => {
     });
   });
 
-  it('keeps all four margin fields readable and persists their page values', async () => {
+  it('keeps semantic margin fields readable and persists their page values', async () => {
     await renderShell();
 
     fireEvent.change(screen.getByLabelText('Top margin in inches'), {
       target: { value: '0.5' },
     });
-    fireEvent.change(screen.getByLabelText('Right margin in inches'), {
+    fireEvent.change(screen.getByLabelText('Bottom margin in inches'), {
       target: { value: '0.6' },
     });
-    fireEvent.change(screen.getByLabelText('Bottom margin in inches'), {
+    fireEvent.change(screen.getByLabelText('Inner margin in inches'), {
       target: { value: '0.7' },
     });
-    fireEvent.change(screen.getByLabelText('Left margin in inches'), {
+    fireEvent.change(screen.getByLabelText('Outer margin in inches'), {
       target: { value: '0.8' },
     });
 
     expect(useDocumentStore.getState().project?.pages[0].margins).toEqual({
       topIn: 0.5,
-      rightIn: 0.6,
-      bottomIn: 0.7,
-      leftIn: 0.8,
+      bottomIn: 0.6,
+      innerIn: 0.7,
+      outerIn: 0.8,
     });
+  });
+
+  it('navigates four independent stories with mirrored folios and per-page suppression', async () => {
+    seedHistoricalFourPageProject();
+    const revisionBeforeNavigation = useDocumentStore.getState().revision;
+    await renderShell();
+
+    expect(screen.queryByTestId('document-page-navigation')).not.toBeNull();
+    expect(screen.getAllByRole('tab')).toHaveLength(4);
+    expect(screen.getByTestId('document-page-tab-0').getAttribute(
+      'aria-selected'
+    )).toBe('true');
+    expect(screen.getByLabelText('Document body').textContent).toContain(
+      'Story 49'
+    );
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-folio-number'
+    )).toBe('49');
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-page-parity'
+    )).toBe('recto');
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-folio-side'
+    )).toBe('right');
+    expect(screen.getByTestId('document-folio').textContent).toBe('49');
+    expect(screen.getByTestId('document-folio').getAttribute(
+      'data-folio-side'
+    )).toBe('right');
+    let pageContent = document.querySelector(
+      '.document-page-content'
+    ) as HTMLElement;
+    expect(Number.parseFloat(pageContent.style.paddingLeft)).toBeCloseTo(
+      0.8 * 96,
+      5
+    );
+    expect(Number.parseFloat(pageContent.style.paddingRight)).toBeCloseTo(
+      0.45 * 96,
+      5
+    );
+
+    fireEvent.click(screen.getByTestId('document-page-tab-1'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Document body').textContent).toContain(
+        'Story 50'
+      );
+    });
+    expect(useDocumentStore.getState().revision).toBe(
+      revisionBeforeNavigation + 1
+    );
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-folio-number'
+    )).toBe('50');
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-page-parity'
+    )).toBe('verso');
+    expect(screen.getByTestId('document-folio').getAttribute(
+      'data-folio-side'
+    )).toBe('left');
+    pageContent = document.querySelector(
+      '.document-page-content'
+    ) as HTMLElement;
+    expect(Number.parseFloat(pageContent.style.paddingLeft)).toBeCloseTo(
+      0.45 * 96,
+      5
+    );
+    expect(Number.parseFloat(pageContent.style.paddingRight)).toBeCloseTo(
+      0.8 * 96,
+      5
+    );
+
+    fireEvent.click(screen.getByTestId('document-page-tab-2'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Document body').textContent).toContain(
+        'Story 51'
+      );
+    });
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-folio-number'
+    )).toBe('51');
+    expect(screen.getByTestId('document-export-root').getAttribute(
+      'data-folio-side'
+    )).toBe('right');
+    expect(screen.queryByTestId('document-folio')).toBeNull();
+    expect(screen.getByTestId('document-suppress-folio').getAttribute(
+      'aria-pressed'
+    )).toBe('true');
+
+    fireEvent.click(screen.getByTestId('document-suppress-folio'));
+    expect(screen.getByTestId('document-folio').textContent).toBe('51');
+    fireEvent.click(screen.getByTestId('document-suppress-folio'));
+    expect(screen.queryByTestId('document-folio')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('document-page-tab-3'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Document body').textContent).toContain(
+        'Story 52'
+      );
+    });
+    expect(screen.getByTestId('document-folio').textContent).toBe('52');
+    expect(screen.getByTestId('document-folio').getAttribute(
+      'data-folio-side'
+    )).toBe('left');
+
+    fireEvent.change(screen.getByTestId('document-starting-folio'), {
+      target: { value: '60' },
+    });
+    expect(useDocumentStore.getState().project?.document.folios).toEqual({
+      startingNumber: 60,
+      visible: true,
+      placement: 'outside-bottom',
+    });
+    expect(screen.getByTestId('document-folio').textContent).toBe('63');
+    expect(screen.getByTestId('document-folio').getAttribute(
+      'data-folio-side'
+    )).toBe('right');
+
+    fireEvent.click(screen.getByTestId('document-show-folios'));
+    expect(screen.queryByTestId('document-folio')).toBeNull();
+    fireEvent.click(screen.getByTestId('document-show-folios'));
+    expect(screen.getByTestId('document-folio').textContent).toBe('63');
+  });
+
+  it('mounts every committed page offscreen with ordered content and page furniture', async () => {
+    const pageIds = seedHistoricalFourPageProject();
+    useDocumentStore.getState().updateDocumentBackground('#EFE6D2');
+    const committedProject = useDocumentStore.getState().project!;
+    let mounted: Awaited<ReturnType<
+      typeof mountCommittedDocumentExportPages
+    >> | undefined;
+
+    try {
+      let mountPromise!: ReturnType<typeof mountCommittedDocumentExportPages>;
+      act(() => {
+        mountPromise = mountCommittedDocumentExportPages(committedProject);
+      });
+      mounted = await mountPromise;
+
+      expect(mounted?.project).not.toBe(committedProject);
+      expect(mounted?.sources.map((source) => source.pageId)).toEqual(pageIds);
+      const roots = mounted!.sources.map((source) => source.element);
+      expect(roots.map((root) => root.getAttribute('data-page-id')))
+        .toEqual(pageIds);
+      expect(roots.map((root) => root.getAttribute('data-folio-number')))
+        .toEqual(['49', '50', '51', '52']);
+      expect(roots.map((root) => root.getAttribute('data-folio-side')))
+        .toEqual(['right', 'left', 'right', 'left']);
+      expect(roots.map((root) => root.getAttribute('data-paper-color')))
+        .toEqual(['#EFE6D2', '#EFE6D2', '#EFE6D2', '#EFE6D2']);
+      expect(roots.map((root) => root.textContent)).toEqual([
+        expect.stringContaining('Historical title 49'),
+        expect.stringContaining('Historical title 50'),
+        expect.stringContaining('Historical title 51'),
+        expect.stringContaining('Historical title 52'),
+      ]);
+      expect(roots.map((root) => root.textContent)).toEqual([
+        expect.stringContaining('Story 49'),
+        expect.stringContaining('Story 50'),
+        expect.stringContaining('Story 51'),
+        expect.stringContaining('Story 52'),
+      ]);
+      expect(roots.map((root) => root.querySelector(
+        '.document-page-folio'
+      )?.textContent ?? null)).toEqual(['49', '50', null, '52']);
+
+      const [rectoContent, versoContent] = roots.map((root) =>
+        root.querySelector('.document-page-content') as HTMLElement
+      );
+      expect(Number.parseFloat(rectoContent.style.paddingLeft)).toBeCloseTo(
+        0.8 * 96,
+        5
+      );
+      expect(Number.parseFloat(versoContent.style.paddingLeft)).toBeCloseTo(
+        0.45 * 96,
+        5
+      );
+    } finally {
+      if (mounted) {
+        act(() => {
+          mounted?.cleanup();
+        });
+      }
+    }
+  });
+
+  it('exposes compact add, duplicate, reorder, select, and remove page controls', async () => {
+    const originalPageIds = seedHistoricalFourPageProject();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await renderShell();
+
+    fireEvent.click(screen.getByTestId('document-page-tab-1'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Document body').textContent).toContain(
+        'Story 50'
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('document-duplicate-page'));
+    let project = useDocumentStore.getState().project!;
+    expect(project.pages).toHaveLength(5);
+    expect(project.activePageIndex).toBe(2);
+    const duplicateId = project.pages[2].id;
+    expect(duplicateId).not.toBe(originalPageIds[1]);
+    expect(project.pages[2].bodyContent).toEqual(
+      project.pages[1].bodyContent
+    );
+    expect(screen.getAllByRole('tab')).toHaveLength(5);
+    expect(screen.getByTestId('document-page-tab-2').getAttribute(
+      'aria-selected'
+    )).toBe('true');
+
+    fireEvent.click(screen.getByTestId('document-move-page-right'));
+    project = useDocumentStore.getState().project!;
+    expect(project.pages[3].id).toBe(duplicateId);
+    expect(project.activePageIndex).toBe(3);
+    expect(screen.getByTestId('document-page-tab-3').getAttribute(
+      'aria-selected'
+    )).toBe('true');
+
+    fireEvent.click(screen.getByTestId('document-move-page-left'));
+    project = useDocumentStore.getState().project!;
+    expect(project.pages[2].id).toBe(duplicateId);
+    expect(project.activePageIndex).toBe(2);
+
+    fireEvent.click(screen.getByTestId('document-remove-page'));
+    project = useDocumentStore.getState().project!;
+    expect(project.pages).toHaveLength(4);
+    expect(project.pages.some((page) => page.id === duplicateId)).toBe(false);
+    expect(project.pages.map((page) => page.id)).toEqual(originalPageIds);
+
+    fireEvent.click(screen.getByTestId('document-add-page'));
+    project = useDocumentStore.getState().project!;
+    expect(project.pages).toHaveLength(5);
+    expect(project.activePageIndex).toBe(3);
+    expect(new Set(project.pages.map((page) => page.id)).size).toBe(5);
+    expect(screen.getAllByRole('tab')).toHaveLength(5);
+    expect(screen.getByTestId('document-page-tab-3').getAttribute(
+      'aria-selected'
+    )).toBe('true');
   });
 
   it('persists basic title and body DOM typing through their Tiptap editors', async () => {
@@ -1842,7 +2157,7 @@ describe('live document editor UI', () => {
     );
     const page = useDocumentStore.getState().project!.pages[0];
     const bodyWidth = (
-      page.size.widthIn - page.margins.leftIn - page.margins.rightIn
+      page.size.widthIn - page.margins.innerIn - page.margins.outerIn
     ) * 96;
     const columnWidth = (
       bodyWidth - page.columnGapPx * (page.columnCount - 1)

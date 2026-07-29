@@ -67,7 +67,7 @@ export type ScanReference = {
 };
 
 export type DocumentPageSize = {
-  presetId?: 'letter' | 'a4' | string;
+  presetId: 'letter' | 'a4' | 'custom';
   orientation: 'portrait' | 'landscape';
   widthIn: number;
   heightIn: number;
@@ -76,9 +76,15 @@ export type DocumentPageSize = {
 
 export type DocumentPageMargins = {
   topIn: number;
-  rightIn: number;
   bottomIn: number;
-  leftIn: number;
+  innerIn: number;
+  outerIn: number;
+};
+
+export type DocumentFolioSettings = {
+  startingNumber: number;
+  visible: boolean;
+  placement: 'outside-bottom';
 };
 
 export type DocumentPage = {
@@ -93,6 +99,7 @@ export type DocumentPage = {
   columnCount: 1 | 2 | 3;
   columnGapPx: number;
   dropCap: boolean;
+  suppressFolio: boolean;
   overlayObjects: DocumentOverlayImage[];
   reference?: ScanReference;
 };

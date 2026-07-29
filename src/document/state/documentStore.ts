@@ -7,11 +7,15 @@ import {
 } from '../../editor/project/projectSchema';
 import type {
   DocumentContentJson,
+  DocumentFolioSettings,
   DocumentOverlayImage,
   DocumentPage,
   ScanReference,
 } from '../types/documentProject';
 import { parseDocumentColor } from '../utils/documentColor';
+import {
+  normalizeDocumentFolioNumber,
+} from '../layout/pageGeometry';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
@@ -35,9 +39,18 @@ type DocumentStoreState = {
   downloadProjectFile: () => Promise<void>;
   renameProject: (name: string) => void;
   updateDocumentBackground: (value: string) => void;
-  updatePage: (update: Partial<DocumentPage> | ((page: DocumentPage) => DocumentPage)) => void;
-  updateTitleContent: (content: DocumentContentJson) => void;
-  updateBodyContent: (content: DocumentContentJson) => void;
+  updateFolioSettings: (update: Partial<DocumentFolioSettings>) => void;
+  selectPage: (index: number) => void;
+  addPage: () => void;
+  duplicatePage: (index?: number) => void;
+  removePage: (index?: number) => void;
+  reorderPages: (fromIndex: number, toIndex: number) => void;
+  updatePage: (
+    update: Partial<DocumentPage> | ((page: DocumentPage) => DocumentPage),
+    pageId?: string
+  ) => void;
+  updateTitleContent: (content: DocumentContentJson, pageId?: string) => void;
+  updateBodyContent: (content: DocumentContentJson, pageId?: string) => void;
   addAsset: (assetId: string, source: string) => void;
   addOverlay: (overlay: DocumentOverlayImage) => void;
   updateOverlay: (id: string, update: Partial<DocumentOverlayImage>) => void;
@@ -58,10 +71,10 @@ const emptyDocumentContent = (): DocumentContentJson => ({
   content: [{ type: 'paragraph' }],
 });
 
-export const createBlankDocumentPage = (): DocumentPage => ({
+export const createBlankDocumentPage = (name = 'Page 1'): DocumentPage => ({
   kind: 'document',
   id: uuidv4(),
-  name: 'Page 1',
+  name,
   size: {
     presetId: 'letter',
     orientation: 'portrait',
@@ -71,9 +84,9 @@ export const createBlankDocumentPage = (): DocumentPage => ({
   },
   margins: {
     topIn: 0.65,
-    rightIn: 0.65,
     bottomIn: 0.65,
-    leftIn: 0.65,
+    innerIn: 0.65,
+    outerIn: 0.65,
   },
   titleContent: emptyDocumentContent(),
   bodyContent: emptyDocumentContent(),
@@ -81,6 +94,7 @@ export const createBlankDocumentPage = (): DocumentPage => ({
   columnCount: 1,
   columnGapPx: 24,
   dropCap: false,
+  suppressFolio: false,
   overlayObjects: [],
 });
 
@@ -121,11 +135,142 @@ const normalizeDocumentPayload = (
   if (normalized.editorMode !== 'document') {
     throw new Error('This is a canvas project, not a document project.');
   }
-  if (normalized.pages.length !== 1 || normalized.pages[0]?.kind !== 'document') {
-    throw new Error('Document projects must contain exactly one document page in this version.');
+  if (normalized.pages.length < 1 || normalized.pages.some(
+    (page) => page?.kind !== 'document'
+  )) {
+    throw new Error('Document projects must contain at least one valid document page.');
   }
   return normalized as DocumentProjectPayload;
 };
+
+const getActivePageIndex = (project: DocumentProjectPayload) => {
+  const requested = Number(project.activePageIndex);
+  if (!Number.isFinite(requested)) return 0;
+  return Math.max(
+    0,
+    Math.min(project.pages.length - 1, Math.trunc(requested))
+  );
+};
+
+const normalizeRequestedPageIndex = (
+  value: number,
+  pageCount: number
+): number | null => {
+  if (!Number.isFinite(value) || pageCount < 1) return null;
+  return Math.max(0, Math.min(pageCount - 1, Math.trunc(value)));
+};
+
+const cloneDocumentContentWithFreshImageIds = (
+  content: DocumentContentJson
+): DocumentContentJson => {
+  const cloneNode = (node: DocumentContentJson): DocumentContentJson => {
+    const next: DocumentContentJson = {
+      ...node,
+      ...(node.attrs ? { attrs: { ...node.attrs } } : {}),
+      ...(node.marks
+        ? {
+            marks: node.marks.map((mark) => ({
+              ...mark,
+              ...(mark.attrs ? { attrs: { ...mark.attrs } } : {}),
+            })),
+          }
+        : {}),
+      ...(node.content ? { content: node.content.map(cloneNode) } : {}),
+    };
+    if (
+      (
+        node.type === 'documentInlineImage'
+        || node.type === 'documentFlowImage'
+      )
+      && next.attrs
+    ) {
+      next.attrs.id = uuidv4();
+    }
+    return next;
+  };
+  return cloneNode(content);
+};
+
+const duplicateDocumentPage = (
+  page: DocumentPage,
+  name: string
+): DocumentPage => ({
+  ...page,
+  id: uuidv4(),
+  name,
+  size: { ...page.size },
+  margins: { ...page.margins },
+  titleContent: cloneDocumentContentWithFreshImageIds(page.titleContent),
+  bodyContent: cloneDocumentContentWithFreshImageIds(page.bodyContent),
+  overlayObjects: page.overlayObjects.map((overlay) => ({
+    ...overlay,
+    id: uuidv4(),
+  })),
+  reference: page.reference ? { ...page.reference } : undefined,
+});
+
+const createPageAfter = (
+  page: DocumentPage,
+  name: string
+): DocumentPage => {
+  const blank = createBlankDocumentPage(name);
+  return {
+    ...blank,
+    size: { ...page.size },
+    margins: { ...page.margins },
+    titleFontSizePx: page.titleFontSizePx,
+    columnCount: page.columnCount,
+    columnGapPx: page.columnGapPx,
+    dropCap: page.dropCap,
+  };
+};
+
+const withDerivedDocumentPageSize = (
+  project: DocumentProjectPayload
+): DocumentProjectPayload => {
+  const firstPage = project.pages[0];
+  if (!firstPage) return project;
+  const width = Math.round(firstPage.size.widthIn * firstPage.size.dpi);
+  const height = Math.round(firstPage.size.heightIn * firstPage.size.dpi);
+  return {
+    ...project,
+    document: {
+      ...project.document,
+      pageSize: {
+        presetId: firstPage.size.presetId,
+        width,
+        height,
+        unitMode: 'px',
+        dpi: firstPage.size.dpi,
+      },
+    },
+    canvasSize: { width, height },
+    unitMode: 'px',
+  };
+};
+
+const omitEmptyDocumentJsonMetadata = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(omitEmptyDocumentJsonMetadata);
+  }
+  if (!value || typeof value !== 'object') return value;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== null && entry !== undefined)
+    .map(([key, entry]) => [key, omitEmptyDocumentJsonMetadata(entry)] as const)
+    .filter(([key, entry]) => (
+      key !== 'attrs'
+      || typeof entry !== 'object'
+      || entry === null
+      || Object.keys(entry as Record<string, unknown>).length > 0
+    ));
+  return Object.fromEntries(entries);
+};
+
+const documentPagesAreEquivalent = (
+  left: DocumentPage,
+  right: DocumentPage
+) => JSON.stringify(omitEmptyDocumentJsonMetadata(left))
+  === JSON.stringify(omitEmptyDocumentJsonMetadata(right));
 
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let projectSessionToken = 0;
@@ -363,24 +508,203 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     markDirty(set);
   },
 
-  updatePage: (update) => {
+  updateFolioSettings: (update) => {
     const project = get().project;
-    const page = project?.pages[0];
-    if (!project || !page) return;
-    const nextPage = typeof update === 'function'
-      ? update(page)
-      : { ...page, ...update };
+    if (!project) return;
+    const current = project.document.folios;
+    const next: DocumentFolioSettings = {
+      startingNumber: update.startingNumber === undefined
+        ? current.startingNumber
+        : normalizeDocumentFolioNumber(
+            update.startingNumber,
+            current.startingNumber
+          ),
+      visible: update.visible ?? current.visible,
+      placement: 'outside-bottom',
+    };
+    if (
+      next.startingNumber === current.startingNumber
+      && next.visible === current.visible
+    ) {
+      return;
+    }
     set({
       project: {
         ...project,
-        pages: [nextPage],
+        document: {
+          ...project.document,
+          folios: next,
+        },
       },
     });
     markDirty(set);
   },
 
-  updateTitleContent: (titleContent) => get().updatePage({ titleContent }),
-  updateBodyContent: (bodyContent) => get().updatePage({ bodyContent }),
+  selectPage: (index) => {
+    const project = get().project;
+    if (!project) return;
+    const nextIndex = normalizeRequestedPageIndex(index, project.pages.length);
+    if (nextIndex === null) return;
+    if (nextIndex === getActivePageIndex(project)) return;
+    set({
+      project: {
+        ...project,
+        activePageIndex: nextIndex,
+      },
+      isReferenceAdjustMode: false,
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isOverflowing: false,
+    });
+    // Page selection is a discrete, persisted document preference. Advancing
+    // the revision also prevents an in-flight save from restoring the older
+    // activePageIndex when its write completes.
+    markDirty(set);
+  },
+
+  addPage: () => {
+    const project = get().project;
+    if (!project) return;
+    const activeIndex = getActivePageIndex(project);
+    const activePage = project.pages[activeIndex] || project.pages[0];
+    const insertIndex = activeIndex + 1;
+    const nextPage = createPageAfter(
+      activePage,
+      `Page ${project.pages.length + 1}`
+    );
+    const pages = [...project.pages];
+    pages.splice(insertIndex, 0, nextPage);
+    set({
+      project: withDerivedDocumentPageSize({
+        ...project,
+        pages,
+        activePageIndex: insertIndex,
+      }),
+      isReferenceAdjustMode: false,
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isOverflowing: false,
+    });
+    markDirty(set);
+  },
+
+  duplicatePage: (requestedIndex) => {
+    const project = get().project;
+    if (!project) return;
+    const activeIndex = getActivePageIndex(project);
+    const sourceIndex = requestedIndex === undefined
+      ? activeIndex
+      : normalizeRequestedPageIndex(requestedIndex, project.pages.length);
+    if (sourceIndex === null) return;
+    const sourcePage = project.pages[sourceIndex];
+    if (!sourcePage) return;
+    const insertIndex = sourceIndex + 1;
+    const nextPage = duplicateDocumentPage(
+      sourcePage,
+      `${sourcePage.name} copy`
+    );
+    const pages = [...project.pages];
+    pages.splice(insertIndex, 0, nextPage);
+    set({
+      project: withDerivedDocumentPageSize({
+        ...project,
+        pages,
+        activePageIndex: insertIndex,
+      }),
+      isReferenceAdjustMode: false,
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isOverflowing: false,
+    });
+    markDirty(set);
+  },
+
+  removePage: (requestedIndex) => {
+    const project = get().project;
+    if (!project) return;
+    if (project.pages.length <= 1) {
+      set({ toastMessage: 'A document must contain at least one page.' });
+      return;
+    }
+    const activeIndex = getActivePageIndex(project);
+    const removeIndex = requestedIndex === undefined
+      ? activeIndex
+      : normalizeRequestedPageIndex(requestedIndex, project.pages.length);
+    if (removeIndex === null) return;
+    const activePageId = project.pages[activeIndex]?.id;
+    const pages = project.pages.filter((_page, index) => index !== removeIndex);
+    const retainedActiveIndex = pages.findIndex(
+      (page) => page.id === activePageId
+    );
+    const nextActiveIndex = retainedActiveIndex >= 0
+      ? retainedActiveIndex
+      : Math.min(removeIndex, pages.length - 1);
+    set({
+      project: withDerivedDocumentPageSize({
+        ...project,
+        pages,
+        activePageIndex: nextActiveIndex,
+      }),
+      isReferenceAdjustMode: false,
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isOverflowing: false,
+    });
+    markDirty(set);
+  },
+
+  reorderPages: (fromIndex, toIndex) => {
+    const project = get().project;
+    if (!project) return;
+    const from = normalizeRequestedPageIndex(fromIndex, project.pages.length);
+    const to = normalizeRequestedPageIndex(toIndex, project.pages.length);
+    if (from === null || to === null) return;
+    if (from === to) return;
+    const activePageId = project.pages[getActivePageIndex(project)]?.id;
+    const pages = [...project.pages];
+    const [moved] = pages.splice(from, 1);
+    if (!moved) return;
+    pages.splice(to, 0, moved);
+    const nextActiveIndex = Math.max(
+      0,
+      pages.findIndex((page) => page.id === activePageId)
+    );
+    set({
+      project: withDerivedDocumentPageSize({
+        ...project,
+        pages,
+        activePageIndex: nextActiveIndex,
+      }),
+    });
+    markDirty(set);
+  },
+
+  updatePage: (update, pageId) => {
+    const project = get().project;
+    if (!project) return;
+    const activePage = project.pages[getActivePageIndex(project)];
+    const targetId = pageId || activePage?.id;
+    const page = project.pages.find((candidate) => candidate.id === targetId);
+    if (!page) return;
+    const nextPage = typeof update === 'function'
+      ? update(page)
+      : { ...page, ...update };
+    if (documentPagesAreEquivalent(nextPage, page)) return;
+    set({
+      project: withDerivedDocumentPageSize({
+        ...project,
+        pages: project.pages.map((candidate) =>
+          candidate.id === page.id ? nextPage : candidate
+        ),
+      }),
+    });
+    markDirty(set);
+  },
+
+  updateTitleContent: (titleContent, pageId) =>
+    get().updatePage({ titleContent }, pageId),
+  updateBodyContent: (bodyContent, pageId) =>
+    get().updatePage({ bodyContent }, pageId),
 
   addAsset: (assetId, source) => {
     const project = get().project;

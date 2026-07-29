@@ -43,6 +43,10 @@ import {
   type DocumentEditorRegion,
 } from './TitleEditor';
 import { DocumentPageView } from './DocumentPageView';
+import { DocumentPageNavigation } from './DocumentPageNavigation';
+import {
+  mountCommittedDocumentExportPages,
+} from './DocumentProjectExportRenderer';
 import {
   DocumentToolbar,
   type DocumentImageLayoutMode,
@@ -54,10 +58,15 @@ import { DocumentSidebar } from './DocumentSidebar';
 import { DocumentZoomControls } from './DocumentZoomControls';
 import { calculateFitPageZoom } from '../utils/documentViewport';
 import {
+  constrainDocumentPageMargins,
   updateDocumentPagePaper,
   type DocumentPageOrientation,
 } from '../utils/documentPageOrientation';
 import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../utils/documentColor';
+import {
+  getDocumentFolioNumber,
+  resolveDocumentPhysicalMargins,
+} from '../layout/pageGeometry';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -163,6 +172,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const updateDocumentBackground = useDocumentStore(
     (state) => state.updateDocumentBackground
   );
+  const updateFolioSettings = useDocumentStore(
+    (state) => state.updateFolioSettings
+  );
+  const selectPage = useDocumentStore((state) => state.selectPage);
+  const addPage = useDocumentStore((state) => state.addPage);
+  const duplicatePage = useDocumentStore((state) => state.duplicatePage);
+  const removePage = useDocumentStore((state) => state.removePage);
+  const reorderPages = useDocumentStore((state) => state.reorderPages);
   const updateTitleContent = useDocumentStore((state) => state.updateTitleContent);
   const updateBodyContent = useDocumentStore((state) => state.updateBodyContent);
   const addAsset = useDocumentStore((state) => state.addAsset);
@@ -196,9 +213,26 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const [textFormatState, setTextFormatState] =
     useState<DocumentTextFormatState>(DEFAULT_TEXT_FORMAT_STATE);
 
-  const page = project?.pages[0];
+  const activePageIndex = project
+    ? Math.max(
+        0,
+        Math.min(
+          project.pages.length - 1,
+          Math.trunc(project.activePageIndex ?? 0)
+        )
+      )
+    : 0;
+  const page = project?.pages[activePageIndex];
   const paperColor = project?.document.background?.value
     || DEFAULT_DOCUMENT_PAPER_COLOR;
+  const folios = project?.document.folios;
+  const folioNumber = folios
+    ? getDocumentFolioNumber(folios.startingNumber, activePageIndex)
+    : activePageIndex + 1;
+  const physicalMargins = page
+    ? resolveDocumentPhysicalMargins(page.margins, folioNumber)
+    : null;
+  const previousPageIdRef = useRef(page?.id);
   const assetSources = useMemo(() => project?.assets || {}, [project?.assets]);
 
   useEffect(() => {
@@ -206,6 +240,23 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const timer = window.setTimeout(() => setToastMessage(null), 4500);
     return () => window.clearTimeout(timer);
   }, [setToastMessage, toastMessage]);
+
+  useEffect(() => {
+    if (previousPageIdRef.current === page?.id) return;
+    previousPageIdRef.current = page?.id;
+    titleEditorRef.current = null;
+    bodyEditorRef.current = null;
+    setSelectedFlowImage(null);
+    setSelectedFlowImageId(null);
+    setSelectedOverlayId(null);
+    setReferenceAdjustMode(false);
+    setTextFormatState(DEFAULT_TEXT_FORMAT_STATE);
+  }, [
+    page?.id,
+    setReferenceAdjustMode,
+    setSelectedFlowImageId,
+    setSelectedOverlayId,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -248,16 +299,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   ]);
 
   const availableColumnWidth = useMemo(() => {
-    if (!page) return 320;
+    if (!page || !physicalMargins) return 320;
     const bodyWidth = (
       page.size.widthIn
-      - page.margins.leftIn
-      - page.margins.rightIn
+      - physicalMargins.leftIn
+      - physicalMargins.rightIn
     ) * 96;
     return (
       bodyWidth - page.columnGapPx * (page.columnCount - 1)
     ) / page.columnCount;
-  }, [page]);
+  }, [page, physicalMargins]);
 
   const insertAssetIntoBody = useCallback((
     asset: DocumentAsset,
@@ -590,7 +641,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       id: overlayId,
       assetId: attributes.assetId,
       altText: attributes.altText,
-      xPx: page.margins.leftIn * 96 + 24,
+      xPx: (physicalMargins?.leftIn ?? page.margins.innerIn) * 96 + 24,
       yPx: page.margins.topIn * 96 + 140,
       widthPx: attributes.widthPx,
       heightPx: attributes.heightPx,
@@ -606,6 +657,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [
     addOverlay,
     page,
+    physicalMargins,
     selectedFlowImage,
     setSelectedFlowImageId,
     setSelectedOverlayId,
@@ -707,7 +759,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         verticalAnchor: 'page-position',
         yPx: Math.max(
           0,
-          selectedOverlay.yPx - page.margins.topIn * 96
+          selectedOverlay.yPx
+            - (physicalMargins?.topIn ?? page.margins.topIn) * 96
         ),
         caption: selectedOverlay.caption || '',
       });
@@ -720,6 +773,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     convertOverlayToFlow,
     convertSelectedFlowToOverlay,
     page,
+    physicalMargins,
     removeOverlay,
     selectedFlowImage,
     selectedOverlay,
@@ -905,23 +959,32 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (!exportRootRef.current || !page || !project || isExporting) return;
     setIsExporting(true);
     setToastMessage(`Preparing ${format.toUpperCase()} export…`);
+    let cleanupExportPages: (() => void) | undefined;
     try {
       const options = {
         widthIn: page.size.widthIn,
         heightIn: page.size.heightIn,
         dpi: page.size.dpi,
-        fileName: project.projectName,
+        fileName: format === 'png'
+          ? `${project.projectName}-${folioNumber}`
+          : project.projectName,
         backgroundColor: paperColor,
       };
       if (format === 'png') {
         await documentExportService.downloadPng(exportRootRef.current, options);
       } else {
-        await documentExportService.downloadPdf(exportRootRef.current, options);
+        const mounted = await mountCommittedDocumentExportPages(project);
+        cleanupExportPages = mounted.cleanup;
+        await documentExportService.downloadPdfPages(
+          mounted.sources,
+          project.projectName
+        );
       }
       setToastMessage(`${format.toUpperCase()} export downloaded.`);
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Document export failed.');
     } finally {
+      cleanupExportPages?.();
       setIsExporting(false);
     }
   }, [isExporting, page, paperColor, project, setToastMessage]);
@@ -943,6 +1006,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     >
       <DocumentTopBar
         projectName={project.projectName}
+        pageCount={project.pages.length}
         saveStatus={isExporting ? 'exporting' : saveStatus}
         exportBusy={isExporting}
         onBack={() => onBackToDashboard?.()}
@@ -967,6 +1031,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       <div className="document-editor-layout">
         <DocumentSidebar
           page={page}
+          folios={project.document.folios}
           paperColor={paperColor}
           isOverflowing={isOverflowing}
           collapsed={sidebarCollapsed}
@@ -979,9 +1044,23 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             setFitMode(true);
             updatePage(updateDocumentPagePaper(page, { orientation }));
           }}
+          onCustomSizeChange={(update) => {
+            setFitMode(true);
+            updatePage(updateDocumentPagePaper(page, {
+              preset: 'custom',
+              ...update,
+            }));
+          }}
           onPaperColorChange={updateDocumentBackground}
+          onFolioSettingsChange={updateFolioSettings}
+          onSuppressFolioChange={(suppressFolio) =>
+            updatePage({ suppressFolio })}
           onMarginChange={(side, value) => updatePage({
-            margins: { ...page.margins, [side]: value },
+            margins: constrainDocumentPageMargins(
+              { ...page.margins, [side]: value },
+              page.size.widthIn,
+              page.size.heightIn
+            ),
           })}
           onColumnCountChange={(columnCount) => updatePage({ columnCount })}
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
@@ -1055,6 +1134,31 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onResetSelectedImageSize={resetSelectedImageSize}
           />
 
+          <DocumentPageNavigation
+            pages={project.pages}
+            activePageIndex={activePageIndex}
+            startingFolio={project.document.folios.startingNumber}
+            onSelectPage={selectPage}
+            onAddPage={addPage}
+            onDuplicatePage={() => duplicatePage()}
+            onRemovePage={() => {
+              if (
+                project.pages.length > 1
+                && window.confirm(`Remove ${page.name}? This cannot be undone.`)
+              ) {
+                removePage();
+              }
+            }}
+            onMovePage={(direction) => {
+              reorderPages(
+                activePageIndex,
+                direction === 'left'
+                  ? activePageIndex - 1
+                  : activePageIndex + 1
+              );
+            }}
+          />
+
           <main
             ref={workspaceRef}
             className="document-workspace"
@@ -1065,6 +1169,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               page={page}
               assetSources={assetSources}
               paperColor={paperColor}
+              folioNumber={folioNumber}
+              showFolio={project.document.folios.visible}
               zoom={zoom}
               exportRootRef={exportRootRef}
               referenceAdjustMode={isReferenceAdjustMode}
@@ -1085,6 +1191,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               onUpdateOverlay={updateOverlay}
               titleEditor={(
                 <TitleEditor
+                  key={`title-${page.id}`}
                   content={page.titleContent as JSONContent}
                   baseFontSizePx={page.titleFontSizePx}
                   onEditorReady={(editor) => {
@@ -1101,7 +1208,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
                   onUpdate={(content, editor) => {
-                    updateTitleContent(content);
+                    updateTitleContent(content, page.id);
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
                   onPasteDispatch={handlePasteDispatch}
@@ -1109,6 +1216,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               )}
               bodyEditor={(
                 <FlowEditor
+                  key={`body-${page.id}`}
                   content={page.bodyContent as JSONContent}
                   columnCount={page.columnCount}
                   columnGapPx={page.columnGapPx}
@@ -1131,7 +1239,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onUpdate={(content, editor) => {
-                    updateBodyContent(content);
+                    updateBodyContent(content, page.id);
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onImageSelectionChange={(selection, editor) => {

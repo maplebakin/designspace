@@ -8,6 +8,7 @@ import type {
   ScanReference,
 } from '../src/document/types/documentProject';
 import {
+  constrainDocumentPageMargins,
   getDocumentPaperDimensions,
   updateDocumentPagePaper,
 } from '../src/document/utils/documentPageOrientation';
@@ -81,10 +82,60 @@ describe('document page orientation', () => {
     expect(landscape.heightIn).toBe(portrait.widthIn);
   });
 
+  it('preserves safe custom dimensions and swaps them once when orientation changes', () => {
+    const page = createBlankDocumentPage();
+    const custom = updateDocumentPagePaper(page, {
+      preset: 'custom',
+      widthIn: 6.25,
+      heightIn: 9.5,
+    });
+
+    expect(custom.size).toMatchObject({
+      presetId: 'custom',
+      orientation: 'portrait',
+      widthIn: 6.25,
+      heightIn: 9.5,
+    });
+
+    const landscape = updateDocumentPagePaper(custom, {
+      orientation: 'landscape',
+    });
+    expect(landscape.size).toMatchObject({
+      presetId: 'custom',
+      orientation: 'landscape',
+      widthIn: 9.5,
+      heightIn: 6.25,
+    });
+
+    const repeated = updateDocumentPagePaper(landscape, {
+      orientation: 'landscape',
+    });
+    expect(repeated.size).toEqual(landscape.size);
+
+    const bounded = updateDocumentPagePaper(custom, {
+      widthIn: 0.1,
+      heightIn: 300,
+    });
+    expect(bounded.size.widthIn).toBe(1);
+    expect(bounded.size.heightIn).toBe(24);
+  });
+
+  it('keeps live margin edits inside a minimum custom page', () => {
+    const constrained = constrainDocumentPageMargins({
+      topIn: 3,
+      bottomIn: 3,
+      innerIn: 3,
+      outerIn: 3,
+    }, 1, 1);
+
+    expect(constrained.innerIn + constrained.outerIn).toBeCloseTo(0.75);
+    expect(constrained.topIn + constrained.bottomIn).toBeCloseTo(0.75);
+  });
+
   it('preserves document state and valid reference settings while bounding overlays', () => {
     const page = {
       ...createBlankDocumentPage(),
-      margins: { topIn: 0.8, rightIn: 0.7, bottomIn: 0.6, leftIn: 0.5 },
+      margins: { topIn: 0.8, bottomIn: 0.6, innerIn: 0.5, outerIn: 0.7 },
       titleContent: {
         type: 'doc',
         content: [{
