@@ -100,6 +100,14 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
+    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+      'historical-page-49-body-drop-cap-wrap.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
+    );
+    await expect(page.getByTestId('document-folio')).toHaveScreenshot(
+      'historical-page-49-folio.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
+    );
 
     await page.getByTestId('document-page-tab-1').click();
     await clearSelection();
@@ -109,6 +117,10 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
+    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+      'historical-page-50-body-row.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
+    );
 
     await page.getByTestId('document-page-tab-2').click();
     await clearSelection();
@@ -118,6 +130,10 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
+    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+      'historical-page-51-body-stack.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
+    );
 
     await page.getByTestId('document-page-tab-3').click();
     await clearSelection();
@@ -127,6 +143,10 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
+    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+      'historical-page-52-body-closing-styles.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
+    );
 
     const pdfDownloadPromise = page.waitForEvent('download');
     await page.getByText('Export', { exact: true }).click();

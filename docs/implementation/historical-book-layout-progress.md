@@ -654,9 +654,9 @@ Verification:
 - `npm run test:e2e -- e2e/document-reconstruction.spec.ts
   e2e/document-typography.spec.ts e2e/historical-book-layout.spec.ts
   --reporter=line` — 10 Playwright tests passed.
-- Four Chromium page-sheet baselines were reviewed and committed. The
-  historical fixture import, page landmarks, PDF page count, and numbered PNG
-  export all passed.
+- Four Chromium page-sheet baselines plus focused body/folio crops were
+  reviewed and committed. The historical fixture import, page landmarks, PDF
+  page count, and numbered PNG export all passed.
 
 Known limitations:
 

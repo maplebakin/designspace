@@ -81,8 +81,9 @@ source-image DPI warnings are surfaced.
 
 `createHistoricalBookFixtureProject()` is a deterministic four-page document
 factory. It is imported through the normal portable-file dashboard workflow in
-Playwright. Per-page model assertions, committed export assertions, four page
-sheet crops, four-page PDF assertions, and numbered PNG assertions are included.
+Playwright. Per-page model assertions, committed export assertions, full-sheet
+and focused body/folio crops, four-page PDF assertions, and numbered PNG
+assertions are included.
 
 ## 3. Architectural changes
 
