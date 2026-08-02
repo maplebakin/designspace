@@ -253,6 +253,7 @@ describe('document project store', () => {
       dropCap: DEFAULT_DOCUMENT_DROP_CAP,
       suppressFolio: false,
       overlayObjects: [],
+      imageGroups: [],
     });
     expect(page.reference).toBeUndefined();
     expect(useDocumentStore.getState()).toMatchObject({
@@ -414,6 +415,52 @@ describe('document project store', () => {
     expect(useDocumentStore.getState().project?.activePageIndex).toBe(1);
   });
 
+  it('commits body JSON and image groups as one repaired page revision', () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Atomic image groups');
+    const pageId = project.pages[0].id;
+    const first = spanningBodyContent();
+    const second = structuredClone(first.content?.find(
+      (node) => node.type === 'documentFlowImage'
+    ));
+    if (!second) throw new Error('fixture image missing');
+    second.attrs = { ...(second.attrs || {}), id: 'span-photo-second' };
+    first.content = [
+      ...(first.content || []),
+      second,
+    ];
+    store.updatePage({
+      bodyContent: first,
+      imageGroups: [{
+        id: 'row-atomic',
+        kind: 'row',
+        childImageIds: ['span-photo', 'span-photo-second'],
+        gapPx: 12,
+        sharedWidth: false,
+      }],
+    }, pageId);
+    const before = useDocumentStore.getState().revision;
+    const withoutSecond = {
+      ...first,
+      content: first.content?.filter(
+        (node) => node.attrs?.id !== 'span-photo-second'
+      ),
+    };
+    store.commitPageImageState(pageId, withoutSecond, [{
+      id: 'row-atomic',
+      kind: 'row',
+      childImageIds: ['span-photo', 'span-photo-second'],
+      gapPx: 12,
+      sharedWidth: false,
+    }]);
+    const page = useDocumentStore.getState().project!.pages[0];
+    expect(useDocumentStore.getState().revision).toBe(before + 1);
+    expect(page.bodyContent.content?.some(
+      (node) => node.attrs?.id === 'span-photo-second'
+    )).toBe(false);
+    expect(page.imageGroups).toEqual([]);
+  });
+
   it('persists active page selection through the bounded autosave', async () => {
     const store = useDocumentStore.getState();
     store.createBlankProject('Selection Only');
@@ -495,9 +542,32 @@ describe('document project store', () => {
     const store = useDocumentStore.getState();
     const project = store.createBlankProject('Page Operations');
     const sourcePageId = project.pages[0].id;
+    const groupedBody = spanningBodyContent();
+    groupedBody.content = [
+      ...(groupedBody.content || []),
+      {
+        type: 'documentFlowImage',
+        attrs: {
+          ...groupedBody.content?.find(
+            (node) => node.type === 'documentFlowImage'
+          )?.attrs,
+          id: 'span-photo-second',
+          assetId: 'asset-family-second',
+          caption: 'Second independently editable caption',
+          xOffsetPx: 280,
+        },
+      },
+    ];
     store.updatePage({
-      bodyContent: spanningBodyContent(),
+      bodyContent: groupedBody,
       overlayObjects: [overlay],
+      imageGroups: [{
+        id: 'source-row',
+        kind: 'row',
+        childImageIds: ['span-photo', 'span-photo-second'],
+        gapPx: 18,
+        sharedWidth: false,
+      }],
       reference,
     }, sourcePageId);
 
@@ -527,7 +597,20 @@ describe('document project store', () => {
     );
     expect(
       collectDocumentNodeIds(duplicate.bodyContent, 'documentFlowImage')
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(duplicate.imageGroups).toHaveLength(1);
+    expect(duplicate.imageGroups[0]).toMatchObject({
+      kind: 'row',
+      gapPx: 18,
+      sharedWidth: false,
+      childImageIds: collectDocumentNodeIds(
+        duplicate.bodyContent,
+        'documentFlowImage'
+      ),
+    });
+    expect(duplicate.imageGroups[0].id).not.toBe(
+      source.imageGroups[0].id
+    );
 
     const duplicateId = duplicate.id;
     store.addPage();

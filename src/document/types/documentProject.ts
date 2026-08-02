@@ -327,6 +327,21 @@ export type DocumentOverlayImage = {
   locked?: boolean;
 };
 
+export type DocumentImageGroupKind = 'row' | 'stack';
+
+/**
+ * Declarative compound-image metadata. Child image nodes remain the only
+ * source of truth for persisted geometry and captions; a group records
+ * ordering and alignment policy only.
+ */
+export type DocumentImageGroup = {
+  id: string;
+  kind: DocumentImageGroupKind;
+  childImageIds: string[];
+  gapPx: number;
+  sharedWidth: boolean;
+};
+
 export type ScanReference = {
   assetId: string;
   sourceType: 'image' | 'pdf';
@@ -374,5 +389,6 @@ export type DocumentPage = {
   dropCap: DocumentDropCapSettings;
   suppressFolio: boolean;
   overlayObjects: DocumentOverlayImage[];
+  imageGroups: DocumentImageGroup[];
   reference?: ScanReference;
 };

@@ -84,6 +84,7 @@ const page: DocumentPage = {
   dropCap: DEFAULT_DOCUMENT_DROP_CAP,
   suppressFolio: false,
   overlayObjects: [],
+  imageGroups: [],
 };
 
 const selectedImage: DocumentImageInspectorValue = {

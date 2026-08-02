@@ -35,6 +35,11 @@ import {
   resolveNewDocumentOverlayGeometry,
   type DocumentOverlayGeometry,
 } from '../layout/overlayGeometry';
+import {
+  collectGroupableDocumentImageIds,
+  duplicateDocumentPageImageState,
+  repairDocumentImageGroups,
+} from '../model/documentImageGroups';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
@@ -75,6 +80,12 @@ type DocumentStoreState = {
   ) => void;
   updateTitleContent: (content: DocumentContentJson, pageId?: string) => void;
   updateBodyContent: (content: DocumentContentJson, pageId?: string) => void;
+  commitPageImageState: (
+    pageId: string,
+    bodyContent: DocumentContentJson,
+    imageGroups?: unknown
+  ) => void;
+  updateImageGroups: (pageId: string, imageGroups: unknown) => void;
   updatePageLanguage: (language?: string, pageId?: string) => void;
   updateDropCap: (
     update: Partial<DocumentDropCapSettings>,
@@ -141,6 +152,7 @@ export const createBlankDocumentPage = (name = 'Page 1'): DocumentPage => ({
   dropCap: { ...DEFAULT_DOCUMENT_DROP_CAP },
   suppressFolio: false,
   overlayObjects: [],
+  imageGroups: [],
 });
 
 export const createBlankDocumentProject = (
@@ -208,55 +220,28 @@ const normalizeRequestedPageIndex = (
   return Math.max(0, Math.min(pageCount - 1, Math.trunc(value)));
 };
 
-const cloneDocumentContentWithFreshImageIds = (
-  content: DocumentContentJson
-): DocumentContentJson => {
-  const cloneNode = (node: DocumentContentJson): DocumentContentJson => {
-    const next: DocumentContentJson = {
-      ...node,
-      ...(node.attrs ? { attrs: { ...node.attrs } } : {}),
-      ...(node.marks
-        ? {
-            marks: node.marks.map((mark) => ({
-              ...mark,
-              ...(mark.attrs ? { attrs: { ...mark.attrs } } : {}),
-            })),
-          }
-        : {}),
-      ...(node.content ? { content: node.content.map(cloneNode) } : {}),
-    };
-    if (
-      (
-        node.type === 'documentInlineImage'
-        || node.type === 'documentFlowImage'
-      )
-      && next.attrs
-    ) {
-      next.attrs.id = uuidv4();
-    }
-    return next;
-  };
-  return cloneNode(content);
-};
-
 const duplicateDocumentPage = (
   page: DocumentPage,
   name: string
-): DocumentPage => ({
-  ...page,
-  id: uuidv4(),
-  name,
-  size: { ...page.size },
-  margins: { ...page.margins },
-  dropCap: { ...page.dropCap },
-  titleContent: cloneDocumentContentWithFreshImageIds(page.titleContent),
-  bodyContent: cloneDocumentContentWithFreshImageIds(page.bodyContent),
-  overlayObjects: page.overlayObjects.map((overlay) => ({
-    ...overlay,
+): DocumentPage => {
+  const duplicatedImageState = duplicateDocumentPageImageState(page, {
+    createImageId: () => uuidv4(),
+    createGroupId: () => uuidv4(),
+  });
+  return {
+    ...page,
     id: uuidv4(),
-  })),
-  reference: page.reference ? { ...page.reference } : undefined,
-});
+    name,
+    size: { ...page.size },
+    margins: { ...page.margins },
+    dropCap: { ...page.dropCap },
+    titleContent: duplicatedImageState.titleContent,
+    bodyContent: duplicatedImageState.bodyContent,
+    overlayObjects: duplicatedImageState.overlayObjects,
+    imageGroups: duplicatedImageState.imageGroups,
+    reference: page.reference ? { ...page.reference } : undefined,
+  };
+};
 
 const createPageAfter = (
   page: DocumentPage,
@@ -798,6 +783,16 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
             'body'
           ),
     };
+    // Page-level groups are valid only when every member is a unique,
+    // page-positioned span image in the resulting stories. Normalize on each
+    // write so content edits and metadata edits cannot diverge.
+    nextPage.imageGroups = repairDocumentImageGroups(
+      nextPage.imageGroups,
+      collectGroupableDocumentImageIds([
+        nextPage.titleContent,
+        nextPage.bodyContent,
+      ])
+    );
     if (documentPagesAreEquivalent(nextPage, page)) return;
     set({
       project: withDerivedDocumentPageSize({
@@ -821,6 +816,27 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     get().updatePage({
       bodyContent: normalizeDocumentContentStyles(bodyContent, 'body'),
     }, pageId),
+  commitPageImageState: (pageId, bodyContent, imageGroups) => {
+    const project = get().project;
+    if (!project) return;
+    const page = project.pages.find((candidate) => candidate.id === pageId);
+    if (!page) return;
+    const normalizedBody = normalizeDocumentContentStyles(bodyContent, 'body');
+    get().updatePage({
+      bodyContent: normalizedBody,
+      imageGroups: imageGroups === undefined
+        ? page.imageGroups
+        : imageGroups as DocumentPage['imageGroups'],
+    }, pageId);
+  },
+  updateImageGroups: (pageId, imageGroups) => {
+    const project = get().project;
+    if (!project) return;
+    if (!project.pages.some((candidate) => candidate.id === pageId)) return;
+    get().updatePage({
+      imageGroups: imageGroups as DocumentPage['imageGroups'],
+    }, pageId);
+  },
   updatePageLanguage: (language, pageId) => {
     const project = get().project;
     if (!project) return;

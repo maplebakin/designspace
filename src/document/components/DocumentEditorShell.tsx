@@ -10,10 +10,17 @@ import type { Editor, JSONContent } from '@tiptap/core';
 import { v4 as uuidv4 } from 'uuid';
 import { useDocumentStore } from '../state/documentStore';
 import type {
+  DocumentImageGroup,
   DocumentFlowImageWrap,
   DocumentOverlayImage,
   ScanReference,
 } from '../types/documentProject';
+import {
+  findDocumentImageGroupForImage,
+  normalizeDocumentImageGroupGapPx,
+  removeDocumentImageIdsFromGroups,
+  removeDocumentImageGroup,
+} from '../model/documentImageGroups';
 import {
   ingestDocumentImage,
   isSafeDocumentImageSource,
@@ -40,6 +47,8 @@ import {
 } from '../extensions/DocumentBlockStyleExtension';
 import {
   commitStructuredDocumentImagePosition,
+  commitStructuredDocumentImageBatch,
+  DOCUMENT_IMAGE_GROUPS_TRANSACTION_META,
   FlowEditor,
   type DocumentDropContext,
   type SelectedDocumentImage,
@@ -220,6 +229,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const reorderPages = useDocumentStore((state) => state.reorderPages);
   const updateTitleContent = useDocumentStore((state) => state.updateTitleContent);
   const updateBodyContent = useDocumentStore((state) => state.updateBodyContent);
+  const commitPageImageState = useDocumentStore(
+    (state) => state.commitPageImageState
+  );
+  const updateImageGroups = useDocumentStore((state) => state.updateImageGroups);
   const addAsset = useDocumentStore((state) => state.addAsset);
   const addOverlay = useDocumentStore((state) => state.addOverlay);
   const updateOverlay = useDocumentStore((state) => state.updateOverlay);
@@ -249,6 +262,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     useState<DocumentEditorRegion>('body');
   const [selectedFlowImage, setSelectedFlowImage] =
     useState<SelectedDocumentImage | null>(null);
+  const [selectedStructuredImageIds, setSelectedStructuredImageIds] =
+    useState<string[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fitMode, setFitMode] = useState(true);
@@ -300,6 +315,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     titleEditorRef.current = null;
     bodyEditorRef.current = null;
     setSelectedFlowImage(null);
+    setSelectedStructuredImageIds([]);
     setSelectedFlowImageId(null);
     setSelectedOverlayId(null);
     setReferenceAdjustMode(false);
@@ -461,6 +477,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         setSelectedOverlayId(null);
         setSelectedFlowImage(null);
         setSelectedFlowImageId(null);
+        setSelectedStructuredImageIds([]);
         setReferenceAdjustMode(false);
       }
     };
@@ -478,6 +495,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setReferenceAdjustMode,
     setSelectedFlowImageId,
     setSelectedOverlayId,
+    setSelectedStructuredImageIds,
     typographyStyle,
   ]);
 
@@ -707,6 +725,170 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const selectedOverlay = page?.overlayObjects.find(
     (object) => object.id === selectedOverlayId
   ) || null;
+  const selectedImageGroup = useMemo(() => {
+    if (!page || selectedStructuredImageIds.length < 2) return null;
+    const selected = new Set(selectedStructuredImageIds);
+    return page.imageGroups.find((group) => (
+      group.childImageIds.length === selected.size
+      && group.childImageIds.every((imageId) => selected.has(imageId))
+    )) || null;
+  }, [page, selectedStructuredImageIds]);
+
+  const handleStructuredImageSelectionRequest = useCallback((
+    imageId: string,
+    additive: boolean
+  ): string | null => {
+    if (!page) return imageId;
+    const group = findDocumentImageGroupForImage(page.imageGroups, imageId);
+    if (group && !additive) {
+      setSelectedStructuredImageIds([...group.childImageIds]);
+      return imageId;
+    }
+    if (!additive) {
+      setSelectedStructuredImageIds([imageId]);
+      return imageId;
+    }
+    const current = selectedStructuredImageIds;
+    if (current.includes(imageId)) {
+      const remaining = current.filter((candidate) => candidate !== imageId);
+      setSelectedStructuredImageIds(remaining);
+      return remaining[0] || imageId;
+    }
+    const next = [...current, imageId];
+    setSelectedStructuredImageIds(next);
+    return imageId;
+  }, [page, selectedStructuredImageIds]);
+
+  const getStructuredLayoutModel = useCallback(() => {
+    const editor = bodyEditorRef.current;
+    if (!editor || editor.isDestroyed || !page || !physicalMargins) return null;
+    const bodyWidthPx = Math.max(
+      1,
+      (
+        page.size.widthIn
+        - physicalMargins.leftIn
+        - physicalMargins.rightIn
+      ) * 96
+    );
+    const editorRoot = editor.view.dom.closest<HTMLElement>(
+      '.document-flow-editor'
+    );
+    const bodyHeightPx = Math.max(
+      1,
+      editorRoot?.clientHeight
+      || (
+        page.size.heightIn
+        - physicalMargins.topIn
+        - physicalMargins.bottomIn
+      ) * 96
+    );
+    return buildMultiDocumentSpanLayoutModel(
+      editor,
+      page.columnCount,
+      page.columnGapPx,
+      bodyWidthPx,
+      bodyHeightPx,
+      {},
+      {
+        typographyStyle,
+        dropCap: page.dropCap,
+        language: page.language || project?.document.language,
+      },
+      page.imageGroups
+    );
+  }, [page, physicalMargins, project?.document.language, typographyStyle]);
+
+  const arrangeSelectedImages = useCallback((
+    kind: DocumentImageGroup['kind']
+  ) => {
+    if (!page || selectedStructuredImageIds.length < 2) return;
+    const editor = bodyEditorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    const selected = new Set(selectedStructuredImageIds);
+    const ordered: string[] = [];
+    editor.state.doc.descendants((node) => {
+      if (
+        node.type.name === 'documentFlowImage'
+        && node.attrs.wrap === 'span-columns'
+        && node.attrs.verticalAnchor === 'page-position'
+        && selected.has(String(node.attrs.id))
+      ) ordered.push(String(node.attrs.id));
+      return true;
+    });
+    if (ordered.length < 2 || ordered.some((id) => (
+      findDocumentImageGroupForImage(page.imageGroups, id)
+    ))) {
+      setToastMessage('Select two or more ungrouped positioned images.');
+      return;
+    }
+    const group: DocumentImageGroup = {
+      id: uuidv4(),
+      kind,
+      childImageIds: ordered,
+      gapPx: 16,
+      sharedWidth: false,
+    };
+    updateImageGroups(page.id, [...page.imageGroups, group]);
+  }, [page, selectedStructuredImageIds, setToastMessage, updateImageGroups]);
+
+  const updateSelectedImageGroup = useCallback((
+    update: Partial<Pick<DocumentImageGroup, 'kind' | 'gapPx' | 'sharedWidth'>>
+  ) => {
+    if (!page || !selectedImageGroup) return;
+    const next = page.imageGroups.map((group) => (
+      group.id === selectedImageGroup.id
+        ? {
+            ...group,
+            ...(update.kind ? { kind: update.kind } : {}),
+            ...(update.gapPx === undefined
+              ? {}
+              : { gapPx: normalizeDocumentImageGroupGapPx(
+                  update.gapPx,
+                  group.gapPx
+                ) }),
+            ...(update.sharedWidth === undefined
+              ? {}
+              : { sharedWidth: update.sharedWidth }),
+          }
+        : group
+    ));
+    updateImageGroups(page.id, next);
+  }, [page, selectedImageGroup, updateImageGroups]);
+
+  const ungroupSelectedImages = useCallback(() => {
+    if (!page || !selectedImageGroup) return;
+    const editor = bodyEditorRef.current;
+    const model = getStructuredLayoutModel();
+    if (!editor || !model) return;
+    const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
+    model.images
+      .filter((image) => selectedImageGroup.childImageIds.includes(image.imageId))
+      .forEach((image) => {
+        updatesByImageId[image.imageId] = {
+          widthPx: image.renderedImageWidthPx,
+          heightPx: image.renderedImageHeightPx,
+          horizontalPlacement: 'custom',
+          verticalAnchor: 'page-position',
+          xOffsetPx: image.imageLeftPx - image.spanLeftPx,
+          yPx: image.imageTopPx,
+        };
+      });
+    const nextGroups = removeDocumentImageGroup(
+      page.imageGroups,
+      selectedImageGroup.id
+    );
+    commitStructuredDocumentImageBatch(editor, {
+      updatesByImageId,
+      selectedImageId: selectedFlowImage?.attributes.id || null,
+      imageGroupsMeta: nextGroups,
+    });
+  }, [
+    commitStructuredDocumentImageBatch,
+    getStructuredLayoutModel,
+    page,
+    selectedFlowImage,
+    selectedImageGroup,
+  ]);
   const selectedInspector: DocumentImageInspectorValue | null =
     selectedFlowImage
       ? {
@@ -983,6 +1165,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }, page.id);
     setSelectedOverlayId(overlayId);
     setSelectedFlowImage(null);
+    setSelectedStructuredImageIds([]);
     setSelectedFlowImageId(null);
   }, [
     addOverlay,
@@ -1182,18 +1365,62 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const deleteSelectedImage = useCallback(() => {
     if (selectedFlowImage) {
-      bodyEditorRef.current?.chain()
-        .focus()
-        .setNodeSelection(selectedFlowImage.position)
-        .deleteSelection()
-        .run();
+      const editor = bodyEditorRef.current;
+      const group = page
+        ? findDocumentImageGroupForImage(
+            page.imageGroups,
+            selectedFlowImage.attributes.id
+        )
+        : null;
+      const selectedPage = page;
+      if (editor && selectedPage && group) {
+        const model = getStructuredLayoutModel();
+        const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
+        model?.images
+          .filter((image) => (
+            group.childImageIds.includes(image.imageId)
+            && image.imageId !== selectedFlowImage.attributes.id
+          ))
+          .forEach((image) => {
+            updatesByImageId[image.imageId] = {
+              widthPx: image.renderedImageWidthPx,
+              heightPx: image.renderedImageHeightPx,
+              horizontalPlacement: 'custom',
+              verticalAnchor: 'page-position',
+              xOffsetPx: image.imageLeftPx - image.spanLeftPx,
+              yPx: image.imageTopPx,
+            };
+          });
+        const nextGroups = removeDocumentImageIdsFromGroups(
+          selectedPage.imageGroups,
+          [selectedFlowImage.attributes.id]
+        );
+        const nextPrimary = group.childImageIds.find(
+          (imageId) => imageId !== selectedFlowImage.attributes.id
+        ) || null;
+        commitStructuredDocumentImageBatch(editor, {
+          updatesByImageId,
+          deleteImageIds: [selectedFlowImage.attributes.id],
+          selectedImageId: nextPrimary,
+          imageGroupsMeta: nextGroups,
+        });
+      } else {
+        editor?.chain()
+          .focus()
+          .setNodeSelection(selectedFlowImage.position)
+          .deleteSelection()
+          .run();
+      }
       setSelectedFlowImage(null);
+      setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
     } else if (selectedOverlay) {
       removeOverlay(selectedOverlay.id, page?.id);
     }
   }, [
+    getStructuredLayoutModel,
     page?.id,
+    page,
     removeOverlay,
     selectedFlowImage,
     selectedOverlay,
@@ -1225,6 +1452,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const handleReferenceAdjustModeChange = useCallback((enabled: boolean) => {
     if (enabled) {
       setSelectedFlowImage(null);
+      setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
       setSelectedOverlayId(null);
     }
@@ -1442,6 +1670,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onSelectOverlay={(id) => {
             setSelectedOverlayId(id);
             setSelectedFlowImage(null);
+            setSelectedStructuredImageIds([]);
             setSelectedFlowImageId(null);
           }}
         />
@@ -1451,6 +1680,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             page={page}
             activeTextRegion={activeTextRegion}
             selectedImage={selectedInspector}
+            selectedImageIds={selectedStructuredImageIds}
+            selectedImageGroup={selectedImageGroup
+              ? {
+                  id: selectedImageGroup.id,
+                  kind: selectedImageGroup.kind,
+                  childImageIds: selectedImageGroup.childImageIds,
+                  gapPx: selectedImageGroup.gapPx,
+                  sharedWidth: selectedImageGroup.sharedWidth,
+                }
+              : null}
             referenceAdjustMode={isReferenceAdjustMode}
             textFormatState={textFormatState}
             onFormat={handleFormat}
@@ -1481,6 +1720,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onReplaceSelectedImage={(file) => void replaceSelectedImage(file)}
             onDeleteSelectedImage={deleteSelectedImage}
             onResetSelectedImageSize={resetSelectedImageSize}
+            onArrangeSelectedImages={arrangeSelectedImages}
+            onSelectedImageGroupChange={updateSelectedImageGroup}
+            onUngroupSelectedImages={ungroupSelectedImages}
           />
 
           <DocumentPageNavigation
@@ -1536,6 +1778,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 setSelectedOverlayId(id);
                 if (id) {
                   setSelectedFlowImage(null);
+                  setSelectedStructuredImageIds([]);
                   setSelectedFlowImageId(null);
                 }
               }}
@@ -1557,6 +1800,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (!focused) return;
                     updateActiveTextFormatState(editor, 'title');
                     setSelectedFlowImage(null);
+                    setSelectedStructuredImageIds([]);
                     setSelectedFlowImageId(null);
                     setSelectedOverlayId(null);
                   }}
@@ -1585,6 +1829,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     availableColumnWidth * page.columnCount
                     + page.columnGapPx * (page.columnCount - 1)
                   }
+                  imageGroups={page.imageGroups}
+                  selectedStructuredImageIds={selectedStructuredImageIds}
                   resolveAssetSource={(assetId) => assetSources[assetId]}
                   onEditorReady={(editor) => {
                     bodyEditorRef.current = editor;
@@ -1596,15 +1842,34 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onSelectionChange={(editor) => {
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
-                  onUpdate={(content, editor) => {
-                    updateBodyContent(content, page.id);
+                  onUpdate={(content, editor, transaction) => {
+                    const imageGroupsMeta = transaction.getMeta(
+                      DOCUMENT_IMAGE_GROUPS_TRANSACTION_META
+                    );
+                    if (imageGroupsMeta !== undefined) {
+                      commitPageImageState(page.id, content, imageGroupsMeta);
+                    } else {
+                      updateBodyContent(content, page.id);
+                    }
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onImageSelectionChange={(selection, editor) => {
                     setSelectedFlowImage(selection);
                     setSelectedFlowImageId(selection?.attributes.id || null);
+                    if (selection) {
+                      setSelectedStructuredImageIds((current) => (
+                        current.length > 1 && current.includes(selection.attributes.id)
+                          ? current
+                          : [selection.attributes.id]
+                      ));
+                    } else if (editor.isFocused) {
+                      setSelectedStructuredImageIds([]);
+                    }
                     if (selection || editor.isFocused) setSelectedOverlayId(null);
                   }}
+                  onStructuredImageSelectionRequest={
+                    handleStructuredImageSelectionRequest
+                  }
                   onRequestImageReplace={handleNodeReplaceRequest}
                   onPasteDispatch={handlePasteDispatch}
                   onDropDispatch={handleDropDispatch}

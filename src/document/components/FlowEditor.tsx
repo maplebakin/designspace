@@ -10,7 +10,11 @@ import {
   type Editor,
   type JSONContent,
 } from '@tiptap/core';
-import { NodeSelection, TextSelection } from '@tiptap/pm/state';
+import {
+  NodeSelection,
+  TextSelection,
+  type Transaction,
+} from '@tiptap/pm/state';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -52,6 +56,7 @@ import {
 } from '../typography/documentTypography';
 import {
   normalizeDocumentImageContentGeometry,
+  type DocumentImageGroup,
 } from '../types/documentProject';
 
 const EMPTY_DOCUMENT: JSONContent = {
@@ -205,6 +210,134 @@ export const commitStructuredDocumentImageSize = (
   );
 };
 
+export const DOCUMENT_IMAGE_GROUPS_TRANSACTION_META =
+  'designSpaceDocumentImageGroups';
+
+export type StructuredDocumentImageBatch = {
+  updatesByImageId?: Readonly<
+    Record<string, Partial<DocumentImageAttributes>>
+  >;
+  deleteImageIds?: readonly string[];
+  selectedImageId?: string | null;
+  imageGroupsMeta?: unknown;
+  focus?: boolean;
+};
+
+/**
+ * Applies a stable-ID image batch in one ProseMirror transaction. Group
+ * operations use the transaction metadata to commit page-level group records
+ * alongside the resulting body JSON in one store revision.
+ */
+export const commitStructuredDocumentImageBatch = (
+  editor: Editor,
+  {
+    updatesByImageId = {},
+    deleteImageIds = [],
+    selectedImageId = null,
+    imageGroupsMeta,
+    focus = true,
+  }: StructuredDocumentImageBatch
+) => {
+  if (editor.isDestroyed) return false;
+  const requestedIds = new Set([
+    ...Object.keys(updatesByImageId),
+    ...deleteImageIds,
+    ...(selectedImageId ? [selectedImageId] : []),
+  ]);
+  const positions = new Map<string, number[]>();
+  editor.state.doc.descendants((node, position) => {
+    if (
+      (
+        node.type.name === 'documentFlowImage'
+        || node.type.name === 'documentInlineImage'
+      )
+      && requestedIds.has(String(node.attrs.id))
+    ) {
+      const id = String(node.attrs.id);
+      positions.set(id, [...(positions.get(id) || []), position]);
+    }
+    return true;
+  });
+  if ([...requestedIds].some((id) => positions.get(id)?.length !== 1)) {
+    return false;
+  }
+
+  const deleted = new Set(deleteImageIds);
+  let transaction = editor.state.tr;
+  deleteImageIds
+    .map((id) => ({
+      id,
+      position: positions.get(id)?.[0] ?? -1,
+    }))
+    .sort((left, right) => right.position - left.position)
+    .forEach(({ position }) => {
+      const mappedPosition = transaction.mapping.map(position);
+      const node = transaction.doc.nodeAt(mappedPosition);
+      if (node) {
+        transaction = transaction.delete(
+          mappedPosition,
+          mappedPosition + node.nodeSize
+        );
+      }
+    });
+
+  Object.entries(updatesByImageId).forEach(([imageId, update]) => {
+    if (deleted.has(imageId)) return;
+    const originalPosition = positions.get(imageId)?.[0];
+    if (originalPosition === undefined) return;
+    const mappedPosition = transaction.mapping.map(originalPosition);
+    const node = transaction.doc.nodeAt(mappedPosition);
+    if (
+      !node
+      || (
+        node.type.name !== 'documentFlowImage'
+        && node.type.name !== 'documentInlineImage'
+      )
+      || node.attrs.id !== imageId
+    ) {
+      return;
+    }
+    transaction = transaction.setNodeMarkup(
+      mappedPosition,
+      undefined,
+      normalizeDocumentImageAttributes({
+        ...(node.attrs as Partial<DocumentImageAttributes>),
+        ...update,
+      })
+    );
+  });
+
+  if (selectedImageId && !deleted.has(selectedImageId)) {
+    const originalPosition = positions.get(selectedImageId)?.[0];
+    if (originalPosition !== undefined) {
+      const mappedPosition = transaction.mapping.map(originalPosition);
+      const node = transaction.doc.nodeAt(mappedPosition);
+      if (
+        node
+        && (
+          node.type.name === 'documentFlowImage'
+          || node.type.name === 'documentInlineImage'
+        )
+        && node.attrs.id === selectedImageId
+      ) {
+        transaction = transaction.setSelection(
+          NodeSelection.create(transaction.doc, mappedPosition)
+        );
+      }
+    }
+  }
+  if (imageGroupsMeta !== undefined) {
+    transaction = transaction.setMeta(
+      DOCUMENT_IMAGE_GROUPS_TRANSACTION_META,
+      imageGroupsMeta
+    );
+  }
+  if (!transaction.docChanged && imageGroupsMeta === undefined) return false;
+  editor.view.dispatch(transaction);
+  if (focus) editor.view.focus();
+  return true;
+};
+
 export interface DocumentDropContext {
   position?: number;
   moved: boolean;
@@ -230,8 +363,13 @@ export interface FlowEditorProps {
   minImageWidthPx?: number;
   maxImageWidthPx?: number;
   maxSpanImageWidthPx?: number;
+  imageGroups?: readonly DocumentImageGroup[];
   resolveAssetSource: (assetId: string) => string | undefined;
-  onUpdate?: (content: JSONContent, editor: Editor) => void;
+  onUpdate?: (
+    content: JSONContent,
+    editor: Editor,
+    transaction: Transaction
+  ) => void;
   onEditorReady?: (editor: Editor | null) => void;
   onFocusChange?: (focused: boolean, editor: Editor) => void;
   onSelectionChange?: (editor: Editor) => void;
@@ -239,6 +377,11 @@ export interface FlowEditorProps {
     selection: SelectedDocumentImage | null,
     editor: Editor
   ) => void;
+  selectedStructuredImageIds?: readonly string[];
+  onStructuredImageSelectionRequest?: (
+    imageId: string,
+    additive: boolean
+  ) => string | null;
   onRequestImageReplace?: (request: DocumentImageReplaceRequest) => void;
   onPasteDispatch?: DocumentPasteDispatcher;
   onDropDispatch?: DocumentDropDispatcher;
@@ -295,12 +438,15 @@ export const FlowEditor = ({
   minImageWidthPx = 48,
   maxImageWidthPx = 720,
   maxSpanImageWidthPx = 720,
+  imageGroups = [],
   resolveAssetSource,
   onUpdate,
   onEditorReady,
   onFocusChange,
   onSelectionChange,
   onImageSelectionChange,
+  selectedStructuredImageIds = [],
+  onStructuredImageSelectionRequest,
   onRequestImageReplace,
   onPasteDispatch,
   onDropDispatch,
@@ -323,6 +469,7 @@ export const FlowEditor = ({
     onFocusChange,
     onSelectionChange,
     onImageSelectionChange,
+    onStructuredImageSelectionRequest,
     onRequestImageReplace,
     onPasteDispatch,
     onDropDispatch,
@@ -338,6 +485,7 @@ export const FlowEditor = ({
     onFocusChange,
     onSelectionChange,
     onImageSelectionChange,
+    onStructuredImageSelectionRequest,
     onRequestImageReplace,
     onPasteDispatch,
     onDropDispatch,
@@ -495,10 +643,11 @@ export const FlowEditor = ({
       onCreate: ({ editor: createdEditor }) => {
         editorInstanceRef.current = createdEditor;
       },
-      onUpdate: ({ editor: updatedEditor }) => {
+      onUpdate: ({ editor: updatedEditor, transaction }) => {
         callbacksRef.current.onUpdate?.(
           updatedEditor.getJSON(),
-          updatedEditor
+          updatedEditor,
+          transaction
         );
         callbacksRef.current.onImageSelectionChange?.(
           getSelectedDocumentImage(updatedEditor),
@@ -767,10 +916,41 @@ export const FlowEditor = ({
           typographyStyle={typographyStyle}
           dropCap={normalizedDropCap}
           language={language}
-          onSelectImage={(position) => {
+          imageGroups={imageGroups}
+          selectedImageIds={selectedStructuredImageIds}
+          onSelectImage={(position, imageId, additive) => {
             enteringStructuredTextRef.current = false;
             setEditingStructuredText(false);
-            editor.commands.setNodeSelection(position);
+            const requestedPrimaryId =
+              callbacksRef.current.onStructuredImageSelectionRequest?.(
+                imageId,
+                additive
+              ) ?? imageId;
+            let primaryPosition = requestedPrimaryId === imageId
+              ? position
+              : -1;
+            if (
+              requestedPrimaryId
+              && primaryPosition < 0
+            ) {
+              editor.state.doc.descendants((node, nodePosition) => {
+                if (
+                  primaryPosition < 0
+                  && (
+                    node.type.name === 'documentFlowImage'
+                    || node.type.name === 'documentInlineImage'
+                  )
+                  && node.attrs.id === requestedPrimaryId
+                ) {
+                  primaryPosition = nodePosition;
+                  return false;
+                }
+                return true;
+              });
+            }
+            if (primaryPosition >= 0) {
+              editor.commands.setNodeSelection(primaryPosition);
+            }
             editor.commands.focus();
           }}
           onCommitImagePosition={(

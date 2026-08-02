@@ -27,8 +27,8 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | S0 — Authoritative paper background | Complete | `4e4e4809` |
 | P1 — Multi-page documents and folios | Complete | `9505d48e` |
 | P2 — Historical typography styles | Complete | `86ba84a1` |
-| P3 — Shared layout and image geometry | Complete | pending phase commit |
-| P4 — Image rows and stacks | Pending | — |
+| P3 — Shared layout and image geometry | Complete | `ea3ca727` |
+| P4 — Image rows and stacks | Complete | pending phase commit |
 | P5 — Persistence, migrations, assets, recovery | Pending | — |
 | P6 — Committed multi-page export | Pending | — |
 | P7 — Historical fixtures and visual regression | Pending | — |
@@ -399,3 +399,84 @@ Deviations and limitations:
 - Selected-page PNG and print still use the mounted live root. P6 will route
   those workflows through the committed offscreen renderer already used by
   multi-page PDF.
+
+## P4 — Image rows and stacks
+
+Status: Complete
+
+Objective: add durable row and vertical-stack helpers while keeping individual
+image nodes and captions canonical.
+
+Schema changes:
+
+- The nested document schema is now version 4.
+- Each page has an `imageGroups` collection with stable group IDs, ordered
+  child image IDs, row/stack kind, bounded gap, and stack shared-width policy.
+- Existing schema-v3 pages migrate to an explicit empty collection.
+
+Migration and repair behaviour:
+
+- Group records are normalized on project load and every page write.
+- Missing children, duplicate memberships, blank IDs, malformed kinds, and
+  groups with fewer than two children are repaired or discarded deterministically.
+- Only uniquely identified page-positioned span images are groupable; overlays
+  and flow-anchored images remain outside this coordinate contract.
+- Page duplication remaps every image, overlay, and group ID and then remaps
+  group membership to the duplicated children.
+- Removing a child removes it from its group and removes a now-invalid group.
+
+Files changed:
+
+- `src/document/types/documentProject.ts`
+- `src/editor/project/projectSchema.ts`
+- `src/document/model/documentImageGroups.ts`
+- `src/document/layout/imageGroupLayout.ts`
+- `src/document/layout/index.ts`
+- `src/document/state/documentStore.ts`
+- `src/document/components/FlowEditor.tsx`
+- `src/document/components/StructuredDocumentSpanLayout.tsx`
+- `src/document/components/DocumentEditorShell.tsx`
+- `src/document/components/DocumentToolbar.tsx`
+- `src/document/components/DocumentProjectExportRenderer.tsx`
+- `src/document/styles/document-page.css`
+- `docs/architecture/document-image-groups.md`
+- P4 model, geometry, schema, toolbar, and regression tests
+
+Implemented behaviour:
+
+- The toolbar supports selecting multiple compatible positioned images,
+  arranging them into a row or stack, changing gap, enabling stack shared
+  width, and ungrouping.
+- Groups derive child image, caption, occupied, and collision rectangles from
+  `src/document/layout/imageGroupLayout.ts`; each child retains independent
+  caption controls and selection.
+- Group bounds are a single collision unit. Pointer dragging translates the
+  complete row/stack at 0.5–2x zoom and commits only the anchor image's
+  canonical body-span coordinate; resize excludes sibling children from the
+  obstacle list.
+- Ungroup and child deletion materialize the current derived geometry before
+  committing body JSON and metadata through one ProseMirror transaction. The
+  store repairs the page record in one dirty revision.
+- The export renderer passes page groups into the same structured layout
+  subsystem, so inactive-page export does not rely on mounted group UI.
+
+Tests and verification:
+
+- Group geometry: row/stack captions, shared width, fit, clamp, translation,
+  overlap, and collision tests passed.
+- Group model/schema: normalization, duplicate repair, migration, page
+  duplication, future-version rejection, and bounded-gap tests passed.
+- Toolbar group control tests passed.
+- Full unit suite after P4 changes: 32 files, 385 tests passed.
+- `npx tsc --noEmit`, `npm run lint`, and `npm run build` passed.
+
+Deviations and limitations:
+
+- Group metadata is deliberately declarative; nested group nodes and generic
+  page-region nodes were not introduced.
+- Groupable images must share a span coordinate contract. The UI reports an
+  actionable message for incompatible selections rather than coercing flow or
+  overlay coordinates.
+- Group resizing is currently expressed through child image controls and the
+  shared-width policy; a dedicated rigid-group resize handle remains a later
+  enhancement.

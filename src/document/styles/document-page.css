@@ -1021,6 +1021,20 @@
   background: #fbfcff;
 }
 
+.document-image-group-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.document-image-group-controls input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: var(--document-accent);
+}
+
 .document-zoom-controls {
   position: absolute;
   bottom: 15px;

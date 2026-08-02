@@ -27,14 +27,21 @@ import {
   buildExclusionRectangle,
   findRectangleCollisions as findKernelRectangleCollisions,
   getDocumentColumnRectangles,
+  layoutDocumentImageGroup,
   moveRectangleWithoutCollisions as moveKernelRectangleWithoutCollisions,
   rectanglesOverlap as kernelRectanglesOverlap,
   resolveInitialRectangleOverlaps,
+  translateDocumentImageGroupLayout,
+  bodyDelta,
   viewportDelta,
   viewportDeltaToLayoutDelta,
   type BodyRectangle,
   type CollisionObstacle,
+  type DocumentImageGroupLayout,
 } from '../layout';
+import type {
+  DocumentImageGroup,
+} from '../types/documentProject';
 import {
   normalizeDocumentDropCap,
   type DocumentDropCapSettings,
@@ -97,6 +104,19 @@ export type StructuredImageLayout = {
   imageTopPx: number;
   maximumXOffsetPx: number;
   maximumImageYPx: number;
+  groupId?: string;
+};
+
+export type StructuredImageGroupLayout = {
+  groupId: string;
+  kind: DocumentImageGroup['kind'];
+  childImageIds: readonly string[];
+  anchorImageId: string;
+  gapPx: number;
+  sharedWidth: boolean;
+  spanLeftPx: number;
+  spanWidthPx: number;
+  bounds: DocumentImageRectangle;
 };
 
 export type StructuredTextBand = {
@@ -111,8 +131,10 @@ export type StructuredTextBand = {
 
 export type MultiDocumentSpanLayoutModel = {
   images: StructuredImageLayout[];
+  imageGroups: StructuredImageGroupLayout[];
   exclusions: DocumentImageRectangle[];
   collisionRectangles: DocumentImageRectangle[];
+  collisionUnits: DocumentImageRectangle[];
   textBands: StructuredTextBand[];
   columnWidthPx: number;
   columnGapPx: number;
@@ -812,7 +834,8 @@ export const buildMultiDocumentSpanLayoutModel = (
   availableWidthPx = 720,
   availableHeightPx = 720,
   attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {},
-  typographyOptions: StructuredDocumentTypographyOptions = {}
+  typographyOptions: StructuredDocumentTypographyOptions = {},
+  imageGroups: readonly DocumentImageGroup[] = []
 ): MultiDocumentSpanLayoutModel | null => {
   const positionedNodes: Array<{
     position: number;
@@ -874,7 +897,7 @@ export const buildMultiDocumentSpanLayoutModel = (
   try {
     const unresolvedCollisionIds = new Set<string>();
     const resolvedObstacles: CollisionObstacle<'body'>[] = [];
-    const images = positionedNodes.flatMap((entry) => {
+    const measuredImages = positionedNodes.flatMap((entry) => {
       const attributes = entry.attributes;
       const imageElement = children.find((element) =>
         element.getAttribute('data-image-id') === attributes.id
@@ -942,28 +965,6 @@ export const buildMultiDocumentSpanLayoutModel = (
         topPaddingPx: attributes.wrapPaddingTopPx,
         bottomPaddingPx: attributes.wrapPaddingBottomPx,
       });
-      imageElement.classList.add(
-        'document-span-layout__image',
-        'document-span-layout__image--structured'
-      );
-      imageElement.style.width = `${renderedImageWidthPx}px`;
-      imageElement.style.maxWidth = `${renderedImageWidthPx}px`;
-      imageElement.setAttribute('data-layout-role', 'spanning-image');
-      imageElement.setAttribute(
-        'data-rendered-width-px',
-        String(renderedImageWidthPx)
-      );
-      imageElement.setAttribute(
-        'data-rendered-height-px',
-        String(renderedImageHeightPx)
-      );
-      const media = imageElement.querySelector<HTMLElement>(
-        '.document-image__media'
-      );
-      if (media) {
-        media.style.width = `${renderedImageWidthPx}px`;
-        media.style.height = `${renderedImageHeightPx}px`;
-      }
       const requestedRectangle = bodyRectangle(
         spanLeftPx + xOffsetPx,
         imageTopPx,
@@ -981,28 +982,6 @@ export const buildMultiDocumentSpanLayoutModel = (
             - attributes.wrapPaddingBottomPx
         )
       );
-      const overlapResolution = resolveInitialRectangleOverlaps({
-        rectangle: requestedRectangle,
-        obstacles: resolvedObstacles,
-        bounds: placementBounds,
-      });
-      if (!overlapResolution.resolved) {
-        unresolvedCollisionIds.add(attributes.id);
-        overlapResolution.collisionIds.forEach((id) => {
-          unresolvedCollisionIds.add(id);
-        });
-      }
-      const resolvedRectangle = overlapResolution.rectangle;
-      resolvedObstacles.push({
-        id: attributes.id,
-        rectangle: resolvedRectangle,
-      });
-      const resolvedXOffsetPx = clampDocumentImageXOffset(
-        resolvedRectangle.leftPx - spanLeftPx,
-        spanWidthPx,
-        renderedImageWidthPx
-      );
-      const resolvedTopPx = resolvedRectangle.topPx;
       return [{
         imageId: attributes.id,
         imagePosition: entry.position,
@@ -1010,27 +989,300 @@ export const buildMultiDocumentSpanLayoutModel = (
           ...attributes,
           spanCount: spanCount as 1 | 2 | 3,
           spanStartColumn: startColumn as 1 | 2 | 3,
-          xOffsetPx: resolvedXOffsetPx,
-          yPx: resolvedTopPx,
         },
-        imageHtml: imageElement.outerHTML,
+        imageElement,
+        captionElement: caption,
+        captionHeightPx,
+        captionSpacingPx: captionHeightPx > 0
+          ? resolveStructuredCaptionSpacingPx(
+              attributes.captionSpacingPx,
+              typographyOptions
+            )
+          : 0,
         spanLeftPx,
         spanWidthPx,
         renderedImageWidthPx,
         renderedImageHeightPx,
         imageRegionHeightPx,
+        requestedRectangle,
+        placementBounds,
+      }];
+    });
+    const measuredById = new Map(
+      measuredImages.map((image) => [image.imageId, image])
+    );
+    const claimedImageIds = new Set<string>();
+    const activeGroups = imageGroups.flatMap((group) => {
+      const members = group.childImageIds
+        .map((imageId) => measuredById.get(imageId))
+        .filter((image): image is (typeof measuredImages)[number] => (
+          image !== undefined
+        ));
+      const anchor = members[0];
+      const compatible = (
+        members.length === group.childImageIds.length
+        && members.length >= 2
+        && members.every((image) => (
+          image.attributes.verticalAnchor === 'page-position'
+          && image.spanLeftPx === anchor.spanLeftPx
+          && image.spanWidthPx === anchor.spanWidthPx
+          && !claimedImageIds.has(image.imageId)
+        ))
+      );
+      if (!compatible) return [];
+      members.forEach((image) => claimedImageIds.add(image.imageId));
+      return [{ group, members, anchor }];
+    });
+
+    const groupByChildId = new Map<string, string>();
+    activeGroups.forEach(({ group }) => {
+      group.childImageIds.forEach((imageId) => {
+        groupByChildId.set(imageId, group.id);
+      });
+    });
+
+    const groupUnits = activeGroups.map(({ group, members, anchor }) => {
+      const gapTotal = group.gapPx * Math.max(0, members.length - 1);
+      const rawWidthPx = group.kind === 'row'
+        ? members.reduce(
+            (width, image) => width + image.renderedImageWidthPx,
+            0
+          ) + gapTotal
+        : (
+            group.sharedWidth
+              ? anchor.renderedImageWidthPx
+              : Math.max(
+                  ...members.map((image) => image.renderedImageWidthPx)
+                )
+          );
+      const widthScale = rawWidthPx > anchor.spanWidthPx
+        ? Math.max(
+            0,
+            group.kind === 'row'
+              ? (
+                  anchor.spanWidthPx - gapTotal
+                ) / Math.max(1, rawWidthPx - gapTotal)
+              : anchor.spanWidthPx / Math.max(1, rawWidthPx)
+          )
+        : 1;
+      const sharedWidthPx = group.sharedWidth
+        ? anchor.renderedImageWidthPx * widthScale
+        : undefined;
+      const childGeometry = members.map((image) => {
+        const widthPx = group.sharedWidth
+          ? sharedWidthPx!
+          : image.renderedImageWidthPx * widthScale;
+        const heightPx = widthPx / Math.max(
+          0.0001,
+          getDocumentImageAspectRatio(image.attributes)
+        );
+        const captionHeightPx = image.captionElement
+          ? measurer.measure([image.captionElement], widthPx)
+          : 0;
+        return {
+          imageId: image.imageId,
+          widthPx,
+          heightPx,
+          captionHeightPx,
+          captionSpacingPx: captionHeightPx > 0
+            ? image.captionSpacingPx
+            : 0,
+        };
+      });
+      if (childGeometry.some((child) => child.widthPx < 48)) {
+        unresolvedCollisionIds.add(group.id);
+      }
+      const laidOutWidthPx = group.kind === 'row'
+        ? childGeometry.reduce((total, child) => total + child.widthPx, 0)
+          + gapTotal
+        : Math.max(...childGeometry.map((child) => child.widthPx));
+      const xOffsetPx = calculateDocumentImageXOffset({
+        placement: anchor.attributes.horizontalPlacement,
+        xOffsetPx: anchor.attributes.xOffsetPx,
+        spanWidthPx: anchor.spanWidthPx,
+        imageWidthPx: Math.min(anchor.spanWidthPx, laidOutWidthPx),
+      });
+      const requestedLayout = layoutDocumentImageGroup({
+        kind: group.kind,
+        origin: bodyPoint(
+          anchor.spanLeftPx + xOffsetPx,
+          anchor.requestedRectangle.topPx
+        ),
+        children: childGeometry,
+        gapPx: group.gapPx,
+        sharedWidth: group.kind === 'stack' && group.sharedWidth,
+        sharedWidthPx,
+      });
+      const topPaddingPx = Math.max(
+        ...members.map((image) => image.attributes.wrapPaddingTopPx)
+      );
+      const bottomPaddingPx = Math.max(
+        ...members.map((image) => image.attributes.wrapPaddingBottomPx)
+      );
+      return {
+        id: group.id,
+        position: Math.min(...members.map((image) => image.imagePosition)),
+        group,
+        members,
+        layout: requestedLayout,
+        bounds: bodyRectangle(
+          anchor.spanLeftPx,
+          topPaddingPx,
+          anchor.spanWidthPx,
+          Math.max(0, safeHeight - topPaddingPx - bottomPaddingPx)
+        ),
+      };
+    });
+    const imageUnits = measuredImages
+      .filter((image) => !claimedImageIds.has(image.imageId))
+      .map((image) => ({
+        id: image.imageId,
+        position: image.imagePosition,
+        image,
+        rectangle: image.requestedRectangle,
+        bounds: image.placementBounds,
+      }));
+    const units = [
+      ...groupUnits.map((unit) => ({ type: 'group' as const, ...unit })),
+      ...imageUnits.map((unit) => ({ type: 'image' as const, ...unit })),
+    ].sort((left, right) => left.position - right.position);
+    const resolvedRectangles = new Map<string, BodyRectangle>();
+    const resolvedGroupLayouts = new Map<string, DocumentImageGroupLayout>();
+    const structuredGroups: StructuredImageGroupLayout[] = [];
+
+    units.forEach((unit) => {
+      const requestedRectangle = unit.type === 'group'
+        ? unit.layout.bounds
+        : unit.rectangle;
+      const overlapResolution = resolveInitialRectangleOverlaps({
+        rectangle: requestedRectangle,
+        obstacles: resolvedObstacles,
+        bounds: unit.bounds,
+      });
+      if (!overlapResolution.resolved) {
+        unresolvedCollisionIds.add(unit.id);
+        overlapResolution.collisionIds.forEach((id) => {
+          unresolvedCollisionIds.add(id);
+        });
+      }
+      resolvedObstacles.push({
+        id: unit.id,
+        rectangle: overlapResolution.rectangle,
+      });
+      if (unit.type === 'image') {
+        resolvedRectangles.set(
+          unit.image.imageId,
+          overlapResolution.rectangle
+        );
+        return;
+      }
+      const resolvedLayout = translateDocumentImageGroupLayout(
+        unit.layout,
+        bodyDelta(
+          overlapResolution.rectangle.leftPx - unit.layout.bounds.leftPx,
+          overlapResolution.rectangle.topPx - unit.layout.bounds.topPx
+        )
+      );
+      resolvedGroupLayouts.set(unit.group.id, resolvedLayout);
+      resolvedLayout.children.forEach((child) => {
+        resolvedRectangles.set(child.imageId, child.occupiedRectangle);
+      });
+      structuredGroups.push({
+        groupId: unit.group.id,
+        kind: unit.group.kind,
+        childImageIds: unit.group.childImageIds,
+        anchorImageId: unit.group.childImageIds[0],
+        gapPx: unit.group.gapPx,
+        sharedWidth: unit.group.sharedWidth,
+        spanLeftPx: unit.members[0].spanLeftPx,
+        spanWidthPx: unit.members[0].spanWidthPx,
+        bounds: {
+          imageId: unit.group.id,
+          leftPx: resolvedLayout.bounds.leftPx,
+          topPx: resolvedLayout.bounds.topPx,
+          widthPx: resolvedLayout.bounds.widthPx,
+          heightPx: resolvedLayout.bounds.heightPx,
+        },
+      });
+    });
+
+    const images: StructuredImageLayout[] = measuredImages.flatMap((image) => {
+      const resolvedRectangle = resolvedRectangles.get(image.imageId);
+      if (!resolvedRectangle) return [];
+      const groupId = groupByChildId.get(image.imageId);
+      const groupLayout = groupId
+        ? resolvedGroupLayouts.get(groupId)
+        : undefined;
+      const groupChild = groupLayout?.children.find(
+        (child) => child.imageId === image.imageId
+      );
+      const renderedImageWidthPx = groupChild?.imageRectangle.widthPx
+        ?? resolvedRectangle.widthPx;
+      const renderedImageHeightPx = groupChild?.imageRectangle.heightPx
+        ?? (
+          renderedImageWidthPx / Math.max(
+            0.0001,
+            getDocumentImageAspectRatio(image.attributes)
+          )
+        );
+      const imageRegionHeightPx = resolvedRectangle.heightPx;
+      image.imageElement.classList.add(
+        'document-span-layout__image',
+        'document-span-layout__image--structured'
+      );
+      image.imageElement.style.width = `${renderedImageWidthPx}px`;
+      image.imageElement.style.maxWidth = `${renderedImageWidthPx}px`;
+      image.imageElement.setAttribute('data-layout-role', 'spanning-image');
+      image.imageElement.setAttribute(
+        'data-rendered-width-px',
+        String(renderedImageWidthPx)
+      );
+      image.imageElement.setAttribute(
+        'data-rendered-height-px',
+        String(renderedImageHeightPx)
+      );
+      if (groupId) {
+        image.imageElement.setAttribute('data-image-group-id', groupId);
+      }
+      const media = image.imageElement.querySelector<HTMLElement>(
+        '.document-image__media'
+      );
+      if (media) {
+        media.style.width = `${renderedImageWidthPx}px`;
+        media.style.height = `${renderedImageHeightPx}px`;
+      }
+      const resolvedXOffsetPx = clampDocumentImageXOffset(
+        resolvedRectangle.leftPx - image.spanLeftPx,
+        image.spanWidthPx,
+        renderedImageWidthPx
+      );
+      return [{
+        imageId: image.imageId,
+        imagePosition: image.imagePosition,
+        attributes: {
+          ...image.attributes,
+          xOffsetPx: resolvedXOffsetPx,
+          yPx: resolvedRectangle.topPx,
+        },
+        imageHtml: image.imageElement.outerHTML,
+        spanLeftPx: image.spanLeftPx,
+        spanWidthPx: image.spanWidthPx,
+        renderedImageWidthPx,
+        renderedImageHeightPx,
+        imageRegionHeightPx,
         imageLeftPx: resolvedRectangle.leftPx,
-        imageTopPx: resolvedTopPx,
+        imageTopPx: resolvedRectangle.topPx,
         maximumXOffsetPx: Math.max(
           0,
-          spanWidthPx - renderedImageWidthPx
+          image.spanWidthPx - renderedImageWidthPx
         ),
         maximumImageYPx: Math.max(
-          attributes.wrapPaddingTopPx,
+          image.attributes.wrapPaddingTopPx,
           safeHeight
           - imageRegionHeightPx
-          - attributes.wrapPaddingBottomPx
+          - image.attributes.wrapPaddingBottomPx
         ),
+        groupId,
       }];
     });
     const collisionRectangles = images.map((image) => ({
@@ -1039,6 +1291,13 @@ export const buildMultiDocumentSpanLayoutModel = (
       topPx: image.imageTopPx,
       widthPx: image.renderedImageWidthPx,
       heightPx: image.imageRegionHeightPx,
+    }));
+    const collisionUnits = resolvedObstacles.map((obstacle) => ({
+      imageId: obstacle.id,
+      leftPx: obstacle.rectangle.leftPx,
+      topPx: obstacle.rectangle.topPx,
+      widthPx: obstacle.rectangle.widthPx,
+      heightPx: obstacle.rectangle.heightPx,
     }));
     const exclusions = images.flatMap((image) => {
       const exclusion = buildExclusionRectangle({
@@ -1137,8 +1396,10 @@ export const buildMultiDocumentSpanLayoutModel = (
       : 0;
     return {
       images,
+      imageGroups: structuredGroups,
       exclusions,
       collisionRectangles,
+      collisionUnits,
       textBands,
       columnWidthPx,
       columnGapPx: safeGap,
@@ -1166,7 +1427,13 @@ type StructuredDocumentSpanLayoutProps = {
   typographyStyle?: CSSProperties;
   dropCap?: DocumentDropCapSettings | boolean;
   language?: string;
-  onSelectImage: (position: number) => void;
+  imageGroups?: readonly DocumentImageGroup[];
+  selectedImageIds?: readonly string[];
+  onSelectImage: (
+    position: number,
+    imageId: string,
+    additive: boolean
+  ) => void;
   onCommitImagePosition: (
     position: number,
     imageId: string,
@@ -1241,6 +1508,8 @@ export const StructuredDocumentSpanLayout = ({
   typographyStyle,
   dropCap = false,
   language,
+  imageGroups = [],
+  selectedImageIds = [],
   onSelectImage,
   onCommitImagePosition,
   onCommitImageSize,
@@ -1250,6 +1519,7 @@ export const StructuredDocumentSpanLayout = ({
     Record<string, Partial<DocumentImageAttributes>>
   >({});
   const layoutRef = useRef<HTMLDivElement | null>(null);
+  const pointerSelectedImageIdRef = useRef<string | null>(null);
   const model = useMemo(
     () => buildMultiDocumentSpanLayoutModel(
       editor,
@@ -1262,7 +1532,8 @@ export const StructuredDocumentSpanLayout = ({
         typographyStyle,
         dropCap,
         language,
-      }
+      },
+      imageGroups
     ),
     [
       availableHeightPx,
@@ -1271,6 +1542,7 @@ export const StructuredDocumentSpanLayout = ({
       columnGapPx,
       editor,
       dropCap,
+      imageGroups,
       previewOverrides,
       revision,
       typographyStyle,
@@ -1456,42 +1728,71 @@ export const StructuredDocumentSpanLayout = ({
     if (resizeRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    onSelectImage(image.imagePosition);
+    pointerSelectedImageIdRef.current = image.imageId;
+    window.setTimeout(() => {
+      if (pointerSelectedImageIdRef.current === image.imageId) {
+        pointerSelectedImageIdRef.current = null;
+      }
+    }, 0);
+    onSelectImage(
+      image.imagePosition,
+      image.imageId,
+      event.shiftKey || event.metaKey || event.ctrlKey
+    );
     if (image.attributes.verticalAnchor !== 'page-position') return;
+    const group = image.groupId
+      ? model.imageGroups.find(
+          (candidate) => candidate.groupId === image.groupId
+        )
+      : undefined;
+    const anchorImage = group
+      ? model.images.find(
+          (candidate) => candidate.imageId === group.anchorImageId
+        )
+      : image;
+    if (!anchorImage) return;
     const captureElement = layoutRef.current || event.currentTarget;
     captureElement.setPointerCapture?.(event.pointerId);
-    const startRectangle = model.collisionRectangles.find(
-      (rectangle) => rectangle.imageId === image.imageId
-    );
+    const startRectangle = group?.bounds
+      ?? model.collisionRectangles.find(
+        (rectangle) => rectangle.imageId === image.imageId
+      );
     if (!startRectangle) return;
+    const movingUnitId = group?.groupId ?? image.imageId;
     dragRef.current = {
       pointerId: event.pointerId,
-      imageId: image.imageId,
-      position: image.imagePosition,
+      imageId: anchorImage.imageId,
+      position: anchorImage.imagePosition,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startImageX: image.imageLeftPx,
-      startImageY: image.imageTopPx,
-      spanLeftPx: image.spanLeftPx,
-      maximumXOffsetPx: image.maximumXOffsetPx,
-      topPaddingPx: image.attributes.wrapPaddingTopPx,
-      bottomPaddingPx: image.attributes.wrapPaddingBottomPx,
+      // The pointer may start on any child in a group. Drag deltas are
+      // measured from the occupied unit's origin, so the group translates as
+      // one rectangle regardless of which child was grabbed.
+      startImageX: startRectangle.leftPx,
+      startImageY: startRectangle.topPx,
+      spanLeftPx: anchorImage.spanLeftPx,
+      maximumXOffsetPx: Math.max(
+        0,
+        anchorImage.spanWidthPx - startRectangle.widthPx
+      ),
+      topPaddingPx: anchorImage.attributes.wrapPaddingTopPx,
+      bottomPaddingPx: anchorImage.attributes.wrapPaddingBottomPx,
       startRectangle,
-      obstacles: model.collisionRectangles.filter(
-        (rectangle) => rectangle.imageId !== image.imageId
+      obstacles: model.collisionUnits.filter(
+        (rectangle) => rectangle.imageId !== movingUnitId
       ),
       captureElement,
-      originalXOffsetPx: image.attributes.xOffsetPx,
-      originalYPx: image.imageTopPx,
+      originalXOffsetPx: anchorImage.attributes.xOffsetPx,
+      originalYPx: startRectangle.topPx,
       latestPreviewPosition: {
-        xOffsetPx: image.attributes.xOffsetPx,
-        yPx: image.imageTopPx,
+        xOffsetPx: anchorImage.attributes.xOffsetPx,
+        yPx: startRectangle.topPx,
       },
       moved: false,
     };
     previewPositionRef.current = {
-      xOffsetPx: image.attributes.xOffsetPx,
-      yPx: image.imageTopPx,
+      xOffsetPx: anchorImage.attributes.xOffsetPx,
+      yPx: startRectangle.topPx,
     };
   };
 
@@ -1502,9 +1803,14 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     if (dragRef.current || resizeRef.current) return;
-    onSelectImage(image.imagePosition);
+    onSelectImage(image.imagePosition, image.imageId, false);
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const startWidth = image.renderedImageWidthPx;
+    const group = image.groupId
+      ? model.imageGroups.find(
+          (candidate) => candidate.groupId === image.groupId
+        )
+      : undefined;
     resizeRef.current = {
       pointerId: event.pointerId,
       imageId: image.imageId,
@@ -1523,8 +1829,8 @@ export const StructuredDocumentSpanLayout = ({
       captionExtraHeightPx:
         image.imageRegionHeightPx - image.renderedImageHeightPx,
       topPx: image.imageTopPx,
-      obstacles: model.collisionRectangles.filter(
-        (rectangle) => rectangle.imageId !== image.imageId
+      obstacles: model.collisionUnits.filter(
+        (rectangle) => rectangle.imageId !== (group?.groupId ?? image.imageId)
       ),
       captureElement: event.currentTarget,
       moved: false,
@@ -1775,7 +2081,13 @@ export const StructuredDocumentSpanLayout = ({
       const image = model.images.find(
         (candidate) => candidate.imageId === imageSlot.dataset.imageId
       );
-      if (image) onSelectImage(image.imagePosition);
+      if (image) {
+        onSelectImage(
+          image.imagePosition,
+          image.imageId,
+          event.shiftKey || event.metaKey || event.ctrlKey
+        );
+      }
       return;
     }
     event.preventDefault();
@@ -1794,10 +2106,21 @@ export const StructuredDocumentSpanLayout = ({
   const handleImageClick = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    const imageId = event.currentTarget.dataset.imageId || '';
+    if (pointerSelectedImageIdRef.current === imageId) {
+      pointerSelectedImageIdRef.current = null;
+      return;
+    }
     const image = model.images.find(
-      (candidate) => candidate.imageId === event.currentTarget.dataset.imageId
+      (candidate) => candidate.imageId === imageId
     );
-    if (image) onSelectImage(image.imagePosition);
+    if (image) {
+      onSelectImage(
+        image.imagePosition,
+        image.imageId,
+        event.shiftKey || event.metaKey || event.ctrlKey
+      );
+    }
   };
 
   const representativeImage = selectedImage || model.images[0];
@@ -1816,6 +2139,7 @@ export const StructuredDocumentSpanLayout = ({
       data-span-start-column={representativeImage?.attributes.spanStartColumn}
       data-span-image-id={representativeImage?.imageId}
       data-structured-image-count={model.images.length}
+      data-image-group-count={model.imageGroups.length}
       data-column-count={columnCount}
       data-column-width-px={model.columnWidthPx}
       data-span-width-px={representativeImage?.spanWidthPx}
@@ -1881,13 +2205,24 @@ export const StructuredDocumentSpanLayout = ({
         ))}
       </div>
       {model.images.map((image) => {
-        const imageSelected = selectedPosition === image.imagePosition;
+        const imagePrimary = selectedPosition === image.imagePosition;
+        const imageSelected = selectedImageIds.length > 0
+          ? selectedImageIds.includes(image.imageId)
+          : imagePrimary;
         return (
           <div
             key={image.imageId}
             className="document-span-layout__image-slot"
             data-layout-role="occupied-columns"
             data-image-id={image.imageId}
+            data-image-group-id={image.groupId}
+            data-image-group-kind={
+              image.groupId
+                ? model.imageGroups.find(
+                    (group) => group.groupId === image.groupId
+                  )?.kind
+                : undefined
+            }
             data-start-column={image.attributes.spanStartColumn}
             data-end-column={
               image.attributes.spanStartColumn
@@ -1918,7 +2253,7 @@ export const StructuredDocumentSpanLayout = ({
               className="document-span-layout__image-content"
               dangerouslySetInnerHTML={{ __html: image.imageHtml }}
             />
-            {imageSelected && (
+            {imagePrimary && (
               <button
                 type="button"
                 className="document-image__resize-handle"

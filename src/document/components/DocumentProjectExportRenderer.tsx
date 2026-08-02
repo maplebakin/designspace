@@ -113,6 +113,7 @@ const ExportPageSurface = ({
           viewScale={1}
           maxImageWidthPx={Math.max(180, columnWidthPx)}
           maxSpanImageWidthPx={bodyWidthPx}
+          imageGroups={page.imageGroups}
           resolveAssetSource={(assetId) => assetSources[assetId]}
         />
       )}

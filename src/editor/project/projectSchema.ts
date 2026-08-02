@@ -45,10 +45,14 @@ import {
   MIN_DOCUMENT_FOLIO_NUMBER,
   getDocumentPageParity,
 } from '../../document/layout/pageGeometry';
+import {
+  collectGroupableDocumentImageIds,
+  normalizeDocumentImageGroups,
+} from '../../document/model/documentImageGroups';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 3 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 4 as const;
 const DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION = 2;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
@@ -911,6 +915,15 @@ export const normalizeDocumentProjectPage = (
   )
     ? applyLegacyTitleFontSize(normalizedTitleContent, sourceTitleFontSizePx)
     : normalizedTitleContent;
+  const bodyContent = normalizeDocumentContentStyles(
+    source.bodyContent,
+    'body',
+    { legacyCaptionPresentation: migrateLegacyTypography }
+  );
+  const imageGroups = normalizeDocumentImageGroups(
+    source.imageGroups,
+    collectGroupableDocumentImageIds([titleContent, bodyContent])
+  );
 
   return {
     kind: 'document',
@@ -925,11 +938,7 @@ export const normalizeDocumentProjectPage = (
     },
     margins: normalizedMargins,
     titleContent,
-    bodyContent: normalizeDocumentContentStyles(
-      source.bodyContent,
-      'body',
-      { legacyCaptionPresentation: migrateLegacyTypography }
-    ),
+    bodyContent,
     columnCount,
     columnGapPx: clamp(normalizeNonNegativeNumber(source.columnGapPx, 24), 0, 480),
     language: source.language === undefined
@@ -938,6 +947,7 @@ export const normalizeDocumentProjectPage = (
     dropCap: normalizeDocumentDropCap(source.dropCap),
     suppressFolio: source.suppressFolio === true,
     overlayObjects,
+    imageGroups,
     reference: constrainDocumentReferenceToPage(
       normalizeScanReference(source.reference),
       widthIn,

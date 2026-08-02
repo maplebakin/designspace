@@ -132,8 +132,8 @@ describe('document image schema v3', () => {
       })
     ) as DocumentProjectPayload;
 
-    expect(normalized.document.schemaVersion).toBe(3);
-    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(3);
+    expect(normalized.document.schemaVersion).toBe(4);
+    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(4);
     const [span, float] = imageNodes(normalized);
 
     expect(span.attrs).toMatchObject({
@@ -323,7 +323,7 @@ describe('document image schema v3', () => {
     });
   });
 
-  it('rejects document schema versions newer than v3', () => {
+  it('rejects document schema versions newer than the current schema', () => {
     expect(() => normalizeDesignSpaceProjectPayload(
       documentPayload(CURRENT_DOCUMENT_SCHEMA_VERSION + 1, {
         type: 'doc',

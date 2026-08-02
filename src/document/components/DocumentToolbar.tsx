@@ -21,9 +21,14 @@ import type {
   DocumentCaptionItalic,
   DocumentCaptionSpacing,
   DocumentFlowImageWrap,
+  DocumentImageGroupKind,
   DocumentOverlayPlacement,
   DocumentPage,
 } from '../types/documentProject';
+import {
+  MAX_DOCUMENT_IMAGE_GROUP_GAP_PX,
+  normalizeDocumentImageGroupGapPx,
+} from '../model/documentImageGroups';
 import {
   DOCUMENT_FONT_SIZES_PT,
 } from '../extensions/DocumentTextStyleExtension';
@@ -61,6 +66,14 @@ export type DocumentImageInspectorValue = {
   canMoveLater?: boolean;
 };
 
+export type DocumentImageGroupInspectorValue = {
+  id: string;
+  kind: DocumentImageGroupKind;
+  childImageIds: readonly string[];
+  gapPx: number;
+  sharedWidth: boolean;
+};
+
 export type DocumentImageLayoutMode =
   | Exclude<DocumentFlowImageWrap, 'span-columns'>
   | DocumentOverlayPlacement
@@ -80,6 +93,8 @@ type DocumentToolbarProps = {
   page: DocumentPage;
   activeTextRegion: 'title' | 'body';
   selectedImage?: DocumentImageInspectorValue | null;
+  selectedImageIds?: readonly string[];
+  selectedImageGroup?: DocumentImageGroupInspectorValue | null;
   referenceAdjustMode: boolean;
   textFormatState: DocumentTextFormatState;
   onFormat: (
@@ -111,6 +126,14 @@ type DocumentToolbarProps = {
   onReplaceSelectedImage: (file: File) => void;
   onDeleteSelectedImage: () => void;
   onResetSelectedImageSize: () => void;
+  onArrangeSelectedImages?: (kind: DocumentImageGroupInspectorValue['kind']) => void;
+  onSelectedImageGroupChange?: (
+    update: Partial<Pick<
+      DocumentImageGroupInspectorValue,
+      'kind' | 'gapPx' | 'sharedWidth'
+    >>
+  ) => void;
+  onUngroupSelectedImages?: () => void;
 };
 
 const numericValue = (value: string, fallback: number) => {
@@ -140,6 +163,143 @@ const FormatButton = ({
   </button>
 );
 
+const DocumentImageGroupControls = ({
+  selectedImageIds,
+  selectedImageGroup,
+  onArrangeSelectedImages,
+  onSelectedImageGroupChange,
+  onUngroupSelectedImages,
+}: {
+  selectedImageIds: readonly string[];
+  selectedImageGroup?: DocumentImageGroupInspectorValue | null;
+  onArrangeSelectedImages?: (
+    kind: DocumentImageGroupInspectorValue['kind']
+  ) => void;
+  onSelectedImageGroupChange?: (
+    update: Partial<Pick<
+      DocumentImageGroupInspectorValue,
+      'kind' | 'gapPx' | 'sharedWidth'
+    >>
+  ) => void;
+  onUngroupSelectedImages?: () => void;
+}) => {
+  const selectedCount = selectedImageIds.length;
+  const groupCount = selectedImageGroup?.childImageIds.length ?? 0;
+  const count = Math.max(selectedCount, groupCount);
+
+  if (count < 2) {
+    return null;
+  }
+
+  const arrange = (kind: DocumentImageGroupInspectorValue['kind']) => {
+    if (selectedImageGroup) {
+      onSelectedImageGroupChange?.({ kind });
+      return;
+    }
+    onArrangeSelectedImages?.(kind);
+  };
+
+  return (
+    <div
+      className="document-image-group-controls"
+      data-testid="document-image-group-selection"
+      data-image-count={count}
+      data-group-id={selectedImageGroup?.id}
+    >
+      <div className="document-context-heading">
+        <span>
+          {selectedImageGroup
+            ? `${selectedImageGroup.kind === 'row' ? 'Row' : 'Stack'} group`
+            : 'Multiple photos'}
+        </span>
+        <strong>{count} selected</strong>
+      </div>
+      <div
+        className="document-context-button-group"
+        aria-label="Image group arrangement"
+      >
+        <button
+          type="button"
+          className={`document-context-button document-context-button--quiet ${
+            selectedImageGroup?.kind === 'row' ? 'is-selected' : ''
+          }`}
+          aria-pressed={selectedImageGroup?.kind === 'row'}
+          data-testid="document-image-group-row"
+          disabled={
+            selectedImageGroup
+              ? !onSelectedImageGroupChange
+              : !onArrangeSelectedImages
+          }
+          onClick={() => arrange('row')}
+        >
+          Arrange row
+        </button>
+        <button
+          type="button"
+          className={`document-context-button document-context-button--quiet ${
+            selectedImageGroup?.kind === 'stack' ? 'is-selected' : ''
+          }`}
+          aria-pressed={selectedImageGroup?.kind === 'stack'}
+          data-testid="document-image-group-stack"
+          disabled={
+            selectedImageGroup
+              ? !onSelectedImageGroupChange
+              : !onArrangeSelectedImages
+          }
+          onClick={() => arrange('stack')}
+        >
+          Arrange stack
+        </button>
+      </div>
+      {selectedImageGroup && (
+        <>
+          <label className="document-context-field">
+            <span>Group gap</span>
+            <input
+              aria-label="Image group gap"
+              data-testid="document-image-group-gap"
+              type="number"
+              min="0"
+              max={MAX_DOCUMENT_IMAGE_GROUP_GAP_PX}
+              value={Math.round(selectedImageGroup.gapPx)}
+              onChange={(event) => onSelectedImageGroupChange?.({
+                gapPx: normalizeDocumentImageGroupGapPx(
+                  event.target.value,
+                  selectedImageGroup.gapPx
+                ),
+              })}
+            />
+          </label>
+          {selectedImageGroup.kind === 'stack' && (
+            <label className="document-context-field">
+              <span>Shared width</span>
+              <input
+                aria-label="Use shared image width"
+                data-testid="document-image-group-shared-width"
+                type="checkbox"
+                checked={selectedImageGroup.sharedWidth}
+                onChange={(event) => onSelectedImageGroupChange?.({
+                  sharedWidth: event.target.checked,
+                })}
+              />
+            </label>
+          )}
+          <button
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            data-testid="document-image-group-ungroup"
+            disabled={!onUngroupSelectedImages}
+            onClick={onUngroupSelectedImages}
+          >
+            Ungroup
+          </button>
+        </>
+      )}
+      <div className="document-context-divider" aria-hidden="true" />
+    </div>
+  );
+};
+
 export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +307,8 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
   const context = props.referenceAdjustMode
     ? 'reference'
     : props.selectedImage
+      || (props.selectedImageIds?.length ?? 0) > 1
+      || props.selectedImageGroup
       ? 'image'
       : props.activeTextRegion;
   const fontSizeValue = props.textFormatState.fontSizePt;
@@ -247,6 +409,13 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
           className="document-context-toolbar__content document-image-inspector"
           data-testid="document-image-inspector"
         >
+          <DocumentImageGroupControls
+            selectedImageIds={props.selectedImageIds ?? [props.selectedImage.id]}
+            selectedImageGroup={props.selectedImageGroup}
+            onArrangeSelectedImages={props.onArrangeSelectedImages}
+            onSelectedImageGroupChange={props.onSelectedImageGroupChange}
+            onUngroupSelectedImages={props.onUngroupSelectedImages}
+          />
           <div className="document-context-heading">
             <span>{props.selectedImage.kind === 'flow' ? 'Flow photo' : 'Positioned photo'}</span>
             <strong>
@@ -641,6 +810,20 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             <Trash2 size={15} aria-hidden="true" />
             Delete
           </button>
+        </div>
+      ) : (props.selectedImageIds?.length ?? 0) > 1
+        || props.selectedImageGroup ? (
+        <div
+          className="document-context-toolbar__content document-image-inspector"
+          data-testid="document-image-inspector"
+        >
+          <DocumentImageGroupControls
+            selectedImageIds={props.selectedImageIds ?? []}
+            selectedImageGroup={props.selectedImageGroup}
+            onArrangeSelectedImages={props.onArrangeSelectedImages}
+            onSelectedImageGroupChange={props.onSelectedImageGroupChange}
+            onUngroupSelectedImages={props.onUngroupSelectedImages}
+          />
         </div>
       ) : (
         <div className="document-context-toolbar__content">
