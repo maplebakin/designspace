@@ -76,6 +76,24 @@ test.describe('historical book acceptance fixture', () => {
     await loadHistoricalFixture(page);
 
     const sheet = page.getByTestId('document-page');
+    const clearSelection = async () => {
+      const visibleStructuredParagraph = page.locator(
+        '[data-layout-role="explicit-text-column"] p:visible'
+      ).first();
+      if (await visibleStructuredParagraph.count() > 0) {
+        await visibleStructuredParagraph.click();
+      } else {
+        await page.locator('.document-flow-prosemirror p:visible').first().click();
+      }
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+        }));
+      });
+      await page.waitForTimeout(50);
+    };
+    await clearSelection();
     await expect(sheet).toHaveScreenshot('historical-page-49.png', {
       animations: 'disabled',
       caret: 'hide',
@@ -84,6 +102,7 @@ test.describe('historical book acceptance fixture', () => {
     });
 
     await page.getByTestId('document-page-tab-1').click();
+    await clearSelection();
     await expect(sheet).toHaveScreenshot('historical-page-50.png', {
       animations: 'disabled',
       caret: 'hide',
@@ -92,6 +111,7 @@ test.describe('historical book acceptance fixture', () => {
     });
 
     await page.getByTestId('document-page-tab-2').click();
+    await clearSelection();
     await expect(sheet).toHaveScreenshot('historical-page-51.png', {
       animations: 'disabled',
       caret: 'hide',
@@ -100,6 +120,7 @@ test.describe('historical book acceptance fixture', () => {
     });
 
     await page.getByTestId('document-page-tab-3').click();
+    await clearSelection();
     await expect(sheet).toHaveScreenshot('historical-page-52.png', {
       animations: 'disabled',
       caret: 'hide',
