@@ -30,7 +30,7 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | P3 — Shared layout and image geometry | Complete | `ea3ca727` |
 | P4 — Image rows and stacks | Complete | `335cd164` |
 | P5 — Persistence, migrations, assets, recovery | Complete | `9f68a02e` |
-| P6 — Committed multi-page export | Pending | — |
+| P6 — Committed multi-page export | Complete | `687e7c22` (+ `db831442`, `0986414b`) |
 | P7 — Historical fixtures and visual regression | Pending | — |
 
 ## S0 — Authoritative paper background
@@ -557,7 +557,7 @@ Risks and limitations:
 
 ## P6 — Committed multi-page export
 
-Status: In progress (implementation complete; verification pending phase commit)
+Status: Complete
 
 Objective: make PNG, PDF, and print consume a frozen project snapshot rather
 than the active editor DOM, and provide deterministic multi-page output.
@@ -587,15 +587,69 @@ Implemented behaviour:
 - The editor's paper-colour test now proves that export and print receive a
   committed offscreen root rather than the live root.
 
-Verification pending:
+Verification:
 
-- Targeted export/editor tests include DPI, sequential PNG naming, committed
-  root routing, multi-page PDF MediaBoxes, print cleanup, and paper colour.
-- Full unit, lint, TypeScript/build, and Playwright verification will be run
-  before the P6 commit.
+- `npx vitest run __tests__/document-export.test.ts
+  __tests__/document-editor.test.ts` — 77 tests passed, including DPI,
+  sequential PNG naming, committed-root routing, all-page scope routing,
+  multi-page PDF MediaBoxes, print cleanup, and paper colour.
+- Full unit suite after P6 — 33 files, 393 tests passed.
+- `npx tsc --noEmit`, `npm run lint`, and `npm run build` — passed.
+- `npx playwright test e2e/document-reconstruction.spec.ts --grep
+  "multi-page|PDF|PNG|paper|span|positioned"` — 2 tests passed.
+- The all-page PNG scope was corrected in follow-up commit `db831442` after
+  browser acceptance caught the shell dropping the menu's `scope` argument.
+- `0986414b` raises the finite committed-mount timeout for slower four-page
+  font/layout environments; it does not remove the recovery timeout bound.
 
 Known limitations:
 
 - PDF is raster-backed and therefore does not provide selectable text.
 - Print CSS uses the first page's print box for the shared print host; the
   historical fixtures use one physical size. PDF itself supports mixed sizes.
+
+## P7 — Historical fixtures and visual regression
+
+Status: In progress (implementation complete; final suite and phase commit pending)
+
+Objective: provide deterministic, editable acceptance pages for the four
+historical layouts and exercise the normal portable import, save/reopen, layout,
+and export workflows in browser tests.
+
+Files changed:
+
+- `src/document/fixtures/historicalBookFixtures.ts`
+- `__tests__/historical-book-fixtures.test.ts`
+- `e2e/historical-book-layout.spec.ts`
+- `e2e/historical-book-layout.spec.ts-snapshots/`
+- `docs/architecture/historical-book-fixtures.md`
+- `docs/architecture/document-export.md`
+
+Implemented behaviour:
+
+- The fixture factory emits four independent German pages, Letter physical
+  sheets, folios 49–52, mirrored outside-bottom folios, named typography roles,
+  and the requested page-specific image/title/drop-cap/quotation layouts.
+- Page 50 uses a declarative row group and page 51 uses a different-height
+  stack; captions remain child image attributes. The page 52 body ends with a
+  short signature block to preserve the lower blank area.
+- Fixture tests assert every page contract, group/caption geometry, style roles,
+  mirrored parity, image IDs, and exact normalized portable round-trip. The
+  export-renderer test mounts all four pages and asserts ordered folios and
+  image surfaces.
+- Playwright imports the factory's JSON through the real dashboard open-file
+  path, checks page-specific DOM landmarks, captures four reviewed sheet crops,
+  and verifies the committed four-page PDF plus numbered PNG workflow.
+
+Verification pending:
+
+- Full unit suite, production build, recovery checks, and the complete focused
+  historical Playwright file will be rerun before the P7 commit.
+
+Known limitations:
+
+- Repository reference photographs were absent at baseline, so the fixture's
+  placeholder PNG and representative German text are intentionally not a
+  photographic or transcription claim.
+- Visual baselines are deterministic Chromium acceptance crops, not comparisons
+  against unavailable source scans.
