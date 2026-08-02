@@ -259,6 +259,8 @@ portable fixture import, PNG/PDF export, and reviewed Chromium visual crops.
 - `63da540b` — surface export DPI warnings for all pages
 - `b761c93a` — add historical page fixtures and visual regressions
 - `aef589e9` — record completed historical layout verification
+- `40fcdba7` — document historical layout completion
+- `d3c105fe` — record final export warning hardening
 
 ## 12. Final readiness score with justification
 
