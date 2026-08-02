@@ -1559,26 +1559,32 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     try {
       const mounted = await mountCommittedDocumentExportPages(project);
       cleanupExportPages = mounted.cleanup;
+      const exportSources = mounted.sources.map((source) => ({
+        ...source,
+        options: {
+          ...source.options,
+          onWarning: (warnings: readonly string[]) => {
+            if (warnings.length > 0) setToastMessage(warnings[0]);
+          },
+        },
+      }));
       if (format === 'png') {
         if (scope === 'all') {
           await documentExportService.downloadPngPages(
-            mounted.sources,
+            exportSources,
             project.projectName
           );
         } else {
-          const source = mounted.sources[activePageIndex];
+          const source = exportSources[activePageIndex];
           if (!source) throw new Error('The selected page is unavailable for export.');
           await documentExportService.downloadPng(source.element, {
             ...source.options,
             fileName: `${project.projectName}-${folioNumber}`,
-            onWarning: (warnings) => {
-              if (warnings.length > 0) setToastMessage(warnings[0]);
-            },
           });
         }
       } else {
         await documentExportService.downloadPdfPages(
-          mounted.sources,
+          exportSources,
           project.projectName
         );
       }
