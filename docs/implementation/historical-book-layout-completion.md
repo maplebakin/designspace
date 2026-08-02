@@ -256,6 +256,7 @@ portable fixture import, PNG/PDF export, and reviewed Chromium visual crops.
 - `687e7c22` — export committed multi-page document layouts
 - `db831442` — repair export scope and recovery image IDs
 - `0986414b` — allow slower committed export mounting
+- `63da540b` — surface export DPI warnings for all pages
 - `b761c93a` — add historical page fixtures and visual regressions
 - `aef589e9` — record completed historical layout verification
 

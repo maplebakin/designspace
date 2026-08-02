@@ -30,7 +30,7 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | P3 — Shared layout and image geometry | Complete | `ea3ca727` |
 | P4 — Image rows and stacks | Complete | `335cd164` |
 | P5 — Persistence, migrations, assets, recovery | Complete | `9f68a02e` |
-| P6 — Committed multi-page export | Complete | `687e7c22` (+ `db831442`, `0986414b`) |
+| P6 — Committed multi-page export | Complete | `687e7c22` (+ `db831442`, `0986414b`, `63da540b`) |
 | P7 — Historical fixtures and visual regression | Complete | `b761c93a` |
 
 ## S0 — Authoritative paper background
@@ -601,6 +601,8 @@ Verification:
   browser acceptance caught the shell dropping the menu's `scope` argument.
 - `0986414b` raises the finite committed-mount timeout for slower four-page
   font/layout environments; it does not remove the recovery timeout bound.
+- `63da540b` routes the DPI warning callback through all-page PNG and PDF
+  sources as well as the selected-page workflow.
 
 Known limitations:
 
