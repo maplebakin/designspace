@@ -470,7 +470,7 @@ describe('live document editor UI', () => {
         blob: new Blob(['png'], { type: 'image/png' }),
         fileName: 'archive-notes.png',
       });
-    const print = vi.spyOn(documentExportService, 'print')
+    const printPages = vi.spyOn(documentExportService, 'printPages')
       .mockResolvedValue(() => undefined);
 
     await renderShell();
@@ -509,23 +509,26 @@ describe('live document editor UI', () => {
     fireEvent.click(screen.getByText('Export', { exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'PNG', exact: true }));
     await waitFor(() => {
-      expect(downloadPng).toHaveBeenCalledWith(
-        exportRoot,
-        expect.objectContaining({
-          backgroundColor: '#E7DCC8',
-        })
-      );
+      expect(downloadPng).toHaveBeenCalledTimes(1);
     });
+    const [committedPngRoot, committedPngOptions] = downloadPng.mock.calls[0];
+    expect(committedPngRoot).not.toBe(exportRoot);
+    expect(committedPngRoot.getAttribute('data-paper-color')).toBe('#E7DCC8');
+    expect(committedPngOptions).toEqual(expect.objectContaining({
+      backgroundColor: '#E7DCC8',
+    }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Print', exact: true }));
     await waitFor(() => {
-      expect(print).toHaveBeenCalledWith(
-        exportRoot,
-        expect.objectContaining({
-          backgroundColor: '#E7DCC8',
-        })
-      );
+      expect(printPages).toHaveBeenCalledTimes(1);
     });
+    const [committedPrintSources] = printPages.mock.calls[0];
+    expect(committedPrintSources[0].element).not.toBe(exportRoot);
+    expect(committedPrintSources[0].element.getAttribute('data-paper-color'))
+      .toBe('#E7DCC8');
+    expect(committedPrintSources[0].options).toEqual(expect.objectContaining({
+      backgroundColor: '#E7DCC8',
+    }));
   });
 
   it('keeps semantic margin fields readable and persists their page values', async () => {

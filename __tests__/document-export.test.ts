@@ -5,7 +5,9 @@ import {
   DOCUMENT_PRINT_HOST_ATTRIBUTE,
   DocumentExportService,
   calculateDocumentCssDimensions,
+  calculateDocumentImageEffectiveDpi,
   calculateDocumentPixelDimensions,
+  collectDocumentImageDpiWarnings,
   createCleanDocumentClone,
   createDocumentPrintCss,
   createDocumentSvgMarkup,
@@ -63,6 +65,28 @@ describe('document export', () => {
       widthIn: 297 / 25.4,
       heightIn: 210 / 25.4,
     }, 300)).toEqual({ width: 3508, height: 2480 });
+  });
+
+  it('calculates effective source-image DPI and reports low-resolution print images', () => {
+    expect(calculateDocumentImageEffectiveDpi({
+      naturalWidthPx: 600,
+      renderedWidthPx: 192,
+    })).toBe(300);
+    expect(calculateDocumentImageEffectiveDpi({
+      naturalWidthPx: 0,
+      renderedWidthPx: 192,
+    })).toBe(0);
+
+    const root = document.createElement('main');
+    const image = document.createElement('img');
+    image.alt = 'Low resolution photograph';
+    image.setAttribute('width', '960');
+    image.style.width = '768px';
+    root.appendChild(image);
+
+    expect(collectDocumentImageDpiWarnings(root, 150)).toEqual([
+      'Low resolution photograph is approximately 120 DPI at print size.',
+    ]);
   });
 
   it('physically removes reference and editor UI while retaining document content', () => {
@@ -462,6 +486,30 @@ describe('document export', () => {
     expect(createObjectUrl).toHaveBeenCalledWith(tinyPng);
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:multi-page-document');
+  });
+
+  it('downloads all PNG pages sequentially with deterministic page filenames', async () => {
+    const service = new DocumentExportService();
+    const sources = ['49', '50', '51'].map((folio) => ({
+      pageId: `page-${folio}`,
+      element: document.createElement('main'),
+      options: { widthIn: 8.5, heightIn: 11, fileName: `page-${folio}` },
+    }));
+    vi.spyOn(service, 'exportPngBlob').mockResolvedValue(tinyPng);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:page');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    const results = await service.downloadPngPages(sources, 'Historical Pages 49–52');
+
+    expect(results.map((result) => result.fileName)).toEqual([
+      'historical-pages-4952-page-01.png',
+      'historical-pages-4952-page-02.png',
+      'historical-pages-4952-page-03.png',
+    ]);
+    expect(click).toHaveBeenCalledTimes(3);
+    expect(Array.from(document.querySelectorAll('a[download]'))).toHaveLength(0);
   });
 
   it('downloads sanitized filenames and revokes the temporary URL', () => {

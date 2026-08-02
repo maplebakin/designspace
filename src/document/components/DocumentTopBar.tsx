@@ -17,7 +17,7 @@ type DocumentTopBarProps = {
   onRename: (name: string) => void;
   onSave: () => void;
   onDownloadProject: () => void;
-  onExport: (format: 'png' | 'pdf') => void;
+  onExport: (format: 'png' | 'pdf', scope?: 'current' | 'all') => void;
   onPrint: () => void;
 };
 
@@ -109,10 +109,19 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
             type="button"
             aria-label="PNG"
             disabled={exportBusy}
-            onClick={() => onExport('png')}
+            onClick={() => onExport('png', 'current')}
           >
             PNG
             <span>Current page · 300 DPI</span>
+          </button>
+          <button
+            type="button"
+            aria-label="PNG all pages"
+            disabled={exportBusy}
+            onClick={() => onExport('png', 'all')}
+          >
+            PNG (all pages)
+            <span>{pageCount} files · 300 DPI</span>
           </button>
           <button
             type="button"

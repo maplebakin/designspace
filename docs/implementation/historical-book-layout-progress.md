@@ -28,8 +28,8 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | P1 — Multi-page documents and folios | Complete | `9505d48e` |
 | P2 — Historical typography styles | Complete | `86ba84a1` |
 | P3 — Shared layout and image geometry | Complete | `ea3ca727` |
-| P4 — Image rows and stacks | Complete | pending phase commit |
-| P5 — Persistence, migrations, assets, recovery | Complete | pending phase commit |
+| P4 — Image rows and stacks | Complete | `335cd164` |
+| P5 — Persistence, migrations, assets, recovery | Complete | `9f68a02e` |
 | P6 — Committed multi-page export | Pending | — |
 | P7 — Historical fixtures and visual regression | Pending | — |
 
@@ -554,3 +554,48 @@ Risks and limitations:
   export intentionally fails until every printable image is available.
 - Duplicate IndexedDB rows are reported, not deleted during normal saves; the
   verified-backup recovery workflow remains the authority for forensic cleanup.
+
+## P6 — Committed multi-page export
+
+Status: In progress (implementation complete; verification pending phase commit)
+
+Objective: make PNG, PDF, and print consume a frozen project snapshot rather
+than the active editor DOM, and provide deterministic multi-page output.
+
+Files changed:
+
+- `src/document/components/DocumentProjectExportRenderer.tsx`
+- `src/document/components/DocumentEditorShell.tsx`
+- `src/document/components/DocumentTopBar.tsx`
+- `src/document/services/documentExportService.ts`
+- `__tests__/document-export.test.ts`
+- `__tests__/document-editor.test.ts`
+
+Implemented behaviour:
+
+- A cloned committed project mounts every page offscreen at 96 CSS pixels per
+  inch. It uses the same `DocumentPageView`, `FlowEditor`, structured span
+  layout, named typography, paper colour, folio parity, groups, captions, and
+  asset map as the editor.
+- Selected-page PNG, all-page PNG, all-page PDF, and print now use those frozen
+  page sources. No export path reads the active page's transient drag or resize
+  preview. All-page PNG downloads sequentially as deterministic
+  `project-page-01.png` files; PDF preserves source order and each page's
+  physical MediaBox.
+- PNG export reports effective source-image DPI warnings. Raster-backed PDF
+  remains intentional and is generated one page at a time to bound memory.
+- The editor's paper-colour test now proves that export and print receive a
+  committed offscreen root rather than the live root.
+
+Verification pending:
+
+- Targeted export/editor tests include DPI, sequential PNG naming, committed
+  root routing, multi-page PDF MediaBoxes, print cleanup, and paper colour.
+- Full unit, lint, TypeScript/build, and Playwright verification will be run
+  before the P6 commit.
+
+Known limitations:
+
+- PDF is raster-backed and therefore does not provide selectable text.
+- Print CSS uses the first page's print box for the shared print host; the
+  historical fixtures use one physical size. PDF itself supports mixed sizes.

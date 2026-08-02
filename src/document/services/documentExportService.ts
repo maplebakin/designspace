@@ -54,6 +54,7 @@ export type DocumentExportOptions = DocumentPhysicalSize & {
   fileName?: string;
   backgroundColor?: string;
   cssPixelsPerInch?: number;
+  onWarning?: (warnings: readonly string[]) => void;
 };
 
 export type DocumentExportPageSource = {
@@ -128,6 +129,42 @@ export const calculateDocumentCssDimensions = (
     width: normalizedSize.widthIn * normalizedCssPixelsPerInch,
     height: normalizedSize.heightIn * normalizedCssPixelsPerInch,
   };
+};
+
+export const calculateDocumentImageEffectiveDpi = ({
+  naturalWidthPx,
+  renderedWidthPx,
+}: {
+  naturalWidthPx: number;
+  renderedWidthPx: number;
+}) => {
+  const natural = finitePositive(naturalWidthPx, 0);
+  const rendered = finitePositive(renderedWidthPx, 0);
+  if (natural <= 0 || rendered <= 0) return 0;
+  return natural * CSS_PIXELS_PER_INCH / rendered;
+};
+
+export const collectDocumentImageDpiWarnings = (
+  root: HTMLElement,
+  minimumDpi = 150
+) => {
+  const warnings: string[] = [];
+  root.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
+    const naturalWidth = image.naturalWidth || Number(image.getAttribute('width'));
+    const renderedWidth = Number.parseFloat(image.style.width)
+      || image.getBoundingClientRect().width
+      || naturalWidth;
+    const dpi = calculateDocumentImageEffectiveDpi({
+      naturalWidthPx: naturalWidth,
+      renderedWidthPx: renderedWidth,
+    });
+    if (dpi > 0 && dpi < minimumDpi) {
+      warnings.push(
+        `${image.alt || 'An image'} is approximately ${Math.round(dpi)} DPI at print size.`
+      );
+    }
+  });
+  return warnings;
 };
 
 const getExclusionSelector = (extraSelectors: string[] = []) =>
@@ -606,6 +643,7 @@ export class DocumentExportService {
     const dpi = finitePositive(options.dpi ?? DEFAULT_DOCUMENT_EXPORT_DPI, DEFAULT_DOCUMENT_EXPORT_DPI);
     const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
     const clone = await prepareDocumentExportClone(pageElement, normalizedSize);
+    options.onWarning?.(collectDocumentImageDpiWarnings(pageElement));
     clone.style.backgroundColor = backgroundColor;
 
     const svgMarkup = createDocumentSvgMarkup(
@@ -706,6 +744,25 @@ export class DocumentExportService {
     return { blob, fileName };
   }
 
+  async downloadPngPages(
+    sources: readonly DocumentExportPageSource[],
+    fileName?: string
+  ) {
+    if (sources.length === 0) {
+      throw new Error('At least one document page is required for PNG export.');
+    }
+    const baseName = sanitizeExportBaseName(fileName);
+    const results: Array<{ blob: Blob; fileName: string }> = [];
+    for (let index = 0; index < sources.length; index += 1) {
+      const source = sources[index];
+      const blob = await this.exportPngBlob(source.element, source.options);
+      const outputName = `${baseName}-page-${String(index + 1).padStart(2, '0')}.png`;
+      triggerDocumentDownload(blob, outputName);
+      results.push({ blob, fileName: outputName });
+    }
+    return results;
+  }
+
   async downloadPdf(pageElement: HTMLElement, options: DocumentExportOptions) {
     const blob = await this.exportPdfBlob(pageElement, options);
     const fileName = `${sanitizeExportBaseName(options.fileName)}.pdf`;
@@ -730,21 +787,41 @@ export class DocumentExportService {
     if (typeof window === 'undefined' || typeof window.print !== 'function') {
       throw new Error('Printing is unavailable in this environment.');
     }
-    const normalizedSize = normalizePhysicalSize(options);
-    const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
-    const clone = await prepareDocumentExportClone(pageElement, normalizedSize);
-    clone.style.width = `${normalizedSize.widthIn}in`;
-    clone.style.height = `${normalizedSize.heightIn}in`;
-    clone.style.backgroundColor = backgroundColor;
+    return this.printPages([{
+      pageId: 'document-page',
+      element: pageElement,
+      options,
+    }]);
+  }
 
+  async printPages(
+    sources: readonly DocumentExportPageSource[]
+  ): Promise<() => void> {
+    if (typeof window === 'undefined' || typeof window.print !== 'function') {
+      throw new Error('Printing is unavailable in this environment.');
+    }
+    if (sources.length === 0) {
+      throw new Error('At least one document page is required for printing.');
+    }
+    const firstSize = normalizePhysicalSize(sources[0].options);
     const host = document.createElement('div');
     host.setAttribute(DOCUMENT_PRINT_HOST_ATTRIBUTE, 'true');
     host.setAttribute('aria-hidden', 'true');
-    host.appendChild(clone);
+    for (const source of sources) {
+      const normalizedSize = normalizePhysicalSize(source.options);
+      const backgroundColor = normalizeDocumentPaperColor(source.options.backgroundColor);
+      const clone = await prepareDocumentExportClone(source.element, normalizedSize);
+      clone.style.width = `${normalizedSize.widthIn}in`;
+      clone.style.height = `${normalizedSize.heightIn}in`;
+      clone.style.backgroundColor = backgroundColor;
+      host.appendChild(clone);
+    }
 
     const style = document.createElement('style');
     style.setAttribute('data-document-print-style', 'true');
-    style.textContent = createDocumentPrintCss(normalizedSize, backgroundColor);
+    style.textContent = createDocumentPrintCss(firstSize, normalizeDocumentPaperColor(
+      sources[0].options.backgroundColor
+    ));
     document.head.appendChild(style);
     document.body.appendChild(host);
 

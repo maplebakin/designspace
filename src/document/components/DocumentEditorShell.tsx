@@ -1548,26 +1548,35 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     sidebarCollapsed,
   ]);
 
-  const exportDocument = useCallback(async (format: 'png' | 'pdf') => {
-    if (!exportRootRef.current || !page || !project || isExporting) return;
+  const exportDocument = useCallback(async (
+    format: 'png' | 'pdf',
+    scope: 'current' | 'all' = 'current'
+  ) => {
+    if (!page || !project || isExporting) return;
     setIsExporting(true);
     setToastMessage(`Preparing ${format.toUpperCase()} export…`);
     let cleanupExportPages: (() => void) | undefined;
     try {
-      const options = {
-        widthIn: page.size.widthIn,
-        heightIn: page.size.heightIn,
-        dpi: page.size.dpi,
-        fileName: format === 'png'
-          ? `${project.projectName}-${folioNumber}`
-          : project.projectName,
-        backgroundColor: paperColor,
-      };
+      const mounted = await mountCommittedDocumentExportPages(project);
+      cleanupExportPages = mounted.cleanup;
       if (format === 'png') {
-        await documentExportService.downloadPng(exportRootRef.current, options);
+        if (scope === 'all') {
+          await documentExportService.downloadPngPages(
+            mounted.sources,
+            project.projectName
+          );
+        } else {
+          const source = mounted.sources[activePageIndex];
+          if (!source) throw new Error('The selected page is unavailable for export.');
+          await documentExportService.downloadPng(source.element, {
+            ...source.options,
+            fileName: `${project.projectName}-${folioNumber}`,
+            onWarning: (warnings) => {
+              if (warnings.length > 0) setToastMessage(warnings[0]);
+            },
+          });
+        }
       } else {
-        const mounted = await mountCommittedDocumentExportPages(project);
-        cleanupExportPages = mounted.cleanup;
         await documentExportService.downloadPdfPages(
           mounted.sources,
           project.projectName
@@ -1580,7 +1589,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       cleanupExportPages?.();
       setIsExporting(false);
     }
-  }, [isExporting, page, paperColor, project, setToastMessage]);
+  }, [
+    activePageIndex,
+    folioNumber,
+    isExporting,
+    page,
+    project,
+    setToastMessage,
+  ]);
 
   if (!project || !page) {
     return (
@@ -1608,14 +1624,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         onDownloadProject={() => void downloadProjectFile()}
         onExport={(format) => void exportDocument(format)}
         onPrint={() => {
-          if (!exportRootRef.current) return;
-          void documentExportService.print(exportRootRef.current, {
-            widthIn: page.size.widthIn,
-            heightIn: page.size.heightIn,
-            dpi: page.size.dpi,
-            fileName: project.projectName,
-            backgroundColor: paperColor,
-          }).catch((error) => {
+          void mountCommittedDocumentExportPages(project).then((mounted) => (
+            documentExportService.printPages(mounted.sources).finally(
+              mounted.cleanup
+            )
+          )).catch((error) => {
             setToastMessage(error instanceof Error ? error.message : 'Printing failed.');
           });
         }}
