@@ -1035,6 +1035,24 @@
   accent-color: var(--document-accent);
 }
 
+.document-overlay-image__missing {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  height: 100%;
+  place-items: center;
+  color: #6b625a;
+  background: repeating-linear-gradient(
+    135deg,
+    #eee7de,
+    #eee7de 8px,
+    #e4dbd1 8px,
+    #e4dbd1 16px
+  );
+  border: 1px dashed #9b8f83;
+  font-size: 12px;
+}
+
 .document-zoom-controls {
   position: absolute;
   bottom: 15px;

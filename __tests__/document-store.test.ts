@@ -309,6 +309,34 @@ describe('document project store', () => {
     });
   });
 
+  it('deduplicates identical imported assets and reports unreachable payload entries', () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Asset lifecycle');
+    const firstId = store.addAsset(
+      'asset-first',
+      'data:image/png;base64,SAME',
+      { mimeType: 'image/png', naturalWidth: 120, naturalHeight: 80 }
+    );
+    const secondId = store.addAsset(
+      'asset-second',
+      'data:image/png;base64,SAME',
+      { mimeType: 'image/png', naturalWidth: 120, naturalHeight: 80 }
+    );
+    expect(firstId).toBe('asset-first');
+    expect(secondId).toBe('asset-first');
+    expect(useDocumentStore.getState().project?.assets).toEqual({
+      'asset-first': 'data:image/png;base64,SAME',
+    });
+    expect(useDocumentStore.getState().project?.assetMetadata?.['asset-first']).toMatchObject({
+      mimeType: 'image/png',
+      naturalWidth: 120,
+    });
+    expect(store.inspectAssetReferences()).toMatchObject({
+      orphanAssetIds: ['asset-first'],
+      missingAssetIds: [],
+    });
+  });
+
   it('persists paper colour through save, library reload, and portable project reopen', async () => {
     const store = useDocumentStore.getState();
     store.createBlankProject('Cream Archive');

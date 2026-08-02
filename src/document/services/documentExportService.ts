@@ -410,6 +410,14 @@ export const prepareDocumentExportClone = async (
   size: DocumentPhysicalSize,
   options: PrepareDocumentCloneOptions = {}
 ) => {
+  const missingImages = source.querySelectorAll(
+    '.document-image__missing, .document-overlay-image__missing'
+  );
+  if (missingImages.length > 0) {
+    throw new Error(
+      `Document export cannot continue: ${missingImages.length} image asset${missingImages.length === 1 ? '' : 's'} missing.`
+    );
+  }
   await waitForDocumentResources(
     source,
     options.resourceWaitOptions,

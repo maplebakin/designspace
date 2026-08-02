@@ -138,6 +138,62 @@ class RecoveryFixtureTest(unittest.TestCase):
             self.assertEqual(records[0].value, b"value")
             ldb.close()
 
+    def test_document_recovery_validates_pages_groups_ids_and_assets(self):
+        image = "data:image/png;base64," + base64.b64encode(b"document-image").decode("ascii")
+        document = {
+            "schemaVersion": 4,
+            "language": "de",
+        }
+        page = {
+            "kind": "document",
+            "id": "page-49",
+            "name": "Page 49",
+            "titleContent": {"type": "doc", "content": [{"type": "paragraph"}]},
+            "bodyContent": {"type": "doc", "content": [
+                {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
+                {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "missing", "wrap": "span-columns", "verticalAnchor": "page-position"}},
+            ]},
+            "imageGroups": [{"id": "row", "kind": "row", "childImageIds": ["duplicate", "duplicate", "missing"], "gapPx": 900}],
+            "overlayObjects": [],
+        }
+        payload = {
+            "editorMode": "document",
+            "projectId": "document-project",
+            "projectName": "Historical document",
+            "document": document,
+            "pages": [page, {**page, "id": "page-50", "name": "Page 50"}],
+            "assets": {"photo": image},
+        }
+        with self.fixture.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"store": "projects", "key": "document-project", "seq": 1, "value": {"id": "document-project", "name": "Historical document"}}) + "\n")
+            handle.write(json.dumps({"store": "canvasData", "key": "document-canvas", "seq": 2, "value": {"id": "document-canvas", "projectId": "document-project", "jsonPayload": json.dumps(payload)}}) + "\n")
+
+        result = subprocess.run(
+            [
+                "python3", str(self.script),
+                "--backup-root", str(self.backup),
+                "--export-root", str(self.exports),
+                "--source-profile", "Google Chrome / Default",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        recovered_path = next((self.exports / "projects").glob("*.apocaproject.json"))
+        recovered = json.loads(recovered_path.read_text())
+        self.assertEqual(recovered["document"]["schemaVersion"], 5)
+        self.assertEqual(len(recovered["pages"]), 2)
+        ids = [
+            node["attrs"]["id"]
+            for node in recovered["pages"][0]["bodyContent"]["content"]
+        ]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn("assetMetadata", recovered)
+        self.assertTrue(recovered["recovery"]["complete"])
+        self.assertTrue(any("Missing referenced assets" in warning for warning in recovered["recovery"]["validationWarnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()

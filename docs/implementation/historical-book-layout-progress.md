@@ -29,7 +29,7 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | P2 — Historical typography styles | Complete | `86ba84a1` |
 | P3 — Shared layout and image geometry | Complete | `ea3ca727` |
 | P4 — Image rows and stacks | Complete | pending phase commit |
-| P5 — Persistence, migrations, assets, recovery | Pending | — |
+| P5 — Persistence, migrations, assets, recovery | Complete | pending phase commit |
 | P6 — Committed multi-page export | Pending | — |
 | P7 — Historical fixtures and visual regression | Pending | — |
 
@@ -480,3 +480,77 @@ Deviations and limitations:
 - Group resizing is currently expressed through child image controls and the
   shared-width policy; a dedicated rigid-group resize handle remains a later
   enhancement.
+
+## P5 — Persistence, migrations, assets, and recovery
+
+Status: Complete
+
+Objective: keep the multi-page/group document durable under browser saves,
+portable files, duplicate imports, missing assets, and desktop recovery.
+
+Schema changes:
+
+- The nested document schema is now version 5.
+- Existing v4 group records remain lossless; v4 and earlier payloads normalize
+  to the current schema and synthesize bounded `assetMetadata` entries for
+  legacy string-only assets.
+- Asset metadata stores a synchronous content fingerprint, encoded byte length,
+  and optional MIME/dimension/file-name information. Unknown fields remain
+  preserved by the portable normalizer.
+
+Files changed:
+
+- `src/editor/project/projectSchema.ts`
+- `src/document/types/documentAsset.ts`
+- `src/document/model/documentAssets.ts`
+- `src/document/state/documentStore.ts`
+- `src/editor/db.ts`
+- `src/document/components/DocumentEditorShell.tsx`
+- `src/document/components/DocumentSidebar.tsx`
+- `src/document/components/DocumentOverlayLayer.tsx`
+- `src/document/services/documentExportService.ts`
+- `src/document/styles/document-page.css`
+- `src-tauri/recovery_tools/recover_indexeddb.py`
+- `src-tauri/src/recovery.rs`
+- P5 schema, lifecycle, DB-growth, recovery, and asset tests
+
+Implemented behaviour:
+
+- Identical imported data URLs reuse an existing canonical asset ID. New
+  assets receive bounded metadata; replacing an image updates the stable node
+  reference to the canonical ID.
+- Reachability is computed across title/body nodes, overlays, and reference
+  scans. Save, autosave, and portable download compact unreachable sources and
+  metadata. `inspectAssetReferences()` exposes reachable, missing, and orphan
+  IDs to the editor; the sidebar reports missing references.
+- Missing node and overlay assets render explicit placeholders. Export fails
+  with a clear count instead of silently producing a blank historical image.
+- Browser DB updates modify only `project.canvasDataId`. Duplicate legacy rows
+  are left intact for forensic recovery and exposed through
+  `getProjectStorageDiagnostics()`; the old `where(projectId).modify()` growth
+  path is gone.
+- Recovery validation now understands current multi-page document payloads,
+  document schema versions through 5, image/group records, duplicate or
+  malformed image IDs, missing assets, and generated asset metadata. Rust
+  startup validation deep-checks recovered document pages and group shape
+  before accepting a report.
+
+Tests and verification:
+
+- `npx vitest run __tests__/document-store.test.ts
+  __tests__/document-image-schema-v4.test.ts
+  __tests__/document-asset-lifecycle.test.ts
+  __tests__/db-write-deduplication.test.ts` — 31 tests passed
+- `python3 -m unittest discover -s src-tauri/recovery_tools/tests -v` — 3
+  tests passed, including a two-page current document recovery fixture
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 20 tests passed
+- `npm run build` — passed
+
+Risks and limitations:
+
+- The browser asset fingerprint is a bounded synchronous deduplication key,
+  not a cryptographic integrity claim. Recovery computes SHA-256 for data URLs.
+- Missing assets are recoverable through the existing replace/import controls;
+  export intentionally fails until every printable image is available.
+- Duplicate IndexedDB rows are reported, not deleted during normal saves; the
+  verified-backup recovery workflow remains the authority for forensic cleanup.

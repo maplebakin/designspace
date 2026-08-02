@@ -21,6 +21,7 @@ import {
   removeDocumentImageIdsFromGroups,
   removeDocumentImageGroup,
 } from '../model/documentImageGroups';
+import { findMissingDocumentAssetIds } from '../model/documentAssets';
 import {
   ingestDocumentImage,
   isSafeDocumentImageSource,
@@ -291,6 +292,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     : null;
   const previousPageIdRef = useRef(page?.id);
   const assetSources = useMemo(() => project?.assets || {}, [project?.assets]);
+  const missingAssetIds = useMemo(
+    () => project
+      ? findMissingDocumentAssetIds(project.pages, project.assets)
+      : [],
+    [project]
+  );
   const typographyStyle = useMemo(
     () => (
       project && page
@@ -521,13 +528,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setToastMessage('The document body is still initializing.');
       return;
     }
-    addAsset(asset.id, asset.source);
+    const assetId = addAsset(asset.id, asset.source, {
+      mimeType: asset.mimeType,
+      naturalWidth: asset.naturalWidth,
+      naturalHeight: asset.naturalHeight,
+      fileName: asset.fileName,
+    });
     const widthPx = getInitialImageWidth(asset, availableColumnWidth);
     const heightPx = widthPx * asset.naturalHeight / asset.naturalWidth;
     const imageId = uuidv4();
     const inserted = editor.commands.insertDocumentImage({
       id: imageId,
-      assetId: asset.id,
+      assetId,
       altText: '',
       widthPx,
       heightPx,
@@ -615,9 +627,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const handleReferenceImport = useCallback(async (file: File) => {
     try {
       const asset = await ingestDocumentReference(file);
-      addAsset(asset.id, asset.source);
+      const assetId = addAsset(asset.id, asset.source, {
+        mimeType: asset.mimeType,
+        naturalWidth: asset.naturalWidth,
+        naturalHeight: asset.naturalHeight,
+        fileName: asset.fileName,
+      });
       setReference({
-        assetId: asset.id,
+        assetId,
         sourceType: file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
           ? 'pdf'
           : 'image',
@@ -1330,14 +1347,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const replaceSelectedImage = useCallback(async (file: File) => {
     try {
       const asset = await ingestDocumentImage(file);
-      addAsset(asset.id, asset.source);
+      const assetId = addAsset(asset.id, asset.source, {
+        mimeType: asset.mimeType,
+        naturalWidth: asset.naturalWidth,
+        naturalHeight: asset.naturalHeight,
+        fileName: asset.fileName,
+      });
       if (selectedFlowImage) {
         const widthPx = selectedFlowImage.attributes.widthPx;
         bodyEditorRef.current?.chain()
           .focus()
           .setNodeSelection(selectedFlowImage.position)
           .updateSelectedDocumentImage({
-            assetId: asset.id,
+            assetId,
             naturalWidth: asset.naturalWidth,
             naturalHeight: asset.naturalHeight,
             heightPx: widthPx * asset.naturalHeight / asset.naturalWidth,
@@ -1345,7 +1367,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           .run();
       } else if (selectedOverlay) {
         updateOverlay(selectedOverlay.id, {
-          assetId: asset.id,
+          assetId,
           naturalWidth: asset.naturalWidth,
           naturalHeight: asset.naturalHeight,
           heightPx: selectedOverlay.widthPx * asset.naturalHeight / asset.naturalWidth,
@@ -1607,6 +1629,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           styles={project.document.styles}
           paperColor={paperColor}
           isOverflowing={isOverflowing}
+          missingAssetIds={missingAssetIds}
           collapsed={sidebarCollapsed}
           selectedOverlayId={selectedOverlayId}
           onCollapsedChange={setSidebarCollapsed}

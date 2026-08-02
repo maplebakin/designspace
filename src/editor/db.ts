@@ -47,6 +47,14 @@ export interface ProjectRecoveryRecord {
   reason: string;
 }
 
+export interface ProjectStorageDiagnostics {
+  projectId: string;
+  referencedCanvasDataId: string | null;
+  canvasDataRowCount: number;
+  duplicateCanvasDataIds: string[];
+  referencedPayloadLength: number;
+}
+
 export interface BrandKit {
   id?: string;
   colors: string[]; // Array of hex codes
@@ -179,7 +187,15 @@ export class DesignSpaceDB extends Dexie {
       const payloadChanged = project.contentHash !== contentHash
         || project.payloadLength !== jsonPayload.length;
       if (payloadChanged) {
-        await this.canvasData.where('projectId').equals(projectId).modify({
+        // A legacy database may contain superseded rows with the same
+        // projectId. Update only the row explicitly referenced by the project
+        // record; rewriting the whole index was the source of unbounded
+        // persistence growth during recovery.
+        const referenced = await this.canvasData.get(project.canvasDataId);
+        if (!referenced || referenced.projectId !== projectId) {
+          throw new Error('Project canvas data reference is missing or inconsistent.');
+        }
+        await this.canvasData.update(project.canvasDataId, {
           jsonPayload,
           contentHash,
           payloadLength: jsonPayload.length,
@@ -198,6 +214,23 @@ export class DesignSpaceDB extends Dexie {
       });
       return payloadChanged;
     });
+  }
+
+  async getProjectStorageDiagnostics(projectId: string): Promise<ProjectStorageDiagnostics | null> {
+    assertIndexedDbStartupAllowed();
+    const project = await this.projects.get(projectId);
+    if (!project) return null;
+    const rows = await this.canvasData.where('projectId').equals(projectId).toArray();
+    const referenced = rows.find((row) => row.id === project.canvasDataId);
+    return {
+      projectId,
+      referencedCanvasDataId: referenced?.id || null,
+      canvasDataRowCount: rows.length,
+      duplicateCanvasDataIds: rows
+        .filter((row) => row.id !== project.canvasDataId)
+        .map((row) => row.id),
+      referencedPayloadLength: referenced?.jsonPayload.length || 0,
+    };
   }
 
   async loadProject(projectId: string): Promise<{ project: Project; canvasData: string } | null> {

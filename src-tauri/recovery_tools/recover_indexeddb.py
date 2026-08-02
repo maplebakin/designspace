@@ -28,6 +28,7 @@ MAX_RECORD_CHARS = 128 * 1024 * 1024
 MAX_ASSET_HASH_CHARS = 112 * 1024 * 1024
 MAX_REPORT_DETAILS = 10_000
 MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
+CURRENT_DOCUMENT_SCHEMA_VERSION = 5
 VENDOR = pathlib.Path(__file__).resolve().parent / "vendor"
 sys.path.insert(0, str(VENDOR))
 
@@ -189,6 +190,123 @@ def replace_asset_refs(value: Any, replacements: dict[str, str]) -> Any:
     return value
 
 
+def _walk_document_nodes(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        children = value.get("content")
+        if isinstance(children, list):
+            for child in children:
+                yield from _walk_document_nodes(child)
+
+
+def normalize_document_recovery(payload: dict[str, Any], warnings: list[str]) -> None:
+    """Validate current document fields without dropping future-safe fields."""
+    document = payload.get("document")
+    if not isinstance(document, dict):
+        raise ValueError("document project is missing document metadata")
+    requested_version = document.get("schemaVersion", 1)
+    if isinstance(requested_version, bool) or not isinstance(requested_version, (int, float)):
+        warnings.append("Document schema version was malformed and migrated to the current recovery schema.")
+    elif int(requested_version) > CURRENT_DOCUMENT_SCHEMA_VERSION:
+        raise ValueError(f"document schema {requested_version} is newer than recovery supports")
+    document["schemaVersion"] = CURRENT_DOCUMENT_SCHEMA_VERSION
+    document.setdefault("language", "de")
+    pages = payload.get("pages")
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("document project has no pages")
+    assets = payload.get("assets") if isinstance(payload.get("assets"), dict) else {}
+    metadata = payload.get("assetMetadata") if isinstance(payload.get("assetMetadata"), dict) else {}
+    asset_references: set[str] = set()
+    for page_index, page in enumerate(pages, 1):
+        if not isinstance(page, dict) or page.get("kind") != "document":
+            raise ValueError(f"document page {page_index} is invalid")
+        for story_key in ("titleContent", "bodyContent"):
+            story = page.get(story_key)
+            if not isinstance(story, dict):
+                raise ValueError(f"document page {page_index} is missing {story_key}")
+            seen_ids: set[str] = set()
+            image_index = 0
+            for node in _walk_document_nodes(story):
+                if node.get("type") not in ("documentFlowImage", "documentInlineImage"):
+                    continue
+                image_index += 1
+                attrs = node.setdefault("attrs", {})
+                if not isinstance(attrs, dict):
+                    attrs = {}
+                    node["attrs"] = attrs
+                raw_id = str(attrs.get("id") or "").strip()
+                image_id = raw_id if raw_id and raw_id not in seen_ids else f"recovered-image-{page_index}-{image_index}"
+                if image_id != raw_id:
+                    warnings.append(f"Repaired malformed or duplicate image ID on document page {page_index}.")
+                while image_id in seen_ids:
+                    image_id += "-copy"
+                seen_ids.add(image_id)
+                attrs["id"] = image_id
+                asset_id = attrs.get("assetId")
+                if isinstance(asset_id, str) and asset_id:
+                    asset_references.add(asset_id)
+        overlays = page.get("overlayObjects")
+        if isinstance(overlays, list):
+            for overlay in overlays:
+                if isinstance(overlay, dict) and isinstance(overlay.get("assetId"), str):
+                    asset_references.add(overlay["assetId"])
+        reference = page.get("reference")
+        if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
+            asset_references.add(reference["assetId"])
+        groups = page.get("imageGroups")
+        if groups is None:
+            page["imageGroups"] = []
+            continue
+        if not isinstance(groups, list):
+            warnings.append(f"Discarded malformed image groups on document page {page_index}.")
+            page["imageGroups"] = []
+            continue
+        valid_ids = {
+            node.get("attrs", {}).get("id")
+            for node in _walk_document_nodes(page.get("bodyContent", {}))
+            if isinstance(node, dict)
+            and node.get("type") == "documentFlowImage"
+            and node.get("attrs", {}).get("wrap") == "span-columns"
+            and node.get("attrs", {}).get("verticalAnchor") == "page-position"
+        }
+        claimed: set[str] = set()
+        repaired_groups: list[dict[str, Any]] = []
+        for group_index, raw_group in enumerate(groups, 1):
+            if not isinstance(raw_group, dict):
+                continue
+            children = raw_group.get("childImageIds")
+            if not isinstance(children, list):
+                continue
+            ordered = []
+            for child in children:
+                child_id = str(child).strip() if isinstance(child, str) else ""
+                if child_id and child_id in valid_ids and child_id not in claimed:
+                    ordered.append(child_id)
+            if len(ordered) < 2:
+                continue
+            claimed.update(ordered)
+            group_id = str(raw_group.get("id") or f"recovered-group-{page_index}-{group_index}").strip()
+            repaired_groups.append({
+                "id": group_id,
+                "kind": "stack" if raw_group.get("kind") == "stack" else "row",
+                "childImageIds": ordered,
+                "gapPx": max(0, min(480, float(raw_group.get("gapPx", 16)) if isinstance(raw_group.get("gapPx", 16), (int, float)) else 16)),
+                "sharedWidth": bool(raw_group.get("sharedWidth")) and raw_group.get("kind") == "stack",
+            })
+        page["imageGroups"] = repaired_groups
+    missing = sorted(asset_references - set(assets))
+    if missing:
+        warnings.append(f"Missing referenced assets: {', '.join(missing[:20])}")
+    for asset_id, source in assets.items():
+        if not isinstance(source, str):
+            continue
+        hashed = hash_data_url(source)
+        if hashed:
+            digest, byte_length = hashed
+            metadata.setdefault(asset_id, {"contentHash": digest, "byteLength": byte_length})
+    payload["assetMetadata"] = metadata
+
+
 def validate_and_migrate(payload: Any, project_id: str, fallback_name: str, recovered_at: str) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("payload is not a JSON object")
@@ -234,6 +352,8 @@ def validate_and_migrate(payload: Any, project_id: str, fallback_name: str, reco
     metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
     metadata.update({"name": name, "sourceApp": "design-space"})
     migrated["metadata"] = metadata
+    if mode == "document":
+        normalize_document_recovery(migrated, warnings)
     if not isinstance(migrated.get("document"), dict):
         size = payload.get("canvasSize") if isinstance(payload.get("canvasSize"), dict) else {"width": 2550, "height": 3300}
         migrated["document"] = {

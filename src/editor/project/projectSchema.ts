@@ -9,6 +9,7 @@ import type {
   DocumentPage,
   ScanReference,
 } from '../../document/types/documentProject';
+import type { DocumentAssetMetadata } from '../../document/types/documentAsset';
 import {
   normalizeDocumentImageNodeGeometryAttributes,
 } from '../../document/types/documentProject';
@@ -49,10 +50,13 @@ import {
   collectGroupableDocumentImageIds,
   normalizeDocumentImageGroups,
 } from '../../document/model/documentImageGroups';
+import {
+  normalizeDocumentAssetMetadata,
+} from '../../document/model/documentAssets';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 4 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 5 as const;
 const DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION = 2;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
@@ -185,6 +189,7 @@ export type ProductAwareProjectPayload<TPage = ExistingProjectPage> = ProductPro
   activePageIndex?: number;
   canvasData?: any;
   assets?: Record<string, string>;
+  assetMetadata?: Record<string, DocumentAssetMetadata>;
   activeTheme?: unknown;
   lastUpdated: string;
   canvasSize?: { width: number; height: number };
@@ -385,6 +390,7 @@ const normalizePageSize = (
   const source = isObject(candidate) ? candidate : {};
   const unitMode = normalizeUnitMode(source.unitMode, fallbackUnitMode);
   const dpi = normalizeDimension(source.dpi, unitMode === 'px' ? 96 : 300);
+
   return {
     presetId: safeString(source.presetId),
     width: normalizeDimension(source.width, fallbackSize.width),
@@ -1103,6 +1109,13 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
     safeString(raw.projectId)
     || safeString(options.projectId)
     || `local-${slug}`;
+  const assets = isObject(raw.assets)
+    ? raw.assets as Record<string, string>
+    : undefined;
+  const assetMetadata = normalizeDocumentAssetMetadata(
+    raw.assetMetadata,
+    assets
+  );
 
   return {
     schemaVersion: DESIGN_SPACE_PROJECT_SCHEMA_VERSION,
@@ -1131,7 +1144,8 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
         ? raw.activePageIndex
         : undefined,
     canvasData: raw.canvasData,
-    assets: isObject(raw.assets) ? raw.assets as Record<string, string> : undefined,
+    assets,
+    assetMetadata,
     activeTheme,
     lastUpdated: updatedAt,
     canvasSize: {

@@ -20,6 +20,12 @@ import type {
   DocumentStyleId,
 } from '../typography/documentTypography';
 import {
+  collectDocumentAssetReferences,
+  findMissingDocumentAssetIds,
+  fingerprintDocumentAssetSource,
+  pruneDocumentAssets,
+} from '../model/documentAssets';
+import {
   DEFAULT_DOCUMENT_DROP_CAP,
   normalizeDocumentDropCap,
   normalizeDocumentLanguage,
@@ -91,7 +97,17 @@ type DocumentStoreState = {
     update: Partial<DocumentDropCapSettings>,
     pageId?: string
   ) => void;
-  addAsset: (assetId: string, source: string) => void;
+  addAsset: (assetId: string, source: string, metadata?: {
+    mimeType?: string;
+    naturalWidth?: number;
+    naturalHeight?: number;
+    fileName?: string;
+  }) => string;
+  inspectAssetReferences: () => {
+    reachableAssetIds: string[];
+    missingAssetIds: string[];
+    orphanAssetIds: string[];
+  };
   addOverlay: (overlay: DocumentOverlayImage, pageId?: string) => void;
   updateOverlay: (
     id: string,
@@ -177,6 +193,7 @@ export const createBlankDocumentProject = (
     },
     pages: [createBlankDocumentPage()],
     assets: {},
+    assetMetadata: {},
   }, {
     editorMode: 'document',
     projectId,
@@ -201,6 +218,21 @@ const normalizeDocumentPayload = (
     throw new Error('Document projects must contain at least one valid document page.');
   }
   return normalized as DocumentProjectPayload;
+};
+
+const compactDocumentProjectForPersistence = (
+  project: DocumentProjectPayload
+): DocumentProjectPayload => {
+  const compacted = pruneDocumentAssets(
+    project.pages,
+    project.assets,
+    project.assetMetadata
+  );
+  return {
+    ...project,
+    assets: compacted.assets,
+    assetMetadata: compacted.assetMetadata,
+  };
 };
 
 const getActivePageIndex = (project: DocumentProjectPayload) => {
@@ -462,7 +494,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const safeName = name?.trim() || project.projectName.trim() || 'Untitled Document';
     const revisionAtStart = get().revision;
     const sessionAtStart = projectSessionToken;
-    const payload = updateProjectTimestamp(project, safeName);
+    const payload = updateProjectTimestamp(
+      compactDocumentProjectForPersistence(project),
+      safeName
+    );
     set({ project: payload, saveStatus: 'saving' });
     try {
       const { db } = await import('../../editor/db');
@@ -496,7 +531,9 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   downloadProjectFile: async () => {
     const project = get().project;
     if (!project) return;
-    const payload = updateProjectTimestamp(project);
+    const payload = updateProjectTimestamp(
+      compactDocumentProjectForPersistence(project)
+    );
     downloadBlob(
       new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
       safeProjectFileName(payload.projectName)
@@ -860,19 +897,67 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     }, targetId);
   },
 
-  addAsset: (assetId, source) => {
+  addAsset: (assetId, source, metadata = {}) => {
     const project = get().project;
-    if (!project) return;
+    if (!project) return assetId;
+    const contentHash = fingerprintDocumentAssetSource(source);
+    const existingId = Object.entries(project.assets || {}).find(
+      ([candidateId, candidateSource]) => (
+        candidateSource === source
+        && (
+          project.assetMetadata?.[candidateId]?.contentHash === contentHash
+          || !project.assetMetadata?.[candidateId]
+        )
+      )
+    )?.[0];
+    const canonicalId = existingId || assetId;
+    const nextMetadata = {
+      ...(project.assetMetadata || {}),
+      [canonicalId]: {
+        contentHash,
+        byteLength: source.length,
+        ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
+        ...(metadata.naturalWidth ? { naturalWidth: metadata.naturalWidth } : {}),
+        ...(metadata.naturalHeight ? { naturalHeight: metadata.naturalHeight } : {}),
+        ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
+      },
+    };
+    if (existingId
+      && project.assetMetadata?.[existingId]?.contentHash === contentHash
+      && project.assetMetadata?.[existingId]?.byteLength === source.length
+    ) return existingId;
     set({
       project: {
         ...project,
         assets: {
           ...(project.assets || {}),
-          [assetId]: source,
+          [canonicalId]: source,
         },
+        assetMetadata: nextMetadata,
       },
     });
     markDirty(set);
+    return canonicalId;
+  },
+
+  inspectAssetReferences: () => {
+    const project = get().project;
+    if (!project) {
+      return {
+        reachableAssetIds: [],
+        missingAssetIds: [],
+        orphanAssetIds: [],
+      };
+    }
+    const reachable = collectDocumentAssetReferences(project.pages);
+    const assetIds = Object.keys(project.assets || {});
+    return {
+      reachableAssetIds: Array.from(reachable).sort(),
+      missingAssetIds: findMissingDocumentAssetIds(project.pages, project.assets),
+      orphanAssetIds: assetIds
+        .filter((assetId) => !reachable.has(assetId))
+        .sort(),
+    };
   },
 
   addOverlay: (overlay, pageId) => {

@@ -90,8 +90,8 @@ describe('document image-group schema v4', () => {
       payload(3)
     ) as DocumentProjectPayload;
 
-    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(4);
-    expect(normalized.document.schemaVersion).toBe(4);
+    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(5);
+    expect(normalized.document.schemaVersion).toBe(5);
     expect(normalized.pages[0].imageGroups).toEqual([]);
     expect(
       normalized.pages[0].bodyContent.content?.[0]?.attrs?.coordinateSpace
@@ -99,7 +99,7 @@ describe('document image-group schema v4', () => {
   });
 
   it('normalizes valid records and safely repairs orphan or duplicate membership', () => {
-    const normalized = normalizeDesignSpaceProjectPayload(payload(4, [{
+    const normalized = normalizeDesignSpaceProjectPayload(payload(5, [{
       id: 'bottom-images',
       kind: 'row',
       childImageIds: [
@@ -129,7 +129,7 @@ describe('document image-group schema v4', () => {
   });
 
   it('round-trips canonical group records without changing order or policy', () => {
-    const once = normalizeDesignSpaceProjectPayload(payload(4, [{
+    const once = normalizeDesignSpaceProjectPayload(payload(5, [{
       id: 'right-stack',
       kind: 'stack',
       childImageIds: ['image-c', 'image-a'],
@@ -149,9 +149,21 @@ describe('document image-group schema v4', () => {
     ]);
   });
 
-  it('rejects future document schema versions beyond v4', () => {
+  it('rejects future document schema versions beyond v5', () => {
     expect(() => normalizeDesignSpaceProjectPayload(
       payload(CURRENT_DOCUMENT_SCHEMA_VERSION + 1)
     )).toThrow(/unsupported document schema/i);
+  });
+
+  it('migrates legacy asset strings to bounded content-hash metadata', () => {
+    const normalized = normalizeDesignSpaceProjectPayload({
+      ...payload(4),
+      assets: { 'asset-photo': 'data:image/png;base64,UEhPVE8=' },
+    }) as DocumentProjectPayload;
+    expect(normalized.document.schemaVersion).toBe(5);
+    expect(normalized.assetMetadata?.['asset-photo']).toMatchObject({
+      byteLength: 'data:image/png;base64,UEhPVE8='.length,
+    });
+    expect(normalized.assetMetadata?.['asset-photo']?.contentHash).toBeTruthy();
   });
 });

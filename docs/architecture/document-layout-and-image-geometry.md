@@ -176,7 +176,7 @@ than general rectangle geometry.
 ## Image schema v3 and four-sided wrapping
 
 `CURRENT_DOCUMENT_SCHEMA_VERSION` in
-`src/editor/project/projectSchema.ts` is `3`. Schema v3 makes these image
+`src/editor/project/projectSchema.ts` introduced schema `3`. Schema v3 makes these image
 attributes canonical:
 
 - `wrapPaddingTopPx`;
@@ -228,7 +228,8 @@ attributes and legacy v2 HTML. It emits only
 aliases so direct legacy Tiptap input can still be opened.
 
 Project normalization accepts missing, v1, and v2 document schema data and
-writes schema v3. A document schema newer than v3 is rejected instead of being
+writes the current normalized schema. A document schema newer than the current
+schema is rejected instead of being
 silently downgraded.
 
 ## Occupied and exclusion rectangles

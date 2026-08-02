@@ -1167,6 +1167,73 @@ fn validate_recovery_report(
         {
             return Err("Recovered project size no longer matches its report.".to_string());
         }
+        let payload: serde_json::Value = read_bounded_json(&canonical_project)?;
+        if payload.get("editorMode").and_then(|value| value.as_str()) == Some("document") {
+            let document_version = payload
+                .get("document")
+                .and_then(|value| value.get("schemaVersion"))
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| {
+                    "Recovered document is missing a numeric schema version.".to_string()
+                })?;
+            if document_version > 5 {
+                return Err(
+                    "Recovered document uses a schema newer than this recovery validator."
+                        .to_string(),
+                );
+            }
+            let pages = payload
+                .get("pages")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| {
+                    "Recovered document pages are missing or not an array.".to_string()
+                })?;
+            if pages.is_empty() {
+                return Err("Recovered document has no pages.".to_string());
+            }
+            for (page_index, page) in pages.iter().enumerate() {
+                if page.get("kind").and_then(|value| value.as_str()) != Some("document") {
+                    return Err(format!(
+                        "Recovered document page {} is invalid.",
+                        page_index + 1
+                    ));
+                }
+                for story_key in ["titleContent", "bodyContent"] {
+                    if page
+                        .get(story_key)
+                        .and_then(|value| value.as_object())
+                        .is_none()
+                    {
+                        return Err(format!(
+                            "Recovered document page {} is missing {}.",
+                            page_index + 1,
+                            story_key
+                        ));
+                    }
+                }
+                if let Some(groups) = page.get("imageGroups") {
+                    if !groups.is_array() {
+                        return Err(format!(
+                            "Recovered document page {} has invalid image groups.",
+                            page_index + 1
+                        ));
+                    }
+                    if let Some(group_items) = groups.as_array() {
+                        for group in group_items {
+                            let children = group
+                                .get("childImageIds")
+                                .and_then(|value| value.as_array());
+                            if children.map(|items| items.len() >= 2).unwrap_or(false) == false {
+                                return Err(format!(
+                                    "Recovered document page {} has an invalid image group.",
+                                    page_index + 1
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     report.report_path = canonical_report.display().to_string();
     Ok(report)

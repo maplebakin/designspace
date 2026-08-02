@@ -33,6 +33,7 @@ type DocumentSidebarProps = {
   styles: DocumentNamedStyleRegistry;
   paperColor: string;
   isOverflowing: boolean;
+  missingAssetIds?: readonly string[];
   collapsed: boolean;
   selectedOverlayId: string | null;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -438,6 +439,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               ? 'Content exceeds this page'
               : 'Content fits on this page'}
           </div>
+          {props.missingAssetIds && props.missingAssetIds.length > 0 && (
+            <div
+              className="document-overflow-status is-warning"
+              data-testid="document-missing-assets"
+              role="status"
+            >
+              <strong>Missing image assets</strong>
+              <span>{props.missingAssetIds.length} referenced asset{props.missingAssetIds.length === 1 ? '' : 's'} need repair before export.</span>
+            </div>
+          )}
         </section>
 
         <section

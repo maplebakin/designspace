@@ -290,7 +290,6 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
     >
       {objects.filter((object) => object.placement === placement).map((object) => {
         const source = assetSources[object.assetId];
-        if (!source) return null;
         const selected = object.id === selectedId;
         const rendered = preview?.id === object.id
           ? { ...object, ...preview.geometry }
@@ -357,15 +356,25 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
             onPointerUp={endInteraction}
             onPointerCancel={cancelInteraction}
           >
-            <img
-              src={source}
-              alt={object.altText}
-              draggable={false}
-              style={{
-                width: rendered.widthPx,
-                height: rendered.heightPx,
-              }}
-            />
+            {source ? (
+              <img
+                src={source}
+                alt={object.altText}
+                draggable={false}
+                style={{
+                  width: rendered.widthPx,
+                  height: rendered.heightPx,
+                }}
+              />
+            ) : (
+              <span
+                className="document-image__missing document-overlay-image__missing"
+                role="img"
+                aria-label={object.altText || 'Missing document image'}
+              >
+                Image unavailable
+              </span>
+            )}
             {object.caption && (
               <figcaption
                 data-caption-alignment={captionAlignment}
