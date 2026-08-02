@@ -268,6 +268,9 @@ portable fixture import, PNG/PDF export, and reviewed Chromium visual crops.
 - `aef589e9` — record completed historical layout verification
 - `40fcdba7` — document historical layout completion
 - `d3c105fe` — record final export warning hardening
+- `585b892f` — complete implementation commit ledger
+- `94fdf035` — document remaining typography limitations
+- `d9a53bac` — record focused visual crop coverage
 
 ## 12. Final readiness score with justification
 
