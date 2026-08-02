@@ -239,6 +239,11 @@ portable fixture import, PNG/PDF export, and reviewed Chromium visual crops.
   supports mixed page dimensions; the historical fixture uses one Letter size.
 - Group resize is expressed through child controls/shared-width policy rather
   than a dedicated rigid group handle.
+- Keep-with-next is not yet a persisted model control; named subsection roles
+  and CSS widows/orphans defaults are in place for a later pagination policy.
+- Fixture typography uses trusted system serif stacks rather than a licensed
+  repository-hosted font; exports wait for fonts and document substitution is
+  therefore environment-dependent.
 - All-page PNG uses sequential browser downloads. Browsers may require the user
   to allow multiple downloads; the service and unit tests still rasterize and
   name every page deterministically.
