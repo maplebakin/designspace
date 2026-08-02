@@ -470,6 +470,8 @@ describe('live document editor UI', () => {
         blob: new Blob(['png'], { type: 'image/png' }),
         fileName: 'archive-notes.png',
       });
+    const downloadPngPages = vi.spyOn(documentExportService, 'downloadPngPages')
+      .mockResolvedValue([]);
     const printPages = vi.spyOn(documentExportService, 'printPages')
       .mockResolvedValue(() => undefined);
 
@@ -517,6 +519,13 @@ describe('live document editor UI', () => {
     expect(committedPngOptions).toEqual(expect.objectContaining({
       backgroundColor: '#E7DCC8',
     }));
+
+    fireEvent.click(screen.getByText('Export', { exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'PNG all pages' }));
+    await waitFor(() => {
+      expect(downloadPngPages).toHaveBeenCalledTimes(1);
+    });
+    expect(downloadPngPages.mock.calls[0][0]).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Print', exact: true }));
     await waitFor(() => {

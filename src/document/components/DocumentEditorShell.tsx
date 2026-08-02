@@ -1622,7 +1622,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         onRename={renameProject}
         onSave={() => void saveProject()}
         onDownloadProject={() => void downloadProjectFile()}
-        onExport={(format) => void exportDocument(format)}
+        onExport={(format, scope) => void exportDocument(format, scope)}
         onPrint={() => {
           void mountCommittedDocumentExportPages(project).then((mounted) => (
             documentExportService.printPages(mounted.sources).finally(

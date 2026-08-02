@@ -220,12 +220,15 @@ def normalize_document_recovery(payload: dict[str, Any], warnings: list[str]) ->
     for page_index, page in enumerate(pages, 1):
         if not isinstance(page, dict) or page.get("kind") != "document":
             raise ValueError(f"document page {page_index} is invalid")
+        # Image IDs are page-scoped references. Keep one reservation set across
+        # title and body stories so a legacy duplicate cannot survive merely by
+        # moving the second occurrence into the other story.
+        seen_ids: set[str] = set()
+        image_index = 0
         for story_key in ("titleContent", "bodyContent"):
             story = page.get(story_key)
             if not isinstance(story, dict):
                 raise ValueError(f"document page {page_index} is missing {story_key}")
-            seen_ids: set[str] = set()
-            image_index = 0
             for node in _walk_document_nodes(story):
                 if node.get("type") not in ("documentFlowImage", "documentInlineImage"):
                     continue

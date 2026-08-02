@@ -148,7 +148,10 @@ class RecoveryFixtureTest(unittest.TestCase):
             "kind": "document",
             "id": "page-49",
             "name": "Page 49",
-            "titleContent": {"type": "doc", "content": [{"type": "paragraph"}]},
+            "titleContent": {"type": "doc", "content": [
+                {"type": "paragraph"},
+                {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
+            ]},
             "bodyContent": {"type": "doc", "content": [
                 {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
                 {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "missing", "wrap": "span-columns", "verticalAnchor": "page-position"}},
@@ -185,10 +188,13 @@ class RecoveryFixtureTest(unittest.TestCase):
         recovered = json.loads(recovered_path.read_text())
         self.assertEqual(recovered["document"]["schemaVersion"], 5)
         self.assertEqual(len(recovered["pages"]), 2)
-        ids = [
-            node["attrs"]["id"]
-            for node in recovered["pages"][0]["bodyContent"]["content"]
-        ]
+        ids = []
+        for story_key in ("titleContent", "bodyContent"):
+            ids.extend(
+                node["attrs"]["id"]
+                for node in recovered["pages"][0][story_key]["content"]
+                if node.get("type") == "documentFlowImage"
+            )
         self.assertEqual(len(ids), len(set(ids)))
         self.assertIn("assetMetadata", recovered)
         self.assertTrue(recovered["recovery"]["complete"])
