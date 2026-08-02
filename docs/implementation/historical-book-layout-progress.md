@@ -31,7 +31,7 @@ Canonical plan: `docs/audits/historical-book-layout-gap-analysis.md`
 | P4 — Image rows and stacks | Complete | `335cd164` |
 | P5 — Persistence, migrations, assets, recovery | Complete | `9f68a02e` |
 | P6 — Committed multi-page export | Complete | `687e7c22` (+ `db831442`, `0986414b`) |
-| P7 — Historical fixtures and visual regression | Pending | — |
+| P7 — Historical fixtures and visual regression | Complete | `b761c93a` |
 
 ## S0 — Authoritative paper background
 
@@ -610,7 +610,7 @@ Known limitations:
 
 ## P7 — Historical fixtures and visual regression
 
-Status: In progress (implementation complete; final suite and phase commit pending)
+Status: Complete
 
 Objective: provide deterministic, editable acceptance pages for the four
 historical layouts and exercise the normal portable import, save/reopen, layout,
@@ -641,10 +641,20 @@ Implemented behaviour:
   path, checks page-specific DOM landmarks, captures four reviewed sheet crops,
   and verifies the committed four-page PDF plus numbered PNG workflow.
 
-Verification pending:
+Verification:
 
-- Full unit suite, production build, recovery checks, and the complete focused
-  historical Playwright file will be rerun before the P7 commit.
+- `npm test -- --reporter=dot` — 34 files, 400 tests passed.
+- `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `git diff --check` —
+  passed.
+- `python3 -m unittest discover -s src-tauri/recovery_tools/tests -v` — 3
+  tests passed, including duplicate title/body image-ID repair.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 20 Rust tests passed.
+- `npm run test:e2e -- e2e/document-reconstruction.spec.ts
+  e2e/document-typography.spec.ts e2e/historical-book-layout.spec.ts
+  --reporter=line` — 10 Playwright tests passed.
+- Four Chromium page-sheet baselines were reviewed and committed. The
+  historical fixture import, page landmarks, PDF page count, and numbered PNG
+  export all passed.
 
 Known limitations:
 
