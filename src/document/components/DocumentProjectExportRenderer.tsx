@@ -157,6 +157,11 @@ const nextAnimationFrame = () => new Promise<void>((resolve) => {
   }
 });
 
+// Four-page historical fixtures can legitimately require several layout
+// passes before every Tiptap surface reports its export root. Keep this bound
+// finite while allowing slower CI/browser font environments to finish.
+export const DOCUMENT_EXPORT_MOUNT_TIMEOUT_MS = 15_000;
+
 const cloneCommittedProject = (
   project: DocumentProjectPayload
 ): DocumentProjectPayload => JSON.parse(JSON.stringify(project));
@@ -221,7 +226,7 @@ export const mountCommittedDocumentExportPages = async (
       new Promise<never>((_resolve, reject) => {
         timeoutId = window.setTimeout(() => {
           reject(new Error('Committed document pages did not finish mounting.'));
-        }, 5_000);
+        }, DOCUMENT_EXPORT_MOUNT_TIMEOUT_MS);
       }),
     ]);
     if (timeoutId !== undefined) window.clearTimeout(timeoutId);
