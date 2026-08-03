@@ -103,6 +103,7 @@ const ExportPageSurface = ({
       bodyEditor={(
         <FlowEditor
           content={page.bodyContent as JSONContent}
+          pageId={page.id}
           editable={false}
           ariaLabel={`Export body for page ${folioNumber}`}
           columnCount={page.columnCount}

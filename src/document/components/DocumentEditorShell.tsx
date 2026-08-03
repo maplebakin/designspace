@@ -1860,6 +1860,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 <FlowEditor
                   key={`body-${page.id}`}
                   content={page.bodyContent as JSONContent}
+                  pageId={page.id}
                   columnCount={page.columnCount}
                   columnGapPx={page.columnGapPx}
                   dropCap={page.dropCap}

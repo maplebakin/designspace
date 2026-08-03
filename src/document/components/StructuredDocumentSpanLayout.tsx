@@ -8,7 +8,11 @@ import {
   type PointerEvent,
 } from 'react';
 import type { Editor } from '@tiptap/core';
-import { NodeSelection } from '@tiptap/pm/state';
+import {
+  AllSelection,
+  NodeSelection,
+  TextSelection,
+} from '@tiptap/pm/state';
 import type {
   DocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
@@ -127,6 +131,17 @@ export type StructuredTextBand = {
   widthPx: number;
   heightPx: number;
   html: string;
+  /** The exact ProseMirror text range represented by this visible region. */
+  documentFrom: number | null;
+  documentTo: number | null;
+  /**
+   * Line metadata is currently bounded to the fragment range because the
+   * layout measurer allocates blocks, not browser line boxes. Keeping the
+   * fields explicit makes the mapping contract extensible without guessing
+   * character widths or line heights.
+   */
+  lineFrom: number | null;
+  lineTo: number | null;
 };
 
 export type MultiDocumentSpanLayoutModel = {
@@ -292,6 +307,75 @@ export const markFirstEligibleDocumentDropCapParagraph = (
 const serializeElements = (elements: Element[]) =>
   elements.map((element) => element.outerHTML).join('');
 
+const DOCUMENT_TEXT_FROM_ATTRIBUTE = 'data-document-from';
+const DOCUMENT_TEXT_TO_ATTRIBUTE = 'data-document-to';
+const DOCUMENT_REGION_ATTRIBUTE = 'data-document-region-id';
+
+type DocumentTextRange = {
+  from: number;
+  to: number;
+};
+
+const readDocumentTextRange = (element: Element): DocumentTextRange | null => {
+  const from = Number(element.getAttribute(DOCUMENT_TEXT_FROM_ATTRIBUTE));
+  const to = Number(element.getAttribute(DOCUMENT_TEXT_TO_ATTRIBUTE));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
+    return null;
+  }
+  return { from, to };
+};
+
+const setDocumentTextRange = (
+  element: Element,
+  range: DocumentTextRange
+) => {
+  element.setAttribute(DOCUMENT_TEXT_FROM_ATTRIBUTE, String(range.from));
+  element.setAttribute(DOCUMENT_TEXT_TO_ATTRIBUTE, String(range.to));
+};
+
+const getElementDocumentTextRange = (
+  element: Element
+): DocumentTextRange | null => readDocumentTextRange(element);
+
+const getElementsDocumentTextRange = (
+  elements: Element[]
+): DocumentTextRange | null => {
+  const ranges = elements.flatMap((element) => {
+    const range = getElementDocumentTextRange(element);
+    return range ? [range] : [];
+  });
+  if (ranges.length === 0) return null;
+  return {
+    from: Math.min(...ranges.map((range) => range.from)),
+    to: Math.max(...ranges.map((range) => range.to)),
+  };
+};
+
+/**
+ * Annotates parsed top-level HTML blocks with their ProseMirror text range.
+ * The structured renderer only consumes these attributes; they are never
+ * persisted. Top-level document positions are stable because they are based
+ * on the ProseMirror document, not DOM rectangles or CSS columns.
+ */
+const annotateSourceElementRanges = (
+  editor: Editor,
+  children: Element[]
+) => {
+  const entries: number[] = [];
+  editor.state.doc.forEach((_node, position) => entries.push(position));
+
+  children.forEach((element, index) => {
+    const position = entries[index];
+    if (position === undefined) return;
+    const textLength = element.textContent?.length || 0;
+    const from = position + 1;
+    setDocumentTextRange(element, {
+      from,
+      to: from + textLength,
+    });
+  });
+};
+
 const estimateElementHeight = (element: Element, widthPx: number) => {
   const textLength = Math.max(1, element.textContent?.length || 0);
   const fontSizes = [
@@ -385,6 +469,7 @@ const cloneElementRange = (
   to: number
 ): Element | null => {
   if (from >= to) return null;
+  const sourceRange = getElementDocumentTextRange(element);
   const offset = { value: 0 };
   const cloneNodeRange = (node: Node): Node | null => {
     if (node.nodeType === 3) {
@@ -424,6 +509,12 @@ const cloneElementRange = (
   const clone = cloneNodeRange(element);
   if (clone?.nodeType !== 1) return null;
   const cloneElement = clone as Element;
+  if (sourceRange) {
+    setDocumentTextRange(cloneElement, {
+      from: sourceRange.from + from,
+      to: sourceRange.from + to,
+    });
+  }
   if (from > 0) removeDocumentDropCapTargets(cloneElement);
   return cloneElement;
 };
@@ -555,6 +646,7 @@ export const buildDocumentSpanLayoutModel = (
   const source = parsed.querySelector('[data-document-span-source]');
   if (!source) return null;
   const children = Array.from(source.children);
+  annotateSourceElementRanges(editor, children);
   const imageIndex = children.findIndex(
     (element) =>
       element.getAttribute('data-image-id') === spanAttributes.id
@@ -864,6 +956,7 @@ export const buildMultiDocumentSpanLayoutModel = (
   const source = parsed.querySelector('[data-document-span-source]');
   if (!source) return null;
   const children = Array.from(source.children);
+  annotateSourceElementRanges(editor, children);
   const structuredIds = new Set(
     positionedNodes.map(({ attributes }) => attributes.id)
   );
@@ -1325,7 +1418,10 @@ export const buildMultiDocumentSpanLayoutModel = (
           }]
         : [];
     });
-    const candidateBands: Omit<StructuredTextBand, 'html'>[] = [];
+    const candidateBands: Array<Omit<
+      StructuredTextBand,
+      'html' | 'documentFrom' | 'documentTo' | 'lineFrom' | 'lineTo'
+    >> = [];
     for (let column = 1; column <= columnCount; column += 1) {
       const columnRectangle = columnRectangles[column - 1];
       const columnLeftPx = columnRectangle.leftPx;
@@ -1379,9 +1475,16 @@ export const buildMultiDocumentSpanLayoutModel = (
         measurer.measure
       );
       remaining = allocation.remaining;
+      const documentRange = getElementsDocumentTextRange(
+        allocation.allocated
+      );
       return {
         ...band,
         html: serializeElements(allocation.allocated),
+        documentFrom: documentRange?.from ?? null,
+        documentTo: documentRange?.to ?? null,
+        lineFrom: documentRange?.from ?? null,
+        lineTo: documentRange?.to ?? null,
       };
     });
     const overflowing = (
@@ -1390,6 +1493,18 @@ export const buildMultiDocumentSpanLayoutModel = (
     );
     if (overflowing && textBands.length > 0) {
       textBands[textBands.length - 1].html += serializeElements(remaining);
+      const overflowRange = getElementsDocumentTextRange(remaining);
+      if (overflowRange) {
+        const finalBand = textBands[textBands.length - 1];
+        finalBand.documentFrom = finalBand.documentFrom === null
+          ? overflowRange.from
+          : Math.min(finalBand.documentFrom, overflowRange.from);
+        finalBand.documentTo = finalBand.documentTo === null
+          ? overflowRange.to
+          : Math.max(finalBand.documentTo, overflowRange.to);
+        finalBand.lineFrom = finalBand.documentFrom;
+        finalBand.lineTo = finalBand.documentTo;
+      }
     }
     const overflowHeightPx = overflowing
       ? measurer.measure(remaining, columnWidthPx) / columnCount
@@ -1416,6 +1531,7 @@ export const buildMultiDocumentSpanLayoutModel = (
 
 type StructuredDocumentSpanLayoutProps = {
   editor: Editor;
+  pageId?: string;
   columnCount: 1 | 2 | 3;
   columnGapPx: number;
   availableWidthPx: number;
@@ -1448,7 +1564,7 @@ type StructuredDocumentSpanLayoutProps = {
     heightPx: number,
     xOffsetPx: number
   ) => boolean;
-  onEditText: () => void;
+  onEditText: (position?: number) => void;
 };
 
 const rectangleCollides = (
@@ -1458,6 +1574,271 @@ const rectangleCollides = (
   toBodyRectangle(rectangle),
   obstacles.map(toCollisionObstacle)
 ).length > 0;
+
+const findDocumentTextRangeElement = (
+  node: Node | null
+): HTMLElement | null => {
+  const element = node instanceof HTMLElement
+    ? node
+    : node?.parentElement;
+  return element?.closest<HTMLElement>(
+    `[${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+  ) || null;
+};
+
+const getTextOffsetWithinElement = (
+  element: HTMLElement,
+  node: Node,
+  offset: number
+) => {
+  if (node.nodeType !== 3) {
+    const range = element.ownerDocument.createRange();
+    range.selectNodeContents(element);
+    range.setEnd(node, Math.min(offset, node.childNodes.length));
+    return range.toString().length;
+  }
+  const walker = element.ownerDocument.createTreeWalker(
+    element,
+    4 /* NodeFilter.SHOW_TEXT */
+  );
+  let current = walker.nextNode();
+  let textOffset = 0;
+  while (current) {
+    if (current === node) {
+      return textOffset + Math.min(
+        Math.max(0, offset),
+        current.textContent?.length || 0
+      );
+    }
+    textOffset += current.textContent?.length || 0;
+    current = walker.nextNode();
+  }
+  return textOffset;
+};
+
+const clampStructuredDocumentPosition = (
+  editor: Editor,
+  position: number
+) => {
+  const maximum = Math.max(1, editor.state.doc.content.size);
+  return Math.max(1, Math.min(maximum, Math.round(position)));
+};
+
+const getCaretRangeAtPoint = (
+  ownerDocument: Document,
+  clientX: number,
+  clientY: number
+): Range | null => {
+  const documentWithCaret = ownerDocument as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (
+      x: number,
+      y: number
+    ) => { offsetNode: Node; offset: number } | null;
+  };
+  const range = documentWithCaret.caretRangeFromPoint?.(clientX, clientY);
+  if (range) return range;
+  const position = documentWithCaret.caretPositionFromPoint?.(clientX, clientY);
+  if (!position) return null;
+  const converted = ownerDocument.createRange();
+  converted.setStart(position.offsetNode, position.offset);
+  converted.collapse(true);
+  return converted;
+};
+
+/**
+ * Resolves browser viewport coordinates against the visible structured text
+ * DOM. The browser supplies the caret offset from real line boxes; no fixed
+ * character width, line height, zoom, or column index is inferred here.
+ */
+export const resolveStructuredDocumentPositionAtPoint = ({
+  root,
+  editor,
+  clientX,
+  clientY,
+}: {
+  root: HTMLElement;
+  editor: Editor;
+  clientX: number;
+  clientY: number;
+}): number | null => {
+  const range = getCaretRangeAtPoint(root.ownerDocument, clientX, clientY);
+  if (range) {
+    const sourceElement = findDocumentTextRangeElement(range.startContainer);
+    const sourceRange = sourceElement
+      ? readDocumentTextRange(sourceElement)
+      : null;
+    if (sourceElement && sourceRange) {
+      const offset = getTextOffsetWithinElement(
+        sourceElement,
+        range.startContainer,
+        range.startOffset
+      );
+      return clampStructuredDocumentPosition(
+        editor,
+        sourceRange.from + offset
+      );
+    }
+  }
+
+  const candidates = Array.from(root.querySelectorAll<HTMLElement>(
+    `[${DOCUMENT_REGION_ATTRIBUTE}][${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+  )).filter((element) => (element.textContent || '').length > 0);
+  if (candidates.length === 0) return null;
+  const nearest = candidates
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const dx = clientX < rect.left
+        ? rect.left - clientX
+        : clientX > rect.right ? clientX - rect.right : 0;
+      const dy = clientY < rect.top
+        ? rect.top - clientY
+        : clientY > rect.bottom ? clientY - rect.bottom : 0;
+      return { element, rect, distance: dx * dx + dy * dy };
+    })
+    .sort((left, right) => left.distance - right.distance)[0];
+  const sourceRange = readDocumentTextRange(nearest.element);
+  if (!sourceRange) return null;
+  const position = clientY <= nearest.rect.top
+    || (clientY <= nearest.rect.bottom && clientX <= nearest.rect.left)
+    ? sourceRange.from
+    : sourceRange.to;
+  return clampStructuredDocumentPosition(editor, position);
+};
+
+const decorateStructuredTextHtml = ({
+  html,
+  selectionFrom,
+  selectionTo,
+  caretPosition,
+}: {
+  html: string;
+  selectionFrom: number | null;
+  selectionTo: number | null;
+  caretPosition: number | null;
+}) => {
+  if (
+    typeof document === 'undefined'
+    || (
+      selectionFrom === null
+      && selectionTo === null
+      && caretPosition === null
+    )
+  ) return html;
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(host, 4 /* SHOW_TEXT */);
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+  let caretInserted = false;
+  const lowerSelection = Math.min(
+    selectionFrom ?? Number.POSITIVE_INFINITY,
+    selectionTo ?? Number.POSITIVE_INFINITY
+  );
+  const upperSelection = Math.max(
+    selectionFrom ?? Number.NEGATIVE_INFINITY,
+    selectionTo ?? Number.NEGATIVE_INFINITY
+  );
+
+  textNodes.forEach((textNode) => {
+    const sourceElement = findDocumentTextRangeElement(textNode);
+    const sourceRange = sourceElement
+      ? readDocumentTextRange(sourceElement)
+      : null;
+    if (!sourceElement || !sourceRange) return;
+    const text = textNode.textContent || '';
+    const textStart = sourceRange.from + getTextOffsetWithinElement(
+      sourceElement,
+      textNode,
+      0
+    );
+    const textEnd = textStart + text.length;
+    const markerOffsets: number[] = [];
+    if (
+      caretPosition !== null
+      && caretPosition >= textStart
+      && caretPosition <= textEnd
+    ) {
+      markerOffsets.push(caretPosition - textStart);
+    }
+    const selectedStart = selectionFrom !== null && selectionTo !== null
+      ? Math.max(textStart, lowerSelection)
+      : textStart;
+    const selectedEnd = selectionFrom !== null && selectionTo !== null
+      ? Math.min(textEnd, upperSelection)
+      : textStart;
+    const boundaries = new Set([0, text.length, ...markerOffsets]);
+    if (selectedStart < selectedEnd) {
+      boundaries.add(selectedStart - textStart);
+      boundaries.add(selectedEnd - textStart);
+    }
+    const orderedBoundaries = [...boundaries]
+      .filter((value) => value >= 0 && value <= text.length)
+      .sort((left, right) => left - right);
+    const fragment = textNode.ownerDocument.createDocumentFragment();
+    const appendCaret = () => {
+      const caret = textNode.ownerDocument.createElement('span');
+      caret.className = 'document-structured-caret';
+      caret.setAttribute('data-document-editor-only', 'true');
+      caret.setAttribute('data-document-export-exclude', 'true');
+      caret.setAttribute('aria-hidden', 'true');
+      fragment.appendChild(caret);
+      caretInserted = true;
+    };
+    for (let index = 0; index < orderedBoundaries.length - 1; index += 1) {
+      const from = orderedBoundaries[index];
+      const to = orderedBoundaries[index + 1];
+      if (markerOffsets.includes(from)) appendCaret();
+      if (to > from) {
+        const value = text.slice(from, to);
+        const documentFrom = textStart + from;
+        const documentTo = textStart + to;
+        const selected = (
+          selectionFrom !== null
+          && selectionTo !== null
+          && documentFrom < upperSelection
+          && documentTo > lowerSelection
+        );
+        if (selected) {
+          const highlight = textNode.ownerDocument.createElement('span');
+          highlight.className = 'document-structured-selection-highlight';
+          highlight.setAttribute('data-document-editor-only', 'true');
+          highlight.setAttribute('data-document-export-exclude', 'true');
+          highlight.textContent = value;
+          fragment.appendChild(highlight);
+        } else {
+          fragment.appendChild(textNode.ownerDocument.createTextNode(value));
+        }
+      }
+      if (index === orderedBoundaries.length - 2
+        && markerOffsets.includes(to)) appendCaret();
+    }
+    textNode.replaceWith(fragment);
+  });
+
+  if (caretPosition !== null && !caretInserted) {
+    const candidates = Array.from(host.querySelectorAll<HTMLElement>(
+      `[${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+    ));
+    const candidate = candidates.find((element) => {
+      const range = readDocumentTextRange(element);
+      return range && caretPosition >= range.from && caretPosition <= range.to;
+    });
+    if (candidate) {
+      const caret = document.createElement('span');
+      caret.className = 'document-structured-caret';
+      caret.setAttribute('data-document-editor-only', 'true');
+      caret.setAttribute('data-document-export-exclude', 'true');
+      caret.setAttribute('aria-hidden', 'true');
+      candidate.appendChild(caret);
+    }
+  }
+  return host.innerHTML;
+};
 
 export const clampResizeWidthWithoutCollisions = ({
   startWidthPx,
@@ -1498,6 +1879,7 @@ export const clampResizeWidthWithoutCollisions = ({
 
 export const StructuredDocumentSpanLayout = ({
   editor,
+  pageId,
   columnCount,
   columnGapPx,
   availableWidthPx,
@@ -1601,6 +1983,14 @@ export const StructuredDocumentSpanLayout = ({
     heightPx: number;
     xOffsetPx: number;
   } | null>(null);
+  const textSelectionDragRef = useRef<{
+    pointerId: number;
+    anchorPosition: number;
+    captureElement: HTMLElement;
+  } | null>(null);
+  const finishTextSelectionRef = useRef<(pointerId: number) => void>(
+    () => undefined
+  );
   const pendingPreviewRef = useRef<{
     imageId: string;
     attributes: Partial<DocumentImageAttributes>;
@@ -1633,22 +2023,28 @@ export const StructuredDocumentSpanLayout = ({
     const handlePointerUp = (event: globalThis.PointerEvent) => {
       finishDragRef.current(event.pointerId, false);
       finishResizeRef.current(event.pointerId, false);
+      finishTextSelectionRef.current(event.pointerId);
     };
     const handlePointerCancel = (event: globalThis.PointerEvent) => {
       finishDragRef.current(event.pointerId, true);
       finishResizeRef.current(event.pointerId, true);
+      finishTextSelectionRef.current(event.pointerId);
     };
     const handleMouseUp = () => {
       const drag = dragRef.current;
       if (drag) finishDragRef.current(drag.pointerId, false);
       const resize = resizeRef.current;
       if (resize) finishResizeRef.current(resize.pointerId, false);
+      const textSelection = textSelectionDragRef.current;
+      if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
     };
     const handleBlur = () => {
       const drag = dragRef.current;
       if (drag) finishDragRef.current(drag.pointerId, true);
       const resize = resizeRef.current;
       if (resize) finishResizeRef.current(resize.pointerId, true);
+      const textSelection = textSelectionDragRef.current;
+      if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
     };
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerCancel);
@@ -1678,6 +2074,23 @@ export const StructuredDocumentSpanLayout = ({
     '--document-span-column-width': `${model.columnWidthPx}px`,
     '--document-span-available-height': `${model.availableHeightPx}px`,
   } as CSSProperties;
+  const activeTextSelection = (
+    textEditing
+    && editor.isFocused
+    && !(
+      editor.state.selection instanceof NodeSelection
+      || editor.state.selection instanceof AllSelection
+        && editor.state.selection.from === editor.state.selection.to
+    )
+  )
+    ? editor.state.selection
+    : null;
+  const selectionFrom = activeTextSelection?.from ?? null;
+  const selectionTo = activeTextSelection?.to ?? null;
+  const caretPosition = activeTextSelection instanceof TextSelection
+    && activeTextSelection.empty
+    ? activeTextSelection.from
+    : null;
 
   const applyPendingPreview = () => {
     previewFrameRef.current = null;
@@ -1721,6 +2134,103 @@ export const StructuredDocumentSpanLayout = ({
       delete next[imageId];
       return next;
     });
+  };
+
+  const setStructuredTextSelection = (
+    fromPosition: number,
+    toPosition = fromPosition
+  ) => {
+    if (editor.isDestroyed) return;
+    const from = clampStructuredDocumentPosition(editor, fromPosition);
+    const to = clampStructuredDocumentPosition(editor, toPosition);
+    const currentSelection = editor.state.selection;
+    if (
+      currentSelection instanceof TextSelection
+      && currentSelection.anchor === from
+      && currentSelection.head === to
+    ) {
+      editor.commands.focus(undefined, { scrollIntoView: false });
+      return;
+    }
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        TextSelection.create(editor.state.doc, from, to)
+      )
+    );
+    editor.commands.focus(undefined, { scrollIntoView: false });
+  };
+
+  const finishTextSelection = (pointerId: number) => {
+    const selection = textSelectionDragRef.current;
+    if (!selection || selection.pointerId !== pointerId) return;
+    if (selection.captureElement.hasPointerCapture?.(pointerId)) {
+      selection.captureElement.releasePointerCapture?.(pointerId);
+    }
+    textSelectionDragRef.current = null;
+  };
+  finishTextSelectionRef.current = finishTextSelection;
+
+  const handleTextPointerDown = (
+    event: PointerEvent<HTMLDivElement>
+  ) => {
+    if (event.button !== 0 || dragRef.current || resizeRef.current) return;
+    const root = layoutRef.current;
+    if (!root) return;
+    const position = resolveStructuredDocumentPositionAtPoint({
+      root,
+      editor,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    if (position === null) {
+      onEditText();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onEditText();
+    setStructuredTextSelection(position);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    textSelectionDragRef.current = {
+      pointerId: event.pointerId,
+      anchorPosition: position,
+      captureElement: event.currentTarget,
+    };
+  };
+
+  const handleTextPointerMove = (
+    event: PointerEvent<HTMLDivElement>
+  ) => {
+    const selection = textSelectionDragRef.current;
+    if (!selection || selection.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const root = layoutRef.current;
+    if (!root) return;
+    const position = resolveStructuredDocumentPositionAtPoint({
+      root,
+      editor,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    if (position === null) return;
+    setStructuredTextSelection(selection.anchorPosition, position);
+  };
+
+  const handleTextPointerUp = (
+    event: PointerEvent<HTMLDivElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishTextSelection(event.pointerId);
+  };
+
+  const handleTextPointerCancel = (
+    event: PointerEvent<HTMLDivElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishTextSelection(event.pointerId);
   };
 
   const handleImagePointerDown = (
@@ -2132,6 +2642,7 @@ export const StructuredDocumentSpanLayout = ({
       ref={layoutRef}
       className="document-spanning-layout"
       data-document-span-layout="true"
+      data-page-id={pageId}
       lang={language}
       data-document-drop-cap={
         normalizedDropCap.enabled ? 'true' : 'false'
@@ -2142,6 +2653,14 @@ export const StructuredDocumentSpanLayout = ({
       data-span-image-id={representativeImage?.imageId}
       data-structured-image-count={model.images.length}
       data-image-group-count={model.imageGroups.length}
+      data-document-selection-from={editor.state.selection.from}
+      data-document-selection-to={editor.state.selection.to}
+      data-document-selection-text={editor.state.doc.textBetween(
+        editor.state.selection.from,
+        editor.state.selection.to,
+        ' ',
+        ' '
+      )}
       data-column-count={columnCount}
       data-column-width-px={model.columnWidthPx}
       data-span-width-px={representativeImage?.spanWidthPx}
@@ -2199,6 +2718,13 @@ export const StructuredDocumentSpanLayout = ({
                 className="document-span-layout__text-column"
                 data-layout-role="explicit-text-column"
                 data-layout-region="band"
+                data-page-id={pageId}
+                data-region-id={band.id}
+                data-document-region-id={band.id}
+                data-document-from={band.documentFrom ?? undefined}
+                data-document-to={band.documentTo ?? undefined}
+                data-line-from={band.lineFrom ?? undefined}
+                data-line-to={band.lineTo ?? undefined}
                 data-column={column}
                 data-band-left-px={band.leftPx}
                 data-band-top-px={band.topPx}
@@ -2213,8 +2739,21 @@ export const StructuredDocumentSpanLayout = ({
                   top: `${band.topPx}px`,
                   width: `${band.widthPx}px`,
                   height: `${band.heightPx}px`,
+                  userSelect: 'none',
+                  pointerEvents: 'auto',
                 }}
-                dangerouslySetInnerHTML={{ __html: band.html }}
+                onPointerDown={handleTextPointerDown}
+                onPointerMove={handleTextPointerMove}
+                onPointerUp={handleTextPointerUp}
+                onPointerCancel={handleTextPointerCancel}
+                dangerouslySetInnerHTML={{
+                  __html: decorateStructuredTextHtml({
+                    html: band.html,
+                    selectionFrom,
+                    selectionTo,
+                    caretPosition,
+                  }),
+                }}
               />
             ))}
           </div>

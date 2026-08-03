@@ -351,6 +351,7 @@ export type DocumentDropDispatcher = (
 
 export interface FlowEditorProps {
   content?: JSONContent;
+  pageId?: string;
   editable?: boolean;
   ariaLabel?: string;
   className?: string;
@@ -426,6 +427,7 @@ export const isDocumentFlowOverflowing = ({
 
 export const FlowEditor = ({
   content = EMPTY_DOCUMENT,
+  pageId,
   editable = true,
   ariaLabel = 'Document body',
   className = '',
@@ -721,7 +723,9 @@ export const FlowEditor = ({
   useEffect(() => {
     if (!editingStructuredText || !editor || editor.isDestroyed) return;
     const focusTextEditor = () => {
-      if (!editor.isDestroyed) editor.commands.focus();
+      if (!editor.isDestroyed) {
+        editor.commands.focus(undefined, { scrollIntoView: false });
+      }
       enteringStructuredTextRef.current = false;
     };
     if (typeof window.requestAnimationFrame === 'function') {
@@ -912,6 +916,7 @@ export const FlowEditor = ({
       {editor && hasStructuredSpan && (
         <StructuredDocumentSpanLayout
           editor={editor}
+          pageId={pageId}
           columnCount={columnCount}
           columnGapPx={columnGapPx}
           availableWidthPx={maxSpanImageWidthPx}
@@ -959,7 +964,7 @@ export const FlowEditor = ({
             if (primaryPosition >= 0) {
               editor.commands.setNodeSelection(primaryPosition);
             }
-            editor.commands.focus();
+            editor.commands.focus(undefined, { scrollIntoView: false });
           }}
           onCommitImagePosition={(
             position,
@@ -1000,7 +1005,7 @@ export const FlowEditor = ({
                 editor.state.tr.setSelection(near)
               );
             }
-            editor.commands.focus();
+            editor.commands.focus(undefined, { scrollIntoView: false });
           }}
         />
       )}

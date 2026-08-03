@@ -603,7 +603,12 @@ test.describe('document reconstruction MVP', () => {
       + '.document-flow-prosemirror'
     );
     await expect(sourceBody).toBeVisible();
-    await sourceBody.locator('p').first().click();
+    // Structured text regions own hit-testing; the transparent ProseMirror
+    // source remains a keyboard/input layer and must not intercept clicks.
+    await expect(page.locator(
+      '.document-flow-editor__content--structured-text-editing'
+    )).toHaveCSS('pointer-events', 'none');
+    await columnOne.locator('p').first().click();
     await expect(page.getByTestId('document-image-inspector')).toHaveCount(0);
     await expect(imageSlot).toBeVisible();
     await expect(sourceImage).toBeHidden();
