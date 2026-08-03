@@ -16,6 +16,14 @@ and structured exclusion rectangles on the same contract as editing.
   that source's physical dimensions; and
 - print creates one committed print host containing all cleaned page clones.
 
+The detached page surface is always measured in unzoomed CSS pixels (96 CSS
+pixels per inch) and converted once to the rounded raster dimensions. The
+live page sheet has a one-pixel editor border; export clones intentionally
+reset the root to a relative `(0, 0)` page surface and leave clipping to the
+explicit XHTML/SVG wrapper (print restores a page-local clip). This prevents
+the bordered sheet's containing-block offset from trimming the final image or
+caption rows while preserving the physical page box.
+
 The clean-clone step removes editor chrome, scan references, selection state,
 resize handles, placeholders, and other `data-document-export-exclude`
 content. Fonts are awaited through `document.fonts.ready` before rasterization.

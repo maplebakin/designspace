@@ -5,6 +5,7 @@ import {
   DOCUMENT_PRINT_HOST_ATTRIBUTE,
   DocumentExportService,
   calculateDocumentCssDimensions,
+  calculateDocumentExportSurfaceGeometry,
   calculateDocumentImageEffectiveDpi,
   calculateDocumentPixelDimensions,
   collectDocumentImageDpiWarnings,
@@ -65,6 +66,27 @@ describe('document export', () => {
       widthIn: 297 / 25.4,
       heightIn: 210 / 25.4,
     }, 300)).toEqual({ width: 3508, height: 2480 });
+  });
+
+  it('keeps the CSS page surface, raster canvas, and PDF scale contract aligned', () => {
+    expect(calculateDocumentExportSurfaceGeometry(
+      { widthIn: 8.5, heightIn: 11 },
+      300
+    )).toEqual({
+      css: { width: 816, height: 1056 },
+      raster: { width: 2550, height: 3300 },
+      cssToRasterX: 2550 / 816,
+      cssToRasterY: 3300 / 1056,
+    });
+
+    const customCssSurface = calculateDocumentExportSurfaceGeometry(
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      100
+    );
+    expect(customCssSurface.css).toEqual({ width: 850, height: 1100 });
+    expect(customCssSurface.raster).toEqual({ width: 2550, height: 3300 });
+    expect(customCssSurface.cssToRasterY).toBeCloseTo(3);
   });
 
   it('calculates effective source-image DPI and reports low-resolution print images', () => {
@@ -137,6 +159,9 @@ describe('document export', () => {
     expect(
       (clone.querySelector('[data-font-size-px="12"]') as HTMLElement).style.fontSize
     ).toBe('12px');
+    expect(clone.style.position).toBe('relative');
+    expect(clone.style.inset).toBe('auto');
+    expect(clone.style.overflow).toBe('visible');
     expect(clone.textContent).not.toContain('Add a title');
     expect(clone.querySelector('img')?.getAttribute('alt')).toBe('Granddad');
   });
@@ -295,7 +320,7 @@ describe('document export', () => {
     expect(svg).toContain('width="2550"');
     expect(svg).toContain('height="3300"');
     expect(svg).toContain('viewBox="0 0 816 1056"');
-    expect(svg).toContain('<foreignObject');
+    expect(svg).toContain('<foreignObject x="0" y="0" width="816" height="1056">');
     expect(svg).toContain('Full-width title');
     expect(svg).toContain('column-count: 3');
     expect(svg).not.toContain('Reference scan');
@@ -559,7 +584,11 @@ describe('document export', () => {
     const service = new DocumentExportService();
     const print = vi.spyOn(window, 'print').mockImplementation(() => undefined);
     const source = document.createElement('main');
-    source.innerHTML = '<p>Printable article</p>';
+    source.innerHTML = `
+      <p>Printable article</p>
+      <figure><figcaption>Attached caption remains printable</figcaption>
+      </figure>
+    `;
 
     const cleanupPrint = await service.print(source, {
       widthIn: 8.5,
@@ -578,6 +607,10 @@ describe('document export', () => {
     expect(print).toHaveBeenCalledTimes(1);
     expect(clone?.style.backgroundColor).toBe('rgb(231, 220, 200)');
     expect(clone?.textContent).toContain('Printable article');
+    expect(clone?.textContent).toContain('Attached caption remains printable');
+    expect(clone?.style.overflow).toBe('hidden');
+    expect(clone?.style.width).toBe('8.5in');
+    expect(clone?.style.height).toBe('11in');
     expect(printStyle?.textContent).toContain(
       'background: #E7DCC8 !important'
     );

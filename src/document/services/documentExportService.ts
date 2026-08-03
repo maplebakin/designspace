@@ -68,6 +68,21 @@ export type DocumentPixelDimensions = {
   height: number;
 };
 
+/**
+ * The export surface has two deliberately different resolutions: the
+ * browser layout surface is expressed in CSS pixels, while the output PNG
+ * (and the raster embedded in PDF) is expressed in print pixels. Keeping
+ * both dimensions and their conversion together prevents a zoomed live DOM
+ * rect, a fractional CSS page, and a rounded canvas dimension from drifting
+ * apart at the bottom edge of a page.
+ */
+export type DocumentExportSurfaceGeometry = {
+  css: DocumentPixelDimensions;
+  raster: DocumentPixelDimensions;
+  cssToRasterX: number;
+  cssToRasterY: number;
+};
+
 export type CleanDocumentCloneOptions = {
   copyComputedStyles?: boolean;
   excludedSelectors?: string[];
@@ -85,6 +100,7 @@ export type DocumentResourceWaitOptions = {
 export type PrepareDocumentCloneOptions = CleanDocumentCloneOptions & {
   resourceWaitOptions?: DocumentResourceWaitOptions;
   fetchResource?: typeof fetch;
+  cssPixelsPerInch?: number;
 };
 
 const finitePositive = (value: number, fallback: number) =>
@@ -128,6 +144,21 @@ export const calculateDocumentCssDimensions = (
   return {
     width: normalizedSize.widthIn * normalizedCssPixelsPerInch,
     height: normalizedSize.heightIn * normalizedCssPixelsPerInch,
+  };
+};
+
+export const calculateDocumentExportSurfaceGeometry = (
+  size: DocumentPhysicalSize,
+  dpi = DEFAULT_DOCUMENT_EXPORT_DPI,
+  cssPixelsPerInch = CSS_PIXELS_PER_INCH
+): DocumentExportSurfaceGeometry => {
+  const css = calculateDocumentCssDimensions(size, cssPixelsPerInch);
+  const raster = calculateDocumentPixelDimensions(size, dpi);
+  return {
+    css,
+    raster,
+    cssToRasterX: raster.width / Math.max(1, css.width),
+    cssToRasterY: raster.height / Math.max(1, css.height),
   };
 };
 
@@ -306,9 +337,16 @@ export const createCleanDocumentClone = (
   clone.style.transform = 'none';
   clone.style.transformOrigin = 'top left';
   clone.style.zoom = '1';
+  // The live root is an absolutely positioned child of the bordered page
+  // sheet.  That editor border shifts its containing block by one CSS pixel
+  // and the live sheet clips the overflow.  An export clone is its own page
+  // surface, so it must start at (0, 0); the explicit SVG/print page surface
+  // below owns clipping instead of the editor sheet.
+  clone.style.position = 'relative';
+  clone.style.inset = 'auto';
   clone.style.margin = '0';
   clone.style.boxShadow = 'none';
-  clone.style.overflow = 'hidden';
+  clone.style.overflow = 'visible';
   clone.style.pointerEvents = 'none';
   clone.style.userSelect = 'none';
 
@@ -463,7 +501,10 @@ export const prepareDocumentExportClone = async (
   const clone = createCleanDocumentClone(source, options);
   await inlineRetainedImages(source, clone, options);
 
-  const cssDimensions = calculateDocumentCssDimensions(size);
+  const cssDimensions = calculateDocumentCssDimensions(
+    size,
+    options.cssPixelsPerInch
+  );
   clone.style.width = `${cssDimensions.width}px`;
   clone.style.height = `${cssDimensions.height}px`;
   clone.style.minWidth = `${cssDimensions.width}px`;
@@ -492,8 +533,13 @@ export const createDocumentSvgMarkup = (
     throw new Error('Document serialization is unavailable in this environment.');
   }
   const normalizedSize = normalizePhysicalSize(size);
-  const pixelDimensions = calculateDocumentPixelDimensions(normalizedSize, dpi);
-  const cssDimensions = calculateDocumentCssDimensions(normalizedSize, cssPixelsPerInch);
+  const surface = calculateDocumentExportSurfaceGeometry(
+    normalizedSize,
+    dpi,
+    cssPixelsPerInch
+  );
+  const pixelDimensions = surface.raster;
+  const cssDimensions = surface.css;
   const wrapper = cleanClone.ownerDocument.createElement('div');
   wrapper.setAttribute('xmlns', XHTML_NAMESPACE);
   wrapper.style.width = `${cssDimensions.width}px`;
@@ -501,6 +547,8 @@ export const createDocumentSvgMarkup = (
   wrapper.style.margin = '0';
   wrapper.style.padding = '0';
   wrapper.style.overflow = 'hidden';
+  wrapper.style.position = 'relative';
+  wrapper.style.boxSizing = 'border-box';
   wrapper.appendChild(cleanClone.cloneNode(true));
 
   const serializedXhtml = new XMLSerializer().serializeToString(wrapper);
@@ -641,8 +689,15 @@ export class DocumentExportService {
   ): Promise<Blob> {
     const normalizedSize = normalizePhysicalSize(options);
     const dpi = finitePositive(options.dpi ?? DEFAULT_DOCUMENT_EXPORT_DPI, DEFAULT_DOCUMENT_EXPORT_DPI);
+    const surface = calculateDocumentExportSurfaceGeometry(
+      normalizedSize,
+      dpi,
+      options.cssPixelsPerInch
+    );
     const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
-    const clone = await prepareDocumentExportClone(pageElement, normalizedSize);
+    const clone = await prepareDocumentExportClone(pageElement, normalizedSize, {
+      cssPixelsPerInch: options.cssPixelsPerInch,
+    });
     options.onWarning?.(collectDocumentImageDpiWarnings(pageElement));
     clone.style.backgroundColor = backgroundColor;
 
@@ -653,10 +708,9 @@ export class DocumentExportService {
       options.cssPixelsPerInch
     );
     const image = await loadSvgImage(svgMarkup);
-    const pixelDimensions = calculateDocumentPixelDimensions(normalizedSize, dpi);
     const canvas = document.createElement('canvas');
-    canvas.width = pixelDimensions.width;
-    canvas.height = pixelDimensions.height;
+    canvas.width = surface.raster.width;
+    canvas.height = surface.raster.height;
     const context = canvas.getContext('2d');
     if (!context) {
       throw new Error('The browser could not create a document export canvas.');
@@ -810,7 +864,12 @@ export class DocumentExportService {
     for (const source of sources) {
       const normalizedSize = normalizePhysicalSize(source.options);
       const backgroundColor = normalizeDocumentPaperColor(source.options.backgroundColor);
-      const clone = await prepareDocumentExportClone(source.element, normalizedSize);
+      const clone = await prepareDocumentExportClone(source.element, normalizedSize, {
+        cssPixelsPerInch: source.options.cssPixelsPerInch,
+      });
+      // PNG/PDF use the XHTML page wrapper as the clip.  Print has no SVG
+      // wrapper, so retain a page-local clip for each committed clone.
+      clone.style.overflow = 'hidden';
       clone.style.width = `${normalizedSize.widthIn}in`;
       clone.style.height = `${normalizedSize.heightIn}in`;
       clone.style.backgroundColor = backgroundColor;
