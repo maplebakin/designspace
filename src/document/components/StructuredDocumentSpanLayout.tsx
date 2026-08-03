@@ -1421,6 +1421,7 @@ type StructuredDocumentSpanLayoutProps = {
   availableWidthPx: number;
   availableHeightPx: number;
   revision: number;
+  selectionRevision: number;
   textEditing: boolean;
   viewScale: number;
   minimumImageWidthPx: number;
@@ -1502,6 +1503,7 @@ export const StructuredDocumentSpanLayout = ({
   availableWidthPx,
   availableHeightPx,
   revision,
+  selectionRevision,
   textEditing,
   viewScale,
   minimumImageWidthPx,
@@ -2152,6 +2154,20 @@ export const StructuredDocumentSpanLayout = ({
       data-image-region-height-px={representativeImage?.imageRegionHeightPx}
       data-layout-content-height-px={model.layoutContentHeightPx}
       data-layout-overflowing={model.overflowing ? 'true' : 'false'}
+      data-layout-coordinate-space="body"
+      data-layout-zoom={viewScale}
+      data-selection-revision={selectionRevision}
+      data-layout-available-width-px={model.availableWidthPx}
+      data-layout-available-height-px={model.availableHeightPx}
+      data-layout-exclusions={JSON.stringify(model.exclusions)}
+      data-layout-text-bands={JSON.stringify(model.textBands.map((band) => ({
+        id: band.id,
+        column: band.column,
+        leftPx: band.leftPx,
+        topPx: band.topPx,
+        widthPx: band.widthPx,
+        heightPx: band.heightPx,
+      })))}
       data-image-top-px={representativeImage?.imageTopPx}
       data-image-left-px={representativeImage?.imageLeftPx}
       data-image-x-offset-px={representativeImage?.attributes.xOffsetPx}
@@ -2160,7 +2176,7 @@ export const StructuredDocumentSpanLayout = ({
       data-image-selected={selectedImage ? 'true' : 'false'}
       data-image-resizing={resizeRef.current ? 'true' : 'false'}
       data-text-editing={textEditing ? 'true' : 'false'}
-      data-hidden-for-editing={textEditing ? 'true' : 'false'}
+      data-hidden-for-editing="false"
       style={style}
       onPointerDown={handleLayoutPointerDown}
       onPointerMove={handleImagePointerMove}

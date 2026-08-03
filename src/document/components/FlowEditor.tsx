@@ -461,6 +461,9 @@ export const FlowEditor = ({
   const frameRef = useRef<number | null>(null);
   const enteringStructuredTextRef = useRef(false);
   const [layoutRevision, setLayoutRevision] = useState(0);
+  // Selection changes still need to repaint selection handles/context, but
+  // they are not layout inputs and must not invalidate the page-space model.
+  const [selectionRevision, setSelectionRevision] = useState(0);
   const [layoutHeightPx, setLayoutHeightPx] = useState(720);
   const [editingStructuredText, setEditingStructuredText] = useState(false);
   const callbacksRef = useRef({
@@ -497,9 +500,13 @@ export const FlowEditor = ({
   };
 
   const measureOverflow = useCallback(() => {
+    // Structured spans are the canonical layout/overflow surface in every
+    // editor state.  The live ProseMirror document is an interaction layer
+    // while text is being edited and its browser CSS-column measurement must
+    // never replace the page-space layout kernel's result.
     const proseMirror =
       rootRef.current?.querySelector<HTMLElement>(
-        '[data-document-span-layout][data-hidden-for-editing="false"]'
+        '[data-document-span-layout]'
       )
       || rootRef.current?.querySelector<HTMLElement>('.ProseMirror');
     if (!proseMirror) return;
@@ -687,7 +694,7 @@ export const FlowEditor = ({
           getSelectedDocumentImage(updatedEditor),
           updatedEditor
         );
-        setLayoutRevision((revision) => revision + 1);
+        setSelectionRevision((revision) => revision + 1);
       },
       onDestroy: () => {
         editorInstanceRef.current = null;
@@ -910,6 +917,7 @@ export const FlowEditor = ({
           availableWidthPx={maxSpanImageWidthPx}
           availableHeightPx={layoutHeightPx}
           revision={layoutRevision}
+          selectionRevision={selectionRevision}
           textEditing={editingStructuredText}
           viewScale={viewScale}
           minimumImageWidthPx={minImageWidthPx}

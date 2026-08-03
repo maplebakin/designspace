@@ -176,4 +176,88 @@ test.describe('historical book acceptance fixture', () => {
       /failed/i
     );
   });
+
+  test('keeps the wrapped page-49 flow geometry stable while selecting text and images', async ({ page }) => {
+    test.slow();
+    test.setTimeout(180_000);
+    await loadHistoricalFixture(page);
+    await page.getByTestId('document-page-tab-0').click();
+
+    const layout = page.locator('[data-document-span-layout]');
+    const body = page.locator('.document-flow-prosemirror');
+    const imageSlot = page.locator('[data-layout-role="occupied-columns"]').first();
+
+    const readGeometry = async () => layout.evaluate((root) => ({
+      availableWidth: root.getAttribute('data-layout-available-width-px'),
+      availableHeight: root.getAttribute('data-layout-available-height-px'),
+      columnWidth: root.getAttribute('data-column-width-px'),
+      exclusions: root.getAttribute('data-layout-exclusions'),
+      textBands: root.getAttribute('data-layout-text-bands'),
+      imageLeft: root.getAttribute('data-image-left-px'),
+      imageTop: root.getAttribute('data-image-top-px'),
+      imageWidth: root.getAttribute('data-rendered-image-width-px'),
+      imageHeight: root.getAttribute('data-rendered-image-height-px'),
+      text: Array.from(root.querySelectorAll(
+        '[data-layout-role="explicit-text-column"]'
+      )).map((column) => column.textContent || ''),
+      imageSlots: root.querySelectorAll(
+        '[data-layout-role="occupied-columns"]'
+      ).length,
+      sourceSpanImages: document.querySelectorAll(
+        '.document-flow-prosemirror '
+        + '.document-image-node[data-wrap="span-columns"]'
+      ).length,
+    }));
+
+    const setZoomNear = async (targetPercent: number) => {
+      const controls = page.getByTestId('document-zoom-controls');
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        const current = Number.parseInt(
+          await page.getByTestId('document-zoom-indicator').textContent() || '100',
+          10
+        );
+        if (Math.abs(current - targetPercent) <= 5) return current;
+        await controls.getByRole('button', {
+          name: current < targetPercent ? 'Zoom in' : 'Zoom out',
+        }).click();
+      }
+      return Number.parseInt(
+        await page.getByTestId('document-zoom-indicator').textContent() || '100',
+        10
+      );
+    };
+
+    for (const targetZoom of [66, 100, 150]) {
+      const actualZoom = await setZoomNear(targetZoom);
+      expect(Math.abs(actualZoom - targetZoom)).toBeLessThanOrEqual(5);
+      await expect(layout).toHaveAttribute('data-text-editing', 'false');
+      const idleGeometry = await readGeometry();
+      expect(idleGeometry.imageSlots).toBe(1);
+      expect(idleGeometry.sourceSpanImages).toBe(1);
+      expect(JSON.parse(idleGeometry.exclusions || '[]')).toHaveLength(1);
+
+      await page.locator(
+        '[data-layout-role="explicit-text-column"] p:visible'
+      ).first().click();
+      await expect(layout).toHaveAttribute('data-text-editing', 'true');
+      await body.press('Control+a');
+      await expect.poll(async () => (await readGeometry()).text.join(''))
+        .toContain('Am Anfang dieser beispielhaften Seite');
+      expect(await readGeometry()).toEqual(idleGeometry);
+      await expect(page.locator(
+        '.document-flow-editor__content--structured-text-editing '
+        + '.document-image-node[data-wrap="span-columns"]'
+      )).toHaveCSS('display', 'none');
+
+      await imageSlot.click();
+      await expect(layout).toHaveAttribute('data-text-editing', 'false');
+      expect(await readGeometry()).toEqual(idleGeometry);
+
+      await page.locator(
+        '[data-layout-role="explicit-text-column"] p:visible'
+      ).first().click();
+      await expect(layout).toHaveAttribute('data-text-editing', 'true');
+      expect(await readGeometry()).toEqual(idleGeometry);
+    }
+  });
 });

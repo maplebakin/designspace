@@ -2682,6 +2682,125 @@ describe('live document editor UI', () => {
     }
   );
 
+  it.each([0.66, 1, 1.5])(
+    'keeps wrapped lower-right flow geometry stable through text selection at %d scale',
+    async (viewScale) => {
+      let editor: Editor | null = null;
+      const paragraphs = Array.from({ length: 12 }, (_, index) => ({
+        type: 'paragraph',
+        content: [{
+          type: 'text',
+          text: `COLUMN-${index + 1} ${'archival sentence '.repeat(12)}`,
+        }],
+      }));
+      const image = {
+        ...spanningBodyContent(2, 1).content![1],
+        attrs: {
+          ...spanningBodyContent(2, 1).content![1].attrs,
+          id: 'lower-right-wrap-image',
+          widthPx: 200,
+          heightPx: 125,
+          spanCount: 1,
+          spanStartColumn: 3,
+          verticalAnchor: 'page-position',
+          horizontalPlacement: 'custom',
+          xOffsetPx: 0,
+          yPx: 360,
+          wrapPaddingTopPx: 12,
+          wrapPaddingRightPx: 12,
+          wrapPaddingBottomPx: 12,
+          wrapPaddingLeftPx: 12,
+        },
+      };
+      const { container } = render(React.createElement(FlowEditor, {
+        content: {
+          type: 'doc',
+          content: [...paragraphs.slice(0, 6), image, ...paragraphs.slice(6)],
+        } as JSONContent,
+        columnCount: 3,
+        columnGapPx: 24,
+        dropCap: false,
+        viewScale,
+        resolveAssetSource: () => 'data:image/png;base64,SPAN',
+        onEditorReady: (readyEditor: Editor | null) => {
+          editor = readyEditor;
+        },
+      }));
+      await waitFor(() => {
+        expect(editor).not.toBeNull();
+        expect(container.querySelector('[data-document-span-layout]'))
+          .not.toBeNull();
+      });
+
+      const layout = container.querySelector<HTMLElement>(
+        '[data-document-span-layout]'
+      )!;
+      const readGeometry = () => ({
+        availableWidth: layout.dataset.layoutAvailableWidthPx,
+        availableHeight: layout.dataset.layoutAvailableHeightPx,
+        columnWidth: layout.dataset.columnWidthPx,
+        exclusions: layout.dataset.layoutExclusions,
+        textBands: layout.dataset.layoutTextBands,
+        imageLeft: layout.dataset.imageLeftPx,
+        imageTop: layout.dataset.imageTopPx,
+        imageWidth: layout.dataset.renderedImageWidthPx,
+        imageHeight: layout.dataset.renderedImageHeightPx,
+        imageSlots: container.querySelectorAll(
+          '[data-layout-role="occupied-columns"]'
+        ).length,
+        sourceSpanImages: container.querySelectorAll(
+          '.document-flow-prosemirror '
+          + '.document-image-node[data-wrap="span-columns"]'
+        ).length,
+        renderedText: Array.from(container.querySelectorAll(
+          '[data-layout-role="explicit-text-column"]'
+        )).map((element) => element.textContent || ''),
+      });
+      const idleGeometry = readGeometry();
+      expect(idleGeometry.imageSlots).toBe(1);
+      expect(idleGeometry.sourceSpanImages).toBe(1);
+      expect(idleGeometry.renderedText.join('')).toContain('COLUMN-1');
+
+      const selectionEnd = Math.min(
+        editor!.state.doc.content.size - 1,
+        260
+      );
+      await act(async () => {
+        editor!.commands.focus();
+        editor!.commands.setTextSelection({ from: 1, to: selectionEnd });
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(layout.dataset.textEditing).toBe('true');
+      });
+      expect(readGeometry()).toEqual(idleGeometry);
+      expect(layout.dataset.layoutCoordinateSpace).toBe('body');
+      expect(layout.dataset.layoutZoom).toBe(String(viewScale));
+
+      let imagePosition = -1;
+      editor!.state.doc.descendants((node, position) => {
+        if (node.attrs.id === 'lower-right-wrap-image') imagePosition = position;
+      });
+      expect(imagePosition).toBeGreaterThan(0);
+      await act(async () => {
+        editor!.commands.setNodeSelection(imagePosition);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(editor!.state.selection).toBeInstanceOf(NodeSelection);
+      });
+      expect(readGeometry()).toEqual(idleGeometry);
+
+      fireEvent.click(container.querySelector(
+        '[data-layout-role="explicit-text-column"]'
+      )!);
+      await waitFor(() => {
+        expect(layout.dataset.textEditing).toBe('true');
+      });
+      expect(readGeometry()).toEqual(idleGeometry);
+    }
+  );
+
   it.each([0.5, 0.75, 1, 1.5])(
     'moves a fixed spanning image in two dimensions at %d scale',
     async (viewScale) => {
