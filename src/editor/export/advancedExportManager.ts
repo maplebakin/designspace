@@ -5,6 +5,12 @@ import { serializeToSVG } from '../utils/serializeToSVG';
 import { pluginManager } from '../utils/pluginArchitecture';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { sanitizeExportBaseName } from '../utils/exportFileName';
+import {
+  deliverFile,
+  deliverFiles,
+  type FileBatchDeliveryResult,
+  type FileDeliveryResult,
+} from '../services/fileDeliveryService';
 import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
 import type { ProjectPage } from '../state/editorStore';
@@ -67,47 +73,57 @@ const waitForDocumentFonts = async () => {
   await document.fonts.ready;
 };
 
-const triggerDownload = (blob: Blob, fileName: string) => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
 export class AdvancedExportManager {
   async export(
     canvas: fabric.Canvas,
     format: AdvancedExportFormat,
     options: AdvancedExportOptions = {}
-  ): Promise<void> {
+  ): Promise<FileDeliveryResult> {
     pluginManager.emitHook('onExport', { format, options });
     const fileName = sanitizeExportBaseName(options.fileName);
 
     if (format === 'png') {
       const blob = await this.exportPng(canvas, options);
-      triggerDownload(blob, `${fileName}.png`);
-      return;
+      return deliverFile({
+        content: blob,
+        fileName: `${fileName}.png`,
+        extension: 'png',
+        dialogTitle: 'Save PNG export',
+        filterName: 'PNG image',
+      });
     }
 
     if (format === 'jpeg') {
       const blob = await this.exportJpeg(canvas, options);
-      triggerDownload(blob, `${fileName}.jpeg`);
-      return;
+      return deliverFile({
+        content: blob,
+        fileName: `${fileName}.jpeg`,
+        extension: 'jpeg',
+        dialogTitle: 'Save JPEG export',
+        filterName: 'JPEG image',
+      });
     }
 
     if (format === 'svg') {
       await waitForDocumentFonts();
       const blob = this.exportSvg(canvas, options);
-      triggerDownload(blob, `${fileName}.svg`);
-      return;
+      return deliverFile({
+        content: blob,
+        fileName: `${fileName}.svg`,
+        extension: 'svg',
+        dialogTitle: 'Save SVG export',
+        filterName: 'SVG image',
+      });
     }
 
     const blob = await this.exportPdf(canvas, options);
-    triggerDownload(blob, `${fileName}.pdf`);
+    return deliverFile({
+      content: blob,
+      fileName: `${fileName}.pdf`,
+      extension: 'pdf',
+      dialogTitle: 'Save PDF export',
+      filterName: 'PDF document',
+    });
   }
 
   async exportPng(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
@@ -178,11 +194,17 @@ export class AdvancedExportManager {
   async exportPagesPdf(
     pages: ProjectPage[],
     options: ExportPagesPdfOptions = {}
-  ): Promise<void> {
+  ): Promise<FileDeliveryResult> {
     pluginManager.emitHook('onExport', { format: 'pdf', options: { ...options, scope: 'all-pages' } });
     const fileName = sanitizeExportBaseName(options.fileName);
     const blob = await this.exportPagesPdfBlob(pages, options);
-    triggerDownload(blob, `${fileName}.pdf`);
+    return deliverFile({
+      content: blob,
+      fileName: `${fileName}.pdf`,
+      extension: 'pdf',
+      dialogTitle: 'Save PDF export',
+      filterName: 'PDF document',
+    });
   }
 
   async exportPagesPdfBlob(
@@ -239,10 +261,17 @@ export class AdvancedExportManager {
     pages: ProjectPage[],
     format: ExportPagesFormat,
     options: ExportPagesPdfOptions = {}
-  ): Promise<void> {
+  ): Promise<FileBatchDeliveryResult> {
     pluginManager.emitHook('onExport', { format, options: { ...options, scope: 'all-pages' } });
     const exportedPages = await this.exportPagesToBlobs(pages, format, options);
-    exportedPages.forEach(({ blob, fileName }) => triggerDownload(blob, fileName));
+    return deliverFiles(
+      exportedPages.map(({ blob, fileName }) => ({
+        content: blob,
+        fileName,
+        extension: format,
+      })),
+      { dialogTitle: `Choose a folder for the exported ${format.toUpperCase()} pages` }
+    );
   }
 
   async exportPagesToBlobs(

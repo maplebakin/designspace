@@ -149,10 +149,9 @@ function App() {
 
   const downloadActiveProjectFile = async () => {
     if (editorMode === 'document') {
-      await downloadDocumentProjectFile();
-    } else {
-      await downloadCanvasProjectFile();
+      return downloadDocumentProjectFile();
     }
+    return downloadCanvasProjectFile();
   };
 
   const saveActiveProject = async () => {
@@ -171,7 +170,8 @@ function App() {
       : useEditorStore.getState().isDirty;
 
   const handleSaveAndClose = async () => {
-    await downloadActiveProjectFile();
+    const delivery = await downloadActiveProjectFile();
+    if (!delivery || delivery.status === 'cancelled') return;
     if (activeProjectIsDirty()) {
       showActiveError('Project could not be downloaded. The window will stay open.');
       return;
@@ -224,7 +224,8 @@ function App() {
   };
 
   const handleDownloadAndReturn = async () => {
-    await downloadActiveProjectFile();
+    const delivery = await downloadActiveProjectFile();
+    if (!delivery || delivery.status === 'cancelled') return;
     if (!activeProjectIsDirty()) {
       returnToDashboardAfterSave();
     }

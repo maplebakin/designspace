@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { sanitizeExportBaseName } from '../../editor/utils/exportFileName';
 import {
+  deliverFile,
+  deliverFiles,
+  triggerBrowserFileDownload,
+} from '../../editor/services/fileDeliveryService';
+import {
   DEFAULT_DOCUMENT_PAPER_COLOR,
   normalizeDocumentPaperColor,
 } from '../utils/documentColor';
@@ -613,21 +618,7 @@ const readBlobBytes = async (blob: Blob): Promise<Uint8Array> => {
 };
 
 export const triggerDocumentDownload = (blob: Blob, fileName: string) => {
-  if (typeof document === 'undefined') {
-    throw new Error('Downloads are unavailable in this environment.');
-  }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  link.hidden = true;
-  document.body.appendChild(link);
-  try {
-    link.click();
-  } finally {
-    link.remove();
-    URL.revokeObjectURL(url);
-  }
+  triggerBrowserFileDownload(blob, fileName);
 };
 
 export const createDocumentPrintCss = (
@@ -794,8 +785,14 @@ export class DocumentExportService {
   async downloadPng(pageElement: HTMLElement, options: DocumentExportOptions) {
     const blob = await this.exportPngBlob(pageElement, options);
     const fileName = `${sanitizeExportBaseName(options.fileName)}.png`;
-    triggerDocumentDownload(blob, fileName);
-    return { blob, fileName };
+    const delivery = await deliverFile({
+      content: blob,
+      fileName,
+      extension: 'png',
+      dialogTitle: 'Save PNG export',
+      filterName: 'PNG image',
+    });
+    return { blob, fileName, delivery };
   }
 
   async downloadPngPages(
@@ -811,17 +808,30 @@ export class DocumentExportService {
       const source = sources[index];
       const blob = await this.exportPngBlob(source.element, source.options);
       const outputName = `${baseName}-page-${String(index + 1).padStart(2, '0')}.png`;
-      triggerDocumentDownload(blob, outputName);
       results.push({ blob, fileName: outputName });
     }
-    return results;
+    const delivery = await deliverFiles(
+      results.map(({ blob, fileName: outputName }) => ({
+        content: blob,
+        fileName: outputName,
+        extension: 'png',
+      })),
+      { dialogTitle: 'Choose a folder for the exported PNG pages' }
+    );
+    return { files: results, delivery };
   }
 
   async downloadPdf(pageElement: HTMLElement, options: DocumentExportOptions) {
     const blob = await this.exportPdfBlob(pageElement, options);
     const fileName = `${sanitizeExportBaseName(options.fileName)}.pdf`;
-    triggerDocumentDownload(blob, fileName);
-    return { blob, fileName };
+    const delivery = await deliverFile({
+      content: blob,
+      fileName,
+      extension: 'pdf',
+      dialogTitle: 'Save PDF export',
+      filterName: 'PDF document',
+    });
+    return { blob, fileName, delivery };
   }
 
   async downloadPdfPages(
@@ -830,8 +840,14 @@ export class DocumentExportService {
   ) {
     const blob = await this.exportPdfPagesBlob(sources);
     const sanitizedFileName = `${sanitizeExportBaseName(fileName)}.pdf`;
-    triggerDocumentDownload(blob, sanitizedFileName);
-    return { blob, fileName: sanitizedFileName };
+    const delivery = await deliverFile({
+      content: blob,
+      fileName: sanitizedFileName,
+      extension: 'pdf',
+      dialogTitle: 'Save PDF export',
+      filterName: 'PDF document',
+    });
+    return { blob, fileName: sanitizedFileName, delivery };
   }
 
   async print(

@@ -32,6 +32,7 @@ import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 import { unitScale as unitScaleMap, UnitMode } from '../utils/units';
 import { applyActiveThemeToCanvas } from '../fabric/themeUtils';
 import { advancedExportManager } from '../export/advancedExportManager';
+import { deliverFile, type FileDeliveryResult } from '../services/fileDeliveryService';
 import { CanvasLayer, enforceSerializedZOrder, withManifestZIndex, ZIndexLayer } from '../fabric/zIndexManifest';
 import {
     useThemeStore,
@@ -1130,7 +1131,7 @@ interface EditorState {
   reorderPages: (from: number, to: number) => void;
   syncActivePageFromCanvas: () => void;
   setDirty: (dirty: boolean) => void;
-  downloadProjectFile: () => Promise<void>;
+  downloadProjectFile: () => Promise<FileDeliveryResult | null>;
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
@@ -2225,7 +2226,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             setToastMessage,
             unitMode,
         } = get();
-        if (!canvas) return;
+        if (!canvas) return null;
         const { themeData, activeBrandCollectionId, brandVault } = useThemeStore.getState();
 
         const fallbackTheme = themeData
@@ -2246,7 +2247,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 ? error.message
                 : 'Failed to prepare project for export.';
             setToastMessage(message);
-            return;
+            return null;
         }
 
         const savedAt = new Date().toISOString();
@@ -2264,14 +2265,24 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         const json = JSON.stringify(payload, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${sanitizeFileName(projectName)}.apocaproject.json`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        const fileName = `${sanitizeFileName(projectName)}.apocaproject.json`;
+        let delivery: FileDeliveryResult;
+        try {
+            delivery = await deliverFile({
+                content: blob,
+                fileName,
+                extension: 'apocaproject.json',
+                dialogTitle: 'Save Design Space project',
+                filterName: 'Design Space project',
+            });
+        } catch (error) {
+            const message = error instanceof Error && error.message
+                ? error.message
+                : 'Could not save the Design Space project.';
+            setToastMessage(message);
+            return null;
+        }
+        if (delivery.status === 'cancelled') return delivery;
         set({
             productProjectFields: extractProductProjectFields(payload),
             pages: exportData.pages,
@@ -2281,11 +2292,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ isDirty: false });
         if (exportData.failedAssetIds.length > 0) {
             setToastMessage(
-                `Saved project with ${exportData.failedAssetIds.length} linked image(s). Some images may require network access when reopened.`
+                delivery.path
+                    ? `Saved project to ${delivery.path} with ${exportData.failedAssetIds.length} linked image(s). Some images may require network access when reopened.`
+                    : `Saved project with ${exportData.failedAssetIds.length} linked image(s). Some images may require network access when reopened.`
             );
         } else {
-            setToastMessage(`Saved project: ${payload.projectName}`);
+            setToastMessage(delivery.path
+                ? `Saved project to ${delivery.path}`
+                : `Saved project: ${payload.projectName}`);
         }
+        return delivery;
     },
 
     loadProjectFile: async (file) => {

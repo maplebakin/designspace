@@ -17,6 +17,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/plugin-dialog": "2.7.0",
+    "@tauri-apps/plugin-fs": "2.5.0",
     "@tiptap/pm": "^3.28.0",
     "@tiptap/react": "^3.28.0",
     "@tiptap/starter-kit": "^3.28.0",
@@ -41,7 +43,7 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4.2.1",
-    "@tauri-apps/api": "^2.9.1",
+    "@tauri-apps/api": "2.10.1",
     "@tauri-apps/cli": "^2.9.6",
     "@testing-library/react": "^16.3.2",
     "@types/fabric": "^5.3.7",

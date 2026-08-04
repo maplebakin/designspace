@@ -31,6 +31,11 @@ import { ingestImageFromClipboardEvent } from '../services/documentClipboardServ
 import { ingestDocumentReference } from '../services/documentReferenceService';
 import { documentExportService } from '../services/documentExportService';
 import {
+  getDeliverySuccessLocation,
+  type FileBatchDeliveryResult,
+  type FileDeliveryResult,
+} from '../../editor/services/fileDeliveryService';
+import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
   type DocumentImageAttributes,
@@ -1568,27 +1573,38 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           },
         },
       }));
+      let delivery: FileDeliveryResult | FileBatchDeliveryResult | undefined;
       if (format === 'png') {
         if (scope === 'all') {
-          await documentExportService.downloadPngPages(
+          const result = await documentExportService.downloadPngPages(
             exportSources,
             project.projectName
           );
+          delivery = result.delivery;
         } else {
           const source = exportSources[activePageIndex];
           if (!source) throw new Error('The selected page is unavailable for export.');
-          await documentExportService.downloadPng(source.element, {
+          const result = await documentExportService.downloadPng(source.element, {
             ...source.options,
             fileName: `${project.projectName}-${folioNumber}`,
           });
+          delivery = result.delivery;
         }
       } else {
-        await documentExportService.downloadPdfPages(
+        const result = await documentExportService.downloadPdfPages(
           exportSources,
           project.projectName
         );
+        delivery = result.delivery;
       }
-      setToastMessage(`${format.toUpperCase()} export downloaded.`);
+      if (delivery?.status === 'cancelled') {
+        setToastMessage(`${format.toUpperCase()} export cancelled.`);
+        return;
+      }
+      const location = delivery ? getDeliverySuccessLocation(delivery) : null;
+      setToastMessage(location
+        ? `${format.toUpperCase()} export saved to ${location}.`
+        : `${format.toUpperCase()} export downloaded.`);
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Document export failed.');
     } finally {

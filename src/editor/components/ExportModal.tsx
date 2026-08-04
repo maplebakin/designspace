@@ -4,6 +4,7 @@ import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore'
 import { useThemeStore } from '../state/useThemeStore';
 import { advancedExportManager, type AdvancedExportFormat } from '../export/advancedExportManager';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
+import { deliverFile, type FileBatchDeliveryResult, type FileDeliveryResult } from '../services/fileDeliveryService';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -56,12 +57,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
-  const runExport = async (job: () => Promise<void>) => {
+  const runExport = async (
+    job: () => Promise<FileDeliveryResult | FileBatchDeliveryResult | void>
+  ) => {
     if (isExportLoading) return;
     setExportError(null);
     setIsExportLoading(true);
     try {
-      await job();
+      const result = await job();
+      if (result?.status === 'cancelled') return;
       onClose();
     } catch (error) {
       setExportError(error instanceof Error ? error.message : 'Export failed. Please try again.');
@@ -125,15 +129,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         throw new Error(details);
       }
 
-      const url = URL.createObjectURL(zipResult.blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = zipResult.fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      onClose();
+      const delivery = await deliverFile({
+        content: zipResult.blob,
+        fileName: zipResult.fileName,
+        extension: 'zip',
+        dialogTitle: 'Save Product ZIP',
+        filterName: 'ZIP archive',
+      });
+      if (delivery.status === 'saved') onClose();
     } catch (error) {
       const message = error instanceof Error && error.message
         ? error.message

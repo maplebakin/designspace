@@ -46,6 +46,10 @@ import {
   duplicateDocumentPageImageState,
   repairDocumentImageGroups,
 } from '../model/documentImageGroups';
+import {
+  deliverFile,
+  type FileDeliveryResult,
+} from '../../editor/services/fileDeliveryService';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
@@ -66,7 +70,7 @@ type DocumentStoreState = {
   loadLibraryProject: (projectId: string) => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   saveProject: (name?: string) => Promise<void>;
-  downloadProjectFile: () => Promise<void>;
+  downloadProjectFile: () => Promise<FileDeliveryResult | null>;
   renameProject: (name: string) => void;
   updateDocumentBackground: (value: string) => void;
   updateDocumentLanguage: (language: string) => void;
@@ -393,17 +397,6 @@ const updateProjectTimestamp = (
   };
 };
 
-const downloadBlob = (blob: Blob, fileName: string) => {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-};
-
 const safeProjectFileName = (name: string) => {
   const safe = Array.from(name.trim())
     .filter((character) => character.charCodeAt(0) >= 32)
@@ -530,20 +523,41 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
 
   downloadProjectFile: async () => {
     const project = get().project;
-    if (!project) return;
+    if (!project) return null;
     const payload = updateProjectTimestamp(
       compactDocumentProjectForPersistence(project)
     );
-    downloadBlob(
-      new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
-      safeProjectFileName(payload.projectName)
-    );
+    const fileName = safeProjectFileName(payload.projectName);
+    let delivery: FileDeliveryResult;
+    try {
+      delivery = await deliverFile({
+        content: new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+        fileName,
+        extension: 'apocaproject.json',
+        dialogTitle: 'Save Design Space project',
+        filterName: 'Design Space project',
+      });
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Could not save the Design Space project.';
+      set({
+        saveStatus: 'error',
+        isDirty: true,
+        toastMessage: message,
+      });
+      return null;
+    }
+    if (delivery.status === 'cancelled') return delivery;
     set({
       project: payload,
       isDirty: false,
       saveStatus: 'saved',
-      toastMessage: `Downloaded project: ${payload.projectName}`,
+      toastMessage: delivery.path
+        ? `Downloaded project to ${delivery.path}`
+        : `Downloaded project: ${payload.projectName}`,
     });
+    return delivery;
   },
 
   renameProject: (name) => {

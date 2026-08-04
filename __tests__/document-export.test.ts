@@ -537,6 +537,10 @@ describe('document export', () => {
     expect(result).toEqual({
       blob: tinyPng,
       fileName: 'historical-pages-4952.pdf',
+      delivery: {
+        status: 'saved',
+        fileName: 'historical-pages-4952.pdf',
+      },
     });
     expect(createObjectUrl).toHaveBeenCalledWith(tinyPng);
     expect(click).toHaveBeenCalledTimes(1);
@@ -558,11 +562,19 @@ describe('document export', () => {
 
     const results = await service.downloadPngPages(sources, 'Historical Pages 49–52');
 
-    expect(results.map((result) => result.fileName)).toEqual([
+    expect(results.files.map((result) => result.fileName)).toEqual([
       'historical-pages-4952-page-01.png',
       'historical-pages-4952-page-02.png',
       'historical-pages-4952-page-03.png',
     ]);
+    expect(results.delivery).toEqual({
+      status: 'saved',
+      files: [
+        { fileName: 'historical-pages-4952-page-01.png' },
+        { fileName: 'historical-pages-4952-page-02.png' },
+        { fileName: 'historical-pages-4952-page-03.png' },
+      ],
+    });
     expect(click).toHaveBeenCalledTimes(3);
     expect(Array.from(document.querySelectorAll('a[download]'))).toHaveLength(0);
   });
