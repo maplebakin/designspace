@@ -326,6 +326,36 @@ describe('document export', () => {
     expect(svg).not.toContain('Reference scan');
   });
 
+  it('keeps source hyphenation text stable without inventing malformed glyphs', () => {
+    const source = document.createElement('main');
+    source.lang = 'de';
+    source.innerHTML = `
+      <p style="hyphens: auto; -webkit-hyphens: auto">
+        Donaudampfschifffahrtsgesellschaftskapitän Übergrößen Straße großartig
+        resettle\u00ADment tradi\u00ADtions Ciu\u00ADcurova
+      </p>
+    `;
+
+    const clone = createCleanDocumentClone(source, { copyComputedStyles: false });
+    const serializedText = clone.textContent || '';
+    const svg = createDocumentSvgMarkup(clone, { widthIn: 8.5, heightIn: 11 }, 300);
+    const codePoints = (value: string) => Array.from(value)
+      .map((character) => character.codePointAt(0) || 0);
+
+    expect(serializedText).toContain('Donaudampfschifffahrtsgesellschaftskapitän');
+    expect(serializedText).toContain('Übergrößen');
+    expect(serializedText).toContain('Straße');
+    expect(serializedText).toContain('großartig');
+    expect(serializedText).toContain('resettle\u00ADment');
+    expect(serializedText).toContain('tradi\u00ADtions');
+    expect(serializedText).toContain('Ciu\u00ADcurova');
+    expect(clone.querySelector('p')?.style.hyphens).toBe('auto');
+    expect(codePoints(svg).filter((codePoint) => codePoint === 0x00ad))
+      .toHaveLength(3);
+    expect(codePoints(svg).filter((codePoint) => codePoint === 0xfffe))
+      .toHaveLength(0);
+  });
+
   it('creates a raster-backed PDF with the requested physical MediaBox', async () => {
     const service = new DocumentExportService();
     const pngSpy = vi.spyOn(service, 'exportPngBlob').mockResolvedValue(tinyPng);
