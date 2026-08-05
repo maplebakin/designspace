@@ -13,6 +13,7 @@ import {
   createDocumentPrintCss,
   createDocumentSvgMarkup,
   getDocumentExportSvgTarget,
+  prepareDocumentExportClone,
   triggerDocumentDownload,
   waitForDocumentResources,
 } from '../src/document/services/documentExportService';
@@ -327,6 +328,136 @@ describe('document export', () => {
     expect(svg).toContain('Full-width title');
     expect(svg).toContain('column-count: 3');
     expect(svg).not.toContain('Reference scan');
+  });
+
+  it('waits for every cloned image after replacing its source', async () => {
+    const source = document.createElement('main');
+    source.innerHTML = '<img data-image-id="image-1" data-asset-id="asset-1" width="240" height="160" src="blob:document-image" alt="Photo">';
+    const decodeImage = vi.fn().mockResolvedValue(undefined);
+    const fetchResource = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => tinyPng,
+    });
+
+    const clone = await prepareDocumentExportClone(source, {
+      widthIn: 8.5,
+      heightIn: 11,
+    }, {
+      resourceWaitOptions: { fontsReady: null, decodeImage },
+      fetchResource: fetchResource as unknown as typeof fetch,
+      copyComputedStyles: false,
+    });
+
+    const image = clone.querySelector<HTMLImageElement>('img');
+    expect(fetchResource).toHaveBeenCalledWith('blob:document-image');
+    expect(decodeImage).toHaveBeenCalledTimes(2);
+    expect(decodeImage.mock.calls[1][0]).toBe(image);
+    expect(image?.src).toMatch(/^data:image\/png;base64,/);
+    expect(image?.getAttribute('width')).toBe('240');
+    expect(image?.getAttribute('height')).toBe('160');
+    expect(image?.hasAttribute('loading')).toBe(false);
+    expect(image?.hasAttribute('decoding')).toBe(false);
+  });
+
+  it('normalizes a Tauri asset URL through the export fetch path', async () => {
+    const source = document.createElement('main');
+    source.innerHTML = '<img width="240" height="160" src="asset://localhost/image.jpg" alt="Photo">';
+    const fetchResource = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => tinyPng,
+    });
+    const clone = await prepareDocumentExportClone(source, {
+      widthIn: 8.5,
+      heightIn: 11,
+    }, {
+      resourceWaitOptions: {
+        fontsReady: null,
+        decodeImage: vi.fn().mockResolvedValue(undefined),
+      },
+      fetchResource: fetchResource as unknown as typeof fetch,
+      copyComputedStyles: false,
+    });
+
+    expect(fetchResource).toHaveBeenCalledWith('asset://localhost/image.jpg');
+    expect(clone.querySelector<HTMLImageElement>('img')?.src)
+      .toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('rejects export when a cloned image cannot be decoded', async () => {
+    const source = document.createElement('main');
+    source.innerHTML = '<img width="240" height="160" src="data:image/png;base64,photo" alt="Photo">';
+    const decodeImage = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('image decode failed'));
+
+    await expect(prepareDocumentExportClone(source, {
+      widthIn: 8.5,
+      heightIn: 11,
+    }, {
+      resourceWaitOptions: { fontsReady: null, decodeImage },
+      copyComputedStyles: false,
+    })).rejects.toThrow('image decode failed');
+  });
+
+  it('uses embedded SVG images only in the Tauri serialization path', async () => {
+    const source = document.createElement('main');
+    source.innerHTML = `
+      <figure data-image-id="image-1" data-asset-id="asset-1">
+        <img width="240" height="160" src="data:image/png;base64,photo" alt="Photo">
+        <figcaption>Attached caption</figcaption>
+      </figure>
+      <figure data-image-id="image-2" data-asset-id="asset-2">
+        <img width="240" height="160" src="data:image/png;base64,photo-2" alt="Second photo">
+      </figure>
+    `;
+    const clone = await prepareDocumentExportClone(source, {
+      widthIn: 8.5,
+      heightIn: 11,
+    }, {
+      resourceWaitOptions: {
+        fontsReady: null,
+        decodeImage: vi.fn().mockResolvedValue(undefined),
+      },
+      copyComputedStyles: false,
+    });
+
+    const browserSvg = createDocumentSvgMarkup(
+      clone,
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      CSS_PIXELS_PER_INCH,
+      'browser'
+    );
+    const tauriSvg = createDocumentSvgMarkup(
+      clone,
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      CSS_PIXELS_PER_INCH,
+      'tauri'
+    );
+
+    expect(browserSvg.match(/<img\b/g)).toHaveLength(2);
+    expect(browserSvg).not.toContain('<image');
+    expect(tauriSvg.match(/<image\b/g)).toHaveLength(2);
+    expect(tauriSvg).not.toMatch(/<img\b/);
+    expect(tauriSvg).toContain('href="data:image/png;base64,photo"');
+    expect(tauriSvg).toContain('href="data:image/png;base64,photo-2"');
+    expect(tauriSvg).toContain('data-image-id="image-1"');
+    expect(tauriSvg).toContain('Attached caption');
+  });
+
+  it('fails Tauri serialization when an image source was not made self-contained', () => {
+    const source = document.createElement('main');
+    source.innerHTML = '<img width="240" height="160" src="tauri://localhost/image.jpg" alt="Photo">';
+    const clone = createCleanDocumentClone(source, { copyComputedStyles: false });
+
+    expect(() => createDocumentSvgMarkup(
+      clone,
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      CSS_PIXELS_PER_INCH,
+      'tauri'
+    )).toThrow(/could not be embedded for Tauri export/i);
   });
 
   it('uses a CSS-sized SVG viewport for the Tauri foreignObject rasterizer', () => {

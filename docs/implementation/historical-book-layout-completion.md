@@ -165,6 +165,27 @@ groups, and named typography. Pages are rasterized sequentially to bound memory.
 Print uses a committed multi-page host and removes it on `afterprint` or the
 bounded fallback timer.
 
+### Tauri image embedding
+
+The browser export clone keeps retained images as XHTML `<img>` elements. The
+Tauri/WebKitGTK raster path uses the same committed clone and geometry, but
+replaces only its retained image nodes with SVG `<image href="data:...">`
+elements before serializing the SVG. WebKitGTK lays out the XHTML
+`foreignObject` correctly, yet drops raster HTML image content when that XHTML
+is loaded from an SVG data URL; SVG image resources render correctly. Image
+sources are made self-contained, awaited again after clone source replacement,
+and the export rejects a source that cannot be embedded or decoded. The
+diagnostics report source type, MIME, byte length, natural/rendered dimensions,
+serialized-source presence, and the chosen raster element without logging image
+contents. PDF assembly reads the completed PNG through `FileReader`; this avoids
+a WebKitGTK `Blob.arrayBuffer()` promise stalling on multi-megabyte page output
+without changing the raster bytes.
+
+This is an engine-specific export delivery change: it does not alter document
+geometry, image exclusion rectangles, typography, browser output, or the direct
+DOM print path. The PDF remains intentionally raster-backed, so its text is not
+selectable/searchable.
+
 The PDF limitation is intentional: text is not selectable/searchable. The
 layout contract and ordered page-source interface leave room for a future
 vector/text renderer.

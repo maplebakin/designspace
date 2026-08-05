@@ -6,7 +6,12 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
-import { createHistoricalBookFixtureProject } from '../src/document/fixtures/historicalBookFixtures';
+import {
+  createHistoricalBookFixtureProject,
+  HISTORICAL_BOOK_FIXTURE_ASSET_IDS,
+} from '../src/document/fixtures/historicalBookFixtures';
+
+const REGRESSION_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgEAIAAACsiDHgAAAAiUlEQVRYw+2WwQ0AIQgEvQS1AjuxibuHlmDl0IpXhA8yBitgssPK01rvayXsk2Iy9+c9xgFAVRn79R7jBMDyTJGAJwB/B+gKGV0hhSt0wT+QR0IrhE+Av8T8GoUrRD8limV+AlGjrgBKV8hCIWeAqFFngKqCPyXYCt1Qo3CF6C1UL2ghdgIFvgM/r0dGVG3+KM8AAAAASUVORK5CYII=';
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +20,13 @@ type RasterBounds = {
   height: number;
   redBounds: { minX: number; minY: number; maxX: number; maxY: number };
   captionRows: { min: number; max: number } | null;
+};
+
+type RasterCropStats = {
+  pixels: number;
+  changedPixels: number;
+  distinctColorBuckets: number;
+  luminanceVariance: number;
 };
 
 const inspectHistoricalPageRaster = async (
@@ -77,6 +89,62 @@ const inspectHistoricalPageRaster = async (
   };
 }, bytes.toString('base64'));
 
+const inspectRasterCrop = async (
+  page: Page,
+  bytes: Buffer,
+  cssRect: { left: number; top: number; width: number; height: number },
+  cssToRaster: number
+): Promise<RasterCropStats> => page.evaluate(async ({ base64, rect, scale }) => {
+  const binary = atob(base64);
+  const imageBytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([imageBytes], { type: 'image/png' }));
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not inspect the exported crop.');
+  context.drawImage(bitmap, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const left = Math.max(0, Math.floor(rect.left * scale));
+  const top = Math.max(0, Math.floor(rect.top * scale));
+  const right = Math.min(canvas.width, Math.ceil((rect.left + rect.width) * scale));
+  const bottom = Math.min(canvas.height, Math.ceil((rect.top + rect.height) * scale));
+  const colorBuckets = new Set<string>();
+  let changedPixels = 0;
+  let luminanceSum = 0;
+  let luminanceSquares = 0;
+  let sampleCount = 0;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * canvas.width + x) * 4;
+      const red = pixels[offset];
+      const green = pixels[offset + 1];
+      const blue = pixels[offset + 2];
+      const alpha = pixels[offset + 3];
+      if (alpha <= 200) continue;
+      const paperDistance = Math.abs(red - 250) + Math.abs(green - 248) + Math.abs(blue - 245);
+      if (paperDistance > 24) changedPixels += 1;
+      colorBuckets.add(`${Math.floor(red / 8)}:${Math.floor(green / 8)}:${Math.floor(blue / 8)}`);
+      const luminance = (red + green + blue) / 3;
+      luminanceSum += luminance;
+      luminanceSquares += luminance * luminance;
+      sampleCount += 1;
+    }
+  }
+  bitmap.close();
+  const mean = sampleCount > 0 ? luminanceSum / sampleCount : 0;
+  return {
+    pixels: Math.max(0, right - left) * Math.max(0, bottom - top),
+    changedPixels,
+    distinctColorBuckets: colorBuckets.size,
+    luminanceVariance: sampleCount > 0 ? luminanceSquares / sampleCount - mean * mean : 0,
+  };
+}, {
+  base64: bytes.toString('base64'),
+  rect: cssRect,
+  scale: cssToRaster,
+});
+
 const readFirstPdfImage = async (pdfPath: string) => {
   const directory = await mkdtemp(join(tmpdir(), 'design-space-pdf-image-'));
   const prefix = join(directory, 'page');
@@ -89,8 +157,10 @@ const readFirstPdfImage = async (pdfPath: string) => {
   }
 };
 
-const loadHistoricalFixture = async (page: Page) => {
-  const fixture = createHistoricalBookFixtureProject();
+const loadHistoricalFixture = async (
+  page: Page,
+  fixture = createHistoricalBookFixtureProject()
+) => {
   await page.goto('/');
   await page.getByTestId('dashboard-open-file-input').setInputFiles({
     name: 'historical-book-pages-49-52.json',
@@ -430,6 +500,165 @@ test.describe('historical book acceptance fixture', () => {
       expect(pdfRaster.captionRows).toEqual(browserRaster.captionRows);
     } finally {
       await rm(pdfDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test('proves Tauri-target PNG/PDF retain multi-color image and caption pixels', async ({ page }) => {
+    test.slow();
+    test.setTimeout(180_000);
+    const fixture = createHistoricalBookFixtureProject();
+    Object.values(HISTORICAL_BOOK_FIXTURE_ASSET_IDS).forEach((assetId) => {
+      fixture.assets[assetId] = REGRESSION_IMAGE;
+    });
+    await loadHistoricalFixture(page, fixture);
+
+    const geometry = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+      const sheet = document.querySelector<HTMLElement>('.document-page-sheet');
+      const image = document.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"] .document-image__media'
+      );
+      const caption = document.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"] figcaption'
+      );
+      if (!root || !sheet || !image || !caption) throw new Error('Image geometry unavailable.');
+      const rootRect = root.getBoundingClientRect();
+      const sheetRect = sheet.getBoundingClientRect();
+      const zoom = rootRect.width / (Number(root.dataset.pageWidthIn) * 96);
+      const pageRect = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: (rect.left - rootRect.left) / zoom,
+          top: (rect.top - rootRect.top) / zoom,
+          width: rect.width / zoom,
+          height: rect.height / zoom,
+        };
+      };
+      return {
+        rootWidth: Number(root.dataset.pageWidthIn) * 96,
+        rootHeight: Number(root.dataset.pageHeightIn) * 96,
+        rootTopWithinSheet: (rootRect.top - sheetRect.top) / zoom,
+        image: pageRect(image),
+        caption: pageRect(caption),
+      };
+    });
+    const imageCrop = {
+      left: geometry.image.left + 2,
+      top: geometry.image.top + 2,
+      width: Math.max(1, geometry.image.width - 4),
+      height: Math.max(1, geometry.image.height - 4),
+    };
+    const captionCrop = {
+      left: geometry.caption.left,
+      top: geometry.caption.top,
+      width: geometry.caption.width,
+      height: geometry.caption.height,
+    };
+    const outputs = await page.evaluate(async () => {
+      const service = await import('/src/document/services/documentExportService.ts');
+      const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+      if (!root) throw new Error('Historical export root unavailable.');
+      const options = {
+        widthIn: 8.5,
+        heightIn: 11,
+        dpi: 300,
+        backgroundColor: '#FAF8F5',
+      };
+      const toBase64 = async (blob: Blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        return btoa(binary);
+      };
+      delete (window as any).__TAURI_INTERNALS__;
+      const browserPng = await service.documentExportService.exportPngBlob(root, options);
+      (window as any).__TAURI_INTERNALS__ = {};
+      const tauriPng = await service.documentExportService.exportPngBlob(root, options);
+      const tauriPdf = await service.documentExportService.exportPdfBlob(root, options);
+      delete (window as any).__TAURI_INTERNALS__;
+      return {
+        browserPng: await toBase64(browserPng),
+        tauriPng: await toBase64(tauriPng),
+        tauriPdf: await toBase64(tauriPdf),
+      };
+    });
+    const browserPng = Buffer.from(outputs.browserPng, 'base64');
+    const tauriPng = Buffer.from(outputs.tauriPng, 'base64');
+    const tauriPdf = Buffer.from(outputs.tauriPdf, 'base64');
+    const rasterScale = 2550 / geometry.rootWidth;
+    const browserCrop = await inspectRasterCrop(page, browserPng, imageCrop, rasterScale);
+    const tauriCrop = await inspectRasterCrop(page, tauriPng, imageCrop, rasterScale);
+    const captionRaster = await inspectRasterCrop(page, tauriPng, captionCrop, rasterScale);
+
+    expect(geometry.rootWidth).toBe(816);
+    expect(geometry.rootHeight).toBe(1056);
+    expect(geometry.rootTopWithinSheet).toBeCloseTo(1, 0);
+    expect(tauriPng).not.toHaveLength(0);
+    expect(tauriCrop.changedPixels).toBeGreaterThan(tauriCrop.pixels * 0.5);
+    expect(tauriCrop.distinctColorBuckets).toBeGreaterThan(20);
+    expect(tauriCrop.luminanceVariance).toBeGreaterThan(100);
+    expect(tauriCrop.changedPixels).toBeCloseTo(browserCrop.changedPixels, -2);
+    expect(captionRaster.changedPixels).toBeGreaterThan(20);
+
+    const pdfDirectory = await mkdtemp(join(tmpdir(), 'design-space-tauri-image-crop-'));
+    const pdfPath = join(pdfDirectory, 'historical-page-49-tauri.pdf');
+    try {
+      await writeFile(pdfPath, tauriPdf);
+      const pdfRaster = await readFirstPdfImage(pdfPath);
+      const pdfCrop = await inspectRasterCrop(page, pdfRaster, imageCrop, rasterScale);
+      expect(pdfCrop.changedPixels).toBeCloseTo(tauriCrop.changedPixels, -2);
+      expect(pdfCrop.distinctColorBuckets).toBeGreaterThan(20);
+      expect(pdfCrop.luminanceVariance).toBeGreaterThan(100);
+    } finally {
+      await rm(pdfDirectory, { recursive: true, force: true });
+    }
+
+    for (const [tabIndex, expectedImageCount] of [[1, 2], [2, 2]] as const) {
+      await page.getByTestId(`document-page-tab-${tabIndex}`).click();
+      await expect(page.getByTestId('document-export-root')).toHaveAttribute(
+        'data-folio-number',
+        String(49 + tabIndex)
+      );
+      const activePage = await page.evaluate(async () => {
+        const service = await import('/src/document/services/documentExportService.ts');
+        const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+        if (!root) throw new Error('Active export root unavailable.');
+        const rootRect = root.getBoundingClientRect();
+        const rootWidth = Number(root.dataset.pageWidthIn) * 96;
+        const zoom = rootRect.width / rootWidth;
+        const imageRects = Array.from(document.querySelectorAll<HTMLElement>(
+          '[data-layout-role="occupied-columns"] .document-image__media'
+        )).map((image) => {
+          const rect = image.getBoundingClientRect();
+          return {
+            left: (rect.left - rootRect.left) / zoom + 2,
+            top: (rect.top - rootRect.top) / zoom + 2,
+            width: Math.max(1, rect.width / zoom - 4),
+            height: Math.max(1, rect.height / zoom - 4),
+          };
+        });
+        (window as any).__TAURI_INTERNALS__ = {};
+        const blob = await service.documentExportService.exportPngBlob(root, {
+          widthIn: Number(root.dataset.pageWidthIn),
+          heightIn: Number(root.dataset.pageHeightIn),
+          dpi: 300,
+          backgroundColor: '#FAF8F5',
+        });
+        delete (window as any).__TAURI_INTERNALS__;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        return { imageRects, rootWidth, base64: btoa(binary) };
+      });
+      expect(activePage.imageRects).toHaveLength(expectedImageCount);
+      const scale = 2550 / activePage.rootWidth;
+      const raster = Buffer.from(activePage.base64, 'base64');
+      for (const rect of activePage.imageRects) {
+        const crop = await inspectRasterCrop(page, raster, rect, scale);
+        expect(crop.changedPixels).toBeGreaterThan(crop.pixels * 0.5);
+        expect(crop.distinctColorBuckets).toBeGreaterThan(20);
+        expect(crop.luminanceVariance).toBeGreaterThan(100);
+      }
     }
   });
 

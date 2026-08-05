@@ -266,6 +266,7 @@ export const DocumentImageNodeView = ({
       }}
       data-document-image="true"
       data-image-id={attributes.id}
+      data-asset-id={attributes.assetId}
       data-wrap={attributes.wrap}
       data-coordinate-space={attributes.coordinateSpace}
       data-vertical-anchor={attributes.verticalAnchor}

@@ -1576,7 +1576,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             if (warnings.length > 0) setToastMessage(warnings[0]);
           },
           onDiagnostics: (diagnostics: DocumentExportDiagnostics) => {
-            if (isTauriRecoveryAvailable()) {
+            if (isTauriRecoveryAvailable() && import.meta.env.DEV) {
               console.info('[Design Space export diagnostics]', diagnostics);
             }
           },

@@ -99,6 +99,43 @@ export type DocumentExportRectDiagnostics = {
   height: number;
 };
 
+export type DocumentExportImageSourceType =
+  | 'data-url'
+  | 'blob-url'
+  | 'file-url'
+  | 'tauri-asset-url'
+  | 'app-url'
+  | 'other';
+
+export type DocumentExportImageDiagnostics = {
+  index: number;
+  imageId: string | null;
+  assetId: string | null;
+  sourceType: DocumentExportImageSourceType;
+  sourceMimeType: string;
+  sourceLength: number;
+  sourceByteLength: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  renderedWidth: number;
+  renderedHeight: number;
+  complete: boolean;
+  clone: {
+    sourceType: DocumentExportImageSourceType;
+    sourceMimeType: string;
+    sourceLength: number;
+    sourceByteLength: number;
+    naturalWidth: number;
+    naturalHeight: number;
+    renderedWidth: number;
+    renderedHeight: number;
+    complete: boolean;
+    decode: 'resolved';
+  };
+  serializedSourcePresent: boolean;
+  rasterElement: 'xhtml-img' | 'svg-image';
+};
+
 export type DocumentExportDiagnostics = {
   target: DocumentExportSvgTarget;
   page: {
@@ -130,6 +167,7 @@ export type DocumentExportDiagnostics = {
     width: number;
     height: number;
   };
+  retainedImages: DocumentExportImageDiagnostics[];
   canvas: DocumentPixelDimensions;
   draw: {
     source: DocumentExportRectDiagnostics;
@@ -455,6 +493,17 @@ const waitForImage = async (image: HTMLImageElement) => {
   });
 };
 
+const waitForDocumentImage = async (
+  image: HTMLImageElement,
+  options?: DocumentResourceWaitOptions
+) => {
+  if (options?.decodeImage) {
+    await options.decodeImage(image);
+    return;
+  }
+  await waitForImage(image);
+};
+
 const retainedSourceImages = (
   root: HTMLElement,
   excludedSelectors: string[] = []
@@ -478,7 +527,7 @@ export const waitForDocumentResources = async (
   const images = retainedSourceImages(root, excludedSelectors);
   await Promise.all(
     images.map((image) =>
-      options.decodeImage ? options.decodeImage(image) : waitForImage(image)
+      waitForDocumentImage(image, options)
     )
   );
 };
@@ -497,16 +546,86 @@ const blobToDataUrl = (blob: Blob) =>
     reader.readAsDataURL(blob);
   });
 
+const dataUrlMetadata = (source: string) => {
+  const match = source.match(/^data:([^,]*),(.*)$/is);
+  if (!match) return null;
+  const header = match[1] || '';
+  const payload = match[2] || '';
+  const headerParts = header.split(';');
+  const mimeType = headerParts[0] || 'text/plain';
+  const isBase64 = headerParts.some((part) => part.toLowerCase() === 'base64');
+  if (isBase64) {
+    const normalizedPayload = payload.replace(/\s/g, '');
+    const padding = normalizedPayload.endsWith('==')
+      ? 2
+      : normalizedPayload.endsWith('=')
+        ? 1
+        : 0;
+    return {
+      mimeType,
+      byteLength: Math.max(0, Math.floor(normalizedPayload.length * 3 / 4) - padding),
+    };
+  }
+  try {
+    const decodedPayload = decodeURIComponent(payload);
+    return {
+      mimeType,
+      byteLength: typeof TextEncoder === 'undefined'
+        ? decodedPayload.length
+        : new TextEncoder().encode(decodedPayload).byteLength,
+    };
+  } catch {
+    return { mimeType, byteLength: 0 };
+  }
+};
+
+const documentImageSourceType = (source: string): DocumentExportImageSourceType => {
+  if (/^data:/i.test(source)) return 'data-url';
+  if (/^blob:/i.test(source)) return 'blob-url';
+  if (/^file:/i.test(source)) return 'file-url';
+  if (/^(?:asset|tauri):/i.test(source)) return 'tauri-asset-url';
+  if (/^(?:https?|app):/i.test(source)) return 'app-url';
+  return 'other';
+};
+
+const describeDocumentImageSource = (source: string) => {
+  const data = dataUrlMetadata(source);
+  return {
+    sourceType: documentImageSourceType(source),
+    sourceMimeType: data?.mimeType || '',
+    sourceLength: source.length,
+    sourceByteLength: data?.byteLength || 0,
+  };
+};
+
+const documentImageSource = (image: HTMLImageElement) => (
+  image.currentSrc || image.src || image.getAttribute('src') || ''
+);
+
+const documentImageIdentity = (image: HTMLImageElement, attribute: string) => (
+  image.getAttribute(attribute)
+  || image.closest(`[${attribute}]`)?.getAttribute(attribute)
+  || null
+);
+
+const documentImageRenderedSize = (image: HTMLImageElement) => {
+  const rect = image.getBoundingClientRect();
+  return {
+    width: rect.width || Number.parseFloat(image.style.width) || image.width || 0,
+    height: rect.height || Number.parseFloat(image.style.height) || image.height || 0,
+  };
+};
+
 const makeImageSourceSelfContained = async (
   source: string,
   fetchResource: typeof fetch
 ) => {
-  if (/^data:/i.test(source)) return source;
   const response = await fetchResource(source);
   if (!response.ok) {
     throw new Error(`Could not load a document image for export (${response.status}).`);
   }
-  return blobToDataUrl(await response.blob());
+  const blob = await response.blob();
+  return blobToDataUrl(blob);
 };
 
 const inlineRetainedImages = async (
@@ -525,21 +644,34 @@ const inlineRetainedImages = async (
 
   await Promise.all(sourceImages.map(async (sourceImage, index) => {
     const clonedImage = clonedImages[index];
-    const imageSource = sourceImage.currentSrc || sourceImage.src || sourceImage.getAttribute('src') || '';
+    const imageSource = documentImageSource(sourceImage);
     if (!imageSource) {
       throw new Error(`Document image has no source${sourceImage.alt ? `: ${sourceImage.alt}` : '.'}`);
     }
 
-    if (/^data:/i.test(imageSource)) {
-      clonedImage.src = imageSource;
-    } else {
-      if (!fetchResource) {
-        throw new Error('This environment cannot make document images self-contained for export.');
-      }
-      clonedImage.src = await makeImageSourceSelfContained(imageSource, fetchResource);
+    if (!fetchResource && !/^data:/i.test(imageSource)) {
+      throw new Error('This environment cannot make document images self-contained for export.');
     }
+
     clonedImage.removeAttribute('srcset');
     clonedImage.removeAttribute('sizes');
+    clonedImage.setAttribute('loading', 'eager');
+    clonedImage.setAttribute('decoding', 'sync');
+    const selfContainedSource = /^data:/i.test(imageSource)
+      ? imageSource
+      : await makeImageSourceSelfContained(imageSource, fetchResource as typeof fetch);
+    clonedImage.src = selfContainedSource;
+    await waitForDocumentImage(clonedImage, options.resourceWaitOptions);
+
+    // A clone can lose explicit dimensions when the source came from a
+    // responsive image. Keep the committed geometry authoritative after the
+    // source is replaced and before SVG/print serialization.
+    if (!clonedImage.getAttribute('width') && sourceImage.getAttribute('width')) {
+      clonedImage.setAttribute('width', sourceImage.getAttribute('width') || '');
+    }
+    if (!clonedImage.getAttribute('height') && sourceImage.getAttribute('height')) {
+      clonedImage.setAttribute('height', sourceImage.getAttribute('height') || '');
+    }
     clonedImage.removeAttribute('loading');
     clonedImage.removeAttribute('decoding');
   }));
@@ -592,6 +724,76 @@ const escapeXmlAttribute = (value: string) =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
+const tauriImagePreserveAspectRatio = (image: HTMLImageElement) => {
+  const objectFit = image.style.getPropertyValue('object-fit')
+    || image.style.objectFit
+    || 'fill';
+  if (objectFit === 'cover') return 'xMidYMid slice';
+  if (objectFit === 'contain') return 'xMidYMid meet';
+  if (objectFit === 'scale-down') return 'xMidYMid meet';
+  return 'none';
+};
+
+/**
+ * WebKitGTK lays out XHTML inside foreignObject correctly at CSS size, but it
+ * drops raster HTMLImageElement content when the same XHTML is loaded from an
+ * SVG data URL. SVG image resources are supported by that raster path. The
+ * replacement is made on the export-only clone and keeps the image's computed
+ * box, class, accessibility metadata, and object-fit behavior intact.
+ */
+const replaceTauriCloneImagesWithSvgImages = (clone: HTMLElement) => {
+  const images = Array.from(clone.querySelectorAll<HTMLImageElement>('img'));
+  images.forEach((image) => {
+    const source = documentImageSource(image);
+    if (!/^data:/i.test(source)) {
+      throw new Error(
+        `Document image could not be embedded for Tauri export${image.alt ? `: ${image.alt}` : '.'}`
+      );
+    }
+
+    const width = Number.parseFloat(image.style.width)
+      || Number.parseFloat(image.getAttribute('width') || '')
+      || image.width
+      || image.naturalWidth;
+    const height = Number.parseFloat(image.style.height)
+      || Number.parseFloat(image.getAttribute('height') || '')
+      || image.height
+      || image.naturalHeight;
+    if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+      throw new Error(
+        `Document image has no usable dimensions for Tauri export${image.alt ? `: ${image.alt}` : '.'}`
+      );
+    }
+
+    const svgImage = clone.ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+    Array.from(image.attributes).forEach((attribute) => {
+      if (['src', 'srcset', 'sizes', 'loading', 'decoding', 'alt', 'width', 'height'].includes(attribute.name)) {
+        return;
+      }
+      svgImage.setAttribute(attribute.name, attribute.value);
+    });
+    svgImage.setAttribute('width', String(width));
+    svgImage.setAttribute('height', String(height));
+    svgImage.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svgImage.setAttribute('preserveAspectRatio', 'none');
+    if (image.alt) {
+      svgImage.setAttribute('role', 'img');
+      svgImage.setAttribute('aria-label', image.alt);
+    }
+
+    const embeddedImage = clone.ownerDocument.createElementNS(SVG_NAMESPACE, 'image');
+    embeddedImage.setAttribute('x', '0');
+    embeddedImage.setAttribute('y', '0');
+    embeddedImage.setAttribute('width', '100%');
+    embeddedImage.setAttribute('height', '100%');
+    embeddedImage.setAttribute('preserveAspectRatio', tauriImagePreserveAspectRatio(image));
+    embeddedImage.setAttribute('href', source);
+    svgImage.appendChild(embeddedImage);
+    image.replaceWith(svgImage);
+  });
+  return images.length;
+};
+
 export const createDocumentSvgMarkup = (
   cleanClone: HTMLElement,
   size: DocumentPhysicalSize,
@@ -619,7 +821,11 @@ export const createDocumentSvgMarkup = (
   wrapper.style.overflow = 'hidden';
   wrapper.style.position = 'relative';
   wrapper.style.boxSizing = 'border-box';
-  wrapper.appendChild(cleanClone.cloneNode(true));
+  const exportClone = cleanClone.cloneNode(true) as HTMLElement;
+  if (target === 'tauri') {
+    replaceTauriCloneImagesWithSvgImages(exportClone);
+  }
+  wrapper.appendChild(exportClone);
 
   const serializedXhtml = new XMLSerializer().serializeToString(wrapper);
   // Chromium applies the root viewBox transform to foreignObject content. The
@@ -664,6 +870,50 @@ const exportComputedStyleValue = (element: Element, property: string) => {
   return window.getComputedStyle(element).getPropertyValue(property);
 };
 
+const collectDocumentExportImageDiagnostics = (
+  sourceRoot: HTMLElement,
+  clone: HTMLElement,
+  serializedSvg: string,
+  target: DocumentExportSvgTarget
+): DocumentExportImageDiagnostics[] => {
+  const sourceImages = retainedSourceImages(sourceRoot);
+  const clonedImages = Array.from(clone.querySelectorAll<HTMLImageElement>('img'));
+  return sourceImages.map((sourceImage, index) => {
+    const clonedImage = clonedImages[index];
+    if (!clonedImage) {
+      throw new Error('The document export image diagnostics could not match the cloned images.');
+    }
+    const source = documentImageSource(sourceImage);
+    const clonedSource = documentImageSource(clonedImage);
+    const sourceMetadata = describeDocumentImageSource(source);
+    const clonedMetadata = describeDocumentImageSource(clonedSource);
+    const sourceRenderedSize = documentImageRenderedSize(sourceImage);
+    const clonedRenderedSize = documentImageRenderedSize(clonedImage);
+    return {
+      index,
+      imageId: documentImageIdentity(sourceImage, 'data-image-id'),
+      assetId: documentImageIdentity(sourceImage, 'data-asset-id'),
+      ...sourceMetadata,
+      naturalWidth: sourceImage.naturalWidth,
+      naturalHeight: sourceImage.naturalHeight,
+      renderedWidth: sourceRenderedSize.width,
+      renderedHeight: sourceRenderedSize.height,
+      complete: sourceImage.complete,
+      clone: {
+        ...clonedMetadata,
+        naturalWidth: clonedImage.naturalWidth,
+        naturalHeight: clonedImage.naturalHeight,
+        renderedWidth: clonedRenderedSize.width,
+        renderedHeight: clonedRenderedSize.height,
+        complete: clonedImage.complete,
+        decode: 'resolved' as const,
+      },
+      serializedSourcePresent: serializedSvg.includes(clonedSource),
+      rasterElement: target === 'tauri' ? 'svg-image' : 'xhtml-img',
+    };
+  });
+};
+
 const loadSvgImage = async (svgMarkup: string) => {
   // Chromium treats an SVG containing foreignObject as cross-origin when it is
   // loaded from a blob URL, which taints the destination canvas. A fully
@@ -692,22 +942,29 @@ const canvasToPngBlob = (canvas: HTMLCanvasElement) =>
   });
 
 const readBlobBytes = async (blob: Blob): Promise<Uint8Array> => {
+  // WebKitGTK exposes Blob.arrayBuffer(), but its promise can remain pending
+  // for the multi-megabyte PNG produced by a page export. FileReader uses the
+  // native blob read path consistently in both WebKitGTK and Chromium.
+  if (typeof FileReader === 'function') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result instanceof ArrayBuffer) {
+          resolve(new Uint8Array(reader.result));
+          return;
+        }
+        reject(new Error('Could not read the exported document image.'));
+      };
+      reader.onerror = () => reject(reader.error || new Error('Could not read the exported document image.'));
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+
   if (typeof blob.arrayBuffer === 'function') {
     return new Uint8Array(await blob.arrayBuffer());
   }
 
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (reader.result instanceof ArrayBuffer) {
-        resolve(new Uint8Array(reader.result));
-        return;
-      }
-      reject(new Error('Could not read the exported document image.'));
-    };
-    reader.onerror = () => reject(reader.error || new Error('Could not read the exported document image.'));
-    reader.readAsArrayBuffer(blob);
-  });
+  throw new Error('Could not read the exported document image.');
 };
 
 export const triggerDocumentDownload = (blob: Blob, fileName: string) => {
@@ -797,6 +1054,12 @@ export class DocumentExportService {
       options.cssPixelsPerInch,
       target
     );
+    const retainedImages = collectDocumentExportImageDiagnostics(
+      pageElement,
+      clone,
+      svgMarkup,
+      target
+    );
     const image = await loadSvgImage(svgMarkup);
     const canvas = document.createElement('canvas');
     canvas.width = surface.raster.width;
@@ -847,6 +1110,7 @@ export class DocumentExportService {
         width: image.width,
         height: image.height,
       },
+      retainedImages,
       canvas: {
         width: canvas.width,
         height: canvas.height,
