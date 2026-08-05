@@ -12,6 +12,7 @@ import {
   createCleanDocumentClone,
   createDocumentPrintCss,
   createDocumentSvgMarkup,
+  getDocumentExportSvgTarget,
   triggerDocumentDownload,
   waitForDocumentResources,
 } from '../src/document/services/documentExportService';
@@ -51,6 +52,8 @@ describe('document export', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = '';
+    delete (window as any).__TAURI_INTERNALS__;
+    delete (window as any).__TAURI__;
   });
 
   it('calculates exact print pixels independently from CSS layout pixels', () => {
@@ -324,6 +327,100 @@ describe('document export', () => {
     expect(svg).toContain('Full-width title');
     expect(svg).toContain('column-count: 3');
     expect(svg).not.toContain('Reference scan');
+  });
+
+  it('uses a CSS-sized SVG viewport for the Tauri foreignObject rasterizer', () => {
+    const source = document.createElement('main');
+    source.innerHTML = '<h1>Full-width title</h1><p>Column body</p>';
+    const clone = createCleanDocumentClone(source, { copyComputedStyles: false });
+
+    expect(getDocumentExportSvgTarget()).toBe('browser');
+    (window as any).__TAURI_INTERNALS__ = {};
+    expect(getDocumentExportSvgTarget()).toBe('tauri');
+
+    const svg = createDocumentSvgMarkup(
+      clone,
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      CSS_PIXELS_PER_INCH,
+      'tauri'
+    );
+
+    expect(svg).toContain('width="816"');
+    expect(svg).toContain('height="1056"');
+    expect(svg).toContain('viewBox="0 0 816 1056"');
+    expect(svg).toContain('<foreignObject x="0" y="0" width="816" height="1056">');
+    expect(svg).not.toContain('width="2550"');
+    expect(svg).not.toContain('height="3300"');
+  });
+
+  it('keeps the Tauri raster surface physical while scaling the CSS SVG once', async () => {
+    const originalImage = globalThis.Image;
+    class MockImage {
+      decoding = '';
+      naturalWidth = 816;
+      naturalHeight = 1056;
+      width = 816;
+      height = 1056;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(value: string) {
+        if (value) queueMicrotask(() => this.onload?.());
+      }
+    }
+    const drawImage = vi.fn();
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      fillRect: vi.fn(),
+      drawImage,
+      imageSmoothingEnabled: false,
+      imageSmoothingQuality: 'low' as ImageSmoothingQuality,
+    };
+    Object.defineProperty(globalThis, 'Image', {
+      configurable: true,
+      value: MockImage,
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob')
+      .mockImplementation((callback) => callback(tinyPng));
+
+    try {
+      (window as any).__TAURI_INTERNALS__ = {};
+      const diagnostics = vi.fn();
+      const source = document.createElement('main');
+      source.textContent = 'Historical page';
+      const blob = await new DocumentExportService().exportPngBlob(source, {
+        widthIn: 8.5,
+        heightIn: 11,
+        dpi: 300,
+        onDiagnostics: diagnostics,
+      });
+
+      expect(blob).toBe(tinyPng);
+      expect(drawImage).toHaveBeenCalledWith(
+        expect.any(MockImage),
+        0,
+        0,
+        2550,
+        3300
+      );
+      expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+        target: 'tauri',
+        svg: expect.objectContaining({ width: 816, height: 1056 }),
+        canvas: { width: 2550, height: 3300 },
+        draw: expect.objectContaining({
+          destination: { left: 0, top: 0, width: 2550, height: 3300 },
+        }),
+      }));
+    } finally {
+      Object.defineProperty(globalThis, 'Image', {
+        configurable: true,
+        value: originalImage,
+      });
+    }
   });
 
   it('keeps source hyphenation text stable without inventing malformed glyphs', () => {

@@ -29,12 +29,16 @@ import {
 } from '../services/documentAssetService';
 import { ingestImageFromClipboardEvent } from '../services/documentClipboardService';
 import { ingestDocumentReference } from '../services/documentReferenceService';
-import { documentExportService } from '../services/documentExportService';
+import {
+  documentExportService,
+  type DocumentExportDiagnostics,
+} from '../services/documentExportService';
 import {
   getDeliverySuccessLocation,
   type FileBatchDeliveryResult,
   type FileDeliveryResult,
 } from '../../editor/services/fileDeliveryService';
+import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
@@ -1570,6 +1574,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ...source.options,
           onWarning: (warnings: readonly string[]) => {
             if (warnings.length > 0) setToastMessage(warnings[0]);
+          },
+          onDiagnostics: (diagnostics: DocumentExportDiagnostics) => {
+            if (isTauriRecoveryAvailable()) {
+              console.info('[Design Space export diagnostics]', diagnostics);
+            }
           },
         },
       }));

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -365,6 +365,72 @@ test.describe('historical book acceptance fixture', () => {
     await expect(page.getByTestId('document-save-status')).not.toHaveText(
       /failed/i
     );
+  });
+
+  test('keeps the Tauri-target raster full-page and physically identical in Chromium', async ({ page }) => {
+    test.slow();
+    test.setTimeout(180_000);
+    await loadHistoricalFixture(page);
+
+    const outputs = await page.evaluate(async () => {
+      const service = await import('/src/document/services/documentExportService.ts');
+      const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+      if (!root) throw new Error('Historical export root unavailable.');
+      const options = {
+        widthIn: 8.5,
+        heightIn: 11,
+        dpi: 300,
+        backgroundColor: '#FAF8F5',
+      };
+      const toBase64 = async (blob: Blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+        return btoa(binary);
+      };
+
+      delete (window as any).__TAURI_INTERNALS__;
+      const browserPng = await service.documentExportService.exportPngBlob(root, options);
+      const browserPngBase64 = await toBase64(browserPng);
+
+      (window as any).__TAURI_INTERNALS__ = {};
+      const tauriPng = await service.documentExportService.exportPngBlob(root, options);
+      const tauriPngBase64 = await toBase64(tauriPng);
+      const tauriPdf = await service.documentExportService.exportPdfBlob(root, options);
+      const tauriPdfBase64 = await toBase64(tauriPdf);
+      delete (window as any).__TAURI_INTERNALS__;
+
+      return { browserPngBase64, tauriPngBase64, tauriPdfBase64 };
+    });
+
+    const browserPng = Buffer.from(outputs.browserPngBase64, 'base64');
+    const tauriPng = Buffer.from(outputs.tauriPngBase64, 'base64');
+    const tauriPdf = Buffer.from(outputs.tauriPdfBase64, 'base64');
+    const browserRaster = await inspectHistoricalPageRaster(page, browserPng);
+    const tauriRaster = await inspectHistoricalPageRaster(page, tauriPng);
+
+    expect(tauriRaster).toMatchObject({ width: 2550, height: 3300 });
+    expect(tauriRaster.redBounds).toEqual(browserRaster.redBounds);
+    expect(tauriRaster.captionRows).toEqual(browserRaster.captionRows);
+
+    const pdfDirectory = await mkdtemp(join(tmpdir(), 'design-space-tauri-raster-'));
+    const pdfPath = join(pdfDirectory, 'historical-page-49-tauri.pdf');
+    try {
+      await writeFile(pdfPath, tauriPdf);
+      const pdf = await PDFDocument.load(tauriPdf);
+      expect(pdf.getPageCount()).toBe(1);
+      expect(pdf.getPage(0).getWidth()).toBeCloseTo(8.5 * 72, 1);
+      expect(pdf.getPage(0).getHeight()).toBeCloseTo(11 * 72, 1);
+      const pdfRaster = await inspectHistoricalPageRaster(
+        page,
+        await readFirstPdfImage(pdfPath)
+      );
+      expect(pdfRaster).toMatchObject({ width: 2550, height: 3300 });
+      expect(pdfRaster.redBounds).toEqual(browserRaster.redBounds);
+      expect(pdfRaster.captionRows).toEqual(browserRaster.captionRows);
+    } finally {
+      await rm(pdfDirectory, { recursive: true, force: true });
+    }
   });
 
   test('keeps the wrapped page-49 flow geometry stable while selecting text and images', async ({ page }) => {

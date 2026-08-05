@@ -9,6 +9,7 @@ import {
   DEFAULT_DOCUMENT_PAPER_COLOR,
   normalizeDocumentPaperColor,
 } from '../utils/documentColor';
+import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 
 export const DOCUMENT_EXPORT_EXCLUDE_ATTRIBUTE = 'data-document-export-exclude';
 export const DOCUMENT_PRINT_HOST_ATTRIBUTE = 'data-document-print-host';
@@ -60,6 +61,7 @@ export type DocumentExportOptions = DocumentPhysicalSize & {
   backgroundColor?: string;
   cssPixelsPerInch?: number;
   onWarning?: (warnings: readonly string[]) => void;
+  onDiagnostics?: (diagnostics: DocumentExportDiagnostics) => void;
 };
 
 export type DocumentExportPageSource = {
@@ -86,6 +88,64 @@ export type DocumentExportSurfaceGeometry = {
   raster: DocumentPixelDimensions;
   cssToRasterX: number;
   cssToRasterY: number;
+};
+
+export type DocumentExportSvgTarget = 'browser' | 'tauri';
+
+export type DocumentExportRectDiagnostics = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+export type DocumentExportDiagnostics = {
+  target: DocumentExportSvgTarget;
+  page: {
+    widthIn: number;
+    heightIn: number;
+    dpi: number;
+    cssPixelsPerInch: number;
+    devicePixelRatio: number;
+  };
+  surface: DocumentExportSurfaceGeometry;
+  sourceRoot: {
+    rect: DocumentExportRectDiagnostics;
+    computedWidth: string;
+    computedHeight: string;
+    transform: string;
+    zoom: string;
+  };
+  exportHost: DocumentExportRectDiagnostics | null;
+  svg: {
+    width: number;
+    height: number;
+    viewBox: string;
+    foreignObjectWidth: number;
+    foreignObjectHeight: number;
+  };
+  image: {
+    naturalWidth: number;
+    naturalHeight: number;
+    width: number;
+    height: number;
+  };
+  canvas: DocumentPixelDimensions;
+  draw: {
+    source: DocumentExportRectDiagnostics;
+    destination: DocumentExportRectDiagnostics;
+  };
+  pdf?: {
+    pageIndex: number;
+    pageWidthIn: number;
+    pageHeightIn: number;
+    pageWidthPt: number;
+    pageHeightPt: number;
+    imageXIn: number;
+    imageYIn: number;
+    imageWidthIn: number;
+    imageHeightIn: number;
+  };
 };
 
 export type CleanDocumentCloneOptions = {
@@ -521,6 +581,10 @@ export const prepareDocumentExportClone = async (
   return clone;
 };
 
+export const getDocumentExportSvgTarget = (): DocumentExportSvgTarget => (
+  isTauriRecoveryAvailable() ? 'tauri' : 'browser'
+);
+
 const escapeXmlAttribute = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -532,7 +596,8 @@ export const createDocumentSvgMarkup = (
   cleanClone: HTMLElement,
   size: DocumentPhysicalSize,
   dpi = DEFAULT_DOCUMENT_EXPORT_DPI,
-  cssPixelsPerInch = CSS_PIXELS_PER_INCH
+  cssPixelsPerInch = CSS_PIXELS_PER_INCH,
+  target: DocumentExportSvgTarget = 'browser'
 ) => {
   if (typeof XMLSerializer === 'undefined') {
     throw new Error('Document serialization is unavailable in this environment.');
@@ -557,10 +622,17 @@ export const createDocumentSvgMarkup = (
   wrapper.appendChild(cleanClone.cloneNode(true));
 
   const serializedXhtml = new XMLSerializer().serializeToString(wrapper);
+  // Chromium applies the root viewBox transform to foreignObject content. The
+  // WebKitGTK version used by Tauri lays out the XHTML at its CSS-pixel size
+  // instead, while still exposing the physical SVG viewport to canvas. Use a
+  // CSS-sized SVG only for that runtime; canvas performs the one explicit
+  // CSS-to-raster scale below. The browser target retains the established
+  // high-resolution SVG contract and output.
+  const intrinsicDimensions = target === 'tauri' ? cssDimensions : pixelDimensions;
   return [
     `<svg xmlns="${SVG_NAMESPACE}"`,
-    ` width="${pixelDimensions.width}"`,
-    ` height="${pixelDimensions.height}"`,
+    ` width="${intrinsicDimensions.width}"`,
+    ` height="${intrinsicDimensions.height}"`,
     ` viewBox="0 0 ${cssDimensions.width} ${cssDimensions.height}"`,
     ' preserveAspectRatio="none">',
     `<title>${escapeXmlAttribute('Design Space document export')}</title>`,
@@ -569,6 +641,27 @@ export const createDocumentSvgMarkup = (
     '</foreignObject>',
     '</svg>',
   ].join('');
+};
+
+const exportRectDiagnostics = (element: Element): DocumentExportRectDiagnostics => {
+  const rect = (element as HTMLElement).getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+};
+
+const exportOptionalRectDiagnostics = (element: Element | null) => (
+  element ? exportRectDiagnostics(element) : null
+);
+
+const exportComputedStyleValue = (element: Element, property: string) => {
+  if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+    return '';
+  }
+  return window.getComputedStyle(element).getPropertyValue(property);
 };
 
 const loadSvgImage = async (svgMarkup: string) => {
@@ -685,6 +778,11 @@ export class DocumentExportService {
       dpi,
       options.cssPixelsPerInch
     );
+    const cssPixelsPerInch = finitePositive(
+      options.cssPixelsPerInch ?? CSS_PIXELS_PER_INCH,
+      CSS_PIXELS_PER_INCH
+    );
+    const target = getDocumentExportSvgTarget();
     const backgroundColor = normalizeDocumentPaperColor(options.backgroundColor);
     const clone = await prepareDocumentExportClone(pageElement, normalizedSize, {
       cssPixelsPerInch: options.cssPixelsPerInch,
@@ -696,7 +794,8 @@ export class DocumentExportService {
       clone,
       normalizedSize,
       dpi,
-      options.cssPixelsPerInch
+      options.cssPixelsPerInch,
+      target
     );
     const image = await loadSvgImage(svgMarkup);
     const canvas = document.createElement('canvas');
@@ -714,6 +813,59 @@ export class DocumentExportService {
     context.imageSmoothingQuality = 'high';
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     context.restore();
+
+    options.onDiagnostics?.({
+      target,
+      page: {
+        widthIn: normalizedSize.widthIn,
+        heightIn: normalizedSize.heightIn,
+        dpi,
+        cssPixelsPerInch,
+        devicePixelRatio: typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+      },
+      surface,
+      sourceRoot: {
+        rect: exportRectDiagnostics(pageElement),
+        computedWidth: exportComputedStyleValue(pageElement, 'width'),
+        computedHeight: exportComputedStyleValue(pageElement, 'height'),
+        transform: exportComputedStyleValue(pageElement, 'transform'),
+        zoom: exportComputedStyleValue(pageElement, 'zoom'),
+      },
+      exportHost: exportOptionalRectDiagnostics(
+        pageElement.closest('[data-document-committed-export-host]')
+      ),
+      svg: {
+        width: target === 'tauri' ? surface.css.width : surface.raster.width,
+        height: target === 'tauri' ? surface.css.height : surface.raster.height,
+        viewBox: `0 0 ${surface.css.width} ${surface.css.height}`,
+        foreignObjectWidth: surface.css.width,
+        foreignObjectHeight: surface.css.height,
+      },
+      image: {
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        width: image.width,
+        height: image.height,
+      },
+      canvas: {
+        width: canvas.width,
+        height: canvas.height,
+      },
+      draw: {
+        source: {
+          left: 0,
+          top: 0,
+          width: image.naturalWidth || image.width,
+          height: image.naturalHeight || image.height,
+        },
+        destination: {
+          left: 0,
+          top: 0,
+          width: canvas.width,
+          height: canvas.height,
+        },
+      },
+    });
 
     try {
       return await canvasToPngBlob(canvas);
@@ -761,7 +913,17 @@ export class DocumentExportService {
 
       // Rasterize one page at a time. exportPngBlob releases its temporary
       // image and canvas before this loop advances to the next source.
-      const pngBlob = await this.exportPngBlob(source.element, source.options);
+      let rasterDiagnostics: DocumentExportDiagnostics | undefined;
+      const rasterOptions = source.options.onDiagnostics
+        ? {
+          ...source.options,
+          onDiagnostics: (diagnostics: DocumentExportDiagnostics) => {
+            rasterDiagnostics = diagnostics;
+            source.options.onDiagnostics?.(diagnostics);
+          },
+        }
+        : source.options;
+      const pngBlob = await this.exportPngBlob(source.element, rasterOptions);
       const imageBytes = await readBlobBytes(pngBlob);
       pdf.addImage(
         imageBytes,
@@ -773,6 +935,22 @@ export class DocumentExportService {
         documentPdfImageAlias(source.pageId, pageIndex),
         'FAST'
       );
+      if (rasterDiagnostics) {
+        source.options.onDiagnostics?.({
+          ...rasterDiagnostics,
+          pdf: {
+            pageIndex,
+            pageWidthIn: normalizedSize.widthIn,
+            pageHeightIn: normalizedSize.heightIn,
+            pageWidthPt: normalizedSize.widthIn * 72,
+            pageHeightPt: normalizedSize.heightIn * 72,
+            imageXIn: 0,
+            imageYIn: 0,
+            imageWidthIn: normalizedSize.widthIn,
+            imageHeightIn: normalizedSize.heightIn,
+          },
+        });
+      }
     }
 
     const blob = pdf.output('blob');
