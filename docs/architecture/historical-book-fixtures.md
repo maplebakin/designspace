@@ -1,10 +1,11 @@
 # Historical book acceptance fixtures
 
 `src/document/fixtures/historicalBookFixtures.ts` is the deterministic source
-for the four-page acceptance document. It deliberately uses a small
-repository-local placeholder PNG and representative German paragraphs: the
-page-numbered source photographs and a verified transcription were not present
-in this repository when the fixture was created.
+for the four-page acceptance document. It uses representative German
+paragraphs where no verified transcription is available. Page 50 now also
+uses the two separately supplied source photographs committed under
+`public/historical-book/`; pages 49, 51, and 52 retain the one-pixel fixture
+asset because no source photographs were supplied for those pages.
 
 The fixture is a normal version-5 document project, not a test-only shape. It
 therefore exercises the same persisted contracts as a user project:
@@ -15,7 +16,9 @@ therefore exercises the same persisted contracts as a user project:
   paragraph roles;
 - page 49's blue multiline title, drop cap, lower-right spanning image,
   caption, and wrapping exclusion;
-- page 50's subsection headings and declarative row group;
+- page 50's titleless three-column continuation, exact readable `Tariverde` and
+  `Karatai (Nisipari)` subsection headings, and declarative row group with
+  unequal child widths;
 - page 51's different-height declarative stack beside flowing text; and
 - page 52's short ending, quotation, signature, and intentional lower blank
   area.
@@ -40,15 +43,41 @@ only these baselines:
 
 ```bash
 npx playwright test e2e/historical-book-layout.spec.ts \
-  -g "captures reviewed visual crops" --update-snapshots
+  -g "exports the committed four-page fixture" --update-snapshots
 ```
 
 The baseline environment is Chromium at the repository Playwright version,
 1920×1080 viewport, CSS-scale screenshots, disabled animations, and browser
 font loading. Do not accept a baseline update without checking the title/drop
-cap, image/caption boundaries, wrapping region, and folio parity. If actual
-source photographs or a reviewed transcription are later added, update the
-fixture assets/text separately and record the source provenance in the change.
+cap, image/caption boundaries, wrapping region, and folio parity.
+
+The page 50 JPEGs are photographic assets rather than a flattened scan: the
+supplied image files were trimmed only to remove their surrounding page text
+and printed caption bands, then downsampled for repository size. The editable
+captions remain document nodes. The page 50 body remains representative text;
+only the readable headings and captions are carried over from the reference.
+Record any later transcription or source-image replacement separately with its
+provenance.
+
+Page 50 fixture geometry is persisted in page space: the image row spans all
+three body columns at `yPx: 390`, uses a `22px` gap, and keeps child widths of
+`350px` and `340px` (`left: 350`, `right: 340`). Each child retains its own
+natural dimensions, asset ID, centered italic caption, and stable row order.
+The page suppresses the otherwise empty title region so the upper text begins
+at the historical continuation baseline; this is a generic page-level
+`suppressTitle` capability, not a page-ID renderer special case.
+
+WebKitGTK uses different text metrics from Chromium for the same committed
+DOM. Before the page 50 fix, that difference allowed the right subsection
+heading to fit as the final line of the middle physical column, leaving its
+following paragraph below the image row in native PNG/PDF output. The shared
+structured-column allocator now keeps a subsection heading with its following
+paragraph when the boundary would orphan it. This is a generic semantic rule;
+it leaves browser geometry and page 49 unchanged.
+
+The page 50 visual checks include the full sheet plus focused top-column,
+image-row, caption, and folio crops. Regenerate them only after inspecting the
+reference comparison and confirming that page 49's baselines remain unchanged.
 
 PDF output remains intentionally raster-backed. The browser test verifies four
 ordered pages and physical Letter MediaBoxes; selectable PDF text is a future

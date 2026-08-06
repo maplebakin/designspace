@@ -209,17 +209,24 @@ vector/text renderer.
 
 ## 8. Historical fixtures
 
-The source photographs were not present under `docs/reference/historical-book/`
-or Git history at baseline. The fixture therefore uses a repository-local
-placeholder PNG and representative German text, explicitly avoiding fabricated
-historical transcription.
+The supplied page 50 reference package includes two separate photographic
+assets. They are committed as downsampled, self-contained JPEGs under
+`public/historical-book/` and are used as the two editable page 50 image
+children. Their surrounding scan text and printed caption bands were removed
+from the supplied image files so the document's own caption nodes remain
+independently editable; the page itself was not flattened into an image.
+Pages 49, 51, and 52 still use the deterministic repository-local placeholder
+PNG. Page 50 body paragraphs remain representative German text because no
+verified transcription was supplied; the readable headings and captions are
+preserved exactly.
 
 The four pages exercise:
 
 - 49: blue multiline title, three columns, blue drop cap, lower-right spanning
   image, caption, and wrapping;
-- 50: upper text with semantic headings and a bottom row with independent
-  captions;
+- 50: titleless three-column upper text with `Tariverde` and `Karatai
+  (Nisipari)`, plus a two-child unequal-width bottom row with independent
+  captions and supplied photographic assets;
 - 51: narrow left story and a right-side stack with different child heights and
   captions; and
 - 52: three-column headings, closing text, quotation, author signature, and a
@@ -228,20 +235,33 @@ The four pages exercise:
 Baselines and update instructions are documented in
 `docs/architecture/historical-book-fixtures.md`.
 
+The native WebKitGTK smoke export initially exposed a semantic pagination
+edge case: its font metrics let the `Karatai (Nisipari)` heading fit as the
+last line of the middle physical column, while its following paragraph flowed
+below the image row. The shared allocator now keeps subsection headings with
+their following paragraph when a boundary would orphan them. This fixes the
+native page 50 PNG/PDF without changing the browser renderer, page geometry,
+image row, or page 49.
+
 ## 9. Tests and verification
 
-Final verification completed on 2026-08-02:
+Final verification completed on 2026-08-06:
 
-- `npm test -- --reporter=dot` — 34 files, 400 tests passed.
+- `npm test -- --reporter=dot` — 35 files, 418 tests passed.
 - `npx tsc --noEmit` — passed.
 - `npm run lint` — passed.
 - `npm run build` — passed.
 - `python3 -m unittest discover -s src-tauri/recovery_tools/tests -v` — 3
   tests passed.
 - `cargo test --manifest-path src-tauri/Cargo.toml` — 20 tests passed.
+- `npx tauri info` — WebKitGTK 2.50.4 and Tauri environment reported.
+- `npx tauri build --debug --no-bundle` — passed.
 - `npm run test:e2e -- e2e/document-reconstruction.spec.ts
   e2e/document-typography.spec.ts e2e/historical-book-layout.spec.ts
-  --reporter=line` — 10 tests passed.
+  --project=chromium --reporter=line` — 14 tests passed.
+- Real Tauri/WebKitGTK page 50 PNG and four-page PDF exports were manually
+  saved and raster-inspected; both page 50 photographs, captions, heading, and
+  folio were present at 2550×3300 px.
 
 Coverage includes schema/geometry/unit tests, store and DB-growth tests,
 asset-deduplication and missing-asset tests, save/reload and reconstruction
@@ -253,8 +273,9 @@ portable fixture import, PNG/PDF export, and reviewed Chromium visual crops.
 
 - PDF is raster-backed; selectable text and true vector font embedding are not
   implemented.
-- The repository lacks the historical scans and a verified complete German
-  transcription, so fixture imagery/text are representative placeholders.
+- A verified complete German transcription is still unavailable, so page 50's
+  body paragraphs and the imagery on pages 49, 51, and 52 remain representative
+  fixture content. Page 50's two supplied photographs are committed assets.
 - Product decision deliberately keeps four independent page stories; automatic
   cross-page continuous flow is not implemented.
 - Browser print CSS assumes one shared physical print box for a print job. PDF

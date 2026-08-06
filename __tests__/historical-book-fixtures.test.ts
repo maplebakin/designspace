@@ -79,11 +79,22 @@ describe('historical book page fixtures', () => {
   });
 
   it('exercises page 50 subsection roles and an independently captioned row', () => {
-    const page = historicalBookFixturePages()[1];
+    const project = createHistoricalBookFixtureProject();
+    const page = project.pages[1];
     const pageImages = images(page.bodyContent);
     const headings = (page.bodyContent.content || [])
       .filter((node) => node.attrs?.documentStyleId === 'subsection-heading');
 
+    expect(page.columnCount).toBe(3);
+    expect(page.suppressTitle).toBe(true);
+    expect(getDocumentFolioNumber(49, 1)).toBe(50);
+    expect(getDocumentOutsideEdge(50)).toBe('left');
+    expect(page.titleContent.content).toHaveLength(1);
+    expect(page.titleContent.content?.[0]).toMatchObject({ type: 'paragraph' });
+    expect(headings.map((heading) => heading.content?.[0]?.text)).toEqual([
+      'Tariverde',
+      'Karatai (Nisipari)',
+    ]);
     expect(headings).toHaveLength(2);
     expect(page.imageGroups).toEqual([{
       id: 'historical-row-50',
@@ -92,10 +103,41 @@ describe('historical book page fixtures', () => {
       gapPx: 22,
       sharedWidth: false,
     }]);
+    expect(pageImages).toHaveLength(2);
+    expect(pageImages.map((image) => image.attrs?.widthPx)).toEqual([350, 340]);
+    expect(pageImages.map((image) => image.attrs?.naturalWidth)).toEqual([1600, 1600]);
+    expect(pageImages.map((image) => image.attrs?.naturalHeight)).toEqual([2376, 2312]);
+    expect(pageImages.every((image) => (
+      image.attrs?.spanStartColumn === 1
+      && image.attrs?.spanCount === 3
+      && image.attrs?.verticalAnchor === 'page-position'
+      && image.attrs?.horizontalPlacement === 'center'
+      && image.attrs?.yPx === 390
+    ))).toBe(true);
     expect(pageImages.map((image) => image.attrs?.caption)).toEqual([
-      'Linke Beispielabbildung',
-      'Rechte Beispielabbildung',
+      'Karatai - Friedhof, einziges deutsches Grab',
+      'Karatai - Straßenschild Deutsche Straße',
     ]);
+    expect(pageImages.map((image) => image.attrs?.assetId)).toEqual([
+      'historical-photo-50-left',
+      'historical-photo-50-right',
+    ]);
+    expect(project.assets['historical-photo-50-left']).toBe(
+      '/historical-book/page50-left.jpg'
+    );
+    expect(project.assets['historical-photo-50-right']).toBe(
+      '/historical-book/page50-right.jpg'
+    );
+    expect(project.assetMetadata['historical-photo-50-left']).toMatchObject({
+      mimeType: 'image/jpeg',
+      naturalWidth: 1600,
+      naturalHeight: 2376,
+    });
+    expect(project.assetMetadata['historical-photo-50-right']).toMatchObject({
+      mimeType: 'image/jpeg',
+      naturalWidth: 1600,
+      naturalHeight: 2312,
+    });
   });
 
   it('exercises page 51 narrow text beside a different-height image stack', () => {
@@ -137,6 +179,23 @@ describe('historical book page fixtures', () => {
     );
 
     expect(reopened).toEqual(source);
+    const page50 = reopened.pages[1];
+    expect(page50.imageGroups[0].childImageIds).toEqual([
+      'historical-image-50-left',
+      'historical-image-50-right',
+    ]);
+    expect(page50.bodyContent.content?.slice(-2).map((node) => node.attrs)).toEqual([
+      expect.objectContaining({
+        assetId: 'historical-photo-50-left',
+        caption: 'Karatai - Friedhof, einziges deutsches Grab',
+        widthPx: 350,
+      }),
+      expect.objectContaining({
+        assetId: 'historical-photo-50-right',
+        caption: 'Karatai - Straßenschild Deutsche Straße',
+        widthPx: 340,
+      }),
+    ]);
   });
 
   it('mounts all four committed fixture pages in export order', async () => {

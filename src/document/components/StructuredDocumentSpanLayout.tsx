@@ -570,7 +570,16 @@ const allocateElementsToHeight = (
   const allocated: Element[] = [];
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
+    const isSubsectionHeading = element.getAttribute('data-document-style-id')
+      === 'subsection-heading';
+    const headingWouldBeOrphaned = isSubsectionHeading
+      && allocated.length > 0
+      && index < elements.length - 1
+      && measure([...allocated, element, elements[index + 1]], widthPx)
+        > Math.max(1, maximumHeightPx);
     if (
+      !headingWouldBeOrphaned
+      &&
       measure([...allocated, element], widthPx)
       <= Math.max(1, maximumHeightPx)
     ) {
@@ -578,13 +587,21 @@ const allocateElementsToHeight = (
       continue;
     }
 
-    const split = splitElementToFit(
-      element,
-      allocated,
-      widthPx,
-      maximumHeightPx,
-      measure
-    );
+    // Keep semantic subsection headings intact when a physical column or an
+    // image exclusion ends mid-heading, and keep them with the following
+    // paragraph when a column boundary would orphan the heading. Splitting
+    // or orphaning a heading creates a misleading continuation such as
+    // “Karatai” at the bottom of one region and “(Nisipari)” at the top of the
+    // next, or leaves the following paragraph below the image row.
+    const split = isSubsectionHeading
+      ? null
+      : splitElementToFit(
+          element,
+          allocated,
+          widthPx,
+          maximumHeightPx,
+          measure
+        );
     if (split) {
       allocated.push(split.before);
       return {

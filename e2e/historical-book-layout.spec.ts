@@ -187,7 +187,7 @@ test.describe('historical book acceptance fixture', () => {
     );
 
     const pageTab = (index: number) => page.getByTestId(`document-page-tab-${index}`);
-    const sheet = page.getByTestId('document-page');
+    const sheet = page.getByTestId('document-workspace').getByTestId('document-page');
     const exportRoot = page.getByTestId('document-export-root');
     const body = page.locator('.document-flow-prosemirror');
 
@@ -205,10 +205,18 @@ test.describe('historical book acceptance fixture', () => {
     await pageTab(1).click();
     await expect(exportRoot).toHaveAttribute('data-folio-number', '50');
     await expect(exportRoot).toHaveAttribute('data-folio-side', 'left');
+    await expect(page.getByTestId('document-workspace').getByTestId('document-title-region'))
+      .toHaveCount(0);
     await expect(body.locator('[data-document-style-id="subsection-heading"]'))
       .toHaveCount(2);
     await expect(page.locator('[data-document-span-layout]')).toHaveCount(1);
     await expect(page.locator('[data-image-group-count="1"]')).toHaveCount(1);
+    await expect(page.locator(
+      '[data-layout-role="occupied-columns"] .document-image__media'
+    )).toHaveCount(2);
+    await expect(page.locator(
+      '[data-layout-role="occupied-columns"] figcaption'
+    )).toHaveCount(2);
     await expect(page.locator('figcaption')).toHaveCount(4);
 
     await pageTab(2).click();
@@ -230,7 +238,8 @@ test.describe('historical book acceptance fixture', () => {
     test.setTimeout(180_000);
     await loadHistoricalFixture(page);
 
-    const sheet = page.getByTestId('document-page');
+    const workspace = page.getByTestId('document-workspace');
+    const sheet = page.getByTestId('document-workspace').getByTestId('document-page');
     const clearSelection = async () => {
       const visibleStructuredParagraph = page.locator(
         '[data-layout-role="explicit-text-column"] p:visible'
@@ -255,11 +264,11 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
-    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+    await expect(workspace.getByTestId('document-body-region')).toHaveScreenshot(
       'historical-page-49-body-drop-cap-wrap.png',
       { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
     );
-    await expect(page.getByTestId('document-folio')).toHaveScreenshot(
+    await expect(workspace.getByTestId('document-folio')).toHaveScreenshot(
       'historical-page-49-folio.png',
       { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
     );
@@ -353,10 +362,31 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
-    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+    await expect(workspace.getByTestId('document-body-region')).toHaveScreenshot(
       'historical-page-50-body-row.png',
       { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
     );
+
+    const page50SheetBox = await sheet.boundingBox();
+    if (!page50SheetBox) throw new Error('Page 50 sheet bounds unavailable.');
+    const page50Crop = async (
+      name: string,
+      topFraction: number,
+      heightFraction: number
+    ) => expect(await page.screenshot({
+      clip: {
+        x: page50SheetBox.x,
+        y: page50SheetBox.y + page50SheetBox.height * topFraction,
+        width: page50SheetBox.width,
+        height: page50SheetBox.height * heightFraction,
+      },
+      animations: 'disabled',
+      caret: 'hide',
+      scale: 'css',
+    })).toMatchSnapshot(name, { maxDiffPixelRatio: 0.02 });
+    await page50Crop('historical-page-50-top-columns.png', 0, 0.4);
+    await page50Crop('historical-page-50-image-row.png', 0.38, 0.5);
+    await page50Crop('historical-page-50-captions-folio.png', 0.84, 0.16);
 
     await page.getByTestId('document-page-tab-2').click();
     await clearSelection();
@@ -366,7 +396,7 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
-    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+    await expect(workspace.getByTestId('document-body-region')).toHaveScreenshot(
       'historical-page-51-body-stack.png',
       { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
     );
@@ -379,7 +409,7 @@ test.describe('historical book acceptance fixture', () => {
       scale: 'css',
       maxDiffPixelRatio: 0.02,
     });
-    await expect(page.getByTestId('document-body-region')).toHaveScreenshot(
+    await expect(workspace.getByTestId('document-body-region')).toHaveScreenshot(
       'historical-page-52-body-closing-styles.png',
       { animations: 'disabled', caret: 'hide', scale: 'css', maxDiffPixelRatio: 0.02 }
     );
@@ -417,21 +447,18 @@ test.describe('historical book acceptance fixture', () => {
       livePage49Geometry.captionBottomPx * (page49PdfRaster.width / livePage49Geometry.rootCssWidth) + 4
     );
 
-    const pngDownloads: string[] = [];
-    page.on('download', async (download) => {
-      pngDownloads.push(download.suggestedFilename());
-    });
     const allPngButton = page.getByRole('button', { name: 'PNG all pages' });
     if (!await allPngButton.isVisible()) {
       await page.getByText('Export', { exact: true }).click();
     }
     await expect(allPngButton).toBeVisible();
-    const allPngDownloadPromise = page.waitForEvent('download');
+    const expectedAllPngFilename = 'historical-book-pages-4952-fixture-page-01.png';
+    const allPngDownloadPromise = page.waitForEvent(
+      'download',
+      (download) => download.suggestedFilename() === expectedAllPngFilename
+    );
     await allPngButton.click();
     await allPngDownloadPromise;
-    expect(pngDownloads[0]).toBe(
-      'historical-book-pages-4952-fixture-page-01.png'
-    );
     await expect(page.getByTestId('document-save-status')).not.toHaveText(
       /failed/i
     );
@@ -659,6 +686,138 @@ test.describe('historical book acceptance fixture', () => {
         expect(crop.distinctColorBuckets).toBeGreaterThan(20);
         expect(crop.luminanceVariance).toBeGreaterThan(100);
       }
+    }
+  });
+
+  test('exports the supplied page-50 image row in Tauri-target PNG and PDF', async ({ page }, testInfo) => {
+    test.slow();
+    test.setTimeout(180_000);
+    await loadHistoricalFixture(page);
+    await page.getByTestId('document-page-tab-1').click();
+    await expect(page.locator(
+      '[data-layout-role="occupied-columns"] .document-image__media'
+    )).toHaveCount(2);
+
+    const geometry = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+      if (!root) throw new Error('Page 50 export root unavailable.');
+      const rootRect = root.getBoundingClientRect();
+      const rootWidth = Number(root.dataset.pageWidthIn) * 96;
+      const zoom = rootRect.width / rootWidth;
+      const pageRect = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: (rect.left - rootRect.left) / zoom + 4,
+          top: (rect.top - rootRect.top) / zoom + 4,
+          width: Math.max(1, rect.width / zoom - 8),
+          height: Math.max(1, rect.height / zoom - 8),
+        };
+      };
+      const images = Array.from(document.querySelectorAll<HTMLElement>(
+        '[data-layout-role="occupied-columns"] .document-image__media'
+      ));
+      const captions = Array.from(document.querySelectorAll<HTMLElement>(
+        '[data-layout-role="occupied-columns"] figcaption'
+      ));
+      return {
+        rootWidth,
+        rootHeight: Number(root.dataset.pageHeightIn) * 96,
+        imageRects: images.map(pageRect),
+        captionRects: captions.map(pageRect),
+        imageSources: images.map((image) => ({
+          src: image.getAttribute('src'),
+          currentSrc: (image as HTMLImageElement).currentSrc,
+          naturalWidth: (image as HTMLImageElement).naturalWidth,
+          naturalHeight: (image as HTMLImageElement).naturalHeight,
+        })),
+      };
+    });
+    expect(geometry.rootWidth).toBe(816);
+    expect(geometry.rootHeight).toBe(1056);
+    expect(geometry.imageRects).toHaveLength(2);
+    expect(geometry.captionRects).toHaveLength(2);
+    expect(geometry.imageRects[0].width).toBeGreaterThan(geometry.imageRects[1].width);
+    expect(geometry.imageSources.every((source) => (
+      source.src?.endsWith('.jpg') && source.currentSrc?.endsWith('.jpg')
+        && source.naturalWidth > 1000
+        && source.naturalHeight > 1000
+    ))).toBe(true);
+
+    const outputs = await page.evaluate(async () => {
+      const service = await import('/src/document/services/documentExportService.ts');
+      const root = document.querySelector<HTMLElement>('[data-document-export-root]');
+      if (!root) throw new Error('Page 50 export root unavailable.');
+      const options = {
+        widthIn: 8.5,
+        heightIn: 11,
+        dpi: 300,
+        backgroundColor: '#FAF8F5',
+      };
+      const toBase64 = async (blob: Blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        return btoa(binary);
+      };
+      delete (window as any).__TAURI_INTERNALS__;
+      const browserPng = await service.documentExportService.exportPngBlob(root, options);
+      (window as any).__TAURI_INTERNALS__ = {};
+      const tauriPng = await service.documentExportService.exportPngBlob(root, options);
+      const tauriPdf = await service.documentExportService.exportPdfBlob(root, options);
+      delete (window as any).__TAURI_INTERNALS__;
+      return {
+        browserPng: await toBase64(browserPng),
+        tauriPng: await toBase64(tauriPng),
+        tauriPdf: await toBase64(tauriPdf),
+      };
+    });
+    const browserPng = Buffer.from(outputs.browserPng, 'base64');
+    const tauriPng = Buffer.from(outputs.tauriPng, 'base64');
+    const tauriPdf = Buffer.from(outputs.tauriPdf, 'base64');
+    await writeFile(testInfo.outputPath('historical-page-50-browser.png'), browserPng);
+    await writeFile(testInfo.outputPath('historical-page-50-tauri.png'), tauriPng);
+    const pdfPath = testInfo.outputPath('historical-page-50-tauri.pdf');
+    await writeFile(pdfPath, tauriPdf);
+
+    const rasterScale = 2550 / geometry.rootWidth;
+    const browserRaster = await inspectHistoricalPageRaster(page, browserPng);
+    const tauriRaster = await inspectHistoricalPageRaster(page, tauriPng);
+    expect(browserRaster).toMatchObject({ width: 2550, height: 3300 });
+    expect(tauriRaster).toEqual(browserRaster);
+    for (const rect of geometry.imageRects) {
+      const browserCrop = await inspectRasterCrop(page, browserPng, rect, rasterScale);
+      const tauriCrop = await inspectRasterCrop(page, tauriPng, rect, rasterScale);
+      expect(tauriCrop.changedPixels).toBeGreaterThan(tauriCrop.pixels * 0.5);
+      expect(tauriCrop.distinctColorBuckets).toBeGreaterThanOrEqual(20);
+      expect(tauriCrop.luminanceVariance).toBeGreaterThan(100);
+      expect(tauriCrop.changedPixels).toBeCloseTo(browserCrop.changedPixels, -2);
+    }
+    for (const rect of geometry.captionRects) {
+      const captionCrop = await inspectRasterCrop(page, tauriPng, rect, rasterScale);
+      expect(captionCrop.changedPixels).toBeGreaterThan(20);
+    }
+
+    const pdf = await PDFDocument.load(tauriPdf);
+    expect(pdf.getPageCount()).toBe(1);
+    expect(pdf.getPage(0).getWidth()).toBeCloseTo(8.5 * 72, 1);
+    expect(pdf.getPage(0).getHeight()).toBeCloseTo(11 * 72, 1);
+    const pdfRaster = await inspectHistoricalPageRaster(
+      page,
+      await readFirstPdfImage(pdfPath)
+    );
+    expect(pdfRaster).toMatchObject({ width: 2550, height: 3300 });
+    const pdfImage = await readFirstPdfImage(pdfPath);
+    for (const rect of geometry.imageRects) {
+      const pdfCrop = await inspectRasterCrop(page, pdfImage, rect, rasterScale);
+      const tauriCrop = await inspectRasterCrop(page, tauriPng, rect, rasterScale);
+      expect(pdfCrop.changedPixels).toBeGreaterThan(pdfCrop.pixels * 0.5);
+      expect(pdfCrop.distinctColorBuckets).toBeGreaterThanOrEqual(20);
+      expect(pdfCrop.luminanceVariance).toBeGreaterThan(100);
+      expect(pdfCrop.changedPixels).toBeCloseTo(tauriCrop.changedPixels, -2);
+    }
+    for (const rect of geometry.captionRects) {
+      const pdfCaptionCrop = await inspectRasterCrop(page, pdfImage, rect, rasterScale);
+      expect(pdfCaptionCrop.changedPixels).toBeGreaterThan(20);
     }
   });
 

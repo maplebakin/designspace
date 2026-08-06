@@ -951,6 +951,7 @@ export const normalizeDocumentProjectPage = (
       ? undefined
       : normalizeDocumentLanguage(source.language, documentLanguage),
     dropCap: normalizeDocumentDropCap(source.dropCap),
+    ...(source.suppressTitle === true ? { suppressTitle: true } : {}),
     suppressFolio: source.suppressFolio === true,
     overlayObjects,
     imageGroups,

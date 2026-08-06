@@ -17,11 +17,16 @@ import type {
 } from '../types/documentProject';
 
 /**
- * Deterministic one-pixel PNG used by the historical fixtures. The fixture
- * intentionally exercises placement and persistence, not photographic
- * fidelity; the repository did not contain the referenced page scans.
+ * Deterministic one-pixel PNG retained for pages whose source photographs are
+ * not part of the supplied historical reference set.
  */
 const FIXTURE_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABmJLR0QA/wD/AP+gvaeTAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+
+// These are the two supplied page 50 source photographs. They live under
+// public/ so the normal browser and packaged Tauri asset protocols can load
+// them, while the export service embeds them into the raster output.
+const PAGE_50_LEFT_ASSET = '/historical-book/page50-left.jpg';
+const PAGE_50_RIGHT_ASSET = '/historical-book/page50-right.jpg';
 
 export const HISTORICAL_BOOK_FIXTURE_ASSET_IDS = {
   page49: 'historical-photo-49',
@@ -55,6 +60,9 @@ type FixtureImageOptions = {
   xOffsetPx?: number;
   spanStartColumn?: 1 | 2 | 3;
   spanCount?: 1 | 2 | 3;
+  horizontalPlacement?: 'left' | 'center' | 'right' | 'custom';
+  naturalWidth?: number;
+  naturalHeight?: number;
   caption: string;
 };
 
@@ -68,6 +76,9 @@ const positionedImage = ({
   xOffsetPx = 0,
   spanStartColumn = 1,
   spanCount = 1,
+  horizontalPlacement = 'custom',
+  naturalWidth = widthPx * 4,
+  naturalHeight = heightPx * 4,
   caption,
 }: FixtureImageOptions): DocumentContentJson => ({
   type: 'documentFlowImage',
@@ -77,13 +88,13 @@ const positionedImage = ({
     altText,
     widthPx,
     heightPx,
-    naturalWidth: widthPx * 4,
-    naturalHeight: heightPx * 4,
+    naturalWidth,
+    naturalHeight,
     wrap: 'span-columns',
     spanCount,
     spanStartColumn,
     verticalAnchor: 'page-position',
-    horizontalPlacement: 'custom',
+    horizontalPlacement,
     coordinateSpace: 'body-span',
     xOffsetPx,
     yPx,
@@ -102,7 +113,7 @@ const pageShell = (
   folio: number,
   name: string,
   bodyContent: DocumentContentJson,
-  options: Partial<Pick<DocumentPage, 'titleContent' | 'columnCount' | 'columnGapPx' | 'dropCap' | 'margins' | 'imageGroups'>> = {}
+  options: Partial<Pick<DocumentPage, 'titleContent' | 'columnCount' | 'columnGapPx' | 'dropCap' | 'margins' | 'imageGroups' | 'suppressTitle'>> = {}
 ): Record<string, unknown> => ({
   kind: 'document',
   id: `historical-page-${folio}`,
@@ -128,6 +139,7 @@ const pageShell = (
   columnGapPx: options.columnGapPx || 20,
   language: 'de',
   dropCap: options.dropCap || { ...DEFAULT_DOCUMENT_DROP_CAP },
+  ...(options.suppressTitle ? { suppressTitle: true } : {}),
   suppressFolio: false,
   overlayObjects: [],
   imageGroups: options.imageGroups || [],
@@ -147,14 +159,56 @@ const group = (
   sharedWidth,
 });
 
-const assetMetadata = (fileName: string) => ({
-  contentHash: fingerprintDocumentAssetSource(FIXTURE_PNG),
-  byteLength: FIXTURE_PNG.length,
-  mimeType: 'image/png',
-  naturalWidth: 1200,
-  naturalHeight: 800,
+const assetMetadata = (
+  source: string,
+  fileName: string,
+  metadata: {
+    mimeType: string;
+    byteLength: number;
+    naturalWidth: number;
+    naturalHeight: number;
+  } = {
+    mimeType: 'image/png',
+    byteLength: FIXTURE_PNG.length,
+    naturalWidth: 1200,
+    naturalHeight: 800,
+  }
+) => ({
+  contentHash: fingerprintDocumentAssetSource(source),
+  byteLength: metadata.byteLength,
+  mimeType: metadata.mimeType,
+  naturalWidth: metadata.naturalWidth,
+  naturalHeight: metadata.naturalHeight,
   fileName,
 });
+
+const PAGE_50_ASSETS = {
+  [HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Left]: PAGE_50_LEFT_ASSET,
+  [HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Right]: PAGE_50_RIGHT_ASSET,
+} as const;
+
+const PAGE_50_ASSET_METADATA = {
+  [HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Left]: assetMetadata(
+    PAGE_50_LEFT_ASSET,
+    'page50-left.jpg',
+    {
+      mimeType: 'image/jpeg',
+      byteLength: 1_542_782,
+      naturalWidth: 1600,
+      naturalHeight: 2376,
+    }
+  ),
+  [HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Right]: assetMetadata(
+    PAGE_50_RIGHT_ASSET,
+    'page50-right.jpg',
+    {
+      mimeType: 'image/jpeg',
+      byteLength: 1_048_282,
+      naturalWidth: 1600,
+      naturalHeight: 2312,
+    }
+  ),
+} as const;
 
 const PAGE_49_BODY = document(
   paragraph(
@@ -185,39 +239,61 @@ const PAGE_49_BODY = document(
 );
 
 const PAGE_50_BODY = document(
-  paragraph('Einleitender Beispieltext für die oberen Satzspalten.'),
-  paragraph('Erster Abschnitt', 'subsection-heading'),
+  paragraph('Tariverde', 'subsection-heading'),
   paragraph(
-    'Dieser Absatz steht als repräsentativer Platzhalter für den historischen '
-      + 'Artikel. Die Abschnittsüberschrift bleibt eine semantische Stilrolle '
-      + 'und ist nicht bloss manuell fett formatiert.'
+    'Dieser editierbare deutsche Beispielabsatz bildet den ruhigen Buchsatz der '
+      + 'Vorlage nach. Er hält die schmale Serifenschrift, die laufende '
+      + 'Rechtfertigung und den kompakten Zeilenfall der oberen Satzfläche fest. '
+      + 'Die repräsentativen Sätze sind bewusst keine nicht verifizierte '
+      + 'Transkription; sie können später durch eine geprüfte Fassung ersetzt '
+      + 'werden. So bleibt die historische Seite in drei schmalen Spalten '
+      + 'bearbeitbar, ohne den sichtbaren Charakter der Vorlage zu verlieren.'
   ),
-  paragraph('Zweiter Abschnitt', 'subsection-heading'),
   paragraph(
-    'Die untere Bildreihe liegt unabhängig vom Textfluss im unteren Seitenbereich. '
-      + 'Beide Kinder besitzen eigene, editierbare Bildunterschriften.'
+    'Die mittlere Satzspalte setzt den repräsentativen Textfluss fort. Längere '
+      + 'deutsche Wörter und Satzzeichen zeigen die typografische Dichte. Die '
+      + 'untere Bildreihe bleibt als eigenständige '
+      + 'Objektgruppe vom Textfluss getrennt. Jede Abbildung hat ihre eigene '
+      + 'Bildunterschrift und kann unabhängig ausgewählt, verschoben und '
+      + 'bearbeitet werden. Reihenfolge und Abstand der Bildreihe bleiben beim '
+      + 'Speichern und erneuten Öffnen erhalten. Zusätzliche repräsentative Zeilen '
+      + 'halten die drei oberen Spalten in einem gleichmäßigen Rhythmus. Sie '
+      + 'bleiben bewusst neutral und dienen nur der editierbaren Gestaltung '
+      + 'dieser historischen Buchseite. Die drei oberen Spalten bleiben dadurch '
+      + 'als ruhige Satzfläche geschlossen. Der obere Bereich endet damit klar '
+      + 'vor der Bildgruppe.'
+  ),
+  paragraph('Karatai (Nisipari)', 'subsection-heading'),
+  paragraph(
+    'Repräsentativer Anschluss; die geprüfte Transkription bleibt offen.'
   ),
   positionedImage({
     id: 'historical-image-50-left',
     assetId: HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Left,
-    altText: 'Placeholder left photograph for historical page 50',
-    widthPx: 240,
-    heightPx: 170,
-    yPx: 590,
+    altText: 'Karatai cemetery, the only German grave',
+    widthPx: 350,
+    heightPx: 520,
+    naturalWidth: 1600,
+    naturalHeight: 2376,
+    yPx: 390,
     spanStartColumn: 1,
-    spanCount: 2,
-    caption: 'Linke Beispielabbildung',
+    spanCount: 3,
+    horizontalPlacement: 'center',
+    caption: 'Karatai - Friedhof, einziges deutsches Grab',
   }),
   positionedImage({
     id: 'historical-image-50-right',
     assetId: HISTORICAL_BOOK_FIXTURE_ASSET_IDS.page50Right,
-    altText: 'Placeholder right photograph for historical page 50',
-    widthPx: 240,
-    heightPx: 170,
-    yPx: 590,
+    altText: 'Karatai street sign, Deutsche Straße',
+    widthPx: 340,
+    heightPx: 491,
+    naturalWidth: 1600,
+    naturalHeight: 2312,
+    yPx: 390,
     spanStartColumn: 1,
-    spanCount: 2,
-    caption: 'Rechte Beispielabbildung',
+    spanCount: 3,
+    horizontalPlacement: 'center',
+    caption: 'Karatai - Straßenschild Deutsche Straße',
   })
 );
 
@@ -275,8 +351,9 @@ const PAGE_52_BODY = document(
 
 /**
  * Builds the four-page acceptance fixture used by unit, export, and browser
- * tests. The strings are explicitly representative placeholders because the
- * source photographs/transcription are not part of this repository.
+ * tests. Page 50 uses the supplied source photographs; its body paragraphs
+ * remain representative placeholders because a verified transcription is not
+ * part of this repository.
  */
 export const createHistoricalBookFixtureProject = (): DocumentProjectPayload => {
   const pages = [
@@ -295,6 +372,8 @@ export const createHistoricalBookFixtureProject = (): DocumentProjectPayload => 
       },
     }),
     pageShell(50, 'Historische Seite 50', PAGE_50_BODY, {
+      titleContent: document({ type: 'paragraph' }),
+      suppressTitle: true,
       imageGroups: [group(
         'historical-row-50',
         'row',
@@ -347,14 +426,23 @@ export const createHistoricalBookFixtureProject = (): DocumentProjectPayload => 
       },
     },
     pages,
-    assets: Object.fromEntries(
+    assets: {
+      ...Object.fromEntries(
       Object.values(HISTORICAL_BOOK_FIXTURE_ASSET_IDS)
         .map((assetId) => [assetId, FIXTURE_PNG])
-    ),
-    assetMetadata: Object.fromEntries(
+      ),
+      ...PAGE_50_ASSETS,
+    },
+    assetMetadata: {
+      ...Object.fromEntries(
       Object.entries(HISTORICAL_BOOK_FIXTURE_ASSET_IDS)
-        .map(([name, assetId]) => [assetId, assetMetadata(`${name}.png`)] )
-    ),
+          .map(([name, assetId]) => [
+            assetId,
+            assetMetadata(FIXTURE_PNG, `${name}.png`),
+          ])
+      ),
+      ...PAGE_50_ASSET_METADATA,
+    },
     activePageIndex: 0,
   }, {
     editorMode: 'document',

@@ -94,6 +94,8 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
     typographyStyles,
     page.dropCap
   );
+  const hasTitle = hasMeaningfulDocumentContent(page.titleContent);
+  const renderTitleRegion = !page.suppressTitle || hasTitle;
 
   return (
     <div
@@ -168,22 +170,24 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
             />
 
             <div className="document-page-content" style={marginStyle}>
-              <section
-                className="document-title-region"
-                data-testid="document-title-region"
-              >
-                {!hasMeaningfulDocumentContent(page.titleContent) && (
-                  <span
-                    className="document-page-placeholder document-page-placeholder--title"
-                    data-document-export-exclude="true"
-                    data-testid="document-title-placeholder"
-                    aria-hidden="true"
-                  >
-                    Add a title
-                  </span>
-                )}
-                {titleEditor}
-              </section>
+              {renderTitleRegion && (
+                <section
+                  className="document-title-region"
+                  data-testid="document-title-region"
+                >
+                  {!hasTitle && (
+                    <span
+                      className="document-page-placeholder document-page-placeholder--title"
+                      data-document-export-exclude="true"
+                      data-testid="document-title-placeholder"
+                      aria-hidden="true"
+                    >
+                      Add a title
+                    </span>
+                  )}
+                  {titleEditor}
+                </section>
+              )}
               <section
                 className={`document-body-region ${
                   page.dropCap.enabled ? 'document-drop-cap' : ''

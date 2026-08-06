@@ -387,6 +387,8 @@ export type DocumentPage = {
   columnGapPx: number;
   language?: string;
   dropCap: DocumentDropCapSettings;
+  /** Pages such as historical article continuations may intentionally omit a title region. */
+  suppressTitle?: boolean;
   suppressFolio: boolean;
   overlayObjects: DocumentOverlayImage[];
   imageGroups: DocumentImageGroup[];
