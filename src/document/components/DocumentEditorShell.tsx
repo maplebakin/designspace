@@ -115,6 +115,8 @@ import '../styles/document-print.css';
 type DocumentEditorShellProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent?: (event: SelectionEvent) => void;
+  useSharedChrome?: boolean;
+  onRegisterFitPage?: (fitPage: (() => void) | null) => void;
 };
 
 const isImageClipboardPaste = (event: ClipboardEvent) => {
@@ -222,6 +224,8 @@ const readTextFormatState = (
 export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  useSharedChrome = false,
+  onRegisterFitPage,
 }) => {
   const project = useDocumentStore((state) => state.project);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
@@ -1929,6 +1933,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     scheduleFitPage();
   }, [scheduleFitPage]);
 
+  useEffect(() => {
+    if (!onRegisterFitPage) return;
+    onRegisterFitPage(fitPage);
+    return () => onRegisterFitPage(null);
+  }, [fitPage, onRegisterFitPage]);
+
   const handleManualZoomChange = useCallback((nextZoom: number) => {
     setFitMode(false);
     setZoom(nextZoom);
@@ -2074,6 +2084,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             setToastMessage(error instanceof Error ? error.message : 'Printing failed.');
           });
         }}
+        showProjectControls={!useSharedChrome}
       />
 
       <div className="document-editor-layout">
@@ -2216,7 +2227,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onDistributeSelectedImages={distributeSelectedImages}
           />
 
-          <DocumentPageNavigation
+          {!useSharedChrome && <DocumentPageNavigation
             pages={project.pages}
             activePageIndex={activePageIndex}
             startingFolio={project.document.folios.startingNumber}
@@ -2239,7 +2250,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   : activePageIndex + 1
               );
             }}
-          />
+          />}
 
           <main
             ref={workspaceRef}
@@ -2386,12 +2397,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             />
           </main>
 
-          <DocumentZoomControls
+          {!useSharedChrome && <DocumentZoomControls
             zoom={zoom}
             fitMode={fitMode}
             onZoomChange={handleManualZoomChange}
             onFitPage={fitPage}
-          />
+          />}
         </section>
       </div>
 

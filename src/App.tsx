@@ -17,10 +17,6 @@ import { UnifiedEditorSession } from './editor/session/UnifiedEditorSession';
 
 function App() {
   const [hasActiveSession, setHasActiveSession] = useState(false);
-  const [showCloseModal, setShowCloseModal] = useState(false);
-  const [showLeaveEditorModal, setShowLeaveEditorModal] = useState(false);
-  const isProgrammaticCloseRef = useRef(false);
-  const leaveEditorCancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     injectAccessibilityStyles();
@@ -30,54 +26,9 @@ function App() {
   const setToast = useEditorStore((state) => state.setToast);
   const editorMode = useProjectSessionStore((state) => state.editorMode);
   const setEditorMode = useProjectSessionStore((state) => state.setEditorMode);
-  const session = useProjectSessionStore((state) => state.session);
-  const sessionCommands = useProjectSessionStore((state) => state.commands);
-  const clearSession = useProjectSessionStore((state) => state.clearSession);
-  const projectName = session?.projectName
-    || (editorMode === 'document' ? 'Untitled Document' : 'Untitled Project');
-  const isDirty = session?.isDirty ?? false;
   const themeData = useThemeStore((state) => state.themeData);
   const manager = useMemo(() => pluginManager, []);
   const previousObjectIdsRef = useRef<string[]>([]);
-
-  useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!isDirty || isProgrammaticCloseRef.current) return;
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isDirty]);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    const init = async () => {
-      const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__;
-      if (!isTauri) return;
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
-          if (isProgrammaticCloseRef.current) {
-            return;
-          }
-
-          if (!isDirty) {
-            return;
-          }
-
-          event.preventDefault();
-          setShowCloseModal(true);
-        });
-      } catch {
-        // ignore
-      }
-    };
-    void init();
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [isDirty]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -118,110 +69,7 @@ function App() {
     }
   }, [setToast]);
 
-  const closeTauriWindow = async () => {
-    isProgrammaticCloseRef.current = true;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().close();
-    } finally {
-      setTimeout(() => {
-        isProgrammaticCloseRef.current = false;
-      }, 250);
-    }
-  };
-
-  const showActiveError = (message: string) => {
-    if (sessionCommands) {
-      sessionCommands.notify(message);
-      return;
-    }
-    if (editorMode === 'canvas') {
-      setToast({
-        message,
-        variant: 'error',
-      });
-    }
-  };
-
-  const downloadActiveProjectFile = async () => {
-    return sessionCommands?.download() ?? null;
-  };
-
-  const saveActiveProject = async () => {
-    const safeName = projectName?.trim()
-      || (editorMode === 'document' ? 'Untitled Document' : 'Untitled Project');
-    await sessionCommands?.save(safeName);
-  };
-
-  const activeProjectIsDirty = () =>
-    sessionCommands?.isDirty() ?? useProjectSessionStore.getState().session?.isDirty ?? false;
-
-  const handleSaveAndClose = async () => {
-    const delivery = await downloadActiveProjectFile();
-    if (!delivery || delivery.status === 'cancelled') return;
-    if (activeProjectIsDirty()) {
-      showActiveError('Project could not be downloaded. The window will stay open.');
-      return;
-    }
-    setShowCloseModal(false);
-    await closeTauriWindow();
-  };
-
-  const handleDontSaveAndClose = async () => {
-    setShowCloseModal(false);
-    await closeTauriWindow();
-  };
-
-  const handleCancelClose = () => {
-    setShowCloseModal(false);
-  };
-
-  const handleBackToDashboard = () => {
-    if (activeProjectIsDirty()) {
-      setShowLeaveEditorModal(true);
-      return;
-    }
-    setHasActiveSession(false);
-  };
-
-  useEffect(() => {
-    if (!showLeaveEditorModal) return;
-    leaveEditorCancelRef.current?.focus();
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      setShowLeaveEditorModal(false);
-    };
-
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [showLeaveEditorModal]);
-
-  const returnToDashboardAfterSave = () => {
-    setShowLeaveEditorModal(false);
-    clearSession();
-    setHasActiveSession(false);
-  };
-
-  const handleSaveToLibraryAndReturn = async () => {
-    await saveActiveProject();
-    if (!activeProjectIsDirty()) {
-      returnToDashboardAfterSave();
-    }
-  };
-
-  const handleDownloadAndReturn = async () => {
-    const delivery = await downloadActiveProjectFile();
-    if (!delivery || delivery.status === 'cancelled') return;
-    if (!activeProjectIsDirty()) {
-      returnToDashboardAfterSave();
-    }
-  };
-
-  const handleDiscardAndReturn = () => {
-    returnToDashboardAfterSave();
-  };
+  const handleBackToDashboard = () => setHasActiveSession(false);
 
   const handleProjectOpen = (
     mode: EditorMode = 'canvas',
@@ -244,93 +92,6 @@ function App() {
               <ProjectDashboard onProjectOpen={handleProjectOpen} />
             ) : (
               <UnifiedEditorSession onBackToDashboard={handleBackToDashboard} />
-            )}
-
-            {showCloseModal && (
-              <div className="design-space-app-dialog-backdrop fixed inset-0 z-[120] bg-[rgba(58,40,32,0.52)] backdrop-blur-sm flex items-center justify-center p-4">
-                <div
-                  className="design-space-app-dialog-panel w-full max-w-md rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] text-[color:var(--ui-text)] shadow-[0_28px_70px_rgba(74,56,45,0.26)] p-6"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="close-project-dialog-title"
-                >
-                  <h2 id="close-project-dialog-title" className="text-lg font-semibold mb-2">Save project before closing?</h2>
-                  <p className="text-sm text-[color:var(--ui-panel-text)]/70 mb-6">
-                    You have unsaved changes. Choose what to do before Design Space closes.
-                  </p>
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      onClick={handleCancelClose}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={() => void handleDontSaveAndClose()}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-rose-900 text-xs uppercase tracking-widest border-rose-300/45 bg-rose-200/42 hover:bg-rose-200/55"
-                    >
-                      Don&apos;t Save
-                    </button>
-                    <button
-                      onClick={() => void handleSaveAndClose()}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/16 hover:bg-[color:var(--brand-primary)]/24"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {showLeaveEditorModal && (
-              <div
-                className="design-space-app-dialog-backdrop fixed inset-0 z-[125] bg-[rgba(58,40,32,0.52)] backdrop-blur-sm flex items-center justify-center p-4"
-                data-testid="unsaved-navigation-dialog"
-              >
-                <div
-                  className="design-space-app-dialog-panel w-full max-w-lg rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] text-[color:var(--ui-text)] shadow-[0_28px_70px_rgba(74,56,45,0.26)] p-6"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="leave-editor-dialog-title"
-                  aria-describedby="leave-editor-dialog-description"
-                >
-                  <h2 id="leave-editor-dialog-title" className="text-lg font-semibold mb-2">Save before returning to Projects?</h2>
-                  <p id="leave-editor-dialog-description" className="text-sm text-[color:var(--ui-panel-text)]/75 mb-6">
-                    This project has unsaved changes. Save a browser-library copy, download a portable project file, or explicitly discard the changes before leaving the editor.
-                  </p>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <button
-                      ref={leaveEditorCancelRef}
-                      type="button"
-                      onClick={() => setShowLeaveEditorModal(false)}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDiscardAndReturn}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest text-rose-900 border-rose-300/45 bg-rose-200/42 hover:bg-rose-200/55"
-                    >
-                      Discard Changes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDownloadAndReturn()}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest"
-                    >
-                      Download Project File
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveToLibraryAndReturn()}
-                      className="ui-button-soft px-4 py-2 rounded-lg text-xs uppercase tracking-widest border-[color:var(--brand-primary)]/40 bg-[color:var(--brand-primary)]/16 hover:bg-[color:var(--brand-primary)]/24"
-                    >
-                      Save to Library
-                    </button>
-                  </div>
-                </div>
-              </div>
             )}
           </UIThemeProvider>
         </PluginManagerContext.Provider>

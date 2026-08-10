@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
@@ -55,6 +55,7 @@ import { ProductPageNavigator } from './ProductPageNavigator';
 import { ProductStarter } from './ProductStarter';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 import { RightInspector, type InspectorTab } from './RightInspector';
+import { ProjectNameEditor } from './ProjectNameEditor';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
@@ -63,74 +64,15 @@ const TOOLBAR_GROUP = 'ui-toolbar-group flex items-center gap-1 rounded-full px-
 const TOOLBAR_GROUP_SPACED = 'ui-toolbar-group flex items-center gap-2 rounded-full px-3 py-1.5';
 const TOOL_BUTTON = 'ui-button-icon rounded-lg p-2 transition-all duration-200 hover:scale-105 active:scale-95';
 
-interface ProjectNameEditorProps {
-  name: string;
-  onRename: (newName: string) => void;
-}
-
-const ProjectNameEditor: React.FC<ProjectNameEditorProps> = ({ name, onRename }) => {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const beginEdit = () => {
-    setDraft(name);
-    setEditing(true);
-  };
-
-  const commitEdit = () => {
-    const trimmed = draft.trim() || 'Untitled Project';
-    setEditing(false);
-    if (trimmed !== name) onRename(trimmed);
-  };
-
-  const cancelEdit = () => {
-    setEditing(false);
-  };
-
-  useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [editing]);
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        data-testid="project-name-input"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commitEdit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-        }}
-        aria-label="Project name"
-        className="max-w-[180px] rounded border border-[color:var(--brand-primary)]/50 bg-[color:var(--ui-bg)] px-2 py-0.5 text-[11px] uppercase tracking-widest text-[color:var(--ui-text)] outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
-      />
-    );
-  }
-
-  return (
-    <button
-      data-testid="project-name-display"
-      onClick={beginEdit}
-      title="Click to rename project"
-      className="group flex items-center gap-1.5 max-w-[180px] rounded px-2 py-0.5 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)] hover:text-[color:var(--ui-text)] hover:bg-white/5 transition-colors"
-    >
-      <span className="truncate">{name}</span>
-      <Pencil className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" />
-    </button>
-  );
-};
-
 interface EditorShellProps {
   onBackToDashboard?: () => void;
+  useSharedChrome?: boolean;
 }
 
-export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) => {
+export const EditorShell: React.FC<EditorShellProps> = ({
+  onBackToDashboard,
+  useSharedChrome = false,
+}) => {
   useKeyboardShortcuts();
   const {
     toastMessage,
@@ -611,7 +553,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
   };
 
   return (
-    <div data-testid="editor-shell" tabIndex={-1} className="design-space-shell w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col">
+    <div data-testid="editor-shell" tabIndex={-1} className={`design-space-shell w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col${useSharedChrome ? ' design-space-legacy-engine-surface' : ''}`}>
         <BrandModal isOpen={isBrandModalOpen} onClose={() => setIsBrandModalOpen(false)} />
         <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
@@ -666,6 +608,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
             </div>
         )}
 
+      {!useSharedChrome && (
       <div className="design-space-narrow-recovery" data-testid="narrow-editor-notice">
         <div className="design-space-narrow-recovery-copy">
           <strong>Editing works best on a larger screen.</strong>
@@ -692,9 +635,27 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           )}
         </div>
       </div>
+      )}
 
       <header data-testid="editor-toolbar" className="design-space-topbar h-16 flex items-center justify-between px-5 shrink-0 bg-[color:var(--ui-panel)] backdrop-blur-[var(--ui-blur)] border-b border-[color:var(--ui-border)] z-10">
         <div className="design-space-projectbar min-w-[25rem] flex items-center gap-3">
+          {useSharedChrome ? (
+            <>
+              <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+                Canvas tools
+              </span>
+              <div
+                data-testid="product-context-summary"
+                className="hidden 2xl:flex max-w-[260px] flex-col rounded-xl border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)]/70 px-3 py-1 leading-tight"
+              >
+                <span className="truncate text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">{productTitle}</span>
+                <span className="truncate text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
+                  {recipeLabel} · {pageCountLabel} · {activePageName}
+                </span>
+              </div>
+            </>
+          ) : (
+          <>
           <div className="design-space-brand shrink-0 leading-tight">
             <h1 className="font-semibold uppercase tracking-widest text-xs text-[color:var(--ui-text)]">Design Space</h1>
             <p className="text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Printable Product Studio</p>
@@ -715,6 +676,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           </div>
           <FileDropdown onImportDesignSpace={() => setIsDesignSpaceImportOpen(true)} />
           <SaveStatusBadge status={saveStatus} />
+          </>
+          )}
         </div>
         <div className="design-space-tool-groups flex-1 flex justify-center items-center gap-4">
             <div className={`design-space-toolbar-group ${TOOLBAR_GROUP}`}>
@@ -891,7 +854,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
         </div>
         <div className="design-space-actions w-auto flex justify-end items-center gap-4">
             <CanvasSettingsPopover />
-            {onBackToDashboard ? (
+            {!useSharedChrome && (onBackToDashboard ? (
               <button
                 onClick={onBackToDashboard}
                 className={CHROME_BUTTON}
@@ -901,8 +864,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               </button>
             ) : (
               <ProjectBrowser />
-            )}
-            <Tooltip content="Quick Open (⌘K)" side="bottom">
+            ))}
+            {!useSharedChrome && <Tooltip content="Quick Open (⌘K)" side="bottom">
               <button
                 onClick={() => setProjectQuickOpenOpen(true)}
                 className={CHROME_ICON_BUTTON}
@@ -910,7 +873,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
               >
                 <Search className={ICON_SMALL} />
               </button>
-            </Tooltip>
+            </Tooltip>}
             <Tooltip content="Keyboard Shortcuts (⌘⇧/)" side="bottom">
               <button
                 onClick={() => setShowHelpModal(true)}
@@ -989,6 +952,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
                     {renderPanel()}
                   </div>
                 </div>
+              ) : useSharedChrome ? (
+                <div className="flex h-full items-center justify-center px-4 text-center text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/65">
+                  Select a Canvas tool to begin.
+                </div>
               ) : (
                 <ProductPageNavigator />
               )}
@@ -1009,8 +976,8 @@ export const EditorShell: React.FC<EditorShellProps> = ({ onBackToDashboard }) =
           onOpenVibeSettings={() => setIsSettingsModalOpen(true)}
         />
       </div>
-      <PageStrip />
-      <StatusBar />
+      {!useSharedChrome && <PageStrip />}
+      <StatusBar showZoomControls={!useSharedChrome} />
       <KeyboardShortcutHelp />
     </div>
   );

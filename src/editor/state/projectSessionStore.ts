@@ -52,6 +52,8 @@ export const useProjectSessionStore = create<ProjectSessionState>((set) => ({
       ...descriptor,
       isDirty: false,
       saveStatus: 'saved',
+      canSave: true,
+      canClose: true,
     },
     viewport: null,
     selection: createEmptySelectionEvent(),

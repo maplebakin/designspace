@@ -4,6 +4,38 @@
   background: #e3e7ed;
 }
 
+/* The shared Phase 1b shell sits above the legacy document renderer. Keep the
+   document navigation/zoom chrome visually compatible without moving any
+   document persistence or layout ownership into the shared layer. */
+.unified-editor-shell[data-renderer-kind='document'] {
+  --document-accent: #3559d6;
+  --document-accent-strong: #2845ae;
+  --document-accent-soft: #e8edff;
+  --document-chrome: #f8fafc;
+  --document-panel: #ffffff;
+  --document-border: #cbd3df;
+  --document-border-strong: #aeb8c8;
+  --document-text: #172033;
+  --document-muted: #5f6b7a;
+  --document-workspace: #dfe3e9;
+}
+
+.unified-document-page-navigation {
+  flex: 0 0 48px;
+}
+
+.unified-editor-shell[data-renderer-kind='document'] .unified-project-header {
+  min-height: 40px;
+  flex-basis: 40px;
+}
+
+.unified-editor-shell .document-top-bar--contextual {
+  min-height: 36px;
+  flex-basis: 36px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
 .document-editor-shell {
   --document-accent: #3559d6;
   --document-accent-strong: #2845ae;

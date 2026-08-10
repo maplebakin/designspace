@@ -19,6 +19,7 @@ type DocumentTopBarProps = {
   onDownloadProject: () => void;
   onExport: (format: 'png' | 'pdf', scope?: 'current' | 'all') => void;
   onPrint: () => void;
+  showProjectControls?: boolean;
 };
 
 const SAVE_STATUS_LABELS: Record<string, string> = {
@@ -40,13 +41,14 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
   onDownloadProject,
   onExport,
   onPrint,
+  showProjectControls = true,
 }) => (
   <header
-    className="document-top-bar"
+    className={`document-top-bar${showProjectControls ? '' : ' document-top-bar--contextual'}`}
     data-document-editor-ui="true"
     data-testid="document-top-bar"
   >
-    <button
+    {showProjectControls && <button
       type="button"
       className="document-top-bar__home"
       onClick={onBack}
@@ -54,9 +56,9 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
     >
       <Home size={17} aria-hidden="true" />
       <span>Projects</span>
-    </button>
+    </button>}
 
-    <div className="document-top-bar__identity">
+    {showProjectControls && <div className="document-top-bar__identity">
       <input
         aria-label="Document project name"
         data-testid="document-project-name"
@@ -73,10 +75,10 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
       >
         {SAVE_STATUS_LABELS[saveStatus] || saveStatus}
       </span>
-    </div>
+    </div>}
 
     <div className="document-top-bar__actions">
-      <details className="document-action-menu">
+      {showProjectControls && <details className="document-action-menu">
         <summary>
           File
           <ChevronDown size={14} aria-hidden="true" />
@@ -87,16 +89,16 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
             Download project file
           </button>
         </div>
-      </details>
+      </details>}
 
-      <button
+      {showProjectControls && <button
         type="button"
         className="document-top-action document-top-action--primary"
         onClick={onSave}
       >
         <Save size={16} aria-hidden="true" />
         Save
-      </button>
+      </button>}
 
       <details className="document-action-menu document-action-menu--export">
         <summary>

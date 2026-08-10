@@ -52,6 +52,8 @@ export type ProjectPageDescriptor = Readonly<{
   id: string;
   name: string;
   index: number;
+  /** Product-facing page number; document adapters map this to the current folio. */
+  folio: number;
   rendererKind: LegacyRendererKind;
   size: PageSizeDescriptor;
   capabilities: readonly PageCapability[];
@@ -71,6 +73,8 @@ export type ProjectSessionDescriptor = Readonly<{
 export type ProjectSessionSnapshot = ProjectSessionDescriptor & Readonly<{
   isDirty: boolean;
   saveStatus: SessionSaveStatus;
+  canSave: boolean;
+  canClose: boolean;
 }>;
 
 export type PageViewport = Readonly<{
@@ -113,10 +117,18 @@ export type SelectionEvent = Readonly<{
 export type ProjectSessionCommands = Readonly<{
   save: (name?: string) => Promise<void>;
   download: () => Promise<FileDeliveryResult | null>;
+  /** Product-level close is supplied by UnifiedEditorSession when routed. */
+  close?: () => Promise<void>;
   notify: (message: string) => void;
   isDirty: () => boolean;
+  renameProject: (name: string) => Promise<void>;
   selectPage: (index: number) => Promise<void>;
+  addPage?: () => Promise<void>;
+  duplicatePage?: () => Promise<void>;
+  removePage?: (index?: number) => Promise<void>;
+  reorderPage?: (fromIndex: number, toIndex: number) => Promise<void>;
   setViewportZoom: (zoom: number) => void;
+  fitPage?: () => void;
 }>;
 
 export type SessionPageLike = Readonly<{
@@ -138,6 +150,9 @@ export type SessionPayloadLike = Readonly<{
       width?: number;
       height?: number;
       dpi?: number;
+    }>;
+    folios?: Readonly<{
+      startingNumber?: number;
     }>;
   }>;
 }>;
@@ -240,10 +255,15 @@ export const createProjectSessionDescriptor = (
 ): ProjectSessionDescriptor => {
   const pages = payload.pages.map((page, index) => {
     const rendererKind = getPageRendererKind(payload, page);
+    const startingFolio = finitePositive(
+      payload.document?.folios?.startingNumber,
+      1
+    );
     return {
       id: page.id,
       name: page.name,
       index,
+      folio: Math.trunc(startingFolio) + index,
       rendererKind,
       size: rendererKind === 'document'
         ? createDocumentPageSize(page)
@@ -268,11 +288,17 @@ export const createProjectSessionDescriptor = (
 export const createSessionSnapshot = (
   descriptor: ProjectSessionDescriptor,
   isDirty: boolean,
-  saveStatus: SessionSaveStatus
+  saveStatus: SessionSaveStatus,
+  lifecycle: Readonly<{
+    canSave?: boolean;
+    canClose?: boolean;
+  }> = {}
 ): ProjectSessionSnapshot => ({
   ...descriptor,
   isDirty,
   saveStatus,
+  canSave: lifecycle.canSave ?? true,
+  canClose: lifecycle.canClose ?? true,
 });
 
 export const createEmptySelectionEvent = (): SelectionEvent => ({

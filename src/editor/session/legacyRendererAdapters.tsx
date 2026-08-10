@@ -20,6 +20,8 @@ import { useProjectSessionStore } from '../state/projectSessionStore';
 export type LegacyRendererAdapterProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent: (event: SelectionEvent) => void;
+  useSharedChrome?: boolean;
+  onRegisterFitPage?: (fitPage: (() => void) | null) => void;
 };
 
 export type LegacyRendererAdapter = Readonly<{
@@ -104,8 +106,17 @@ const createCanvasCommands = (): ProjectSessionCommands => ({
     });
   },
   isDirty: () => useEditorStore.getState().isDirty,
+  renameProject: (name) => useEditorStore.getState().renameCurrentProject(name),
   selectPage: (index) => useEditorStore.getState().switchToPage(index),
+  addPage: () => useEditorStore.getState().addPage(),
+  removePage: (index) => useEditorStore.getState().deletePage(
+    index ?? useEditorStore.getState().activePageIndex
+  ),
+  reorderPage: async (fromIndex, toIndex) => {
+    useEditorStore.getState().reorderPages(fromIndex, toIndex);
+  },
   setViewportZoom: (zoom) => zoomToCenter(zoom),
+  fitPage: () => useEditorStore.getState().resetViewCanvas(),
 });
 
 const createDocumentCommands = (): ProjectSessionCommands => ({
@@ -113,8 +124,23 @@ const createDocumentCommands = (): ProjectSessionCommands => ({
   download: () => useDocumentStore.getState().downloadProjectFile(),
   notify: (message) => useDocumentStore.getState().setToastMessage(message),
   isDirty: () => useDocumentStore.getState().isDirty,
+  renameProject: async (name) => {
+    useDocumentStore.getState().renameProject(name);
+  },
   selectPage: async (index) => {
     useDocumentStore.getState().selectPage(index);
+  },
+  addPage: async () => {
+    useDocumentStore.getState().addPage();
+  },
+  duplicatePage: async () => {
+    useDocumentStore.getState().duplicatePage();
+  },
+  removePage: async (index) => {
+    useDocumentStore.getState().removePage(index);
+  },
+  reorderPage: async (fromIndex, toIndex) => {
+    useDocumentStore.getState().reorderPages(fromIndex, toIndex);
   },
   setViewportZoom: (zoom) => useDocumentStore.getState().setZoom(zoom),
 });
@@ -194,6 +220,8 @@ export const useLegacyProjectSessionBridge = () => {
 const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  useSharedChrome,
+  onRegisterFitPage,
 }) => {
   const pageId = useProjectSessionStore((state) => state.session?.activePageId);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
@@ -222,16 +250,31 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     });
   }, [onSelectionEvent, pageId, selectedLayerIds, selectedObjectId]);
 
-  return <EditorShell onBackToDashboard={onBackToDashboard} />;
+  useEffect(() => {
+    if (!onRegisterFitPage) return;
+    onRegisterFitPage(() => useEditorStore.getState().resetViewCanvas());
+    return () => onRegisterFitPage(null);
+  }, [onRegisterFitPage]);
+
+  return (
+    <EditorShell
+      onBackToDashboard={onBackToDashboard}
+      useSharedChrome={useSharedChrome}
+    />
+  );
 };
 
 const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  useSharedChrome,
+  onRegisterFitPage,
 }) => (
   <DocumentEditorShell
     onBackToDashboard={onBackToDashboard}
     onSelectionEvent={onSelectionEvent}
+    useSharedChrome={useSharedChrome}
+    onRegisterFitPage={onRegisterFitPage}
   />
 );
 

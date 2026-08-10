@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { PageViewport } from './PageViewport';
 import {
   legacyRendererAdapters,
@@ -6,6 +6,7 @@ import {
 } from './legacyRendererAdapters';
 import type { SelectionEvent } from './projectSession';
 import { useProjectSessionStore } from '../state/projectSessionStore';
+import { UnifiedEditorShell } from './UnifiedEditorChrome';
 
 export type UnifiedEditorSessionProps = {
   onBackToDashboard?: () => void;
@@ -22,6 +23,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   const reportSelection = useProjectSessionStore((state) => state.reportSelection);
   const setSessionSnapshot = useProjectSessionStore((state) => state.setSessionSnapshot);
   const setViewport = useProjectSessionStore((state) => state.setViewport);
+  const clearSession = useProjectSessionStore((state) => state.clearSession);
   const {
     mode,
     snapshot,
@@ -30,27 +32,58 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   } = useLegacyProjectSessionBridge();
   const adapter = legacyRendererAdapters[mode];
   const LegacyRenderer = adapter.render;
-
-  useEffect(() => {
-    if (!snapshot) return;
-    setSessionSnapshot(snapshot, commands);
-  }, [commands, setSessionSnapshot, snapshot]);
+  const fitPageRef = useRef<(() => void) | null>(null);
 
   const handleSelectionEvent = useCallback(
     (event: SelectionEvent) => reportSelection(event),
     [reportSelection]
   );
 
+  const registerFitPage = useCallback((fitPage: (() => void) | null) => {
+    fitPageRef.current = fitPage;
+  }, []);
+
+  const sharedCommands = useMemo(() => {
+    if (!commands) return null;
+    return {
+      ...commands,
+      close: async () => {
+        clearSession();
+        onBackToDashboard?.();
+      },
+      fitPage: () => {
+        if (commands.fitPage) {
+          commands.fitPage();
+          return;
+        }
+        fitPageRef.current?.();
+      },
+    };
+  }, [clearSession, commands, onBackToDashboard]);
+
+  useEffect(() => {
+    if (!snapshot || !sharedCommands) return;
+    setSessionSnapshot(snapshot, sharedCommands);
+  }, [setSessionSnapshot, sharedCommands, snapshot]);
+
   return (
-    <PageViewport
+    <UnifiedEditorShell
       session={snapshot}
+      commands={sharedCommands}
       zoom={zoom}
-      onViewportChange={setViewport}
+      onBackToDashboard={onBackToDashboard}
     >
-      <LegacyRenderer
-        onBackToDashboard={onBackToDashboard}
-        onSelectionEvent={handleSelectionEvent}
-      />
-    </PageViewport>
+      <PageViewport
+        session={snapshot}
+        zoom={zoom}
+        onViewportChange={setViewport}
+      >
+        <LegacyRenderer
+          onSelectionEvent={handleSelectionEvent}
+          useSharedChrome
+          onRegisterFitPage={registerFitPage}
+        />
+      </PageViewport>
+    </UnifiedEditorShell>
   );
 };

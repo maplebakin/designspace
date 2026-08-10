@@ -3,6 +3,7 @@ import {
   createEmptySelectionEvent,
   createPageViewport,
   createProjectSessionDescriptor,
+  createSessionSnapshot,
 } from '../src/editor/session/projectSession';
 
 describe('shared project session contract', () => {
@@ -97,5 +98,33 @@ describe('shared project session contract', () => {
       isFocused: false,
       isEditing: false,
     });
+  });
+
+  it('normalizes document folios and exposes lifecycle observation without persistence fields', () => {
+    const descriptor = createProjectSessionDescriptor({
+      editorMode: 'document',
+      projectId: 'document-project',
+      projectName: 'Document project',
+      pages: [{
+        id: 'document-page',
+        name: 'Page 1',
+        kind: 'document',
+        size: { widthIn: 8.5, heightIn: 11, dpi: 300 },
+      }],
+      document: {
+        pageSize: { dpi: 300 },
+        folios: { startingNumber: 49 },
+      },
+    });
+    const snapshot = createSessionSnapshot(descriptor, true, 'unsaved');
+
+    expect(descriptor.pages[0].folio).toBe(49);
+    expect(snapshot).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+      canSave: true,
+      canClose: true,
+    });
+    expect(snapshot).not.toHaveProperty('engine');
   });
 });

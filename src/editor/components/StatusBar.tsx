@@ -8,7 +8,13 @@ import { SAFE_MARGIN_PX, formatInches, fromCanvasUnits, UnitMode } from '../util
 import { zoomToCenter } from '../fabric/canvasUtils';
 import { SaveStatusBadge } from './SaveStatusBadge';
 
-export const StatusBar: React.FC = () => {
+export type StatusBarProps = {
+  showZoomControls?: boolean;
+};
+
+export const StatusBar: React.FC<StatusBarProps> = ({
+  showZoomControls = true,
+}) => {
   const { zoom, unitMode, setUnitMode, canvas, bleedPx, resetViewCanvas, saveStatus, showSafeZones, setShowSafeZones, selectedLayerIds, layers } = useEditorStore(
     (state) => ({
       zoom: state.zoom,
@@ -158,7 +164,7 @@ export const StatusBar: React.FC = () => {
         </button>
         <SaveStatusBadge status={saveStatus} compact />
       </div>
-      <div className="flex items-center gap-3">
+      {showZoomControls && <div className="flex items-center gap-3">
         <div className="hidden md:flex items-center gap-1 rounded-full border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] shadow-[var(--ui-shadow-soft)]">
           {zoomPresets.map((level) => (
             <button
@@ -197,7 +203,7 @@ export const StatusBar: React.FC = () => {
         >
           <Expand className="w-3.5 h-3.5 stroke-[1.5]" />
         </button>
-      </div>
+      </div>}
     </footer>
   );
 };

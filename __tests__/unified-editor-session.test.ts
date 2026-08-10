@@ -65,6 +65,16 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
         .toBe('canvas-page');
     });
 
+    expect(rendererMocks.canvas.mock.calls.at(-1)?.[0]).toMatchObject({
+      useSharedChrome: true,
+    });
+    expect(useProjectSessionStore.getState().commands).toMatchObject({
+      renameProject: expect.any(Function),
+      addPage: expect.any(Function),
+      close: expect.any(Function),
+      fitPage: expect.any(Function),
+    });
+
     expect(screen.getByTestId('unified-page-viewport')
       .getAttribute('data-page-coordinate-space')).toBe('canvas-logical-px');
     await waitFor(() => {
@@ -87,6 +97,16 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       expect(rendererMocks.document).toHaveBeenCalled();
       expect(useProjectSessionStore.getState().session?.rendererKind)
         .toBe('document');
+    });
+
+    expect(rendererMocks.document.mock.calls.at(-1)?.[0]).toMatchObject({
+      useSharedChrome: true,
+    });
+    expect(useProjectSessionStore.getState().commands).toMatchObject({
+      renameProject: expect.any(Function),
+      duplicatePage: expect.any(Function),
+      close: expect.any(Function),
+      fitPage: expect.any(Function),
     });
 
     expect(screen.getByTestId('unified-page-viewport')
