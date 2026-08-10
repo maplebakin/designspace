@@ -163,5 +163,21 @@ describe('document image frame and crop state', () => {
       cropFocalX: 0.5,
       cropFocalY: 0.5,
     });
+
+    const authored = {
+      ...normalized,
+      pages: normalized.pages.map((page) => ({
+        ...page,
+        bodyContent: imageContent,
+      })),
+    };
+    const reopened = normalizeDesignSpaceProjectPayload(
+      JSON.parse(JSON.stringify(authored))
+    ) as DocumentProjectPayload;
+    expect(reopened.pages[0].bodyContent.content?.[0]?.attrs).toMatchObject({
+      cropMode: 'fill',
+      cropFocalX: 0.2,
+      cropFocalY: 0.8,
+    });
   });
 });
