@@ -150,7 +150,7 @@ class RecoveryFixtureTest(unittest.TestCase):
             "name": "Page 49",
             "titleContent": {"type": "doc", "content": [
                 {"type": "paragraph"},
-                {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
+                {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position", "cropMode": "fill", "cropFocalX": 0.2, "cropFocalY": 0.8}},
             ]},
             "bodyContent": {"type": "doc", "content": [
                 {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
@@ -158,6 +158,7 @@ class RecoveryFixtureTest(unittest.TestCase):
             ]},
             "imageGroups": [{"id": "row", "kind": "row", "childImageIds": ["duplicate", "duplicate", "missing"], "gapPx": 900}],
             "overlayObjects": [],
+            "reference": {"assetId": "photo", "sourceType": "image", "visible": True, "locked": False},
         }
         payload = {
             "editorMode": "document",
@@ -186,7 +187,7 @@ class RecoveryFixtureTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         recovered_path = next((self.exports / "projects").glob("*.apocaproject.json"))
         recovered = json.loads(recovered_path.read_text())
-        self.assertEqual(recovered["document"]["schemaVersion"], 5)
+        self.assertEqual(recovered["document"]["schemaVersion"], 6)
         self.assertEqual(len(recovered["pages"]), 2)
         ids = []
         for story_key in ("titleContent", "bodyContent"):
@@ -197,6 +198,22 @@ class RecoveryFixtureTest(unittest.TestCase):
             )
         self.assertEqual(len(ids), len(set(ids)))
         self.assertIn("assetMetadata", recovered)
+        self.assertEqual(
+            recovered["pages"][0]["bodyContent"]["content"][0]["attrs"]["cropMode"],
+            "fit",
+        )
+        self.assertEqual(
+            recovered["pages"][0]["titleContent"]["content"][1]["attrs"]["cropMode"],
+            "fill",
+        )
+        self.assertEqual(
+            recovered["pages"][0]["titleContent"]["content"][1]["attrs"]["cropFocalY"],
+            0.8,
+        )
+        self.assertEqual(
+            recovered["pages"][0]["reference"]["locked"],
+            False,
+        )
         self.assertTrue(recovered["recovery"]["complete"])
         self.assertTrue(any("Missing referenced assets" in warning for warning in recovered["recovery"]["validationWarnings"]))
 

@@ -1229,7 +1229,7 @@ describe('document project store', () => {
 });
 
 describe('document reference invariants', () => {
-  it('normalizes references to locked and physically excludes marked reference material from export', () => {
+  it('preserves reference lock state and physically excludes marked reference material from export', () => {
     const page = normalizeDocumentProjectPage({
       kind: 'document',
       reference: {
@@ -1241,7 +1241,7 @@ describe('document reference invariants', () => {
 
     expect(page.reference).toMatchObject({
       assetId: 'asset-scan',
-      locked: true,
+      locked: false,
       opacity: 1,
     });
 

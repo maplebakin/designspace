@@ -292,7 +292,7 @@ describe('project schema normalization', () => {
         assetId: 'scan',
         opacity: 1,
         fit: 'cover',
-        locked: true,
+        locked: false,
       },
     });
   });

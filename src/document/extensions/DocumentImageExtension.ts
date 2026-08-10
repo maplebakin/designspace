@@ -14,6 +14,8 @@ import { DocumentImageNodeView } from '../components/DocumentImageNodeView';
 import {
   DEFAULT_DOCUMENT_IMAGE_WRAP_PADDING_PX,
   normalizeDocumentFlowImageWrap,
+  normalizeDocumentImageCropMode,
+  normalizeDocumentImageFocal,
   normalizeDocumentImageGeometry,
   normalizeDocumentImageVerticalAnchor as normalizeProjectDocumentImageVerticalAnchor,
 } from '../types/documentProject';
@@ -22,6 +24,7 @@ import type {
   DocumentCaptionItalic,
   DocumentCaptionSpacing,
   DocumentImageCoordinateSpace,
+  DocumentImageCropMode,
   DocumentImageVerticalAnchor as ProjectDocumentImageVerticalAnchor,
 } from '../types/documentProject';
 
@@ -92,6 +95,9 @@ export interface DocumentImageAttributes {
   captionAlignment: DocumentCaptionAlignment;
   captionItalic: DocumentCaptionItalic;
   captionSpacingPx: DocumentCaptionSpacing;
+  cropMode: DocumentImageCropMode;
+  cropFocalX: number;
+  cropFocalY: number;
 }
 
 export interface DocumentImageReplaceRequest {
@@ -104,6 +110,13 @@ export interface DocumentImageReplaceRequest {
 export interface DocumentImageExtensionOptions {
   resolveAssetSource: (assetId: string) => string | undefined;
   onRequestReplace?: (request: DocumentImageReplaceRequest) => void;
+  onSelectImage?: (request: {
+    editor: Editor;
+    position: number | undefined;
+    imageId: string;
+    additive: boolean;
+  }) => void;
+  isImageSelected?: (imageId: string) => boolean;
   getViewScale: () => number;
   minWidthPx: number;
   maxWidthPx: number;
@@ -164,6 +177,9 @@ const DEFAULT_IMAGE_ATTRIBUTES: DocumentImageAttributes = {
   captionAlignment: 'inherit',
   captionItalic: 'inherit',
   captionSpacingPx: 'inherit',
+  cropMode: 'fit',
+  cropFocalX: 0.5,
+  cropFocalY: 0.5,
 };
 
 const DOCUMENT_IMAGE_HORIZONTAL_PLACEMENTS =
@@ -311,6 +327,23 @@ export const calculateDocumentImageHeight = (
     / Math.max(0.0001, Number.isFinite(aspectRatio) ? aspectRatio : 1)
   )
 );
+
+export const calculateDocumentImageFrameHeight = (
+  attributes: Pick<
+    DocumentImageAttributes,
+    'cropMode' | 'heightPx' | 'naturalWidth' | 'naturalHeight'
+  >,
+  widthPx: number
+) => attributes.cropMode === 'fill'
+  ? Math.max(1, Number.isFinite(attributes.heightPx) ? attributes.heightPx : 1)
+  : Math.max(
+      1,
+      Math.max(1, Number.isFinite(widthPx) ? widthPx : 1)
+      / Math.max(
+        0.0001,
+        attributes.naturalWidth / Math.max(1, attributes.naturalHeight)
+      )
+    );
 
 export const clampDocumentImageWidth = (
   value: unknown,
@@ -501,6 +534,9 @@ export const normalizeDocumentImageAttributes = (
     captionSpacingPx: normalizeDocumentCaptionSpacing(
       value.captionSpacingPx
     ),
+    cropMode: normalizeDocumentImageCropMode(value.cropMode),
+    cropFocalX: normalizeDocumentImageFocal(value.cropFocalX),
+    cropFocalY: normalizeDocumentImageFocal(value.cropFocalY),
   };
 };
 
@@ -863,6 +899,37 @@ const createDocumentImageAttributes = (
       ),
     }),
   },
+  cropMode: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.cropMode,
+    parseHTML: (element: HTMLElement) => normalizeDocumentImageCropMode(
+      element.getAttribute('data-crop-mode')
+    ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-crop-mode': normalizeDocumentImageCropMode(attributes.cropMode),
+    }),
+  },
+  cropFocalX: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.cropFocalX,
+    parseHTML: (element: HTMLElement) => normalizeDocumentImageFocal(
+      element.getAttribute('data-crop-focal-x')
+    ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-crop-focal-x': String(normalizeDocumentImageFocal(
+        attributes.cropFocalX
+      )),
+    }),
+  },
+  cropFocalY: {
+    default: DEFAULT_IMAGE_ATTRIBUTES.cropFocalY,
+    parseHTML: (element: HTMLElement) => normalizeDocumentImageFocal(
+      element.getAttribute('data-crop-focal-y')
+    ),
+    renderHTML: (attributes: Record<string, unknown>) => ({
+      'data-crop-focal-y': String(normalizeDocumentImageFocal(
+        attributes.cropFocalY
+      )),
+    }),
+  },
   caption: {
     default: '',
     parseHTML: (element: HTMLElement) =>
@@ -919,6 +986,13 @@ const getDefaultOptions = (): DocumentImageExtensionOptions => ({
   getSpanWidthPx: () => 720,
 });
 
+const getCropStyle = (
+  attributes: DocumentImageAttributes
+) => [
+  `object-fit: ${attributes.cropMode === 'fill' ? 'cover' : 'contain'}`,
+  `object-position: ${attributes.cropFocalX * 100}% ${attributes.cropFocalY * 100}%`,
+].join('; ');
+
 const renderImageHtml = (
   nodeAttributes: Partial<DocumentImageAttributes>,
   htmlAttributes: Record<string, unknown>,
@@ -939,7 +1013,24 @@ const renderImageHtml = (
       width: attributes.widthPx,
       height: attributes.heightPx,
       draggable: 'false',
+      'data-natural-width': String(attributes.naturalWidth),
+      'data-natural-height': String(attributes.naturalHeight),
+      style: getCropStyle(attributes),
     },
+  ];
+  const frame: DOMOutputSpec = [
+    'div',
+    {
+      class: 'document-image__frame',
+      'data-crop-mode': attributes.cropMode,
+      'data-crop-focal-x': String(attributes.cropFocalX),
+      'data-crop-focal-y': String(attributes.cropFocalY),
+      style: `width: ${attributes.widthPx}px; height: ${calculateDocumentImageFrameHeight(
+        attributes,
+        attributes.widthPx
+      )}px`,
+    },
+    image,
   ];
   const caption: DOMOutputSpec | null = attributes.caption
     ? (() => {
@@ -981,7 +1072,7 @@ const renderImageHtml = (
         class: 'document-image document-image--inline',
         'data-document-image': 'true',
       }),
-      image,
+      frame,
       ...(caption ? [caption] : []),
     ];
   }
@@ -992,7 +1083,7 @@ const renderImageHtml = (
       class: 'document-image document-image--flow',
       'data-document-image': 'true',
     }),
-    image,
+    frame,
     ...(caption ? [caption] : []),
   ];
 };

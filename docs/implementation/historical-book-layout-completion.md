@@ -63,7 +63,8 @@ introduced.
 
 ### P5 — persistence, assets, migrations, and recovery
 
-Document schema version 5 adds asset metadata and completes the migration chain.
+Document schema version 6 adds non-destructive image frames/crops and completes
+the authoring migration chain.
 Stable IDs, duplicate repair, content-fingerprint deduplication, reachability
 compaction, missing-asset placeholders, storage diagnostics, primary-key-only
 IndexedDB updates, and deep Python/Rust recovery validation are implemented
@@ -114,7 +115,7 @@ HTML parsing is not used as a project source of truth.
 ## 4. Schema and migrations
 
 The project envelope remains `design-space-project-v2`; the nested document
-schema is now `CURRENT_DOCUMENT_SCHEMA_VERSION = 5` in
+schema is now `CURRENT_DOCUMENT_SCHEMA_VERSION = 6` in
 `src/editor/project/projectSchema.ts`.
 
 1. Legacy/v1 and one-page document payloads normalize to a valid `DocumentPage`
@@ -125,9 +126,13 @@ schema is now `CURRENT_DOCUMENT_SCHEMA_VERSION = 5` in
    duplicate, orphan, or undersized memberships.
 4. Asset migration (schema 5) synthesizes bounded `assetMetadata` for legacy
    string assets and preserves valid MIME, dimensions, and file-name metadata.
-5. Typography migration maps title/body/caption content to named defaults and
+5. Frame migration (schema 6) materializes `fit` crop defaults and normalized
+   focal positions for flow/overlay images while preserving explicit fill
+   frames; old reference scans remain locked unless they carry an explicit
+   unlock state.
+6. Typography migration maps title/body/caption content to named defaults and
    maps legacy `dropCap: true` to safe bounded settings.
-6. Recovery migration repairs empty or duplicate IDs across both title and body
+7. Recovery migration repairs empty or duplicate IDs across both title and body
    stories, normalizes current group shape, reports missing asset references,
    and rejects document schemas newer than the recovery implementation.
 
@@ -146,7 +151,11 @@ image IDs and never duplicates child geometry.
   and configure a drop cap.
 - Insert/reselect/replace images, edit alt text and attached captions, choose
   no-wrap/float/span layout, set numeric geometry, drag/resize/nudge at zoom,
-  and select multiple compatible images to arrange a row or stack.
+  select multiple compatible images to arrange a row or stack, align/distribute
+  them, and use non-destructive fit/fill/focal crop controls.
+- Insert deterministic column breaks and paragraph keep rules from the body
+  toolbar; hide an empty continuation-page title and use the reference scan's
+  fit, visibility, lock, opacity, and alignment controls while reconstructing.
 - Download a portable project file and reopen it through the dashboard. Missing
   assets remain visible as placeholders and block export with an explicit error.
 - Export the current page PNG, all pages as numbered PNG downloads, all pages as

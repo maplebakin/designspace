@@ -1176,7 +1176,7 @@ fn validate_recovery_report(
                 .ok_or_else(|| {
                     "Recovered document is missing a numeric schema version.".to_string()
                 })?;
-            if document_version > 5 {
+            if document_version > 6 {
                 return Err(
                     "Recovered document uses a schema newer than this recovery validator."
                         .to_string(),

@@ -31,6 +31,31 @@ export type DocumentImageVerticalAnchor = 'flow' | 'page-position';
  */
 export type DocumentImageCoordinateSpace = 'flow' | 'body-span';
 
+export type DocumentImageCropMode = 'fit' | 'fill';
+
+export const normalizeDocumentImageCropMode = (
+  value: unknown
+): DocumentImageCropMode => value === 'fill' ? 'fill' : 'fit';
+
+export const normalizeDocumentImageFocal = (
+  value: unknown,
+  fallback = 0.5
+) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric)
+    ? Math.min(1, Math.max(0, numeric))
+    : fallback;
+};
+
+export const normalizeDocumentImageCropAttributes = (
+  sourceAttrs: Record<string, unknown>
+): Record<string, unknown> => ({
+  ...sourceAttrs,
+  cropMode: normalizeDocumentImageCropMode(sourceAttrs.cropMode),
+  cropFocalX: normalizeDocumentImageFocal(sourceAttrs.cropFocalX),
+  cropFocalY: normalizeDocumentImageFocal(sourceAttrs.cropFocalY),
+});
+
 export type DocumentImageWrapPadding = {
   wrapPaddingTopPx: number;
   wrapPaddingRightPx: number;
@@ -228,6 +253,20 @@ export const normalizeDocumentImageNodeGeometryAttributes = (
   };
 };
 
+export type DocumentFlowControlAttributes = {
+  documentColumnBreakBefore: boolean;
+  documentKeepWithNext: boolean;
+  documentKeepLinesTogether: boolean;
+};
+
+export const normalizeDocumentFlowControlAttributes = (
+  sourceAttrs: Record<string, unknown>
+): DocumentFlowControlAttributes => ({
+  documentColumnBreakBefore: sourceAttrs.documentColumnBreakBefore === true,
+  documentKeepWithNext: sourceAttrs.documentKeepWithNext === true,
+  documentKeepLinesTogether: sourceAttrs.documentKeepLinesTogether === true,
+});
+
 const normalizeDocumentImageContentGeometryNode = (
   value: unknown
 ): DocumentContentJson | null => {
@@ -247,7 +286,7 @@ const normalizeDocumentImageContentGeometryNode = (
     ...(isImage
       ? {
           attrs: normalizeDocumentImageNodeGeometryAttributes(
-            sourceAttrs,
+            normalizeDocumentImageCropAttributes(sourceAttrs),
             nodeType
           ),
         }
@@ -305,6 +344,9 @@ export type DocumentFlowImage = {
   captionSpacingPx?: DocumentCaptionSpacing;
   naturalWidth?: number;
   naturalHeight?: number;
+  cropMode?: DocumentImageCropMode;
+  cropFocalX?: number;
+  cropFocalY?: number;
 };
 
 export type DocumentOverlayPlacement = 'front' | 'behind';
@@ -324,6 +366,9 @@ export type DocumentOverlayImage = {
   captionSpacingPx?: DocumentCaptionSpacing;
   naturalWidth?: number;
   naturalHeight?: number;
+  cropMode?: DocumentImageCropMode;
+  cropFocalX?: number;
+  cropFocalY?: number;
   locked?: boolean;
 };
 
@@ -351,7 +396,7 @@ export type ScanReference = {
   offsetXPx: number;
   offsetYPx: number;
   visible: boolean;
-  locked: true;
+  locked: boolean;
 };
 
 export type DocumentPageSize = {

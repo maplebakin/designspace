@@ -90,8 +90,8 @@ describe('document image-group schema v4', () => {
       payload(3)
     ) as DocumentProjectPayload;
 
-    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(5);
-    expect(normalized.document.schemaVersion).toBe(5);
+    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(6);
+    expect(normalized.document.schemaVersion).toBe(6);
     expect(normalized.pages[0].imageGroups).toEqual([]);
     expect(
       normalized.pages[0].bodyContent.content?.[0]?.attrs?.coordinateSpace
@@ -160,7 +160,7 @@ describe('document image-group schema v4', () => {
       ...payload(4),
       assets: { 'asset-photo': 'data:image/png;base64,UEhPVE8=' },
     }) as DocumentProjectPayload;
-    expect(normalized.document.schemaVersion).toBe(5);
+    expect(normalized.document.schemaVersion).toBe(6);
     expect(normalized.assetMetadata?.['asset-photo']).toMatchObject({
       byteLength: 'data:image/png;base64,UEhPVE8='.length,
     });

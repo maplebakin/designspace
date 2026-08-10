@@ -446,6 +446,39 @@ describe('document export', () => {
     expect(tauriSvg).toContain('Attached caption');
   });
 
+  it('serializes non-centre crop focal positions into the Tauri SVG viewport', () => {
+    const source = document.createElement('main');
+    source.innerHTML = `
+      <figure>
+        <div class="document-image__frame" style="width: 240px; height: 160px">
+          <img
+            width="240"
+            height="160"
+            data-natural-width="1600"
+            data-natural-height="800"
+            src="data:image/png;base64,photo"
+            style="object-fit: cover; object-position: 20% 80%"
+            alt="Cropped photo"
+          >
+        </div>
+      </figure>
+    `;
+    const clone = createCleanDocumentClone(source, { copyComputedStyles: false });
+    const tauriSvg = createDocumentSvgMarkup(
+      clone,
+      { widthIn: 8.5, heightIn: 11 },
+      300,
+      CSS_PIXELS_PER_INCH,
+      'tauri'
+    );
+
+    expect(tauriSvg).toContain('preserveAspectRatio="none"');
+    expect(tauriSvg).toContain('x="-16"');
+    expect(tauriSvg).toContain('y="0"');
+    expect(tauriSvg).toContain('width="320"');
+    expect(tauriSvg).toContain('height="160"');
+  });
+
   it('fails Tauri serialization when an image source was not made self-contained', () => {
     const source = document.createElement('main');
     source.innerHTML = '<img width="240" height="160" src="tauri://localhost/image.jpg" alt="Photo">';

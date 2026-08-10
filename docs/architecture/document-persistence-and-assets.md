@@ -3,7 +3,7 @@
 The canonical persisted project is the normalized Zustand document payload.
 Document pages contain stories, settings, image groups, and overlay/reference
 records; `assets` contains source strings and `assetMetadata` contains bounded
-content fingerprints and import metadata. The nested document schema is v5.
+content fingerprints and import metadata. The nested document schema is v6.
 Older pages are normalized through the existing schema chain and receive empty
 group metadata, canonical image geometry, named styles, drop-cap settings, and
 asset metadata without changing unknown portable fields.
@@ -25,7 +25,20 @@ cleanup confirmation remain unchanged.
 
 The Python recovery reader hashes data-URL assets with SHA-256, deduplicates
 identical assets within each portable payload, repairs malformed IDs and group
-membership, reports missing references, and validates current multi-page
-document pages. Rust validates the generated report and deep-checks recovered
-document schema, page stories, and group shape before recovery is considered
-complete. Unknown fields are retained for a future schema migration.
+membership, materializes non-destructive crop defaults and reference lock state,
+reports missing references, and validates current multi-page document pages.
+Rust validates the generated report and deep-checks recovered document schema,
+page stories, and group shape before recovery is considered complete. Unknown
+fields are retained for a future schema migration.
+
+## Schema v6 image-frame migration
+
+`normalizeDocumentProjectPage` is the backwards-compatible migration boundary
+for the nested document schema. When it receives schema 5 or older content, it
+adds `cropMode: "fit"`, `cropFocalX: 0.5`, and `cropFocalY: 0.5` to flow and
+overlay images, while preserving authored fill frames and bounded focal values.
+It also preserves an explicit `reference.locked: false`; documents that omit
+the field retain the legacy locked default. The recovery reader applies the
+same materialization before writing a recovered portable project, so browser
+load, save/reopen, portable round-trip, and Tauri export consume one canonical
+shape.

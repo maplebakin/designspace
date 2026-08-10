@@ -28,7 +28,7 @@ MAX_RECORD_CHARS = 128 * 1024 * 1024
 MAX_ASSET_HASH_CHARS = 112 * 1024 * 1024
 MAX_REPORT_DETAILS = 10_000
 MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
-CURRENT_DOCUMENT_SCHEMA_VERSION = 5
+CURRENT_DOCUMENT_SCHEMA_VERSION = 6
 VENDOR = pathlib.Path(__file__).resolve().parent / "vendor"
 sys.path.insert(0, str(VENDOR))
 
@@ -199,6 +199,25 @@ def _walk_document_nodes(value: Any) -> Iterable[dict[str, Any]]:
                 yield from _walk_document_nodes(child)
 
 
+def _normalize_unit_interval(value: Any, fallback: float = 0.5) -> float:
+    if isinstance(value, bool):
+        return fallback
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if numeric != numeric:
+        return fallback
+    return max(0.0, min(1.0, numeric))
+
+
+def _normalize_crop_attributes(attrs: dict[str, Any]) -> None:
+    """Make the v6 non-destructive image frame explicit for recovery output."""
+    attrs["cropMode"] = "fill" if attrs.get("cropMode") == "fill" else "fit"
+    attrs["cropFocalX"] = _normalize_unit_interval(attrs.get("cropFocalX"))
+    attrs["cropFocalY"] = _normalize_unit_interval(attrs.get("cropFocalY"))
+
+
 def normalize_document_recovery(payload: dict[str, Any], warnings: list[str]) -> None:
     """Validate current document fields without dropping future-safe fields."""
     document = payload.get("document")
@@ -245,17 +264,24 @@ def normalize_document_recovery(payload: dict[str, Any], warnings: list[str]) ->
                     image_id += "-copy"
                 seen_ids.add(image_id)
                 attrs["id"] = image_id
+                _normalize_crop_attributes(attrs)
                 asset_id = attrs.get("assetId")
                 if isinstance(asset_id, str) and asset_id:
                     asset_references.add(asset_id)
         overlays = page.get("overlayObjects")
         if isinstance(overlays, list):
             for overlay in overlays:
-                if isinstance(overlay, dict) and isinstance(overlay.get("assetId"), str):
+                if not isinstance(overlay, dict):
+                    continue
+                _normalize_crop_attributes(overlay)
+                if isinstance(overlay.get("assetId"), str):
                     asset_references.add(overlay["assetId"])
         reference = page.get("reference")
-        if isinstance(reference, dict) and isinstance(reference.get("assetId"), str):
-            asset_references.add(reference["assetId"])
+        if isinstance(reference, dict):
+            if not isinstance(reference.get("locked"), bool):
+                reference["locked"] = True
+            if isinstance(reference.get("assetId"), str):
+                asset_references.add(reference["assetId"])
         groups = page.get("imageGroups")
         if groups is None:
             page["imageGroups"] = []

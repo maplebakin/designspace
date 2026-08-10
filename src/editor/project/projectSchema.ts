@@ -12,6 +12,8 @@ import type {
 import type { DocumentAssetMetadata } from '../../document/types/documentAsset';
 import {
   normalizeDocumentImageNodeGeometryAttributes,
+  normalizeDocumentImageCropAttributes,
+  normalizeDocumentFlowControlAttributes,
 } from '../../document/types/documentProject';
 export {
   normalizeDocumentImageContentGeometry,
@@ -56,7 +58,7 @@ import {
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 5 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 6 as const;
 const DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION = 2;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
@@ -645,16 +647,29 @@ const normalizeDocumentContentNode = (
             defaultStyleId
           ),
         };
+        if (normalized.textAlign === null) delete normalized.textAlign;
         const fontSizePx = normalizeDocumentBlockFontSizePx(
           sourceAttrs.documentStyleFontSizePx
         );
         normalized.documentStyleFontSizePx = fontSizePx;
+        const flowControls = normalizeDocumentFlowControlAttributes(sourceAttrs);
+        Object.keys(flowControls).forEach((key) => {
+          // False is the schema default and stays implicit. Persist only the
+          // authored true controls so opening a legacy paragraph in Tiptap
+          // does not create a dirty revision merely because global defaults
+          // were materialized at runtime.
+          if (flowControls[key as keyof typeof flowControls]) {
+            normalized[key] = flowControls[key as keyof typeof flowControls];
+          } else {
+            delete normalized[key];
+          }
+        });
         return normalized;
       })()
     : isImage
       ? {
           ...normalizeDocumentImageNodeGeometryAttributes(
-            sourceAttrs,
+            normalizeDocumentImageCropAttributes(sourceAttrs),
             nodeType
           ),
           captionAlignment: normalizeCaptionAlignment(
@@ -809,6 +824,9 @@ const normalizeOverlayImage = (
     naturalHeight: value.naturalHeight === undefined
       ? undefined
       : normalizePositiveNumber(value.naturalHeight, 1),
+    cropMode: value.cropMode === 'fill' ? 'fill' : 'fit',
+    cropFocalX: clamp(normalizeFiniteNumber(value.cropFocalX, 0.5), 0, 1),
+    cropFocalY: clamp(normalizeFiniteNumber(value.cropFocalY, 0.5), 0, 1),
     locked: typeof value.locked === 'boolean' ? value.locked : undefined,
   };
 };
@@ -827,9 +845,9 @@ const normalizeScanReference = (value: unknown): ScanReference | undefined => {
     offsetXPx: normalizeFiniteNumber(value.offsetXPx, 0),
     offsetYPx: normalizeFiniteNumber(value.offsetYPx, 0),
     visible: typeof value.visible === 'boolean' ? value.visible : true,
-    // Reference scans are editor-only source material and must always reopen
-    // locked. A transient adjust-reference mode may unlock its UI controls.
-    locked: true,
+    // Older documents omitted this field and reopen locked. New documents may
+    // persist an explicit unlock so the author can position the scan normally.
+    locked: typeof value.locked === 'boolean' ? value.locked : true,
   };
 };
 

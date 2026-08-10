@@ -662,6 +662,16 @@ const inlineRetainedImages = async (
       : await makeImageSourceSelfContained(imageSource, fetchResource as typeof fetch);
     clonedImage.src = selfContainedSource;
     await waitForDocumentImage(clonedImage, options.resourceWaitOptions);
+    if (clonedImage.naturalWidth > 0 && clonedImage.naturalHeight > 0) {
+      clonedImage.setAttribute(
+        'data-export-natural-width',
+        String(clonedImage.naturalWidth)
+      );
+      clonedImage.setAttribute(
+        'data-export-natural-height',
+        String(clonedImage.naturalHeight)
+      );
+    }
 
     // A clone can lose explicit dimensions when the source came from a
     // responsive image. Keep the committed geometry authoritative after the
@@ -724,14 +734,78 @@ const escapeXmlAttribute = (value: string) =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-const tauriImagePreserveAspectRatio = (image: HTMLImageElement) => {
+const positiveImageDimension = (value: unknown, fallback: number) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+};
+
+const parseObjectPositionCoordinate = (
+  value: string | undefined,
+  axis: 'x' | 'y'
+) => {
+  const token = value?.trim().toLowerCase() || '';
+  if (token === (axis === 'x' ? 'left' : 'top')) return 0;
+  if (token === 'center') return 0.5;
+  if (token === (axis === 'x' ? 'right' : 'bottom')) return 1;
+  if (token.endsWith('%')) {
+    const numeric = Number.parseFloat(token.slice(0, -1));
+    if (Number.isFinite(numeric)) return Math.min(1, Math.max(0, numeric / 100));
+  }
+  return 0.5;
+};
+
+const getTauriImageViewport = (
+  image: HTMLImageElement,
+  width: number,
+  height: number
+) => {
   const objectFit = image.style.getPropertyValue('object-fit')
     || image.style.objectFit
     || 'fill';
-  if (objectFit === 'cover') return 'xMidYMid slice';
-  if (objectFit === 'contain') return 'xMidYMid meet';
-  if (objectFit === 'scale-down') return 'xMidYMid meet';
-  return 'none';
+  const naturalWidth = positiveImageDimension(
+    image.naturalWidth
+      || image.getAttribute('data-export-natural-width')
+      || image.getAttribute('data-natural-width'),
+    width
+  );
+  const naturalHeight = positiveImageDimension(
+    image.naturalHeight
+      || image.getAttribute('data-export-natural-height')
+      || image.getAttribute('data-natural-height'),
+    height
+  );
+  const position = (image.style.getPropertyValue('object-position')
+    || image.style.objectPosition
+    || '50% 50%')
+    .trim()
+    .split(/\s+/);
+  const focalX = parseObjectPositionCoordinate(position[0], 'x');
+  const focalY = parseObjectPositionCoordinate(position[1] || position[0], 'y');
+
+  if (objectFit === 'cover' || objectFit === 'contain' || objectFit === 'scale-down') {
+    const cover = objectFit === 'cover';
+    const scale = cover
+      ? Math.max(width / naturalWidth, height / naturalHeight)
+      : Math.min(width / naturalWidth, height / naturalHeight);
+    const boundedScale = objectFit === 'scale-down'
+      ? Math.min(1, scale)
+      : scale;
+    const imageWidth = naturalWidth * boundedScale;
+    const imageHeight = naturalHeight * boundedScale;
+    return {
+      x: (width - imageWidth) * focalX,
+      y: (height - imageHeight) * focalY,
+      width: imageWidth,
+      height: imageHeight,
+    };
+  }
+
+  return {
+    x: 0,
+    y: 0,
+    width,
+    height,
+  };
 };
 
 /**
@@ -781,12 +855,16 @@ const replaceTauriCloneImagesWithSvgImages = (clone: HTMLElement) => {
       svgImage.setAttribute('aria-label', image.alt);
     }
 
+    const viewport = getTauriImageViewport(image, width, height);
     const embeddedImage = clone.ownerDocument.createElementNS(SVG_NAMESPACE, 'image');
-    embeddedImage.setAttribute('x', '0');
-    embeddedImage.setAttribute('y', '0');
-    embeddedImage.setAttribute('width', '100%');
-    embeddedImage.setAttribute('height', '100%');
-    embeddedImage.setAttribute('preserveAspectRatio', tauriImagePreserveAspectRatio(image));
+    embeddedImage.setAttribute('x', String(viewport.x));
+    embeddedImage.setAttribute('y', String(viewport.y));
+    embeddedImage.setAttribute('width', String(viewport.width));
+    embeddedImage.setAttribute('height', String(viewport.height));
+    // The viewport above has already applied CSS object-fit and focal
+    // positioning.  Disabling SVG's own aspect-ratio negotiation keeps the
+    // result identical in Chromium and WebKitGTK, including non-centre crops.
+    embeddedImage.setAttribute('preserveAspectRatio', 'none');
     embeddedImage.setAttribute('href', source);
     svgImage.appendChild(embeddedImage);
     image.replaceWith(svgImage);
