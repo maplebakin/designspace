@@ -65,6 +65,7 @@ import {
   commitStructuredDocumentImageBatch,
   DOCUMENT_IMAGE_GROUPS_TRANSACTION_META,
   FlowEditor,
+  getSelectedDocumentImage,
   type DocumentDropContext,
   type SelectedDocumentImage,
 } from './FlowEditor';
@@ -107,11 +108,13 @@ import {
 import type {
   DocumentNamedStyleRegistry,
 } from '../typography/documentTypography';
+import type { SelectionEvent } from '../../editor/session/projectSession';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
 type DocumentEditorShellProps = {
   onBackToDashboard?: () => void;
+  onSelectionEvent?: (event: SelectionEvent) => void;
 };
 
 const isImageClipboardPaste = (event: ClipboardEvent) => {
@@ -218,6 +221,7 @@ const readTextFormatState = (
 
 export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onBackToDashboard,
+  onSelectionEvent,
 }) => {
   const project = useDocumentStore((state) => state.project);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
@@ -287,6 +291,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     useState<string[]>([]);
   const [selectedImageGroupId, setSelectedImageGroupId] =
     useState<string | null>(null);
+  const [focusedTextRegion, setFocusedTextRegion] =
+    useState<DocumentEditorRegion | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fitMode, setFitMode] = useState(true);
@@ -349,12 +355,77 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setSelectedFlowImageId(null);
     setSelectedOverlayId(null);
     setReferenceAdjustMode(false);
+    setFocusedTextRegion(null);
     setTextFormatState(DEFAULT_TEXT_FORMAT_STATE);
   }, [
     page?.id,
     setReferenceAdjustMode,
     setSelectedFlowImageId,
     setSelectedOverlayId,
+  ]);
+
+  useEffect(() => {
+    if (!page || !onSelectionEvent) return;
+    if (focusedTextRegion) {
+      onSelectionEvent({
+        source: 'document',
+        pageId: page.id,
+        target: {
+          kind: 'structured-text',
+          pageId: page.id,
+          editor: focusedTextRegion,
+        },
+        isFocused: true,
+        isEditing: true,
+      });
+      return;
+    }
+    if (selectedImageGroupId) {
+      onSelectionEvent({
+        source: 'document',
+        pageId: page.id,
+        target: {
+          kind: 'structured-group',
+          pageId: page.id,
+          groupId: selectedImageGroupId,
+        },
+        isFocused: true,
+        isEditing: false,
+      });
+      return;
+    }
+    const selectedImageId = selectedFlowImage?.attributes.id
+      || selectedStructuredImageIds[0]
+      || selectedOverlayId;
+    if (selectedImageId) {
+      onSelectionEvent({
+        source: 'document',
+        pageId: page.id,
+        target: {
+          kind: 'structured-image',
+          pageId: page.id,
+          imageId: selectedImageId,
+        },
+        isFocused: true,
+        isEditing: false,
+      });
+      return;
+    }
+    onSelectionEvent({
+      source: 'document',
+      pageId: page.id,
+      target: { kind: 'none' },
+      isFocused: false,
+      isEditing: false,
+    });
+  }, [
+    focusedTextRegion,
+    onSelectionEvent,
+    page,
+    selectedFlowImage,
+    selectedImageGroupId,
+    selectedOverlayId,
+    selectedStructuredImageIds,
   ]);
 
   useEffect(() => {
@@ -2218,6 +2289,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     titleEditorRef.current = editor;
                   }}
                   onFocusChange={(focused, editor) => {
+                    setFocusedTextRegion(focused ? 'title' : null);
                     if (!focused) return;
                     updateActiveTextFormatState(editor, 'title');
                     setSelectedFlowImage(null);
@@ -2258,6 +2330,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     bodyEditorRef.current = editor;
                   }}
                   onFocusChange={(focused, editor) => {
+                    const selectedImage = getSelectedDocumentImage(editor);
+                    setFocusedTextRegion(
+                      focused && !selectedImage ? 'body' : null
+                    );
                     if (!focused) return;
                     updateActiveTextFormatState(editor, 'body');
                   }}
@@ -2276,6 +2352,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onImageSelectionChange={(selection, editor) => {
+                    setFocusedTextRegion(
+                      selection ? null : editor.isFocused ? 'body' : null
+                    );
                     setSelectedFlowImage(selection);
                     setSelectedFlowImageId(selection?.attributes.id || null);
                     if (selection) {

@@ -9,6 +9,12 @@ import {
   type DesignSpaceProjectPayload,
   type EditorMode,
 } from './projectSchema';
+import {
+  createProjectSessionDescriptor,
+  type ProjectSessionDescriptor,
+  type ProjectSessionSource,
+  type SessionPayloadLike,
+} from '../session/projectSession';
 
 export const MAX_PROJECT_OPEN_FILE_BYTES = 100 * 1024 * 1024;
 
@@ -16,6 +22,7 @@ export type ProjectOpenInspection = {
   editorMode: EditorMode;
   projectName: string;
   payload: DesignSpaceProjectPayload;
+  session: ProjectSessionDescriptor;
 };
 
 export type LibraryProjectOpenInspection = ProjectOpenInspection & {
@@ -26,6 +33,7 @@ export type LibraryProjectOpenInspection = ProjectOpenInspection & {
 type ProjectInspectionOptions = {
   fallbackName?: string;
   projectId?: string;
+  source?: ProjectSessionSource;
 };
 
 type ProjectLibraryReader = Pick<DesignSpaceDB, 'loadProject'>
@@ -85,6 +93,10 @@ export const inspectDesignSpaceProjectPayload = (
     editorMode: normalized.editorMode,
     projectName: normalized.projectName,
     payload: normalized,
+    session: createProjectSessionDescriptor(
+      normalized as SessionPayloadLike,
+      { source: options.source }
+    ),
   };
 };
 
@@ -119,6 +131,7 @@ export const inspectDesignSpaceProjectFile = async (
   const jsonPayload = await readProjectFileText(file);
   return inspectDesignSpaceProjectJson(jsonPayload, {
     fallbackName: getFileFallbackName(file.name),
+    source: 'portable',
   });
 };
 
@@ -139,6 +152,7 @@ export const inspectLibraryProject = async (
     inspection = inspectDesignSpaceProjectJson(result.canvasData, {
       fallbackName: result.project.name,
       projectId,
+      source: 'library',
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Project data is invalid.';
@@ -158,6 +172,10 @@ export const inspectLibraryProject = async (
     ...inspection,
     projectName: result.project.name,
     payload,
+    session: createProjectSessionDescriptor(
+      payload as SessionPayloadLike,
+      { source: 'library' }
+    ),
     libraryProjectId: projectId,
     libraryProject: result.project,
   };

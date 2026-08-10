@@ -4,6 +4,7 @@ import { useEditorStore } from '../state/editorStore';
 import { Sparkles, FolderOpen, Plus, ChevronDown, ChevronUp, Pencil, FileText } from 'lucide-react';
 import { DEFAULT_CANVAS_SIZE } from '../state/editorStore';
 import type { EditorMode } from '../project/projectSchema';
+import type { ProjectSessionDescriptor } from '../session/projectSession';
 import {
   inspectDesignSpaceProjectFile,
   inspectLibraryProject,
@@ -22,7 +23,10 @@ interface ProjectItem {
 const INITIAL_DISPLAY_COUNT = 5;
 
 interface ProjectDashboardProps {
-  onProjectOpen?: (mode?: EditorMode) => void | Promise<void>;
+  onProjectOpen?: (
+    mode?: EditorMode,
+    session?: ProjectSessionDescriptor
+  ) => void | Promise<void>;
   onOpenComplete?: () => void | Promise<void>;
 }
 
@@ -128,9 +132,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
 
   const openProjectInEditor = async (
     loadAction: () => Promise<void>,
-    mode: EditorMode = 'canvas'
+    mode: EditorMode = 'canvas',
+    session?: ProjectSessionDescriptor
   ) => {
-    await onProjectOpen?.(mode);
+    await onProjectOpen?.(mode, session);
     if (mode === 'document') {
       await loadAction();
       await onOpenComplete?.();
@@ -174,11 +179,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
           inspection.payload,
           inspection.libraryProjectId
         );
-        await onProjectOpen?.('document');
+        await onProjectOpen?.('document', inspection.session);
         await onOpenComplete?.();
         return;
       }
-      await openProjectInEditor(() => loadProject(projectId), 'canvas');
+      await openProjectInEditor(
+        () => loadProject(projectId),
+        'canvas',
+        inspection.session
+      );
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Failed to open project.');
     }
@@ -189,11 +198,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
       const inspection = await inspectDesignSpaceProjectFile(file);
       if (inspection.editorMode === 'document') {
         useDocumentStore.getState().hydrateProject(inspection.payload, null);
-        await onProjectOpen?.('document');
+        await onProjectOpen?.('document', inspection.session);
         await onOpenComplete?.();
         return;
       }
-      await openProjectInEditor(() => loadProjectFile(file), 'canvas');
+      await openProjectInEditor(
+        () => loadProjectFile(file),
+        'canvas',
+        inspection.session
+      );
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Failed to open project file.');
     }

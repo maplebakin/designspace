@@ -638,6 +638,17 @@ describe('project pre-mount inspection', () => {
     expect(inspection.editorMode).toBe('document');
     expect(inspection.projectName).toBe('Granddad Article');
     expect(inspection.payload.pages[0].kind).toBe('document');
+    expect(inspection.session).toMatchObject({
+      rendererKind: 'document',
+      activePageId: inspection.payload.pages[0].id,
+      pages: [{
+        size: {
+          coordinateSpace: 'document-page-css-px',
+          widthCssPx: 816,
+          heightCssPx: 1056,
+        },
+      }],
+    });
   });
 
   it('loads and inspects opaque library JSON without requiring a canvas', async () => {
@@ -660,6 +671,8 @@ describe('project pre-mount inspection', () => {
       libraryProjectId: 'document-project',
       libraryProject: { editorMode: 'document' },
     });
+    expect(inspection.session.source).toBe('library');
+    expect(inspection.session.rendererKind).toBe('document');
   });
 
   it('routes v1 product records with root-level Fabric data back to the canvas editor', async () => {
@@ -703,6 +716,20 @@ describe('project pre-mount inspection', () => {
           objects: [{ id: 'legacy-shape', type: 'rect' }],
         },
       },
+    });
+    expect(inspection.session).toMatchObject({
+      source: 'library',
+      rendererKind: 'canvas',
+      activePageId: 'legacy-page',
+      pages: [{
+        size: {
+          coordinateSpace: 'canvas-logical-px',
+          sourceWidth: 1200,
+          sourceHeight: 900,
+          widthCssPx: 384,
+          heightCssPx: 288,
+        },
+      }],
     });
   });
 

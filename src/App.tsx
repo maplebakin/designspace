@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { EditorShell } from './editor/components/EditorShell';
 import { UIThemeProvider } from './editor/components/UIThemeProvider';
 import { ProjectDashboard } from './editor/components/ProjectDashboard';
 import { useEditorStore } from './editor/state/editorStore';
@@ -11,10 +10,10 @@ import { useThemeStore } from './editor/state/useThemeStore';
 import { pluginManager, PluginManagerContext } from './editor/utils/pluginArchitecture';
 import { pwaOfflineManager } from './editor/offline/pwaOfflineManager';
 import { getValidationWarnings } from './utils/validateFunctionalityWarnings';
-import { DocumentEditorShell } from './document/components/DocumentEditorShell';
-import { useDocumentStore } from './document/state/documentStore';
 import { useProjectSessionStore } from './editor/state/projectSessionStore';
 import type { EditorMode } from './editor/project/projectSchema';
+import type { ProjectSessionDescriptor } from './editor/session/projectSession';
+import { UnifiedEditorSession } from './editor/session/UnifiedEditorSession';
 
 function App() {
   const [hasActiveSession, setHasActiveSession] = useState(false);
@@ -27,21 +26,16 @@ function App() {
     injectAccessibilityStyles();
   }, []);
 
-  const canvasProjectName = useEditorStore((state) => state.projectName);
-  const canvasIsDirty = useEditorStore((state) => state.isDirty);
-  const downloadCanvasProjectFile = useEditorStore((state) => state.downloadProjectFile);
-  const saveCanvasProject = useEditorStore((state) => state.saveProject);
   const canvasObjects = useEditorStore((state) => state.canvasObjects);
   const setToast = useEditorStore((state) => state.setToast);
   const editorMode = useProjectSessionStore((state) => state.editorMode);
   const setEditorMode = useProjectSessionStore((state) => state.setEditorMode);
-  const documentProjectName = useDocumentStore((state) => state.project?.projectName);
-  const documentIsDirty = useDocumentStore((state) => state.isDirty);
-  const downloadDocumentProjectFile = useDocumentStore((state) => state.downloadProjectFile);
-  const saveDocumentProject = useDocumentStore((state) => state.saveProject);
-  const setDocumentToastMessage = useDocumentStore((state) => state.setToastMessage);
-  const projectName = editorMode === 'document' ? documentProjectName : canvasProjectName;
-  const isDirty = editorMode === 'document' ? documentIsDirty : canvasIsDirty;
+  const session = useProjectSessionStore((state) => state.session);
+  const sessionCommands = useProjectSessionStore((state) => state.commands);
+  const clearSession = useProjectSessionStore((state) => state.clearSession);
+  const projectName = session?.projectName
+    || (editorMode === 'document' ? 'Untitled Document' : 'Untitled Project');
+  const isDirty = session?.isDirty ?? false;
   const themeData = useThemeStore((state) => state.themeData);
   const manager = useMemo(() => pluginManager, []);
   const previousObjectIdsRef = useRef<string[]>([]);
@@ -137,9 +131,11 @@ function App() {
   };
 
   const showActiveError = (message: string) => {
-    if (editorMode === 'document') {
-      setDocumentToastMessage(message);
-    } else {
+    if (sessionCommands) {
+      sessionCommands.notify(message);
+      return;
+    }
+    if (editorMode === 'canvas') {
       setToast({
         message,
         variant: 'error',
@@ -148,26 +144,17 @@ function App() {
   };
 
   const downloadActiveProjectFile = async () => {
-    if (editorMode === 'document') {
-      return downloadDocumentProjectFile();
-    }
-    return downloadCanvasProjectFile();
+    return sessionCommands?.download() ?? null;
   };
 
   const saveActiveProject = async () => {
     const safeName = projectName?.trim()
       || (editorMode === 'document' ? 'Untitled Document' : 'Untitled Project');
-    if (editorMode === 'document') {
-      await saveDocumentProject(safeName);
-    } else {
-      await saveCanvasProject(safeName);
-    }
+    await sessionCommands?.save(safeName);
   };
 
   const activeProjectIsDirty = () =>
-    editorMode === 'document'
-      ? useDocumentStore.getState().isDirty
-      : useEditorStore.getState().isDirty;
+    sessionCommands?.isDirty() ?? useProjectSessionStore.getState().session?.isDirty ?? false;
 
   const handleSaveAndClose = async () => {
     const delivery = await downloadActiveProjectFile();
@@ -190,7 +177,7 @@ function App() {
   };
 
   const handleBackToDashboard = () => {
-    if (isDirty) {
+    if (activeProjectIsDirty()) {
       setShowLeaveEditorModal(true);
       return;
     }
@@ -213,6 +200,7 @@ function App() {
 
   const returnToDashboardAfterSave = () => {
     setShowLeaveEditorModal(false);
+    clearSession();
     setHasActiveSession(false);
   };
 
@@ -235,8 +223,14 @@ function App() {
     returnToDashboardAfterSave();
   };
 
-  const handleProjectOpen = (mode: EditorMode = 'canvas') => {
+  const handleProjectOpen = (
+    mode: EditorMode = 'canvas',
+    descriptor?: ProjectSessionDescriptor
+  ) => {
     setEditorMode(mode);
+    if (descriptor) {
+      useProjectSessionStore.getState().setSessionDescriptor(descriptor);
+    }
     setHasActiveSession(true);
   };
 
@@ -249,11 +243,7 @@ function App() {
             {!hasActiveSession ? (
               <ProjectDashboard onProjectOpen={handleProjectOpen} />
             ) : (
-              editorMode === 'document' ? (
-                <DocumentEditorShell onBackToDashboard={handleBackToDashboard} />
-              ) : (
-                <EditorShell onBackToDashboard={handleBackToDashboard} />
-              )
+              <UnifiedEditorSession onBackToDashboard={handleBackToDashboard} />
             )}
 
             {showCloseModal && (
