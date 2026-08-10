@@ -288,7 +288,7 @@ describe('positioned document image contract', () => {
   });
 
   it.each([0.5, 1, 2])(
-    'commits identical unzoomed coordinates after a drag at %d× view scale',
+    'commits identical snapped unzoomed coordinates after a drag at %d× view scale',
     async (viewScale) => {
       const onUpdate = vi.fn();
       const content: JSONContent = {
@@ -332,7 +332,7 @@ describe('positioned document image contract', () => {
         yPx: 120,
       });
       await waitFor(() => {
-        expect(Number(slot.dataset.imageXOffsetPx)).toBeCloseTo(64, 5);
+        expect(Number(slot.dataset.imageXOffsetPx)).toBeCloseTo(68, 5);
         expect(Number(slot.dataset.imageTopPx)).toBeCloseTo(156, 5);
       });
 
@@ -344,7 +344,7 @@ describe('positioned document image contract', () => {
       await waitFor(() => {
         expect(findImages(editor)[0].attrs).toMatchObject({
           horizontalPlacement: 'custom',
-          xOffsetPx: 64,
+          xOffsetPx: 68,
           yPx: 156,
         });
       });

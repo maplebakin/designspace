@@ -39,6 +39,9 @@ import {
   DocumentBlockStyleExtension,
 } from '../extensions/DocumentBlockStyleExtension';
 import {
+  DocumentFlowControlExtension,
+} from '../extensions/DocumentFlowControlExtension';
+import {
   SanitizedPasteExtension,
   sanitizeDocumentPastedText,
 } from '../extensions/SanitizedPasteExtension';
@@ -383,14 +386,64 @@ export interface FlowEditorProps {
     imageId: string,
     additive: boolean
   ) => string | null;
+  onImageSelectionRequest?: (imageId: string, additive: boolean) => void;
   onRequestImageReplace?: (request: DocumentImageReplaceRequest) => void;
   onPasteDispatch?: DocumentPasteDispatcher;
   onDropDispatch?: DocumentDropDispatcher;
   onOverflowChange?: (overflowing: boolean) => void;
 }
 
+const FLOW_CONTROL_DEFAULT_KEYS = [
+  'documentColumnBreakBefore',
+  'documentKeepWithNext',
+  'documentKeepLinesTogether',
+] as const;
+const EDITOR_DEFAULT_NULL_KEYS = ['textAlign'] as const;
+
+const normalizeEditorComparisonContent = (
+  value: JSONContent
+): JSONContent => {
+  const {
+    attrs: sourceAttrs,
+    content: sourceContent,
+    ...sourceFields
+  } = value;
+  const attrs = sourceAttrs && typeof sourceAttrs === 'object'
+    ? { ...sourceAttrs }
+    : undefined;
+  FLOW_CONTROL_DEFAULT_KEYS.forEach((key) => {
+    if (attrs?.[key] === false) delete attrs[key];
+  });
+  EDITOR_DEFAULT_NULL_KEYS.forEach((key) => {
+    if (attrs?.[key] === null) delete attrs[key];
+  });
+  return {
+    ...sourceFields,
+    ...(attrs && Object.keys(attrs).length > 0
+      ? { attrs }
+      : { attrs: undefined }),
+    ...(sourceContent
+      ? { content: sourceContent.map(normalizeEditorComparisonContent) }
+      : {}),
+  };
+};
+
+const stableJson = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => (
+      `${JSON.stringify(key)}:${stableJson(object[key])}`
+    )).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
 const jsonEquals = (left: JSONContent, right: JSONContent) =>
-  JSON.stringify(left) === JSON.stringify(right);
+  stableJson(normalizeEditorComparisonContent(left))
+  === stableJson(normalizeEditorComparisonContent(right));
 
 export const isDocumentFlowOverflowing = ({
   clientHeight,
@@ -449,6 +502,7 @@ export const FlowEditor = ({
   onImageSelectionChange,
   selectedStructuredImageIds = [],
   onStructuredImageSelectionRequest,
+  onImageSelectionRequest,
   onRequestImageReplace,
   onPasteDispatch,
   onDropDispatch,
@@ -475,6 +529,8 @@ export const FlowEditor = ({
     onSelectionChange,
     onImageSelectionChange,
     onStructuredImageSelectionRequest,
+    onImageSelectionRequest,
+    selectedStructuredImageIds,
     onRequestImageReplace,
     onPasteDispatch,
     onDropDispatch,
@@ -491,6 +547,8 @@ export const FlowEditor = ({
     onSelectionChange,
     onImageSelectionChange,
     onStructuredImageSelectionRequest,
+    onImageSelectionRequest,
+    selectedStructuredImageIds,
     onRequestImageReplace,
     onPasteDispatch,
     onDropDispatch,
@@ -558,6 +616,14 @@ export const FlowEditor = ({
       callbacksRef.current.resolveAssetSource(assetId),
     onRequestReplace: (request: DocumentImageReplaceRequest) =>
       callbacksRef.current.onRequestImageReplace?.(request),
+    onSelectImage: ({
+      imageId,
+      additive,
+    }: { imageId: string; additive: boolean }) => {
+      callbacksRef.current.onImageSelectionRequest?.(imageId, additive);
+    },
+    isImageSelected: (imageId: string) =>
+      callbacksRef.current.selectedStructuredImageIds.includes(imageId),
     getViewScale: () => callbacksRef.current.viewScale,
     minWidthPx: minImageWidthPx,
     maxWidthPx: maxImageWidthPx,
@@ -603,6 +669,7 @@ export const FlowEditor = ({
         DocumentBlockStyleExtension.configure({
           defaultStyleId: 'body',
         }),
+        DocumentFlowControlExtension,
         SanitizedPasteExtension,
         DocumentInlineImageExtension.configure(imageExtensionOptions),
         DocumentFlowImageExtension.configure(imageExtensionOptions),
@@ -720,6 +787,28 @@ export const FlowEditor = ({
     editor.setEditable(editable);
   }, [editable, editor]);
 
+  // React node views are owned by Tiptap and do not necessarily rerender when
+  // the shell's transient additive-selection state changes. Keep the visible
+  // source-image affordance in sync without writing selection into the
+  // document or dispatching a persistence transaction.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const selectedIds = new Set(selectedStructuredImageIds);
+    root
+      .querySelectorAll<HTMLElement>(
+        '[data-document-image="true"], .document-image-node'
+      )
+      .forEach((image) => {
+        const selected = selectedIds.has(image.dataset.imageId || '');
+        image.classList.toggle('document-image--multi-selected', selected);
+        image.dataset.imageSelected = selected
+          || image.classList.contains('document-image--selected')
+          ? 'true'
+          : 'false';
+      });
+  }, [editor, selectedStructuredImageIds, selectionRevision]);
+
   useEffect(() => {
     if (!editingStructuredText || !editor || editor.isDestroyed) return;
     const focusTextEditor = () => {
@@ -761,12 +850,16 @@ export const FlowEditor = ({
           + columnGapPx * (normalized.spanCount - 1)
         );
         if (normalized.widthPx > spanWidth) {
-          const aspectRatio =
-            normalized.naturalWidth / Math.max(1, normalized.naturalHeight);
           normalized = {
             ...normalized,
             widthPx: spanWidth,
-            heightPx: spanWidth / aspectRatio,
+            ...(normalized.cropMode === 'fit'
+              ? {
+                  heightPx: spanWidth
+                    * normalized.naturalHeight
+                    / Math.max(1, normalized.naturalWidth),
+                }
+              : {}),
           };
         }
         normalized = {

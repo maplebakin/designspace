@@ -1451,6 +1451,27 @@
   overflow: hidden;
 }
 
+.document-span-layout__snap-guide {
+  position: absolute;
+  z-index: 8;
+  pointer-events: none;
+  border-color: rgba(82, 103, 216, 0.78);
+  border-style: dashed;
+  border-width: 0;
+}
+
+.document-span-layout__snap-guide--x {
+  top: 0;
+  bottom: 0;
+  border-left-width: 1px;
+}
+
+.document-span-layout__snap-guide--y {
+  left: 0;
+  right: 0;
+  border-top-width: 1px;
+}
+
 .document-span-layout__column-stack {
   position: relative;
   box-sizing: border-box;
@@ -1582,6 +1603,21 @@
 .document-flow-prosemirror p:last-child,
 .document-spanning-layout p:last-child {
   margin-bottom: 0;
+}
+
+.document-flow-prosemirror [data-document-column-break-before="true"],
+.document-spanning-layout [data-document-column-break-before="true"] {
+  break-before: column;
+}
+
+.document-flow-prosemirror [data-document-keep-with-next="true"],
+.document-spanning-layout [data-document-keep-with-next="true"] {
+  break-after: avoid;
+}
+
+.document-flow-prosemirror [data-document-keep-lines-together="true"],
+.document-spanning-layout [data-document-keep-lines-together="true"] {
+  break-inside: avoid;
 }
 
 :is(
@@ -1840,11 +1876,19 @@
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  height: auto;
+  height: 100%;
+}
+
+.document-image__frame {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .document-image__media {
   object-fit: contain;
+  object-position: 50% 50%;
 }
 
 .document-image__missing {
@@ -1890,6 +1934,12 @@
 .document-image--selected {
   outline: 2px solid #5267d8;
   outline-offset: 2px;
+}
+
+.document-image--multi-selected {
+  outline: 2px solid #5267d8;
+  outline-offset: 2px;
+  background: rgba(82, 103, 216, 0.08);
 }
 
 .document-image__resize-handle {
@@ -2082,6 +2132,27 @@
   overflow: hidden;
   user-select: none;
   touch-action: none;
+}
+
+.document-overlay-snap-guide {
+  position: absolute;
+  z-index: 12;
+  pointer-events: none;
+  border-color: rgba(82, 103, 216, 0.78);
+  border-style: dashed;
+  border-width: 0;
+}
+
+.document-overlay-snap-guide--x {
+  top: 0;
+  bottom: 0;
+  border-left-width: 1px;
+}
+
+.document-overlay-snap-guide--y {
+  left: 0;
+  right: 0;
+  border-top-width: 1px;
 }
 
 .document-scan-reference img {

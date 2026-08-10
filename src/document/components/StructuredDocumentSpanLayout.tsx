@@ -18,6 +18,7 @@ import type {
 } from '../extensions/DocumentImageExtension';
 import {
   calculateDocumentImageHeight,
+  calculateDocumentImageFrameHeight,
   calculateDocumentImageXOffset,
   clampDocumentImageXOffset,
   clampDocumentImageWidth,
@@ -42,6 +43,8 @@ import {
   type BodyRectangle,
   type CollisionObstacle,
   type DocumentImageGroupLayout,
+  snapDocumentRectangle,
+  type DocumentSnapGuide,
 } from '../layout';
 import type {
   DocumentImageGroup,
@@ -558,25 +561,50 @@ const splitElementToFit = (
   return before && after ? { before, after } : null;
 };
 
-const allocateElementsToHeight = (
+export const allocateElementsToHeight = (
   elements: Element[],
   widthPx: number,
   maximumHeightPx: number,
   measure: StructuredContentMeasurer['measure']
-): { allocated: Element[]; remaining: Element[] } => {
+): {
+  allocated: Element[];
+  remaining: Element[];
+  breakBefore: boolean;
+} => {
   if (maximumHeightPx <= 0) {
-    return { allocated: [], remaining: elements };
+    return { allocated: [], remaining: elements, breakBefore: false };
   }
   const allocated: Element[] = [];
   for (let index = 0; index < elements.length; index += 1) {
     const element = elements[index];
     const isSubsectionHeading = element.getAttribute('data-document-style-id')
       === 'subsection-heading';
-    const headingWouldBeOrphaned = isSubsectionHeading
-      && allocated.length > 0
+    const startsNewColumn = element.getAttribute(
+      'data-document-column-break-before'
+    ) === 'true';
+    const keepWithNext = isSubsectionHeading
+      || element.getAttribute('data-document-keep-with-next') === 'true';
+    const keepLinesTogether = element.getAttribute(
+      'data-document-keep-lines-together'
+    ) === 'true';
+    if (startsNewColumn) {
+      return {
+        allocated,
+        remaining: elements.slice(index),
+        breakBefore: true,
+      };
+    }
+    const headingWouldBeOrphaned = keepWithNext
       && index < elements.length - 1
       && measure([...allocated, element, elements[index + 1]], widthPx)
         > Math.max(1, maximumHeightPx);
+    if (headingWouldBeOrphaned && allocated.length === 0) {
+      return {
+        allocated,
+        remaining: elements.slice(index),
+        breakBefore: false,
+      };
+    }
     if (
       !headingWouldBeOrphaned
       &&
@@ -593,7 +621,7 @@ const allocateElementsToHeight = (
     // or orphaning a heading creates a misleading continuation such as
     // “Karatai” at the bottom of one region and “(Nisipari)” at the top of the
     // next, or leaves the following paragraph below the image row.
-    const split = isSubsectionHeading
+    const split = isSubsectionHeading || keepLinesTogether || keepWithNext
       ? null
       : splitElementToFit(
           element,
@@ -607,20 +635,38 @@ const allocateElementsToHeight = (
       return {
         allocated,
         remaining: [split.after, ...elements.slice(index + 1)],
+        breakBefore: false,
       };
     }
     if (allocated.length === 0) {
       return {
         allocated,
         remaining: elements.slice(index),
+        breakBefore: false,
       };
     }
     return {
       allocated,
       remaining: elements.slice(index),
+      breakBefore: false,
     };
   }
-  return { allocated, remaining: [] };
+  return { allocated, remaining: [], breakBefore: false };
+};
+
+const consumeLeadingDocumentColumnBreak = (
+  elements: Element[]
+): Element[] => {
+  const first = elements[0];
+  if (
+    !first
+    || first.getAttribute('data-document-column-break-before') !== 'true'
+  ) {
+    return elements;
+  }
+  const consumed = first.cloneNode(true) as Element;
+  consumed.removeAttribute('data-document-column-break-before');
+  return [consumed, ...elements.slice(1)];
 };
 
 export const buildDocumentSpanLayoutModel = (
@@ -706,9 +752,9 @@ export const buildDocumentSpanLayoutModel = (
   );
   const aspectRatio =
     spanAttributes.naturalWidth / Math.max(1, spanAttributes.naturalHeight);
-  const renderedImageHeightPx = Math.max(
-    1,
-    renderedImageWidthPx / aspectRatio
+  const renderedImageHeightPx = calculateDocumentImageFrameHeight(
+    spanAttributes,
+    renderedImageWidthPx
   );
 
   const imageElement = children[imageIndex] as HTMLElement;
@@ -737,6 +783,13 @@ export const buildDocumentSpanLayoutModel = (
   if (image) {
     image.style.width = `${renderedImageWidthPx}px`;
     image.style.height = `${renderedImageHeightPx}px`;
+  }
+  const frame = imageElement.querySelector<HTMLElement>(
+    '.document-image__frame'
+  );
+  if (frame) {
+    frame.style.width = `${renderedImageWidthPx}px`;
+    frame.style.height = `${renderedImageHeightPx}px`;
   }
 
   const measurer = createStructuredContentMeasurer({
@@ -804,7 +857,14 @@ export const buildDocumentSpanLayoutModel = (
       exclusionBottomPx
     );
     let remaining = [...before, ...after];
+    let skipColumn: number | null = null;
+    let consumeBreakBeforeNextColumn = false;
     segmentOrder.forEach((segment) => {
+      if (skipColumn === segment.column) return;
+      if (consumeBreakBeforeNextColumn) {
+        remaining = consumeLeadingDocumentColumnBreak(remaining);
+        consumeBreakBeforeNextColumn = false;
+      }
       const allocation = allocateElementsToHeight(
         remaining,
         columnWidthPx,
@@ -815,6 +875,10 @@ export const buildDocumentSpanLayoutModel = (
       column[segment.region === 'top' ? 'topHtml' : 'bottomHtml'] =
         serializeElements(allocation.allocated);
       remaining = allocation.remaining;
+      if (allocation.breakBefore) {
+        skipColumn = segment.column;
+        consumeBreakBeforeNextColumn = true;
+      }
     });
     const overflowElements = remaining;
     const overflowing = overflowElements.length > 0;
@@ -1032,9 +1096,10 @@ export const buildMultiDocumentSpanLayoutModel = (
         spanWidthPx,
         attributes.widthPx
       );
-      const aspectRatio = getDocumentImageAspectRatio(attributes);
-      const renderedImageHeightPx =
-        renderedImageWidthPx / Math.max(0.0001, aspectRatio);
+      const renderedImageHeightPx = calculateDocumentImageFrameHeight(
+        attributes,
+        renderedImageWidthPx
+      );
       const caption = imageElement.querySelector('figcaption');
       const captionHeightPx = caption
         ? measurer.measure([caption], renderedImageWidthPx)
@@ -1182,9 +1247,9 @@ export const buildMultiDocumentSpanLayoutModel = (
         const widthPx = group.sharedWidth
           ? sharedWidthPx!
           : image.renderedImageWidthPx * widthScale;
-        const heightPx = widthPx / Math.max(
-          0.0001,
-          getDocumentImageAspectRatio(image.attributes)
+        const heightPx = calculateDocumentImageFrameHeight(
+          image.attributes,
+          widthPx
         );
         const captionHeightPx = image.captionElement
           ? measurer.measure([image.captionElement], widthPx)
@@ -1330,9 +1395,9 @@ export const buildMultiDocumentSpanLayoutModel = (
         ?? resolvedRectangle.widthPx;
       const renderedImageHeightPx = groupChild?.imageRectangle.heightPx
         ?? (
-          renderedImageWidthPx / Math.max(
-            0.0001,
-            getDocumentImageAspectRatio(image.attributes)
+          calculateDocumentImageFrameHeight(
+            image.attributes,
+            renderedImageWidthPx
           )
         );
       const imageRegionHeightPx = resolvedRectangle.heightPx;
@@ -1360,6 +1425,13 @@ export const buildMultiDocumentSpanLayoutModel = (
       if (media) {
         media.style.width = `${renderedImageWidthPx}px`;
         media.style.height = `${renderedImageHeightPx}px`;
+      }
+      const frame = image.imageElement.querySelector<HTMLElement>(
+        '.document-image__frame'
+      );
+      if (frame) {
+        frame.style.width = `${renderedImageWidthPx}px`;
+        frame.style.height = `${renderedImageHeightPx}px`;
       }
       const resolvedXOffsetPx = clampDocumentImageXOffset(
         resolvedRectangle.leftPx - image.spanLeftPx,
@@ -1484,7 +1556,23 @@ export const buildMultiDocumentSpanLayoutModel = (
       }
     }
     let remaining = [...textElements];
+    let skipColumn: number | null = null;
+    let consumeBreakBeforeNextColumn = false;
     const textBands = candidateBands.map((band) => {
+      if (skipColumn === band.column) {
+        return {
+          ...band,
+          html: '',
+          documentFrom: null,
+          documentTo: null,
+          lineFrom: null,
+          lineTo: null,
+        };
+      }
+      if (consumeBreakBeforeNextColumn) {
+        remaining = consumeLeadingDocumentColumnBreak(remaining);
+        consumeBreakBeforeNextColumn = false;
+      }
       const allocation = allocateElementsToHeight(
         remaining,
         band.widthPx,
@@ -1492,6 +1580,10 @@ export const buildMultiDocumentSpanLayoutModel = (
         measurer.measure
       );
       remaining = allocation.remaining;
+      if (allocation.breakBefore) {
+        skipColumn = band.column;
+        consumeBreakBeforeNextColumn = true;
+      }
       const documentRange = getElementsDocumentTextRange(
         allocation.allocated
       );
@@ -1919,6 +2011,7 @@ export const StructuredDocumentSpanLayout = ({
   const [previewOverrides, setPreviewOverrides] = useState<
     Record<string, Partial<DocumentImageAttributes>>
   >({});
+  const [snapGuides, setSnapGuides] = useState<readonly DocumentSnapGuide[]>([]);
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const pointerSelectedImageIdRef = useRef<string | null>(null);
   const model = useMemo(
@@ -2262,7 +2355,7 @@ export const StructuredDocumentSpanLayout = ({
       if (pointerSelectedImageIdRef.current === image.imageId) {
         pointerSelectedImageIdRef.current = null;
       }
-    }, 0);
+    }, 50);
     onSelectImage(
       image.imagePosition,
       image.imageId,
@@ -2323,6 +2416,7 @@ export const StructuredDocumentSpanLayout = ({
       xOffsetPx: anchorImage.attributes.xOffsetPx,
       yPx: startRectangle.topPx,
     };
+    setSnapGuides([]);
   };
 
   const handleResizePointerDown = (
@@ -2376,8 +2470,9 @@ export const StructuredDocumentSpanLayout = ({
     );
     resizeRef.current.maximumWidth = Math.min(
       resizeRef.current.maximumWidth,
-      maximumImageHeightPx
-        * resizeRef.current.aspectRatio
+      image.attributes.cropMode === 'fill'
+        ? Number.POSITIVE_INFINITY
+        : maximumImageHeightPx * resizeRef.current.aspectRatio
     );
     resizeRef.current.minimumWidth = Math.min(
       resizeRef.current.minimumWidth,
@@ -2420,9 +2515,9 @@ export const StructuredDocumentSpanLayout = ({
         leftPx: resize.spanLeftPx + xOffsetPx,
         topPx: resize.topPx,
         widthPx: candidateWidth,
-        heightPx: calculateDocumentImageHeight(
-          candidateWidth,
-          resize.aspectRatio
+        heightPx: calculateDocumentImageFrameHeight(
+          resize.attributes,
+          candidateWidth
         ) + resize.captionExtraHeightPx,
       };
     };
@@ -2432,9 +2527,9 @@ export const StructuredDocumentSpanLayout = ({
       buildRectangle,
       obstacles: resize.obstacles,
     });
-    const heightPx = calculateDocumentImageHeight(
-      collisionSafeWidth,
-      resize.aspectRatio
+    const heightPx = calculateDocumentImageFrameHeight(
+      resize.attributes,
+      collisionSafeWidth
     );
     const xOffsetPx = calculateDocumentImageXOffset({
       placement: resize.attributes.horizontalPlacement,
@@ -2525,11 +2620,30 @@ export const StructuredDocumentSpanLayout = ({
           - drag.bottomPaddingPx
       )
     );
+    const desiredOrigin = bodyPoint(
+      drag.startImageX + pointerDelta.xPx,
+      drag.startImageY + pointerDelta.yPx
+    );
+    const columnGeometry = getDocumentColumnRectangles({
+      bodyWidthPx: model.availableWidthPx,
+      bodyHeightPx: model.availableHeightPx,
+      columnCount,
+      columnGapPx,
+    });
+    const snapped = snapDocumentRectangle({
+      rectangle: toBodyRectangle(drag.startRectangle),
+      desiredOrigin,
+      bounds: bodyRectangle(0, 0, model.availableWidthPx, model.availableHeightPx),
+      columns: columnGeometry.columns,
+      nearby: drag.obstacles.map(toBodyRectangle),
+      thresholdPx: 8,
+    });
+    setSnapGuides(snapped.guides);
     const nextMovement = moveKernelRectangleWithoutCollisions({
       start: toBodyRectangle(drag.startRectangle),
       desiredOrigin: bodyPoint(
-        drag.startImageX + pointerDelta.xPx,
-        drag.startImageY + pointerDelta.yPx
+        snapped.rectangle.leftPx,
+        snapped.rectangle.topPx
       ),
       obstacles: drag.obstacles.map(toCollisionObstacle),
       bounds: movementBounds,
@@ -2573,6 +2687,7 @@ export const StructuredDocumentSpanLayout = ({
     previewPositionRef.current = null;
     if (cancelled || !drag.moved) {
       clearPreview(drag.imageId);
+      setSnapGuides([]);
       return;
     }
     const committed = onCommitImagePosition(
@@ -2584,6 +2699,7 @@ export const StructuredDocumentSpanLayout = ({
     if (!committed) {
       clearPreview(drag.imageId);
     }
+    setSnapGuides([]);
   };
   finishDragRef.current = finishDrag;
 
@@ -2718,6 +2834,18 @@ export const StructuredDocumentSpanLayout = ({
       onPointerMove={handleImagePointerMove}
       onClick={handleClick}
     >
+      {snapGuides.map((guide, index) => (
+        <div
+          key={`${guide.axis}-${guide.positionPx}-${index}`}
+          className={`document-span-layout__snap-guide document-span-layout__snap-guide--${guide.axis}`}
+          data-document-export-exclude="true"
+          data-snap-axis={guide.axis}
+          data-snap-source={guide.source}
+          style={guide.axis === 'x'
+            ? { left: `${guide.positionPx}px` }
+            : { top: `${guide.positionPx}px` }}
+        />
+      ))}
       <div className="document-span-layout__column-stacks">
         {Array.from({ length: columnCount }, (_, index) => index + 1).map(
           (column) => (

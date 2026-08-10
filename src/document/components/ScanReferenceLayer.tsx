@@ -24,9 +24,10 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
   } | null>(null);
 
   if (!reference || !source || !reference.visible) return null;
+  const canAdjust = adjustMode && !reference.locked;
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!adjustMode) return;
+    if (!canAdjust) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStart.current = {
@@ -38,7 +39,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStart.current || !adjustMode) return;
+    if (!dragStart.current || !canAdjust) return;
     const scale = zoom || 1;
     onChange({
       offsetXPx: dragStart.current.offsetX + (event.clientX - dragStart.current.pointerX) / scale,
@@ -55,7 +56,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
 
   return (
     <div
-      className={`document-scan-reference ${adjustMode ? 'is-adjusting' : ''}`}
+      className={`document-scan-reference ${canAdjust ? 'is-adjusting' : ''}`}
       data-document-export-exclude="true"
       data-reference-layer="true"
       data-testid="document-reference-layer"
@@ -65,7 +66,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
       onPointerUp={stopDragging}
       onPointerCancel={stopDragging}
       style={{
-        pointerEvents: adjustMode ? 'auto' : 'none',
+        pointerEvents: canAdjust ? 'auto' : 'none',
         opacity: reference.opacity,
       }}
     >
@@ -78,7 +79,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
           transform: `translate(${reference.offsetXPx}px, ${reference.offsetYPx}px) scale(${reference.scale})`,
         }}
       />
-      {adjustMode && (
+      {canAdjust && (
         <div className="document-reference-adjust-label">
           Drag the scan to align it
         </div>

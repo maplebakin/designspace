@@ -49,6 +49,7 @@ import {
 import {
   canMoveSelectedStructuredImage,
   calculateDocumentImageHeight,
+  calculateDocumentImageFrameHeight,
   calculateDocumentImageResizeWidth,
   calculateDocumentImageDragY,
   calculateDocumentImageXOffset,
@@ -1216,6 +1217,44 @@ describe('live document editor UI', () => {
       useDocumentStore.getState().project?.pages[0].reference?.visible
     ).toBe(true);
     expect(screen.queryByTestId('document-reference-layer')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('document-reference-lock'));
+    expect(
+      useDocumentStore.getState().project?.pages[0].reference?.locked
+    ).toBe(false);
+    fireEvent.change(screen.getByLabelText('Reference fit'), {
+      target: { value: 'cover' },
+    });
+    fireEvent.change(screen.getByLabelText('Reference scale'), {
+      target: { value: '1.4' },
+    });
+    fireEvent.change(screen.getByLabelText('Reference X offset'), {
+      target: { value: '18' },
+    });
+    fireEvent.click(screen.getByTestId('document-reference-fit-page'));
+    expect(
+      useDocumentStore.getState().project?.pages[0].reference
+    ).toMatchObject({
+      fit: 'contain',
+      scale: 1,
+      offsetXPx: 0,
+      offsetYPx: 0,
+    });
+
+    fireEvent.keyDown(screen.getByTestId('document-workspace'), {
+      key: 'r',
+      shiftKey: true,
+    });
+    expect(
+      useDocumentStore.getState().project?.pages[0].reference?.visible
+    ).toBe(false);
+    fireEvent.keyDown(screen.getByTestId('document-workspace'), {
+      key: 'r',
+      shiftKey: true,
+    });
+    expect(
+      useDocumentStore.getState().project?.pages[0].reference?.visible
+    ).toBe(true);
   });
 
   it('switches the contextual toolbar between text, image, and reference adjustment', async () => {
@@ -2410,7 +2449,12 @@ describe('live document editor UI', () => {
           .toBeCloseTo(expectedWidth, 5);
       });
       expect(Number(layout.dataset.renderedImageHeightPx)).toBeCloseTo(
-        expectedWidth / 1.6,
+        calculateDocumentImageFrameHeight({
+          cropMode: 'fit',
+          heightPx: 150,
+          naturalWidth: 1.6,
+          naturalHeight: 1,
+        }, expectedWidth),
         5
       );
       expect(Number(layout.dataset.imageRegionHeightPx))
@@ -2422,7 +2466,15 @@ describe('live document editor UI', () => {
         .toBeCloseTo(expectedWidth, 5);
       expect(Number.parseFloat(previewFigure.querySelector<HTMLElement>(
         '.document-image__media'
-      )!.style.height)).toBeCloseTo(expectedWidth / 1.6, 5);
+      )!.style.height)).toBeCloseTo(
+        calculateDocumentImageFrameHeight({
+          cropMode: 'fit',
+          heightPx: 150,
+          naturalWidth: 1.6,
+          naturalHeight: 1,
+        }, expectedWidth),
+        5
+      );
 
       dispatchTestPointer(handle, 'pointerup', {
         pointerId: 21,
@@ -2838,6 +2890,10 @@ describe('live document editor UI', () => {
       const startLeft = Number(imageSlot.dataset.imageLeftPx);
       const deltaX = 30;
       const deltaY = 24;
+      // At 0.5× the requested edge lands within the snap threshold of the
+      // next column edge. The other zoom cases remain away from a guide.
+      const snapAdjustment = viewScale === 0.5 ? 4 : 0;
+      const verticalSnapAdjustment = viewScale === 0.5 ? 7 : 0;
       onUpdate.mockClear();
 
       dispatchTestPointer(imageSlot, 'pointerdown', {
@@ -2860,7 +2916,7 @@ describe('live document editor UI', () => {
           '[data-layout-role="occupied-columns"]'
         )!;
         expect(Number(preview.dataset.imageLeftPx)).toBeCloseTo(
-          startLeft + deltaX / viewScale,
+          startLeft + deltaX / viewScale + snapAdjustment,
           4
         );
       });
@@ -2873,13 +2929,13 @@ describe('live document editor UI', () => {
       await waitFor(() => {
         expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
           horizontalPlacement: 'custom',
-          xOffsetPx: 40 + deltaX / viewScale,
-          yPx: 120 + deltaY / viewScale,
+          xOffsetPx: 40 + deltaX / viewScale + snapAdjustment,
+          yPx: 120 + deltaY / viewScale + verticalSnapAdjustment,
         });
         expect(Number(container.querySelector<HTMLElement>(
           '[data-layout-role="occupied-columns"]'
         )!.dataset.imageXOffsetPx)).toBeCloseTo(
-          40 + deltaX / viewScale,
+          40 + deltaX / viewScale + snapAdjustment,
           5
         );
       });
@@ -2898,8 +2954,8 @@ describe('live document editor UI', () => {
       });
       editor!.commands.redo();
       expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
-        xOffsetPx: 40 + deltaX / viewScale,
-        yPx: 120 + deltaY / viewScale,
+        xOffsetPx: 40 + deltaX / viewScale + snapAdjustment,
+        yPx: 120 + deltaY / viewScale + verticalSnapAdjustment,
       });
     }
   );

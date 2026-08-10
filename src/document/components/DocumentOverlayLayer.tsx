@@ -9,14 +9,21 @@ import {
   pagePoint,
   pageRectangle,
   resizeRectangleWithoutCollisions,
+  snapDocumentRectangle,
   viewportDelta,
   viewportDeltaToLayoutDelta,
   type CollisionObstacle,
+  type DocumentSnapGuide,
   type PageRectangle,
 } from '../layout';
 import type {
+  DocumentImageCropMode,
   DocumentOverlayImage,
   DocumentOverlayPlacement,
+} from '../types/documentProject';
+import {
+  normalizeDocumentImageCropMode,
+  normalizeDocumentImageFocal,
 } from '../types/documentProject';
 
 type DocumentOverlayLayerProps = {
@@ -44,6 +51,7 @@ type Interaction = {
   pointerY: number;
   start: OverlayPreview;
   latest: OverlayPreview;
+  cropMode: DocumentImageCropMode;
   captionExtraHeightPx: number;
   startRectangle: PageRectangle;
   obstacles: CollisionObstacle<'page'>[];
@@ -80,6 +88,7 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
     id: string;
     geometry: OverlayPreview;
   } | null>(null);
+  const [snapGuides, setSnapGuides] = useState<readonly DocumentSnapGuide[]>([]);
   const pageBounds = pageRectangle(0, 0, pageWidthPx, pageHeightPx);
 
   const measureCaptionExtraHeight = useCallback((
@@ -116,6 +125,7 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
     }
     interaction.current = null;
     setPreview(null);
+    setSnapGuides([]);
     if (cancelled || !active.moved) return;
     if (active.mode === 'move') {
       onChange(active.id, {
@@ -168,6 +178,7 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     onSelect(object.id);
+    setSnapGuides([]);
     const start = {
       xPx: object.xPx,
       yPx: object.yPx,
@@ -186,6 +197,7 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
       pointerY: event.clientY,
       start,
       latest: start,
+      cropMode: normalizeDocumentImageCropMode(object.cropMode),
       captionExtraHeightPx,
       startRectangle: pageRectangle(
         object.xPx,
@@ -222,11 +234,22 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
     );
     let geometry: OverlayPreview;
     if (active.mode === 'move') {
-      const result = moveRectangleWithoutCollisions({
-        start: active.startRectangle,
+      const snapped = snapDocumentRectangle({
+        rectangle: active.startRectangle,
         desiredOrigin: pagePoint(
           active.start.xPx + delta.xPx,
           active.start.yPx + delta.yPx
+        ),
+        bounds: pageBounds,
+        boundsSource: 'page',
+        nearby: active.obstacles.map((obstacle) => obstacle.rectangle),
+        thresholdPx: 8,
+      });
+      const result = moveRectangleWithoutCollisions({
+        start: active.startRectangle,
+        desiredOrigin: pagePoint(
+          snapped.rectangle.leftPx,
+          snapped.rectangle.topPx
         ),
         obstacles: active.obstacles,
         bounds: pageBounds,
@@ -236,11 +259,15 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
         xPx: result.rectangle.leftPx,
         yPx: result.rectangle.topPx,
       };
+      setSnapGuides(snapped.guides);
     } else {
+      setSnapGuides([]);
       const aspectRatio =
         active.start.heightPx / Math.max(1, active.start.widthPx);
       const desiredWidthPx = Math.max(48, active.start.widthPx + delta.xPx);
-      const desiredImageHeightPx = desiredWidthPx * aspectRatio;
+      const desiredImageHeightPx = active.cropMode === 'fill'
+        ? active.start.heightPx
+        : desiredWidthPx * aspectRatio;
       const result = resizeRectangleWithoutCollisions({
         start: active.startRectangle,
         desiredWidthPx,
@@ -288,6 +315,18 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
         if (event.target === event.currentTarget) onSelect(null);
       }}
     >
+      {snapGuides.map((guide, index) => (
+        <div
+          key={`${guide.axis}-${guide.positionPx}-${index}`}
+          className={`document-overlay-snap-guide document-overlay-snap-guide--${guide.axis}`}
+          data-document-export-exclude="true"
+          data-snap-axis={guide.axis}
+          data-snap-source={guide.source}
+          style={guide.axis === 'x'
+            ? { left: guide.positionPx }
+            : { top: guide.positionPx }}
+        />
+      ))}
       {objects.filter((object) => object.placement === placement).map((object) => {
         const source = assetSources[object.assetId];
         const selected = object.id === selectedId;
@@ -345,6 +384,7 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
             data-caption-italic={String(captionItalic)}
             data-caption-spacing-px={captionSpacingPx}
             data-previewing={preview?.id === object.id ? 'true' : 'false'}
+            data-crop-mode={object.cropMode || 'fit'}
             style={{
               left: rendered.xPx,
               top: rendered.yPx,
@@ -356,25 +396,38 @@ export const DocumentOverlayLayer: React.FC<DocumentOverlayLayerProps> = ({
             onPointerUp={endInteraction}
             onPointerCancel={cancelInteraction}
           >
-            {source ? (
-              <img
-                src={source}
-                alt={object.altText}
-                draggable={false}
-                style={{
-                  width: rendered.widthPx,
-                  height: rendered.heightPx,
-                }}
-              />
-            ) : (
-              <span
-                className="document-image__missing document-overlay-image__missing"
-                role="img"
-                aria-label={object.altText || 'Missing document image'}
-              >
-                Image unavailable
-              </span>
-            )}
+            <div
+              className="document-image__frame document-overlay-image__frame"
+              data-crop-mode={normalizeDocumentImageCropMode(object.cropMode)}
+              style={{
+                width: rendered.widthPx,
+                height: rendered.heightPx,
+              }}
+            >
+              {source ? (
+                <img
+                  src={source}
+                  alt={object.altText}
+                  draggable={false}
+                  data-natural-width={object.naturalWidth || object.widthPx}
+                  data-natural-height={object.naturalHeight || object.heightPx}
+                  style={{
+                    width: rendered.widthPx,
+                    height: rendered.heightPx,
+                    objectFit: object.cropMode === 'fill' ? 'cover' : 'contain',
+                    objectPosition: `${normalizeDocumentImageFocal(object.cropFocalX) * 100}% ${normalizeDocumentImageFocal(object.cropFocalY) * 100}%`,
+                  }}
+                />
+              ) : (
+                <span
+                  className="document-image__missing document-overlay-image__missing"
+                  role="img"
+                  aria-label={object.altText || 'Missing document image'}
+                >
+                  Image unavailable
+                </span>
+              )}
+            </div>
             {object.caption && (
               <figcaption
                 data-caption-alignment={captionAlignment}

@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import type { Editor, JSONContent } from '@tiptap/core';
+import { NodeSelection, TextSelection } from 'prosemirror-state';
 import { v4 as uuidv4 } from 'uuid';
 import { useDocumentStore } from '../state/documentStore';
 import type {
@@ -42,6 +43,7 @@ import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
+  calculateDocumentImageFrameHeight,
   type DocumentImageAttributes,
   type DocumentImageMoveDirection,
   type DocumentImageReplaceRequest,
@@ -55,6 +57,9 @@ import {
   normalizeDocumentBlockStyleId,
   type DocumentBlockStyleId,
 } from '../extensions/DocumentBlockStyleExtension';
+import type {
+  DocumentFlowControl,
+} from '../extensions/DocumentFlowControlExtension';
 import {
   commitStructuredDocumentImagePosition,
   commitStructuredDocumentImageBatch,
@@ -137,6 +142,9 @@ const DEFAULT_TEXT_FORMAT_STATE: DocumentTextFormatState = {
   alignment: 'left',
   fontSizePt: documentPixelsToPoints(14),
   blockStyleId: 'body',
+  columnBreakBefore: false,
+  keepWithNext: false,
+  keepLinesTogether: false,
 };
 
 const readSelectionFontSize = (
@@ -202,6 +210,9 @@ const readTextFormatState = (
       styles[blockStyleId].fontSizePx
     ),
     blockStyleId,
+    columnBreakBefore: paragraphAttributes.documentColumnBreakBefore === true,
+    keepWithNext: paragraphAttributes.documentKeepWithNext === true,
+    keepLinesTogether: paragraphAttributes.documentKeepLinesTogether === true,
   };
 };
 
@@ -274,6 +285,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     useState<SelectedDocumentImage | null>(null);
   const [selectedStructuredImageIds, setSelectedStructuredImageIds] =
     useState<string[]>([]);
+  const [selectedImageGroupId, setSelectedImageGroupId] =
+    useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fitMode, setFitMode] = useState(true);
@@ -332,6 +345,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     bodyEditorRef.current = null;
     setSelectedFlowImage(null);
     setSelectedStructuredImageIds([]);
+    setSelectedImageGroupId(null);
     setSelectedFlowImageId(null);
     setSelectedOverlayId(null);
     setReferenceAdjustMode(false);
@@ -359,7 +373,72 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         void saveProject();
         return;
       }
+      if (
+        event.key === 'Escape'
+        && (
+          selectedFlowImage
+          || selectedImageGroupId
+          || selectedStructuredImageIds.length > 0
+          || selectedOverlayId
+          || isReferenceAdjustMode
+        )
+      ) {
+        event.preventDefault();
+        if (selectedFlowImage && page) {
+          const childGroup = findDocumentImageGroupForImage(
+            page.imageGroups,
+            selectedFlowImage.attributes.id
+          );
+          if (childGroup && !selectedImageGroupId) {
+            setSelectedImageGroupId(childGroup.id);
+            setSelectedStructuredImageIds([...childGroup.childImageIds]);
+            return;
+          }
+        }
+        if (selectedImageGroupId) {
+          const editor = bodyEditorRef.current;
+          if (
+            editor
+            && !editor.isDestroyed
+            && editor.state.selection instanceof NodeSelection
+          ) {
+            editor.view.dispatch(
+              editor.state.tr.setSelection(
+                TextSelection.near(
+                  editor.state.doc.resolve(editor.state.selection.from),
+                  -1
+                )
+              )
+            );
+          }
+          setSelectedImageGroupId(null);
+          setSelectedStructuredImageIds([]);
+          setSelectedFlowImage(null);
+          setSelectedFlowImageId(null);
+          return;
+        }
+        setSelectedOverlayId(null);
+        setSelectedFlowImage(null);
+        setSelectedFlowImageId(null);
+        setSelectedStructuredImageIds([]);
+        setSelectedImageGroupId(null);
+        setReferenceAdjustMode(false);
+        return;
+      }
       if (editable) return;
+      if (
+        event.shiftKey
+        && !isMeta
+        && event.key.toLowerCase() === 'r'
+        && page?.reference
+      ) {
+        event.preventDefault();
+        setReference({
+          ...page.reference,
+          visible: !page.reference.visible,
+        });
+        return;
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedOverlayId) {
         event.preventDefault();
         removeOverlay(selectedOverlayId, page?.id);
@@ -489,13 +568,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         );
         return;
       }
-      if (event.key === 'Escape') {
-        setSelectedOverlayId(null);
-        setSelectedFlowImage(null);
-        setSelectedFlowImageId(null);
-        setSelectedStructuredImageIds([]);
-        setReferenceAdjustMode(false);
-      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -507,11 +579,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     removeOverlay,
     saveProject,
     selectedFlowImage,
+    selectedImageGroupId,
+    selectedStructuredImageIds,
     selectedOverlayId,
+    isReferenceAdjustMode,
     setReferenceAdjustMode,
     setSelectedFlowImageId,
     setSelectedOverlayId,
     setSelectedStructuredImageIds,
+    setReference,
     typographyStyle,
   ]);
 
@@ -748,6 +824,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
   }, [project]);
 
+  const handleFlowControl = useCallback((control: DocumentFlowControl) => {
+    const editor = bodyEditorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    const chain = editor.chain().focus();
+    if (control === 'column-break') chain.toggleDocumentColumnBreak().run();
+    if (control === 'keep-with-next') chain.toggleDocumentKeepWithNext().run();
+    if (control === 'keep-lines-together') {
+      chain.toggleDocumentKeepLinesTogether().run();
+    }
+    if (project) updateActiveTextFormatState(editor, 'body');
+  }, [project, updateActiveTextFormatState]);
+
   const selectedOverlay = page?.overlayObjects.find(
     (object) => object.id === selectedOverlayId
   ) || null;
@@ -755,10 +843,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (!page || selectedStructuredImageIds.length < 2) return null;
     const selected = new Set(selectedStructuredImageIds);
     return page.imageGroups.find((group) => (
-      group.childImageIds.length === selected.size
+      (!selectedImageGroupId || group.id === selectedImageGroupId)
+      && group.childImageIds.length === selected.size
       && group.childImageIds.every((imageId) => selected.has(imageId))
     )) || null;
-  }, [page, selectedStructuredImageIds]);
+  }, [page, selectedImageGroupId, selectedStructuredImageIds]);
 
   const handleStructuredImageSelectionRequest = useCallback((
     imageId: string,
@@ -767,13 +856,21 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (!page) return imageId;
     const group = findDocumentImageGroupForImage(page.imageGroups, imageId);
     if (group && !additive) {
+      if (selectedImageGroupId === group.id) {
+        setSelectedImageGroupId(null);
+        setSelectedStructuredImageIds([imageId]);
+        return imageId;
+      }
+      setSelectedImageGroupId(group.id);
       setSelectedStructuredImageIds([...group.childImageIds]);
       return imageId;
     }
     if (!additive) {
+      setSelectedImageGroupId(null);
       setSelectedStructuredImageIds([imageId]);
       return imageId;
     }
+    setSelectedImageGroupId(null);
     const current = selectedStructuredImageIds;
     if (current.includes(imageId)) {
       const remaining = current.filter((candidate) => candidate !== imageId);
@@ -783,7 +880,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const next = [...current, imageId];
     setSelectedStructuredImageIds(next);
     return imageId;
-  }, [page, selectedStructuredImageIds]);
+  }, [page, selectedImageGroupId, selectedStructuredImageIds]);
 
   const getStructuredLayoutModel = useCallback(() => {
     const editor = bodyEditorRef.current;
@@ -832,19 +929,37 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (!editor || editor.isDestroyed) return;
     const selected = new Set(selectedStructuredImageIds);
     const ordered: string[] = [];
+    const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
     editor.state.doc.descendants((node) => {
-      if (
-        node.type.name === 'documentFlowImage'
-        && node.attrs.wrap === 'span-columns'
-        && node.attrs.verticalAnchor === 'page-position'
+        if (
+          node.type.name === 'documentFlowImage'
         && selected.has(String(node.attrs.id))
-      ) ordered.push(String(node.attrs.id));
+      ) {
+        const imageId = String(node.attrs.id);
+        ordered.push(imageId);
+        updatesByImageId[imageId] = {
+          wrap: 'span-columns',
+          spanCount: 1,
+          spanStartColumn: 1,
+          verticalAnchor: 'page-position',
+          horizontalPlacement: 'custom',
+          xOffsetPx: 0,
+          yPx: Number.isFinite(Number(node.attrs.yPx))
+            ? Math.max(0, Number(node.attrs.yPx))
+            : 24,
+        };
+      }
       return true;
     });
-    if (ordered.length < 2 || ordered.some((id) => (
-      findDocumentImageGroupForImage(page.imageGroups, id)
-    ))) {
-      setToastMessage('Select two or more ungrouped positioned images.');
+    if (
+      ordered.length < 2
+      || ordered.length !== selected.size
+      || ordered.some((id) => findDocumentImageGroupForImage(
+        page.imageGroups,
+        id
+      ))
+    ) {
+      setToastMessage('Select two or more ungrouped flow images.');
       return;
     }
     const group: DocumentImageGroup = {
@@ -854,8 +969,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       gapPx: 16,
       sharedWidth: false,
     };
-    updateImageGroups(page.id, [...page.imageGroups, group]);
-  }, [page, selectedStructuredImageIds, setToastMessage, updateImageGroups]);
+    if (!commitStructuredDocumentImageBatch(editor, {
+      updatesByImageId,
+      selectedImageId: ordered[0],
+      imageGroupsMeta: [...page.imageGroups, group],
+    })) return;
+    setSelectedStructuredImageIds(ordered);
+    setSelectedImageGroupId(group.id);
+  }, [
+    commitStructuredDocumentImageBatch,
+    page,
+    selectedStructuredImageIds,
+    setToastMessage,
+  ]);
 
   const updateSelectedImageGroup = useCallback((
     update: Partial<Pick<DocumentImageGroup, 'kind' | 'gapPx' | 'sharedWidth'>>
@@ -908,6 +1034,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       selectedImageId: selectedFlowImage?.attributes.id || null,
       imageGroupsMeta: nextGroups,
     });
+    setSelectedImageGroupId(null);
   }, [
     commitStructuredDocumentImageBatch,
     getStructuredLayoutModel,
@@ -915,6 +1042,140 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     selectedFlowImage,
     selectedImageGroup,
   ]);
+
+  type SelectedImageAlignment =
+    'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+
+  const commitStructuredSelectionGeometry = useCallback((
+    alignment?: SelectedImageAlignment,
+    distribution?: 'horizontal' | 'vertical'
+  ) => {
+    const editor = bodyEditorRef.current;
+    const model = getStructuredLayoutModel();
+    if (!editor || !model || !page) return;
+    const ids = selectedImageGroup
+      ? selectedImageGroup.childImageIds
+      : selectedStructuredImageIds;
+    const images = model.images.filter((image) => ids.includes(image.imageId));
+    if (images.length < 2) return;
+    if (distribution && selectedImageGroup) {
+      setToastMessage('Distribute works on separate selected images.');
+      return;
+    }
+    const bounds = images.reduce((current, image) => ({
+      leftPx: Math.min(current.leftPx, image.imageLeftPx),
+      topPx: Math.min(current.topPx, image.imageTopPx),
+      rightPx: Math.max(
+        current.rightPx,
+        image.imageLeftPx + image.renderedImageWidthPx
+      ),
+      bottomPx: Math.max(
+        current.bottomPx,
+        image.imageTopPx + image.imageRegionHeightPx
+      ),
+    }), {
+      leftPx: Number.POSITIVE_INFINITY,
+      topPx: Number.POSITIVE_INFINITY,
+      rightPx: Number.NEGATIVE_INFINITY,
+      bottomPx: Number.NEGATIVE_INFINITY,
+    });
+    const offsets = new Map<string, { xPx: number; yPx: number }>();
+    if (alignment) {
+      const targetX = alignment === 'left'
+        ? 0
+        : alignment === 'right'
+          ? model.availableWidthPx
+          : alignment === 'center'
+            ? model.availableWidthPx / 2
+            : null;
+      const targetY = alignment === 'top'
+        ? 0
+        : alignment === 'bottom'
+          ? model.availableHeightPx
+          : alignment === 'middle'
+            ? model.availableHeightPx / 2
+            : null;
+      const deltaX = targetX === null
+        ? 0
+        : alignment === 'left'
+          ? targetX - bounds.leftPx
+          : alignment === 'right'
+            ? targetX - bounds.rightPx
+            : targetX - (bounds.leftPx + bounds.rightPx) / 2;
+      const deltaY = targetY === null
+        ? 0
+        : alignment === 'top'
+          ? targetY - bounds.topPx
+          : alignment === 'bottom'
+            ? targetY - bounds.bottomPx
+            : targetY - (bounds.topPx + bounds.bottomPx) / 2;
+      images.forEach((image) => offsets.set(image.imageId, {
+        xPx: image.imageLeftPx + deltaX,
+        yPx: image.imageTopPx + deltaY,
+      }));
+    } else if (distribution) {
+      const ordered = [...images].sort((left, right) => (
+        distribution === 'horizontal'
+          ? left.imageLeftPx - right.imageLeftPx
+          : left.imageTopPx - right.imageTopPx
+      ));
+      const totalSize = ordered.reduce((sum, image) => sum + (
+        distribution === 'horizontal'
+          ? image.renderedImageWidthPx
+          : image.imageRegionHeightPx
+      ), 0);
+      const available = (distribution === 'horizontal'
+        ? bounds.rightPx - bounds.leftPx
+        : bounds.bottomPx - bounds.topPx) - totalSize;
+      const gap = Math.max(0, available / Math.max(1, ordered.length - 1));
+      let cursor = distribution === 'horizontal' ? bounds.leftPx : bounds.topPx;
+      ordered.forEach((image) => {
+        offsets.set(image.imageId, {
+          xPx: distribution === 'horizontal' ? cursor : image.imageLeftPx,
+          yPx: distribution === 'vertical' ? cursor : image.imageTopPx,
+        });
+        cursor += (distribution === 'horizontal'
+          ? image.renderedImageWidthPx
+          : image.imageRegionHeightPx) + gap;
+      });
+    }
+    const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
+    images.forEach((image) => {
+      const offset = offsets.get(image.imageId);
+      if (!offset) return;
+      updatesByImageId[image.imageId] = {
+        horizontalPlacement: 'custom',
+        verticalAnchor: 'page-position',
+        xOffsetPx: clampDocumentImageXOffset(
+          offset.xPx - image.spanLeftPx,
+          image.spanWidthPx,
+          image.renderedImageWidthPx
+        ),
+        yPx: Math.max(0, offset.yPx),
+      };
+    });
+    commitStructuredDocumentImageBatch(editor, {
+      updatesByImageId,
+      selectedImageId: selectedFlowImage?.attributes.id || images[0].imageId,
+      imageGroupsMeta: page.imageGroups,
+    });
+  }, [
+    commitStructuredDocumentImageBatch,
+    getStructuredLayoutModel,
+    page,
+    selectedFlowImage,
+    selectedImageGroup,
+    selectedStructuredImageIds,
+    setToastMessage,
+  ]);
+
+  const alignSelectedImages = useCallback((alignment: SelectedImageAlignment) => {
+    commitStructuredSelectionGeometry(alignment);
+  }, [commitStructuredSelectionGeometry]);
+
+  const distributeSelectedImages = useCallback((axis: 'horizontal' | 'vertical') => {
+    commitStructuredSelectionGeometry(undefined, axis);
+  }, [commitStructuredSelectionGeometry]);
   const selectedInspector: DocumentImageInspectorValue | null =
     selectedFlowImage
       ? {
@@ -949,6 +1210,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           altText: selectedFlowImage.attributes.altText,
           naturalWidth: selectedFlowImage.attributes.naturalWidth,
           naturalHeight: selectedFlowImage.attributes.naturalHeight,
+          cropMode: selectedFlowImage.attributes.cropMode,
+          cropFocalX: selectedFlowImage.attributes.cropFocalX,
+          cropFocalY: selectedFlowImage.attributes.cropFocalY,
           canMoveEarlier:
             selectedFlowImage.attributes.wrap === 'span-columns'
             && !!bodyEditorRef.current
@@ -998,6 +1262,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             altText: selectedOverlay.altText,
             naturalWidth: selectedOverlay.naturalWidth,
             naturalHeight: selectedOverlay.naturalHeight,
+            cropMode: selectedOverlay.cropMode || 'fit',
+            cropFocalX: selectedOverlay.cropFocalX ?? 0.5,
+            cropFocalY: selectedOverlay.cropFocalY ?? 0.5,
           }
         : null;
 
@@ -1030,6 +1297,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             }
           : {}),
         ...(typeof update.altText === 'string' ? { altText: update.altText } : {}),
+        ...(update.cropMode === 'fit' || update.cropMode === 'fill'
+          ? { cropMode: update.cropMode }
+          : {}),
+        ...(typeof update.cropFocalX === 'number'
+          ? { cropFocalX: Math.min(1, Math.max(0, update.cropFocalX)) }
+          : {}),
+        ...(typeof update.cropFocalY === 'number'
+          ? { cropFocalY: Math.min(1, Math.max(0, update.cropFocalY)) }
+          : {}),
         ...(typeof update.wrapPaddingPx === 'number'
           ? { wrapPaddingPx: update.wrapPaddingPx }
           : {}),
@@ -1080,7 +1356,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           selectedFlowImage.attributes.naturalHeight
           / Math.max(1, selectedFlowImage.attributes.naturalWidth);
         next.widthPx = widthPx;
-        next.heightPx = widthPx * ratio;
+        const cropMode = update.cropMode === 'fill'
+          || (update.cropMode === undefined
+            && selectedFlowImage.attributes.cropMode === 'fill')
+          ? 'fill'
+          : 'fit';
+        if (cropMode === 'fit') next.heightPx = widthPx * ratio;
       } else if (typeof update.heightPx === 'number') {
         const aspectRatio =
           selectedFlowImage.attributes.naturalWidth
@@ -1094,9 +1375,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   * (selectedFlowImage.attributes.spanCount - 1)
               )
             : Number.POSITIVE_INFINITY;
-        const widthPx = Math.min(desiredWidthPx, maximumWidth);
-        next.widthPx = widthPx;
-        next.heightPx = widthPx / Math.max(0.0001, aspectRatio);
+        const cropMode = update.cropMode === 'fill'
+          || (update.cropMode === undefined
+            && selectedFlowImage.attributes.cropMode === 'fill')
+          ? 'fill'
+          : 'fit';
+        if (cropMode === 'fill') {
+          next.heightPx = Math.max(1, update.heightPx);
+        } else {
+          const widthPx = Math.min(desiredWidthPx, maximumWidth);
+          next.widthPx = widthPx;
+          next.heightPx = widthPx / Math.max(0.0001, aspectRatio);
+        }
       }
       editor.chain()
         .setNodeSelection(selectedFlowImage.position)
@@ -1128,6 +1418,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           }
         : {}),
       ...(typeof update.altText === 'string' ? { altText: update.altText } : {}),
+      ...(update.cropMode === 'fit' || update.cropMode === 'fill'
+        ? { cropMode: update.cropMode }
+        : {}),
+      ...(typeof update.cropFocalX === 'number'
+        ? { cropFocalX: Math.min(1, Math.max(0, update.cropFocalX)) }
+        : {}),
+      ...(typeof update.cropFocalY === 'number'
+        ? { cropFocalY: Math.min(1, Math.max(0, update.cropFocalY)) }
+        : {}),
     };
     const geometry: Partial<Pick<
       DocumentOverlayImage,
@@ -1136,14 +1435,22 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       ...(typeof update.xPx === 'number' ? { xPx: update.xPx } : {}),
       ...(typeof update.yPx === 'number' ? { yPx: update.yPx } : {}),
     };
+    const cropMode = update.cropMode === 'fill'
+      || (update.cropMode === undefined && selectedOverlay.cropMode === 'fill')
+      ? 'fill'
+      : 'fit';
     if (typeof update.widthPx === 'number') {
       const ratio = selectedOverlay.heightPx / Math.max(1, selectedOverlay.widthPx);
       geometry.widthPx = update.widthPx;
-      geometry.heightPx = update.widthPx * ratio;
+      if (cropMode === 'fit') geometry.heightPx = update.widthPx * ratio;
     } else if (typeof update.heightPx === 'number') {
       const ratio = selectedOverlay.widthPx / Math.max(1, selectedOverlay.heightPx);
-      geometry.widthPx = update.heightPx * ratio;
-      geometry.heightPx = update.heightPx;
+      if (cropMode === 'fill') {
+        geometry.heightPx = update.heightPx;
+      } else {
+        geometry.widthPx = update.heightPx * ratio;
+        geometry.heightPx = update.heightPx;
+      }
     }
     if (Object.keys(metadata).length > 0) {
       updateOverlay(selectedOverlay.id, metadata, page.id);
@@ -1187,6 +1494,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionSpacingPx: attributes.captionSpacingPx,
       naturalWidth: attributes.naturalWidth,
       naturalHeight: attributes.naturalHeight,
+      cropMode: attributes.cropMode,
+      cropFocalX: attributes.cropFocalX,
+      cropFocalY: attributes.cropFocalY,
       locked: false,
     }, page.id);
     setSelectedOverlayId(overlayId);
@@ -1223,6 +1533,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionAlignment: overlay.captionAlignment,
       captionItalic: overlay.captionItalic,
       captionSpacingPx: overlay.captionSpacingPx,
+      cropMode: overlay.cropMode,
+      cropFocalX: overlay.cropFocalX,
+      cropFocalY: overlay.cropFocalY,
     });
     editor.commands.focus();
   }, [page?.id, removeOverlay]);
@@ -1250,9 +1563,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           availableColumnWidth * spanCount
           + page.columnGapPx * (spanCount - 1)
         );
-        const ratio =
-          selectedFlowImage.attributes.naturalHeight
-          / Math.max(1, selectedFlowImage.attributes.naturalWidth);
         editor.chain()
           .focus()
           .setNodeSelection(selectedFlowImage.position)
@@ -1261,7 +1571,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             spanCount,
             spanStartColumn,
             widthPx: spanWidth,
-            heightPx: spanWidth * ratio,
+            heightPx: calculateDocumentImageFrameHeight(
+              selectedFlowImage.attributes,
+              spanWidth
+            ),
             verticalAnchor:
               selectedFlowImage.attributes.verticalAnchor || 'flow',
           })
@@ -1308,6 +1621,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         captionAlignment: selectedOverlay.captionAlignment,
         captionItalic: selectedOverlay.captionItalic,
         captionSpacingPx: selectedOverlay.captionSpacingPx,
+        cropMode: selectedOverlay.cropMode,
+        cropFocalX: selectedOverlay.cropFocalX,
+        cropFocalY: selectedOverlay.cropFocalY,
       });
       bodyEditorRef.current?.commands.focus();
     } else {
@@ -1473,6 +1789,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     });
   }, [availableColumnWidth, page, selectedInspector, updateSelectedImage]);
 
+  const resetSelectedImageCrop = useCallback(() => {
+    updateSelectedImage({
+      cropMode: 'fit',
+      cropFocalX: 0.5,
+      cropFocalY: 0.5,
+    });
+  }, [updateSelectedImage]);
+
   const handleNodeReplaceRequest = useCallback((
     request: DocumentImageReplaceRequest
   ) => {
@@ -1482,6 +1806,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const handleReferenceAdjustModeChange = useCallback((enabled: boolean) => {
     if (enabled) {
+      if (page?.reference?.locked) {
+        setReference({ ...page.reference, locked: false });
+      }
       setSelectedFlowImage(null);
       setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
@@ -1490,6 +1817,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setReferenceAdjustMode(enabled);
   }, [
     setReferenceAdjustMode,
+    page,
+    setReference,
     setSelectedFlowImageId,
     setSelectedOverlayId,
   ]);
@@ -1556,6 +1885,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     scheduleFitPage,
     sidebarCollapsed,
   ]);
+
+  const fitReferenceToPage = useCallback(() => {
+    if (!page?.reference) return;
+    setReference({
+      ...page.reference,
+      fit: 'contain',
+      scale: 1,
+      offsetXPx: 0,
+      offsetYPx: 0,
+    });
+  }, [page, setReference]);
 
   const exportDocument = useCallback(async (
     format: 'png' | 'pdf',
@@ -1695,6 +2035,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onFolioSettingsChange={updateFolioSettings}
           onSuppressFolioChange={(suppressFolio) =>
             updatePage({ suppressFolio })}
+          onSuppressTitleChange={(suppressTitle) =>
+            updatePage({ suppressTitle })}
           onMarginChange={(side, value) => updatePage({
             margins: constrainDocumentPageMargins(
               { ...page.margins, [side]: value },
@@ -1720,7 +2062,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onReferenceAdjustModeChange={handleReferenceAdjustModeChange}
           onReferenceChange={(update) => {
             if (page.reference) {
-              setReference({ ...page.reference, ...update, locked: true });
+              setReference({ ...page.reference, ...update });
             }
           }}
           onResetReference={() => {
@@ -1730,14 +2072,22 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 offsetXPx: 0,
                 offsetYPx: 0,
                 scale: 1,
-                locked: true,
               });
             }
           }}
+          onToggleReferenceLock={() => {
+            if (page.reference) {
+              const locked = !page.reference.locked;
+              setReference({ ...page.reference, locked });
+              if (locked) setReferenceAdjustMode(false);
+            }
+          }}
+          onFitReferenceToPage={fitReferenceToPage}
           onSelectOverlay={(id) => {
             setSelectedOverlayId(id);
             setSelectedFlowImage(null);
             setSelectedStructuredImageIds([]);
+            setSelectedImageGroupId(null);
             setSelectedFlowImageId(null);
           }}
         />
@@ -1762,11 +2112,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onFormat={handleFormat}
             onFontSizeChange={handleFontSizeChange}
             onBlockStyleChange={handleBlockStyleChange}
+            onFlowControl={handleFlowControl}
             onImportImages={(files) => void importImages(files)}
             onReferenceAdjustModeChange={handleReferenceAdjustModeChange}
             onReferenceChange={(update) => {
               if (page.reference) {
-                setReference({ ...page.reference, ...update, locked: true });
+                setReference({ ...page.reference, ...update });
               }
             }}
             onResetReference={() => {
@@ -1776,7 +2127,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   offsetXPx: 0,
                   offsetYPx: 0,
                   scale: 1,
-                  locked: true,
                 });
               }
             }}
@@ -1787,9 +2137,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onReplaceSelectedImage={(file) => void replaceSelectedImage(file)}
             onDeleteSelectedImage={deleteSelectedImage}
             onResetSelectedImageSize={resetSelectedImageSize}
+            onResetSelectedImageCrop={resetSelectedImageCrop}
             onArrangeSelectedImages={arrangeSelectedImages}
             onSelectedImageGroupChange={updateSelectedImageGroup}
             onUngroupSelectedImages={ungroupSelectedImages}
+            onAlignSelectedImages={alignSelectedImages}
+            onDistributeSelectedImages={distributeSelectedImages}
           />
 
           <DocumentPageNavigation
@@ -1838,7 +2191,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               isOverflowing={isOverflowing}
               onReferenceChange={(update: Partial<ScanReference>) => {
                 if (page.reference) {
-                  setReference({ ...page.reference, ...update, locked: true });
+                  setReference({ ...page.reference, ...update });
                 }
               }}
               onSelectOverlay={(id) => {
@@ -1846,6 +2199,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 if (id) {
                   setSelectedFlowImage(null);
                   setSelectedStructuredImageIds([]);
+                  setSelectedImageGroupId(null);
                   setSelectedFlowImageId(null);
                 }
               }}
@@ -1938,6 +2292,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onStructuredImageSelectionRequest={
                     handleStructuredImageSelectionRequest
                   }
+                  onImageSelectionRequest={(
+                    imageId,
+                    additive
+                  ) => {
+                    handleStructuredImageSelectionRequest(imageId, additive);
+                  }}
                   onRequestImageReplace={handleNodeReplaceRequest}
                   onPasteDispatch={handlePasteDispatch}
                   onDropDispatch={handleDropDispatch}

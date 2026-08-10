@@ -151,6 +151,199 @@ test.describe('document reconstruction MVP', () => {
     expect(await pngDownload.path()).not.toBeNull();
   });
 
+  test('authors a page-50-style composition from a blank document through visible controls', async ({ page }) => {
+    test.slow();
+    test.setTimeout(180_000);
+    await page.goto('/');
+    await page.getByTestId('dashboard-new-document').click();
+    await page.getByTestId('document-project-name').fill(
+      'Blank Authoring Acceptance'
+    );
+    await page.getByRole('button', { name: '3 columns' }).click();
+    await page.getByTestId('document-starting-folio').fill('49');
+    await page.getByTestId('document-show-folios').click();
+
+    const body = page.locator('.document-flow-prosemirror');
+    await body.fill('Opening translated body text for the article.');
+    await body.press('End');
+    await body.press('Enter');
+    await body.type('The family and the old river road');
+    await page.getByTestId('document-block-style').selectOption(
+      'subsection-heading'
+    );
+    await expect(body.locator('[data-document-style-id="subsection-heading"]'))
+      .toContainText('The family and the old river road');
+    await body.press('End');
+    await body.press('Enter');
+    await body.type('The next paragraph begins in a deliberate column.');
+    await page.getByRole('button', { name: 'Insert column break' }).click();
+    await expect(body.locator(
+      '[data-document-column-break-before="true"]'
+    )).toHaveCount(1);
+
+    const firstImage = {
+      name: 'family-photo-a.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(PHOTO_PNG_BASE64, 'base64'),
+    };
+    const secondImage = {
+      name: 'family-photo-b.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(PHOTO_PNG_BASE64, 'base64'),
+    };
+    await page.getByTestId('document-image-file-input').setInputFiles([
+      firstImage,
+      secondImage,
+    ]);
+    await expect(page.locator('.document-image-node')).toHaveCount(2);
+
+    const sourceImages = page.locator('.document-image-node');
+    await sourceImages.nth(0).click();
+    await sourceImages.nth(1).click({ modifiers: ['Shift'] });
+    await expect(page.getByTestId('document-image-group-selection'))
+      .toHaveAttribute('data-image-count', '2');
+    await expect(sourceImages.nth(0)).toHaveAttribute(
+      'data-image-selected',
+      'true'
+    );
+    await expect(sourceImages.nth(1)).toHaveAttribute(
+      'data-image-selected',
+      'true'
+    );
+
+    await page.getByTestId('document-image-group-row').click();
+    const layout = page.locator('[data-document-span-layout]');
+    await expect(layout).toHaveAttribute('data-image-group-count', '1');
+    await expect(layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    )).toHaveCount(2);
+
+    const firstSlot = layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    ).nth(0);
+    const secondSlot = layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    ).nth(1);
+    const groupId = await firstSlot.getAttribute('data-image-group-id');
+    expect(groupId).toBeTruthy();
+    await firstSlot.click();
+    await expect(page.getByTestId('document-image-group-selection')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('document-image-group-selection'))
+      .toHaveAttribute('data-group-id', groupId!);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('document-image-group-selection')).toHaveCount(0);
+    await firstSlot.click();
+    await firstSlot.click();
+    await page.getByLabel('Image width').fill('180');
+    await page.getByLabel('Image caption').fill('First family photograph');
+    await page.getByTestId('document-image-crop-mode').selectOption('fill');
+    await page.getByLabel('Image height').fill('160');
+    await page.getByTestId('document-image-crop-focal-x').fill('0.2');
+    await page.getByTestId('document-image-crop-focal-y').fill('0.8');
+    await expect(layout).toContainText(
+      'First family photograph'
+    );
+
+    await secondSlot.click();
+    await page.getByLabel('Image width').fill('260');
+    await page.getByLabel('Image caption').fill('Second family photograph');
+    await expect(layout).toContainText(
+      'Second family photograph'
+    );
+
+    await page.getByTestId('document-image-group-gap').fill('28');
+    await page.getByTestId('document-image-align-left').click();
+    await expect(page.getByTestId('document-image-group-gap')).toHaveValue('28');
+    const positions = await layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    ).evaluateAll((slots) => slots.map((slot) => Number(
+      (slot as HTMLElement).dataset.imageLeftPx
+    )));
+    const renderedWidths = await layout.locator(
+      '[data-layout-role="occupied-columns"]'
+    ).evaluateAll((slots) => slots.map((slot) => (
+      (slot as HTMLElement).getBoundingClientRect().width
+    )));
+    expect(positions).toHaveLength(2);
+    expect(renderedWidths[0]).not.toBe(renderedWidths[1]);
+
+    await page.getByTestId('document-add-page').click();
+    await expect(page.getByTestId('document-page-tab-1')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    await page.getByTestId('document-suppress-title').click();
+    await expect(page.getByTestId('document-title-placeholder')).toHaveCount(0);
+    await page.locator('.document-flow-prosemirror').fill(
+      'Continuation text without a title region.'
+    );
+    await expect(page.getByTestId('document-folio')).toHaveText('50');
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    const savedCard = page.getByTestId('dashboard-project-card').filter({
+      hasText: 'Blank Authoring Acceptance',
+    });
+    await expect(savedCard).toBeVisible();
+    await savedCard.getByRole('button').first().click();
+
+    await expect(page.getByTestId('document-page-tab-1')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    await expect(page.getByTestId('document-title-placeholder')).toHaveCount(0);
+    await expect(page.getByTestId('document-folio')).toHaveText('50');
+    await page.getByTestId('document-page-tab-0').click();
+    await expect(page.locator('[data-document-span-layout]'))
+      .toHaveAttribute('data-image-group-count', '1');
+    await expect(page.locator(
+      '[data-document-span-layout] [data-image-group-id] .document-image__frame'
+    ).first()).toHaveAttribute('data-crop-mode', 'fill');
+    await expect(page.locator(
+      '[data-document-span-layout] [data-image-group-id] .document-image__frame'
+    ).first()).toHaveAttribute('data-crop-focal-y', '0.8');
+    await expect(page.locator('[data-document-span-layout]')).toContainText(
+      'First family photograph'
+    );
+    await expect(page.locator('[data-document-span-layout]')).toContainText(
+      'Second family photograph'
+    );
+    await expect(page.locator('[data-document-span-layout]')).toContainText(
+      'The family and the old river road'
+    );
+    await expect(page.getByTestId('document-folio')).toHaveText('49');
+    const reopenedSlots = page.locator(
+      '[data-document-span-layout] [data-layout-role="occupied-columns"]'
+    );
+    const reopenedWidths = await reopenedSlots.evaluateAll((slots) => slots.map(
+      (slot) => (slot as HTMLElement).getBoundingClientRect().width
+    ));
+    expect(reopenedWidths).toHaveLength(2);
+    expect(reopenedWidths[0]).not.toBe(reopenedWidths[1]);
+
+    const exportRoot = page.getByTestId('document-export-root');
+    await expect(exportRoot).toHaveAttribute('data-folio-number', '49');
+    await expect(exportRoot.locator(
+      '[data-document-span-layout] [data-document-image="true"]'
+    ))
+      .toHaveCount(2);
+    await expect(exportRoot.locator(
+      '[data-document-span-layout] figcaption'
+    )).toHaveCount(2);
+    await expect(exportRoot).toContainText('First family photograph');
+    await expect(exportRoot).toContainText('Second family photograph');
+
+    const pdfDownloadPromise = page.waitForEvent('download');
+    await (await openExportFormat(page, 'PDF')).click();
+    const pdfDownload = await pdfDownloadPromise;
+    const pdfPath = await pdfDownload.path();
+    expect(pdfPath).not.toBeNull();
+    const pdf = await PDFDocument.load(await readFile(pdfPath!));
+    expect(pdf.getPages()).toHaveLength(2);
+  });
+
   test('applies contextual body and title point sizes without affecting canvas mode', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('dashboard-new-document').click();
@@ -735,6 +928,23 @@ test.describe('document reconstruction MVP', () => {
       slotBox!.x + slotBox!.width / 2 - 30,
       slotBox!.y + Math.min(40, slotBox!.height / 2) + 40
     );
+    const snapXGuidePosition = await layout.locator(
+      '[data-snap-axis="x"]'
+    ).evaluate((guide) => Number.parseFloat(
+      (guide as HTMLElement).style.left
+    ));
+    const previewImageWidth = Number(
+      await imageSlot.locator('[data-layout-role="spanning-image"]')
+        .getAttribute('data-rendered-width-px')
+    );
+    const previewImageLeft = Number(
+      await layout.getAttribute('data-image-left-px')
+    );
+    expect(Math.min(
+      Math.abs(previewImageLeft - snapXGuidePosition),
+      Math.abs(previewImageLeft + previewImageWidth / 2 - snapXGuidePosition),
+      Math.abs(previewImageLeft + previewImageWidth - snapXGuidePosition)
+    )).toBeLessThan(0.5);
     await page.mouse.up();
     await expect.poll(async () =>
       Number(await layout.getAttribute('data-image-top-px'))
@@ -745,10 +955,17 @@ test.describe('document reconstruction MVP', () => {
     const committedImageX = Number(
       await layout.getAttribute('data-image-left-px')
     );
+    const committedImageWidth = Number(
+      await imageSlot.locator('[data-layout-role="spanning-image"]')
+        .getAttribute('data-rendered-width-px')
+    );
     expect(committedImageY - imageYBeforeDrag)
       .toBeCloseTo(40 / (zoomPercent / 100), 0);
-    expect(committedImageX - imageXBeforeDrag)
-      .toBeCloseTo(-30 / (zoomPercent / 100), 0);
+    expect(Math.min(
+      Math.abs(committedImageX - snapXGuidePosition),
+      Math.abs(committedImageX + committedImageWidth / 2 - snapXGuidePosition),
+      Math.abs(committedImageX + committedImageWidth - snapXGuidePosition)
+    )).toBeLessThan(0.5);
     await expect(sourceImage).toHaveAttribute(
       'data-horizontal-placement',
       'custom'

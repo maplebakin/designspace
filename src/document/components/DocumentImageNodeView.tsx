@@ -17,6 +17,7 @@ import type {
 } from '../extensions/DocumentImageExtension';
 import {
   calculateDocumentImageHeight,
+  calculateDocumentImageFrameHeight,
   calculateDocumentImageResizeWidth,
   clampDocumentImageWidth,
   getDocumentImageAspectRatio,
@@ -45,6 +46,7 @@ export const DocumentImageNodeView = ({
     nodeType === 'documentInlineImage' ? 'inline' : 'float-left'
   );
   const source = options.resolveAssetSource(attributes.assetId);
+  const multiSelected = options.isImageSelected?.(attributes.id) === true;
   const resizeSessionRef = useRef<ResizeSession | null>(null);
   const previewWidthRef = useRef<number | null>(null);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
@@ -62,9 +64,9 @@ export const DocumentImageNodeView = ({
 
   const aspectRatio = getDocumentImageAspectRatio(attributes);
   const renderedWidth = previewWidth ?? attributes.widthPx;
-  const renderedHeight = calculateDocumentImageHeight(
-    renderedWidth,
-    aspectRatio
+  const renderedHeight = calculateDocumentImageFrameHeight(
+    attributes,
+    renderedWidth
   );
   const captionStyle = {
     ...(attributes.captionAlignment === 'inherit'
@@ -106,10 +108,12 @@ export const DocumentImageNodeView = ({
 
   const commitWidth = (requestedWidth: number) => {
     const widthPx = normalizeWidth(requestedWidth);
-    updateAttributes({
-      widthPx,
-      heightPx: calculateDocumentImageHeight(widthPx, aspectRatio),
-    });
+    updateAttributes(attributes.cropMode === 'fill'
+      ? { widthPx }
+      : {
+          widthPx,
+          heightPx: calculateDocumentImageHeight(widthPx, aspectRatio),
+        });
     previewWidthRef.current = null;
     setPreviewWidth(null);
   };
@@ -184,27 +188,46 @@ export const DocumentImageNodeView = ({
     setPreviewWidth(null);
   };
 
+  const media = source && !sourceFailed ? (
+    <img
+      className="document-image__media"
+      src={source}
+      alt={attributes.altText}
+      draggable={false}
+      width={renderedWidth}
+      height={renderedHeight}
+      data-natural-width={attributes.naturalWidth}
+      data-natural-height={attributes.naturalHeight}
+      style={{
+        objectFit: attributes.cropMode === 'fill' ? 'cover' : 'contain',
+        objectPosition: `${attributes.cropFocalX * 100}% ${attributes.cropFocalY * 100}%`,
+      }}
+      onError={() => setSourceFailed(true)}
+    />
+  ) : (
+    <span
+      className="document-image__missing"
+      role="img"
+      aria-label={attributes.altText || 'Missing document image'}
+    >
+      Image unavailable
+    </span>
+  );
+
   const imageContent = (
     <>
-      {source && !sourceFailed ? (
-        <img
-          className="document-image__media"
-          src={source}
-          alt={attributes.altText}
-          draggable={false}
-          width={renderedWidth}
-          height={renderedHeight}
-          onError={() => setSourceFailed(true)}
-        />
-      ) : (
-        <span
-          className="document-image__missing"
-          role="img"
-          aria-label={attributes.altText || 'Missing document image'}
-        >
-          Image unavailable
-        </span>
-      )}
+      <div
+        className="document-image__frame"
+        data-crop-mode={attributes.cropMode}
+        data-crop-focal-x={attributes.cropFocalX}
+        data-crop-focal-y={attributes.cropFocalY}
+        style={{
+          width: `${renderedWidth}px`,
+          height: `${renderedHeight}px`,
+        }}
+      >
+        {media}
+      </div>
       {attributes.caption && (
         nodeType === 'documentInlineImage' ? (
           <span
@@ -253,12 +276,19 @@ export const DocumentImageNodeView = ({
           ? 'document-image--inline'
           : 'document-image--flow',
         selected ? 'document-image--selected' : '',
+        multiSelected ? 'document-image--multi-selected' : '',
       ].filter(Boolean).join(' ')}
       contentEditable={false}
       onClick={(event: ReactMouseEvent<HTMLElement>) => {
         event.preventDefault();
         event.stopPropagation();
         const position = getPos();
+        options.onSelectImage?.({
+          editor,
+          position: typeof position === 'number' ? position : undefined,
+          imageId: attributes.id,
+          additive: event.shiftKey || event.metaKey || event.ctrlKey,
+        });
         if (typeof position === 'number') {
           editor.commands.setNodeSelection(position);
           editor.commands.focus();
@@ -266,6 +296,7 @@ export const DocumentImageNodeView = ({
       }}
       data-document-image="true"
       data-image-id={attributes.id}
+      data-image-selected={multiSelected || selected ? 'true' : 'false'}
       data-asset-id={attributes.assetId}
       data-wrap={attributes.wrap}
       data-coordinate-space={attributes.coordinateSpace}
@@ -276,6 +307,9 @@ export const DocumentImageNodeView = ({
       data-caption-alignment={attributes.captionAlignment}
       data-caption-italic={String(attributes.captionItalic)}
       data-caption-spacing-px={attributes.captionSpacingPx}
+      data-crop-mode={attributes.cropMode}
+      data-crop-focal-x={attributes.cropFocalX}
+      data-crop-focal-y={attributes.cropFocalY}
       style={{
         width: `${renderedWidth}px`,
         '--document-image-width': `${renderedWidth}px`,

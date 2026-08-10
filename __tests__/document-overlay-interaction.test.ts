@@ -273,4 +273,54 @@ describe('document overlay transactional interaction', () => {
       yPx: 100,
     });
   });
+
+  it('resizes a fill-mode frame without changing its authored height', () => {
+    const onChange = vi.fn();
+    const object = overlay('filled', {
+      cropMode: 'fill',
+      widthPx: 100,
+      heightPx: 140,
+    });
+    const { container } = render(React.createElement(
+      DocumentOverlayLayer,
+      {
+        placement: 'front',
+        objects: [object],
+        assetSources: {
+          [object.assetId]: 'data:image/png;base64,AA==',
+        },
+        selectedId: object.id,
+        zoom: 1,
+        pageWidthPx: 500,
+        pageHeightPx: 500,
+        onSelect: vi.fn(),
+        onChange,
+      }
+    ));
+    const resizeHandle = container.querySelector<HTMLElement>(
+      '[data-document-overlay-id="filled"] [aria-label="Resize overlay image"]'
+    )!;
+
+    dispatchPointer(resizeHandle, 'pointerdown', {
+      pointerId: 73,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchPointer(resizeHandle, 'pointermove', {
+      pointerId: 73,
+      clientX: 160,
+      clientY: 100,
+    });
+    dispatchPointer(window, 'pointerup', {
+      pointerId: 73,
+      clientX: 160,
+      clientY: 100,
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('filled', {
+      widthPx: 160,
+      heightPx: 140,
+    });
+  });
 });

@@ -22,6 +22,7 @@ import type {
   DocumentCaptionSpacing,
   DocumentFlowImageWrap,
   DocumentImageGroupKind,
+  DocumentImageCropMode,
   DocumentOverlayPlacement,
   DocumentPage,
 } from '../types/documentProject';
@@ -35,6 +36,9 @@ import {
 import type {
   DocumentBlockStyleId,
 } from '../extensions/DocumentBlockStyleExtension';
+import type {
+  DocumentFlowControl,
+} from '../extensions/DocumentFlowControlExtension';
 
 export type DocumentImageInspectorValue = {
   id: string;
@@ -62,6 +66,9 @@ export type DocumentImageInspectorValue = {
   altText: string;
   naturalWidth?: number;
   naturalHeight?: number;
+  cropMode?: DocumentImageCropMode;
+  cropFocalX?: number;
+  cropFocalY?: number;
   canMoveEarlier?: boolean;
   canMoveLater?: boolean;
 };
@@ -87,6 +94,9 @@ export type DocumentTextFormatState = {
   alignment: 'left' | 'center' | 'right' | 'justify';
   fontSizePt: number | 'mixed';
   blockStyleId: DocumentBlockStyleId | 'mixed';
+  columnBreakBefore?: boolean;
+  keepWithNext?: boolean;
+  keepLinesTogether?: boolean;
 };
 
 type DocumentToolbarProps = {
@@ -111,6 +121,7 @@ type DocumentToolbarProps = {
   ) => void;
   onFontSizeChange: (fontSizePt: number) => void;
   onBlockStyleChange: (styleId: DocumentBlockStyleId) => void;
+  onFlowControl?: (control: DocumentFlowControl) => void;
   onImportImages: (files: File[]) => void;
   onReferenceAdjustModeChange: (enabled: boolean) => void;
   onReferenceChange: (
@@ -134,6 +145,11 @@ type DocumentToolbarProps = {
     >>
   ) => void;
   onUngroupSelectedImages?: () => void;
+  onAlignSelectedImages?: (
+    alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+  ) => void;
+  onDistributeSelectedImages?: (axis: 'horizontal' | 'vertical') => void;
+  onResetSelectedImageCrop?: () => void;
 };
 
 const numericValue = (value: string, fallback: number) => {
@@ -169,6 +185,8 @@ const DocumentImageGroupControls = ({
   onArrangeSelectedImages,
   onSelectedImageGroupChange,
   onUngroupSelectedImages,
+  onAlignSelectedImages,
+  onDistributeSelectedImages,
 }: {
   selectedImageIds: readonly string[];
   selectedImageGroup?: DocumentImageGroupInspectorValue | null;
@@ -182,6 +200,10 @@ const DocumentImageGroupControls = ({
     >>
   ) => void;
   onUngroupSelectedImages?: () => void;
+  onAlignSelectedImages?: (
+    alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+  ) => void;
+  onDistributeSelectedImages?: (axis: 'horizontal' | 'vertical') => void;
 }) => {
   const selectedCount = selectedImageIds.length;
   const groupCount = selectedImageGroup?.childImageIds.length ?? 0;
@@ -295,6 +317,48 @@ const DocumentImageGroupControls = ({
           </button>
         </>
       )}
+      <div
+        className="document-context-button-group"
+        aria-label="Image alignment"
+      >
+        {([
+          ['left', 'Align left'],
+          ['center', 'Align centre'],
+          ['right', 'Align right'],
+          ['top', 'Align top'],
+          ['middle', 'Align middle'],
+          ['bottom', 'Align bottom'],
+        ] as const).map(([alignment, label]) => (
+          <button
+            key={alignment}
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            data-testid={`document-image-align-${alignment}`}
+            disabled={!onAlignSelectedImages}
+            onClick={() => onAlignSelectedImages?.(alignment)}
+          >
+            {label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="document-context-button document-context-button--quiet"
+          data-testid="document-image-distribute-horizontal"
+          disabled={count < 3 || Boolean(selectedImageGroup) || !onDistributeSelectedImages}
+          onClick={() => onDistributeSelectedImages?.('horizontal')}
+        >
+          Distribute horizontally
+        </button>
+        <button
+          type="button"
+          className="document-context-button document-context-button--quiet"
+          data-testid="document-image-distribute-vertical"
+          disabled={count < 3 || Boolean(selectedImageGroup) || !onDistributeSelectedImages}
+          onClick={() => onDistributeSelectedImages?.('vertical')}
+        >
+          Distribute vertically
+        </button>
+      </div>
       <div className="document-context-divider" aria-hidden="true" />
     </div>
   );
@@ -415,6 +479,8 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             onArrangeSelectedImages={props.onArrangeSelectedImages}
             onSelectedImageGroupChange={props.onSelectedImageGroupChange}
             onUngroupSelectedImages={props.onUngroupSelectedImages}
+            onAlignSelectedImages={props.onAlignSelectedImages}
+            onDistributeSelectedImages={props.onDistributeSelectedImages}
           />
           <div className="document-context-heading">
             <span>{props.selectedImage.kind === 'flow' ? 'Flow photo' : 'Positioned photo'}</span>
@@ -624,6 +690,70 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               })}
             />
           </label>
+          <label className="document-context-field">
+            <span>Frame</span>
+            <select
+              aria-label="Image frame mode"
+              data-testid="document-image-crop-mode"
+              value={props.selectedImage.cropMode || 'fit'}
+              onChange={(event) => props.onSelectedImageChange({
+                cropMode: event.target.value as DocumentImageCropMode,
+              })}
+            >
+              <option value="fit">Fit entire photo</option>
+              <option value="fill">Fill frame / crop</option>
+            </select>
+          </label>
+          {props.selectedImage.cropMode === 'fill' && (
+            <>
+              <label className="document-context-field document-context-field--range">
+                <span>Focal X</span>
+                <input
+                  aria-label="Image crop focal X"
+                  data-testid="document-image-crop-focal-x"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={props.selectedImage.cropFocalX ?? 0.5}
+                  onChange={(event) => props.onSelectedImageChange({
+                    cropFocalX: numericValue(
+                      event.target.value,
+                      props.selectedImage!.cropFocalX ?? 0.5
+                    ),
+                  })}
+                />
+                <output>{Math.round((props.selectedImage.cropFocalX ?? 0.5) * 100)}%</output>
+              </label>
+              <label className="document-context-field document-context-field--range">
+                <span>Focal Y</span>
+                <input
+                  aria-label="Image crop focal Y"
+                  data-testid="document-image-crop-focal-y"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={props.selectedImage.cropFocalY ?? 0.5}
+                  onChange={(event) => props.onSelectedImageChange({
+                    cropFocalY: numericValue(
+                      event.target.value,
+                      props.selectedImage!.cropFocalY ?? 0.5
+                    ),
+                  })}
+                />
+                <output>{Math.round((props.selectedImage.cropFocalY ?? 0.5) * 100)}%</output>
+              </label>
+            </>
+          )}
+          <button
+            type="button"
+            className="document-context-button document-context-button--quiet"
+            data-testid="document-image-reset-crop"
+            onClick={props.onResetSelectedImageCrop}
+          >
+            Reset crop
+          </button>
           {props.selectedImage.kind === 'flow' ? (
             ([
               ['Top', 'wrapPaddingTopPx'],
@@ -823,6 +953,8 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             onArrangeSelectedImages={props.onArrangeSelectedImages}
             onSelectedImageGroupChange={props.onSelectedImageGroupChange}
             onUngroupSelectedImages={props.onUngroupSelectedImages}
+            onAlignSelectedImages={props.onAlignSelectedImages}
+            onDistributeSelectedImages={props.onDistributeSelectedImages}
           />
         </div>
       ) : (
@@ -862,7 +994,36 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             </label>
           )}
           {props.activeTextRegion === 'body' && (
-            <div className="document-context-divider" aria-hidden="true" />
+            <>
+              <div className="document-context-divider" aria-hidden="true" />
+              <div
+                className="document-context-button-group"
+                aria-label="Paragraph flow controls"
+              >
+                <FormatButton
+                  label="Insert column break"
+                  active={props.textFormatState.columnBreakBefore}
+                  onClick={() => props.onFlowControl?.('column-break')}
+                >
+                  <span aria-hidden="true">↪</span>
+                </FormatButton>
+                <FormatButton
+                  label="Keep with next"
+                  active={props.textFormatState.keepWithNext}
+                  onClick={() => props.onFlowControl?.('keep-with-next')}
+                >
+                  <span aria-hidden="true">↕</span>
+                </FormatButton>
+                <FormatButton
+                  label="Keep lines together"
+                  active={props.textFormatState.keepLinesTogether}
+                  onClick={() => props.onFlowControl?.('keep-lines-together')}
+                >
+                  <span aria-hidden="true">≡</span>
+                </FormatButton>
+              </div>
+              <div className="document-context-divider" aria-hidden="true" />
+            </>
           )}
           <label className="document-context-field document-context-field--font-size">
             <span>

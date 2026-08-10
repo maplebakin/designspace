@@ -7,6 +7,7 @@ import {
   FileImage,
   ImagePlus,
   Lock,
+  Unlock,
   RotateCcw,
 } from 'lucide-react';
 import type {
@@ -43,6 +44,7 @@ type DocumentSidebarProps = {
   onPaperColorChange: (value: string) => void;
   onFolioSettingsChange: (update: Partial<DocumentFolioSettings>) => void;
   onSuppressFolioChange: (suppressed: boolean) => void;
+  onSuppressTitleChange?: (suppressed: boolean) => void;
   onMarginChange: (side: keyof DocumentPage['margins'], value: number) => void;
   onColumnCountChange: (count: 1 | 2 | 3) => void;
   onColumnGapChange: (gapPx: number) => void;
@@ -62,6 +64,8 @@ type DocumentSidebarProps = {
     update: Partial<NonNullable<DocumentPage['reference']>>
   ) => void;
   onResetReference: () => void;
+  onToggleReferenceLock?: () => void;
+  onFitReferenceToPage?: () => void;
   onSelectOverlay: (id: string) => void;
 };
 
@@ -380,6 +384,22 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             <span>
               <strong>Hide number on this page</strong>
               <small>Keep numbering for the following pages</small>
+            </span>
+            <span className="document-switch" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="document-suppress-title"
+            className={`document-toggle-row ${props.page.suppressTitle ? 'is-selected' : ''}`}
+            aria-pressed={props.page.suppressTitle === true}
+            onClick={() => props.onSuppressTitleChange?.(
+              !props.page.suppressTitle
+            )}
+          >
+            <span>
+              <strong>No title on this page</strong>
+              <small>Useful for continuation pages</small>
             </span>
             <span className="document-switch" aria-hidden="true" />
           </button>
@@ -874,8 +894,10 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             <h2 id="document-reference-settings">Reference scan</h2>
             {reference && (
               <span className="document-locked-badge">
-                <Lock size={12} aria-hidden="true" />
-                Locked
+                {reference.locked
+                  ? <Lock size={12} aria-hidden="true" />
+                  : <Unlock size={12} aria-hidden="true" />}
+                {reference.locked ? 'Locked' : 'Unlocked'}
               </span>
             )}
           </div>
@@ -922,6 +944,17 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                 </button>
                 <button
                   type="button"
+                  data-testid="document-reference-lock"
+                  aria-pressed={reference.locked}
+                  onClick={props.onToggleReferenceLock}
+                >
+                  {reference.locked
+                    ? <Lock size={16} aria-hidden="true" />
+                    : <Unlock size={16} aria-hidden="true" />}
+                  {reference.locked ? 'Unlock reference' : 'Lock reference'}
+                </button>
+                <button
+                  type="button"
                   className={props.referenceAdjustMode ? 'is-selected' : ''}
                   aria-pressed={props.referenceAdjustMode}
                   onClick={() => props.onReferenceAdjustModeChange(
@@ -929,6 +962,13 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                   )}
                 >
                   {props.referenceAdjustMode ? 'Finish adjusting' : 'Adjust reference'}
+                </button>
+                <button
+                  type="button"
+                  data-testid="document-reference-fit-page"
+                  onClick={props.onFitReferenceToPage}
+                >
+                  Fit reference to page
                 </button>
               </div>
 
