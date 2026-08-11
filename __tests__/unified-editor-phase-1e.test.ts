@@ -136,6 +136,8 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
         canvasGeometry: true,
         canvasObjectAdd: true,
         canvasObjectRemove: true,
+        documentOverlayAdd: true,
+        documentOverlayRemove: true,
         documentOverlayGeometry: true,
         documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
         documentPageMetadata: true,

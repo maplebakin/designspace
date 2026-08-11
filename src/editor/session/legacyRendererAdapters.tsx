@@ -345,16 +345,22 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
     const isPageMetadata = mutation.action === 'modify-page-metadata';
+    const isOverlayLifecycle = mutation.action === 'add-structured-overlay'
+      || mutation.action === 'remove-structured-overlay';
     observeCommittedEngineChange(changeCoordinator, {
       projectId: currentSession.projectId,
       source: 'document',
       action: mutation.action,
       pageIds: [isPageMetadata ? mutation.pageId : currentPageId],
-      domains: isPageMetadata ? ['page-structure'] : ['geometry'],
+      domains: isPageMetadata
+        ? ['page-structure']
+        : isOverlayLifecycle
+          ? ['structured-content']
+          : ['geometry'],
       target: isPageMetadata
         ? { kind: 'page', id: mutation.pageId }
         : { kind: 'structured-image', id: mutation.overlayId },
-      assetEffect: 'none',
+      assetEffect: 'assetEffect' in mutation ? mutation.assetEffect : 'none',
     });
   }, [changeCoordinator]);
 

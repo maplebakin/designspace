@@ -117,7 +117,7 @@ type DocumentStoreState = {
     missingAssetIds: string[];
     orphanAssetIds: string[];
   };
-  addOverlay: (overlay: DocumentOverlayImage, pageId?: string) => void;
+  addOverlay: (overlay: DocumentOverlayImage, pageId?: string) => boolean;
   updateOverlay: (
     id: string,
     update: Partial<DocumentOverlayImage>,
@@ -134,7 +134,7 @@ type DocumentStoreState = {
     deltaXPx: number,
     deltaYPx: number
   ) => boolean;
-  removeOverlay: (id: string, pageId?: string) => void;
+  removeOverlay: (id: string, pageId?: string) => boolean;
   setReference: (reference?: ScanReference) => void;
   setZoom: (zoom: number) => void;
   setReferenceAdjustMode: (enabled: boolean) => void;
@@ -985,6 +985,14 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   addOverlay: (overlay, pageId) => {
+    const project = get().project;
+    if (!project || !overlay.id.trim()) return false;
+    const activePage = project.pages[getActivePageIndex(project)];
+    const targetPageId = pageId || activePage?.id;
+    const page = project.pages.find((candidate) => candidate.id === targetPageId);
+    if (!page || page.overlayObjects.some((candidate) => candidate.id === overlay.id)) {
+      return false;
+    }
     get().updatePage((page) => {
       const geometry = resolveNewDocumentOverlayGeometry({
         overlay,
@@ -1001,8 +1009,13 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
           { ...overlay, ...geometry },
         ],
       };
-    }, pageId);
+    }, targetPageId);
+    const committed = get().project?.pages
+      .find((candidate) => candidate.id === targetPageId)
+      ?.overlayObjects.some((candidate) => candidate.id === overlay.id) === true;
+    if (!committed) return false;
     set({ selectedOverlayId: overlay.id, selectedFlowImageId: null });
+    return true;
   },
 
   updateOverlay: (id, update, pageId) => get().updatePage((page) => ({
@@ -1066,11 +1079,25 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   removeOverlay: (id, pageId) => {
+    const project = get().project;
+    if (!project) return false;
+    const activePage = project.pages[getActivePageIndex(project)];
+    const targetPageId = pageId || activePage?.id;
+    const page = project.pages.find((candidate) => candidate.id === targetPageId);
+    if (!page || !page.overlayObjects.some((overlay) => overlay.id === id)) {
+      return false;
+    }
     get().updatePage((page) => ({
       ...page,
       overlayObjects: page.overlayObjects.filter((overlay) => overlay.id !== id),
-    }), pageId);
+    }), targetPageId);
+    const committedPage = get().project?.pages
+      .find((candidate) => candidate.id === targetPageId);
+    if (!committedPage || committedPage.overlayObjects.some((overlay) => overlay.id === id)) {
+      return false;
+    }
     if (get().selectedOverlayId === id) set({ selectedOverlayId: null });
+    return true;
   },
 
   setReference: (reference) => get().updatePage({ reference }),

@@ -141,6 +141,23 @@ describe('document overlay store geometry contract', () => {
     expect(useDocumentStore.getState().project).toEqual(projectBefore);
   });
 
+  it('returns truthful success results for overlay add/remove commits', () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Overlay lifecycle results');
+    const pageId = project.pages[0].id;
+    const revisionBefore = useDocumentStore.getState().revision;
+
+    expect(store.addOverlay(overlay('lifecycle-image'), pageId)).toBe(true);
+    expect(store.addOverlay(overlay('lifecycle-image'), pageId)).toBe(false);
+    expect(store.addOverlay(overlay('missing-page-image'), 'missing-page')).toBe(false);
+    expect(store.removeOverlay('lifecycle-image', pageId)).toBe(true);
+    expect(store.removeOverlay('lifecycle-image', pageId)).toBe(false);
+    expect(store.removeOverlay('missing-image', pageId)).toBe(false);
+
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore + 2);
+    expect(readPage(pageId).overlayObjects).toEqual([]);
+  });
+
   it('records one revision for one atomic geometry commit', () => {
     const store = useDocumentStore.getState();
     const project = store.createBlankProject('Atomic overlay geometry');
@@ -224,6 +241,65 @@ describe('document overlay store geometry contract', () => {
       saveStatus: 'saved',
       revision: 0,
     });
+  });
+
+  it('preserves overlay assets through save/reopen and keeps save-time pruning on remove', async () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Overlay asset round trip');
+    const pageId = project.pages[0].id;
+    store.addAsset('asset-round-trip', 'data:image/png;base64,ROUNDTRIP', {
+      mimeType: 'image/png',
+      naturalWidth: 1200,
+      naturalHeight: 800,
+      fileName: 'round-trip.png',
+    });
+    expect(store.addOverlay(overlay('asset-overlay', {
+      assetId: 'asset-round-trip',
+    }), pageId)).toBe(true);
+
+    await store.saveProject();
+    const addedPayload = JSON.parse(
+      dbMocks.saveProject.mock.calls.at(-1)?.[1] as string
+    );
+    expect(addedPayload.pages[0].overlayObjects).toHaveLength(1);
+    expect(addedPayload.assets['asset-round-trip']).toBe(
+      'data:image/png;base64,ROUNDTRIP'
+    );
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'overlay-asset-project',
+        name: 'Overlay asset round trip',
+      },
+      canvasData: JSON.stringify(addedPayload),
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('overlay-asset-project');
+    const reopened = useDocumentStore.getState();
+    const reopenedPageId = reopened.project!.pages[0].id;
+    expect(reopened.project!.pages[0].overlayObjects).toHaveLength(1);
+    expect(reopened.project!.assets?.['asset-round-trip']).toBe(
+      'data:image/png;base64,ROUNDTRIP'
+    );
+
+    expect(reopened.removeOverlay('asset-overlay', reopenedPageId)).toBe(true);
+    await reopened.saveProject();
+    const removedPayload = JSON.parse(
+      dbMocks.saveProject.mock.calls.at(-1)?.[1] as string
+    );
+    expect(removedPayload.pages[0].overlayObjects).toHaveLength(0);
+    expect(removedPayload.assets).toEqual({});
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'overlay-asset-project',
+        name: 'Overlay asset round trip',
+      },
+      canvasData: JSON.stringify(removedPayload),
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('overlay-asset-project');
+    expect(useDocumentStore.getState().project!.pages[0].overlayObjects).toEqual([]);
   });
 
   it.each([0.5, 1, 2])(

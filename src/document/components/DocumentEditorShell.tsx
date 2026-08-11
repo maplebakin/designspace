@@ -109,6 +109,7 @@ import type {
   DocumentNamedStyleRegistry,
 } from '../typography/documentTypography';
 import type { SelectionEvent } from '../../editor/session/projectSession';
+import type { PageAssetEffect } from '../../editor/session/projectMutation';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -128,6 +129,11 @@ export type DocumentCommittedMutation =
   | Readonly<{
       action: 'modify-page-metadata';
       pageId: string;
+    }>
+  | Readonly<{
+      action: 'add-structured-overlay' | 'remove-structured-overlay';
+      overlayId: string;
+      assetEffect: PageAssetEffect;
     }>;
 
 const notifyCommittedMutation = (
@@ -148,6 +154,19 @@ const notifyCommittedOverlayGeometry = (
   notifyCommittedMutation(callback, {
     action: 'modify-structured-geometry',
     overlayId,
+  });
+};
+
+const notifyCommittedOverlayLifecycle = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  action: 'add-structured-overlay' | 'remove-structured-overlay',
+  overlayId: string,
+  assetEffect: PageAssetEffect
+) => {
+  notifyCommittedMutation(callback, {
+    action,
+    overlayId,
+    assetEffect,
   });
 };
 
@@ -549,7 +568,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedOverlayId) {
         event.preventDefault();
-        removeOverlay(selectedOverlayId, page?.id);
+        const committed = removeOverlay(selectedOverlayId, page?.id);
+        if (committed) {
+          notifyCommittedOverlayLifecycle(
+            onCommittedMutation,
+            'remove-structured-overlay',
+            selectedOverlayId,
+            'cleanup-delegated'
+          );
+        }
         return;
       }
       if (
@@ -1595,7 +1622,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       .deleteSelection()
       .run();
     const overlayId = attributes.id || uuidv4();
-    addOverlay({
+    const committed = addOverlay({
       id: overlayId,
       assetId: attributes.assetId,
       altText: attributes.altText,
@@ -1615,12 +1642,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       cropFocalY: attributes.cropFocalY,
       locked: false,
     }, page.id);
+    if (!committed) return;
+    notifyCommittedOverlayLifecycle(
+      onCommittedMutation,
+      'add-structured-overlay',
+      overlayId,
+      'retained-reference'
+    );
     setSelectedOverlayId(overlayId);
     setSelectedFlowImage(null);
     setSelectedStructuredImageIds([]);
     setSelectedFlowImageId(null);
   }, [
     addOverlay,
+    onCommittedMutation,
     page,
     physicalMargins,
     selectedFlowImage,
@@ -1878,10 +1913,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
     } else if (selectedOverlay) {
-      removeOverlay(selectedOverlay.id, page?.id);
+      const committed = removeOverlay(selectedOverlay.id, page?.id);
+      if (committed) {
+        notifyCommittedOverlayLifecycle(
+          onCommittedMutation,
+          'remove-structured-overlay',
+          selectedOverlay.id,
+          'cleanup-delegated'
+        );
+      }
     }
   }, [
     getStructuredLayoutModel,
+    onCommittedMutation,
     page?.id,
     page,
     removeOverlay,

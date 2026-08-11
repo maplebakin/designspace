@@ -1186,7 +1186,11 @@ describe('live document editor UI', () => {
 
   it('keeps a selected overlay while Delete comes from an input or editor, then deletes it from noneditable UI', async () => {
     addOverlayFixture();
-    await renderShell();
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, { onCommittedMutation }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-overlay-image')).not.toBeNull();
+    });
 
     fireEvent.keyDown(screen.getByLabelText('Document project name'), {
       key: 'Delete',
@@ -1206,6 +1210,19 @@ describe('live document editor UI', () => {
     });
     expect(useDocumentStore.getState().project?.pages[0].overlayObjects).toHaveLength(0);
     expect(useDocumentStore.getState().selectedOverlayId).toBeNull();
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'remove-structured-overlay',
+      overlayId: overlay.id,
+      assetEffect: 'cleanup-delegated',
+    });
+    act(() => {
+      useDocumentStore.getState().setSelectedOverlayId('stale-overlay');
+    });
+    fireEvent.keyDown(screen.getByTestId('document-workspace'), {
+      key: 'Backspace',
+    });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
   });
 
   it('persists reference visibility and opacity controls and updates the live reference layer', async () => {
@@ -1376,6 +1393,63 @@ describe('live document editor UI', () => {
     expect((screen.getByTestId('document-image-wrap') as HTMLSelectElement).value).toBe('behind');
   });
 
+  it('reports one overlay add for a flow-to-overlay conversion without a paired removal', async () => {
+    const store = useDocumentStore.getState();
+    store.addAsset('asset-flow-to-overlay', 'data:image/png;base64,FLOW');
+    store.updateBodyContent({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Before image.' }] },
+        {
+          type: 'documentFlowImage',
+          attrs: {
+            id: 'flow-to-overlay',
+            assetId: 'asset-flow-to-overlay',
+            altText: 'Flow image',
+            widthPx: 240,
+            heightPx: 160,
+            naturalWidth: 1200,
+            naturalHeight: 800,
+            wrap: 'float-left',
+            wrapPaddingPx: 12,
+            caption: 'Flow image caption',
+          },
+        },
+      ],
+    });
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(DocumentEditorShell, { onCommittedMutation })
+    ));
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-image-id="flow-to-overlay"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-image-id="flow-to-overlay"]')!);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Image layout mode')).not.toBeNull();
+    });
+
+    fireEvent.change(screen.getByLabelText('Image layout mode'), {
+      target: { value: 'front' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-overlay-image')).not.toBeNull();
+    });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'add-structured-overlay',
+      overlayId: 'flow-to-overlay',
+      assetEffect: 'retained-reference',
+    });
+    expect(onCommittedMutation).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'remove-structured-overlay',
+    }));
+  });
+
   it('reports one committed overlay geometry observation after pointer movement', async () => {
     addOverlayFixture();
     const onCommittedMutation = vi.fn();
@@ -1448,7 +1522,7 @@ describe('live document editor UI', () => {
   it('keeps overlay selection and hydration silent for geometry observation', async () => {
     addOverlayFixture();
     const onCommittedMutation = vi.fn();
-    render(React.createElement(DocumentEditorShell, {
+    const rendered = render(React.createElement(DocumentEditorShell, {
       onCommittedMutation,
     }));
     await waitFor(() => {
@@ -1458,6 +1532,8 @@ describe('live document editor UI', () => {
     act(() => {
       useDocumentStore.getState().setSelectedOverlayId(null);
       useDocumentStore.getState().setSelectedOverlayId(overlay.id);
+      useDocumentStore.getState().addPage();
+      useDocumentStore.getState().selectPage(0);
       useDocumentStore.getState().hydrateProject(
         structuredClone(useDocumentStore.getState().project)
       );
@@ -1466,6 +1542,8 @@ describe('live document editor UI', () => {
     expect(onCommittedMutation).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().project?.pages[0].overlayObjects[0].id)
       .toBe(overlay.id);
+    rendered.unmount();
+    expect(onCommittedMutation).not.toHaveBeenCalled();
   });
 
   it('serializes and renders every flow image wrapping mode with its document attributes', async () => {

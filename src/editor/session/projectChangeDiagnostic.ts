@@ -73,6 +73,8 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasGeometry: true;
   canvasObjectAdd: true;
   canvasObjectRemove: true;
+  documentOverlayAdd: true;
+  documentOverlayRemove: true;
   documentOverlayGeometry: true;
   documentOverlayGeometryInputs: readonly ProjectChangeDiagnosticDocumentGeometryInput[];
   documentPageMetadata: true;
@@ -131,6 +133,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasGeometry: true,
   canvasObjectAdd: true,
   canvasObjectRemove: true,
+  documentOverlayAdd: true,
+  documentOverlayRemove: true,
   documentOverlayGeometry: true,
   documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
   documentPageMetadata: true,
@@ -139,7 +143,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'Tiptap text editing',
     'Fabric text editing',
     'styles and grouping',
-    'captions, image groups, and references',
+    'flow-image lifecycle, captions, image groups, and references',
     'unobserved page settings and structured flow mutations',
     'inspector metadata and asset mutations',
     'drawing and erase operations',
