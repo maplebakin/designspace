@@ -73,6 +73,10 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasGeometry: true;
   canvasObjectAdd: true;
   canvasObjectRemove: true;
+  /** Completed freehand strokes are observed through object:add. */
+  canvasDrawing: true;
+  /** The current erase tool does not produce semantic erase mutations. */
+  canvasErase: false;
   documentOverlayAdd: true;
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
@@ -136,6 +140,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasGeometry: true,
   canvasObjectAdd: true,
   canvasObjectRemove: true,
+  canvasDrawing: true,
+  canvasErase: false,
   documentOverlayAdd: true,
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
@@ -153,7 +159,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'captions, image groups, and references',
     'unobserved page settings, document styles, and page metadata beyond orientation and column count',
     'inspector metadata and asset mutations',
-    'drawing and erase operations',
+    'semantic Canvas eraser content changes (the current erase tool creates a regular PencilBrush path)',
     'templates, recipes, and full-page restoration',
   ],
 };
