@@ -1,5 +1,12 @@
 import type { EditorMode } from '../project/projectSchema';
 import type { FileDeliveryResult } from '../services/fileDeliveryService';
+import type {
+  PageAssetReferenceResult,
+} from './assetReference';
+import type {
+  PageMutationCommand,
+  PageMutationResult,
+} from './projectMutation';
 
 /**
  * The shared page viewport contract uses CSS pixels only for display geometry.
@@ -122,11 +129,10 @@ export type ProjectSessionCommands = Readonly<{
   notify: (message: string) => void;
   isDirty: () => boolean;
   renameProject: (name: string) => Promise<void>;
-  selectPage: (index: number) => Promise<void>;
-  addPage?: () => Promise<void>;
-  duplicatePage?: () => Promise<void>;
-  removePage?: (index?: number) => Promise<void>;
-  reorderPage?: (fromIndex: number, toIndex: number) => Promise<void>;
+  /** Product-level page actions are delegated by stable ID at the adapter boundary. */
+  mutatePage: (command: PageMutationCommand) => Promise<PageMutationResult>;
+  /** Read-only adapter description; this is not a shared asset store. */
+  describePageAssets?: (pageId: string) => Promise<PageAssetReferenceResult>;
   setViewportZoom: (zoom: number) => void;
   fitPage?: () => void;
 }>;

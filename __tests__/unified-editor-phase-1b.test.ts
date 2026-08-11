@@ -13,6 +13,10 @@ import {
   createSessionSnapshot,
   type ProjectSessionCommands,
 } from '../src/editor/session/projectSession';
+import type {
+  PageMutationCommand,
+  PageMutationResult,
+} from '../src/editor/session/projectMutation';
 import { UnifiedEditorShell } from '../src/editor/session/UnifiedEditorChrome';
 import { useProjectSessionStore } from '../src/editor/state/projectSessionStore';
 
@@ -22,11 +26,21 @@ const createCommands = (dirty = false): ProjectSessionCommands => ({
   notify: vi.fn(),
   isDirty: vi.fn(() => dirty),
   renameProject: vi.fn(async () => undefined),
-  selectPage: vi.fn(async () => undefined),
-  addPage: vi.fn(async () => undefined),
-  duplicatePage: vi.fn(async () => undefined),
-  removePage: vi.fn(async () => undefined),
-  reorderPage: vi.fn(async () => undefined),
+  mutatePage: vi.fn(async (command: PageMutationCommand): Promise<PageMutationResult> => ({
+    ok: true,
+    status: 'success',
+    kind: command.kind,
+    projectId: command.projectId,
+    affectedPageIds: [],
+    activePageId: null,
+    pageOrder: [],
+    effects: {
+      contentChanged: false,
+      pageStructureChanged: false,
+      assetEffects: 'none',
+      selection: 'unchanged',
+    },
+  })),
   setViewportZoom: vi.fn(),
   fitPage: vi.fn(),
 });
@@ -110,8 +124,15 @@ describe('UnifiedEditorSession Phase 1b shared chrome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     fireEvent.click(screen.getByRole('button', { name: 'Fit page' }));
 
-    expect(commands.selectPage).toHaveBeenCalledWith(1);
-    expect(commands.addPage).toHaveBeenCalled();
+    expect(commands.mutatePage).toHaveBeenCalledWith({
+      kind: 'select-page',
+      projectId: 'canvas-project',
+      pageId: 'page-2',
+    });
+    expect(commands.mutatePage).toHaveBeenCalledWith({
+      kind: 'add-page',
+      projectId: 'canvas-project',
+    });
     expect(commands.setViewportZoom).toHaveBeenCalledWith(0.85);
     expect(commands.fitPage).toHaveBeenCalled();
   });
@@ -132,9 +153,20 @@ describe('UnifiedEditorSession Phase 1b shared chrome', () => {
     fireEvent.click(screen.getByTestId('document-duplicate-page'));
     fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
 
-    expect(commands.selectPage).toHaveBeenCalledWith(1);
-    expect(commands.addPage).toHaveBeenCalled();
-    expect(commands.duplicatePage).toHaveBeenCalled();
+    expect(commands.mutatePage).toHaveBeenCalledWith({
+      kind: 'select-page',
+      projectId: 'document-project',
+      pageId: 'page-2',
+    });
+    expect(commands.mutatePage).toHaveBeenCalledWith({
+      kind: 'add-page',
+      projectId: 'document-project',
+    });
+    expect(commands.mutatePage).toHaveBeenCalledWith({
+      kind: 'duplicate-page',
+      projectId: 'document-project',
+      sourcePageId: 'page-1',
+    });
     expect(commands.save).toHaveBeenCalledWith('document project');
   });
 

@@ -67,11 +67,13 @@ const TOOL_BUTTON = 'ui-button-icon rounded-lg p-2 transition-all duration-200 h
 interface EditorShellProps {
   onBackToDashboard?: () => void;
   useSharedChrome?: boolean;
+  sharedPageStrip?: React.ReactNode;
 }
 
 export const EditorShell: React.FC<EditorShellProps> = ({
   onBackToDashboard,
   useSharedChrome = false,
+  sharedPageStrip,
 }) => {
   useKeyboardShortcuts();
   const {
@@ -553,7 +555,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
   };
 
   return (
-    <div data-testid="editor-shell" tabIndex={-1} className={`design-space-shell w-screen h-screen bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col${useSharedChrome ? ' design-space-legacy-engine-surface' : ''}`}>
+    <div data-testid="editor-shell" tabIndex={-1} className={`design-space-shell ${useSharedChrome ? 'design-space-legacy-engine-surface w-full h-full' : 'w-screen h-screen'} bg-[color:var(--ui-bg)] text-[color:var(--ui-text)] flex flex-col`}>
         <BrandModal isOpen={isBrandModalOpen} onClose={() => setIsBrandModalOpen(false)} />
         <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
@@ -976,7 +978,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
           onOpenVibeSettings={() => setIsSettingsModalOpen(true)}
         />
       </div>
-      {!useSharedChrome && <PageStrip />}
+      {useSharedChrome ? sharedPageStrip : <PageStrip />}
       <StatusBar showZoomControls={!useSharedChrome} />
       <KeyboardShortcutHelp />
     </div>

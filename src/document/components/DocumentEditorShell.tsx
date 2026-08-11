@@ -2050,9 +2050,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setToastMessage,
   ]);
 
+  const shellClassName = `document-editor-shell${useSharedChrome ? ' document-editor-shell--embedded' : ''}`;
+
   if (!project || !page) {
     return (
-      <div data-testid="document-editor-shell" className="document-editor-shell">
+      <div data-testid="document-editor-shell" className={shellClassName}>
         <p>Document project could not be loaded.</p>
         <button type="button" onClick={onBackToDashboard}>Back to Projects</button>
       </div>
@@ -2061,7 +2063,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   return (
     <div
-      className="document-editor-shell"
+      className={shellClassName}
       data-testid="document-editor-shell"
       data-editor-mode="document"
     >

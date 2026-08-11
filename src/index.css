@@ -375,6 +375,11 @@ body {
   min-height: 0;
 }
 
+.unified-editor-shell .design-space-legacy-engine-surface {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .unified-canvas-page-item {
   display: flex;
   width: 190px;
@@ -434,17 +439,10 @@ body {
 }
 
 .unified-canvas-page-strip {
-  position: absolute;
-  right: 0;
-  bottom: 40px;
-  left: 0;
-  z-index: 50;
+  position: relative;
   min-height: 72px;
-}
-
-.unified-canvas-renderer {
-  height: calc(100% - 136px);
-  flex: 0 0 calc(100% - 136px);
+  height: 72px;
+  flex: 0 0 72px;
 }
 
 .unified-zoom-controls {

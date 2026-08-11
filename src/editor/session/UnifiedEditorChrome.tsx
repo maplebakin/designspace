@@ -20,6 +20,7 @@ import type {
   ProjectSessionCommands,
   ProjectSessionSnapshot,
 } from './projectSession';
+import type { PageMutationCommand } from './projectMutation';
 
 type UnifiedPageNavigationProps = {
   session: ProjectSessionSnapshot;
@@ -35,6 +36,19 @@ const pageNumber = (page: ProjectPageDescriptor, index: number) =>
 const confirmRemovePage = (page: ProjectPageDescriptor) => {
   if (typeof window === 'undefined') return true;
   return window.confirm(`Remove ${page.name || 'this page'}? This cannot be undone.`);
+};
+
+const runPageMutation = async (
+  commands: ProjectSessionCommands | null,
+  command: PageMutationCommand
+) => {
+  if (!commands) return;
+  try {
+    const result = await commands.mutatePage(command);
+    if (!result.ok) commands.notify(result.error.message);
+  } catch (error) {
+    commands.notify(error instanceof Error ? error.message : 'The page action failed.');
+  }
 };
 
 const SharedPageButton: React.FC<{
@@ -104,7 +118,11 @@ const UnifiedCanvasPageNavigator: React.FC<UnifiedPageNavigationProps> = ({
               page={page}
               index={index}
               active={session.activePageIndex === index}
-              onSelect={() => void commands?.selectPage(index)}
+              onSelect={() => void runPageMutation(commands, {
+                kind: 'select-page',
+                projectId: session.projectId,
+                pageId: page.id,
+              })}
             />
           ))}
         </div>
@@ -112,8 +130,11 @@ const UnifiedCanvasPageNavigator: React.FC<UnifiedPageNavigationProps> = ({
       <div className="design-space-page-navigator-footer border-t border-[color:var(--border-subtle)] p-2">
         <button
           type="button"
-          onClick={() => void commands?.addPage?.()}
-          disabled={!commands?.addPage}
+          onClick={() => void runPageMutation(commands, {
+            kind: 'add-page',
+            projectId: session.projectId,
+          })}
+          disabled={!commands?.mutatePage}
           className="design-space-add-page flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[color:var(--ui-border)] px-3 py-2 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] transition-all duration-200 hover:border-[color:var(--brand-primary)] hover:text-[color:var(--brand-primary)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Plus className="h-3.5 w-3.5" />
@@ -131,7 +152,7 @@ export const UnifiedCanvasPageStrip: React.FC<UnifiedPageNavigationProps> = ({
   session,
   commands,
 }) => {
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragPageId, setDragPageId] = useState<string | null>(null);
 
   return (
     <div
@@ -142,24 +163,33 @@ export const UnifiedCanvasPageStrip: React.FC<UnifiedPageNavigationProps> = ({
       {session.pages.map((page, index) => (
         <div
           key={page.id}
-          draggable={Boolean(commands?.reorderPage)}
-          onDragStart={() => setDragIndex(index)}
+          draggable={Boolean(commands?.mutatePage)}
+          onDragStart={() => setDragPageId(page.id)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={() => {
             if (
-              dragIndex === null
-              || dragIndex === index
-              || !commands?.reorderPage
+              dragPageId === null
+              || dragPageId === page.id
+              || !commands?.mutatePage
             ) return;
-            void commands.reorderPage(dragIndex, index);
-            setDragIndex(null);
+            void runPageMutation(commands, {
+              kind: 'reorder-page',
+              projectId: session.projectId,
+              pageId: dragPageId,
+              targetIndex: index,
+            });
+            setDragPageId(null);
           }}
-          onDragEnd={() => setDragIndex(null)}
+          onDragEnd={() => setDragPageId(null)}
           className="group relative shrink-0"
         >
           <button
             type="button"
-            onClick={() => void commands?.selectPage(index)}
+            onClick={() => void runPageMutation(commands, {
+              kind: 'select-page',
+              projectId: session.projectId,
+              pageId: page.id,
+            })}
             aria-current={session.activePageIndex === index ? 'page' : undefined}
             aria-label={`Open page ${index + 1}: ${pageName(page, index)}`}
             className={`design-space-page-strip-item h-[56px] w-20 rounded-xl border p-1 text-left transition-all duration-200 ${session.activePageIndex === index
@@ -175,11 +205,15 @@ export const UnifiedCanvasPageStrip: React.FC<UnifiedPageNavigationProps> = ({
             <button
               type="button"
               aria-label={`Delete page ${index + 1}: ${pageName(page, index)}`}
-              disabled={!commands?.removePage}
+              disabled={!commands?.mutatePage}
               onClick={(event) => {
                 event.stopPropagation();
-                if (!commands?.removePage || !confirmRemovePage(page)) return;
-                void commands.removePage(index);
+                if (!commands?.mutatePage || !confirmRemovePage(page)) return;
+                void runPageMutation(commands, {
+                  kind: 'remove-page',
+                  projectId: session.projectId,
+                  pageId: page.id,
+                });
               }}
               className="absolute right-1 top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[rgba(74,56,45,0.7)] text-[#fbf7f2] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 disabled:hidden"
             >
@@ -190,8 +224,11 @@ export const UnifiedCanvasPageStrip: React.FC<UnifiedPageNavigationProps> = ({
       ))}
       <button
         type="button"
-        onClick={() => void commands?.addPage?.()}
-        disabled={!commands?.addPage}
+        onClick={() => void runPageMutation(commands, {
+          kind: 'add-page',
+          projectId: session.projectId,
+        })}
+        disabled={!commands?.mutatePage}
         className="design-space-page-strip-add flex h-[56px] w-8 shrink-0 items-center justify-center rounded-xl border border-dashed border-[color:var(--ui-border)] text-[color:var(--ui-panel-text)] transition-all duration-200 hover:border-[color:var(--brand-primary)] hover:text-[color:var(--brand-primary)] disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Add page"
       >
@@ -221,7 +258,11 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
             page={page}
             index={index}
             active={session.activePageIndex === index}
-            onSelect={() => void commands?.selectPage(index)}
+            onSelect={() => void runPageMutation(commands, {
+              kind: 'select-page',
+              projectId: session.projectId,
+              pageId: page.id,
+            })}
             documentStyle
           />
         ))}
@@ -231,10 +272,15 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
           type="button"
           data-testid="document-move-page-left"
           aria-label="Move page left"
-          disabled={session.activePageIndex <= 0 || !commands?.reorderPage}
+          disabled={session.activePageIndex <= 0 || !commands?.mutatePage || !activePage}
           onClick={() => {
-            if (activePage && commands?.reorderPage) {
-              void commands.reorderPage(session.activePageIndex, session.activePageIndex - 1);
+            if (activePage && commands?.mutatePage) {
+              void runPageMutation(commands, {
+                kind: 'reorder-page',
+                projectId: session.projectId,
+                pageId: activePage.id,
+                targetIndex: session.activePageIndex - 1,
+              });
             }
           }}
         >
@@ -244,10 +290,15 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
           type="button"
           data-testid="document-move-page-right"
           aria-label="Move page right"
-          disabled={session.activePageIndex >= session.pages.length - 1 || !commands?.reorderPage}
+          disabled={session.activePageIndex >= session.pages.length - 1 || !commands?.mutatePage || !activePage}
           onClick={() => {
-            if (activePage && commands?.reorderPage) {
-              void commands.reorderPage(session.activePageIndex, session.activePageIndex + 1);
+            if (activePage && commands?.mutatePage) {
+              void runPageMutation(commands, {
+                kind: 'reorder-page',
+                projectId: session.projectId,
+                pageId: activePage.id,
+                targetIndex: session.activePageIndex + 1,
+              });
             }
           }}
         >
@@ -256,8 +307,15 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
         <button
           type="button"
           data-testid="document-duplicate-page"
-          disabled={!commands?.duplicatePage}
-          onClick={() => void commands?.duplicatePage?.()}
+          disabled={!commands?.mutatePage || !activePage}
+          onClick={() => {
+            if (!activePage) return;
+            void runPageMutation(commands, {
+              kind: 'duplicate-page',
+              projectId: session.projectId,
+              sourcePageId: activePage.id,
+            });
+          }}
         >
           <Copy size={14} aria-hidden="true" />
           Duplicate
@@ -265,8 +323,11 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
         <button
           type="button"
           data-testid="document-add-page"
-          disabled={!commands?.addPage}
-          onClick={() => void commands?.addPage?.()}
+          disabled={!commands?.mutatePage}
+          onClick={() => void runPageMutation(commands, {
+            kind: 'add-page',
+            projectId: session.projectId,
+          })}
         >
           <Plus size={14} aria-hidden="true" />
           Add page
@@ -275,10 +336,14 @@ const UnifiedDocumentPageNavigation: React.FC<UnifiedPageNavigationProps> = ({
           type="button"
           data-testid="document-remove-page"
           aria-label="Remove current page"
-          disabled={session.pages.length <= 1 || !commands?.removePage}
+          disabled={session.pages.length <= 1 || !commands?.mutatePage || !activePage}
           onClick={() => {
-            if (activePage && commands?.removePage && confirmRemovePage(activePage)) {
-              void commands.removePage(session.activePageIndex);
+            if (activePage && commands?.mutatePage && confirmRemovePage(activePage)) {
+              void runPageMutation(commands, {
+                kind: 'remove-page',
+                projectId: session.projectId,
+                pageId: activePage.id,
+              });
             }
           }}
         >
@@ -464,8 +529,13 @@ export type UnifiedEditorShellProps = {
   commands: ProjectSessionCommands | null;
   zoom: number;
   onBackToDashboard?: () => void;
-  children: React.ReactNode;
+  children: React.ReactNode | ((slots: UnifiedEditorShellContentSlots) => React.ReactNode);
 };
+
+export type UnifiedEditorShellContentSlots = Readonly<{
+  /** Shared Canvas page chrome can be mounted inside the legacy content region. */
+  canvasPageStrip: React.ReactNode;
+}>;
 
 export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   session,
@@ -483,6 +553,13 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   const isDirty = session?.isDirty ?? false;
   const projectName = session?.projectName
     || (rendererKind === 'document' ? 'Untitled Document' : 'Untitled Project');
+  const usesContentSlot = typeof children === 'function';
+  const canvasPageStrip = session && rendererKind === 'canvas'
+    ? <UnifiedCanvasPageStrip session={session} commands={commands} />
+    : null;
+  const renderedChildren = usesContentSlot
+    ? children({ canvasPageStrip })
+    : children;
 
   const returnToDashboard = useCallback(() => {
     setShowLeaveEditorModal(false);
@@ -626,17 +703,15 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
       {session && rendererKind === 'canvas' ? (
         <div className="unified-canvas-editor-layout">
           <UnifiedCanvasPageNavigator session={session} commands={commands} />
-          <div className="unified-editor-renderer unified-canvas-renderer">{children}</div>
+          <div className="unified-editor-renderer">{renderedChildren}</div>
         </div>
       ) : (
         <>
           {session && <UnifiedPageNavigation session={session} commands={commands} />}
-          <div className="unified-editor-renderer">{children}</div>
+          <div className="unified-editor-renderer">{renderedChildren}</div>
         </>
       )}
-      {session && rendererKind === 'canvas' && (
-        <UnifiedCanvasPageStrip session={session} commands={commands} />
-      )}
+      {session && rendererKind === 'canvas' && !usesContentSlot && canvasPageStrip}
       <UnifiedZoomControls
         rendererKind={rendererKind}
         zoom={zoom}

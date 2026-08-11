@@ -70,7 +70,8 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
     });
     expect(useProjectSessionStore.getState().commands).toMatchObject({
       renameProject: expect.any(Function),
-      addPage: expect.any(Function),
+      mutatePage: expect.any(Function),
+      describePageAssets: expect.any(Function),
       close: expect.any(Function),
       fitPage: expect.any(Function),
     });
@@ -104,7 +105,8 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
     });
     expect(useProjectSessionStore.getState().commands).toMatchObject({
       renameProject: expect.any(Function),
-      duplicatePage: expect.any(Function),
+      mutatePage: expect.any(Function),
+      describePageAssets: expect.any(Function),
       close: expect.any(Function),
       fitPage: expect.any(Function),
     });

@@ -14,6 +14,12 @@ import {
   type SelectionEvent,
   type SessionPayloadLike,
 } from './projectSession';
+import {
+  describeCanvasPageAssets,
+  describeDocumentPageAssets,
+  executeCanvasPageMutation,
+  executeDocumentPageMutation,
+} from './legacyPageMutationAdapters';
 import { useEditorStore } from '../state/editorStore';
 import { useProjectSessionStore } from '../state/projectSessionStore';
 
@@ -22,6 +28,8 @@ export type LegacyRendererAdapterProps = {
   onSelectionEvent: (event: SelectionEvent) => void;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
+  /** Shared chrome may provide a page strip to the embedded engine surface. */
+  sharedPageStrip?: React.ReactNode;
 };
 
 export type LegacyRendererAdapter = Readonly<{
@@ -107,14 +115,8 @@ const createCanvasCommands = (): ProjectSessionCommands => ({
   },
   isDirty: () => useEditorStore.getState().isDirty,
   renameProject: (name) => useEditorStore.getState().renameCurrentProject(name),
-  selectPage: (index) => useEditorStore.getState().switchToPage(index),
-  addPage: () => useEditorStore.getState().addPage(),
-  removePage: (index) => useEditorStore.getState().deletePage(
-    index ?? useEditorStore.getState().activePageIndex
-  ),
-  reorderPage: async (fromIndex, toIndex) => {
-    useEditorStore.getState().reorderPages(fromIndex, toIndex);
-  },
+  mutatePage: executeCanvasPageMutation,
+  describePageAssets: async (pageId) => describeCanvasPageAssets(pageId),
   setViewportZoom: (zoom) => zoomToCenter(zoom),
   fitPage: () => useEditorStore.getState().resetViewCanvas(),
 });
@@ -127,21 +129,8 @@ const createDocumentCommands = (): ProjectSessionCommands => ({
   renameProject: async (name) => {
     useDocumentStore.getState().renameProject(name);
   },
-  selectPage: async (index) => {
-    useDocumentStore.getState().selectPage(index);
-  },
-  addPage: async () => {
-    useDocumentStore.getState().addPage();
-  },
-  duplicatePage: async () => {
-    useDocumentStore.getState().duplicatePage();
-  },
-  removePage: async (index) => {
-    useDocumentStore.getState().removePage(index);
-  },
-  reorderPage: async (fromIndex, toIndex) => {
-    useDocumentStore.getState().reorderPages(fromIndex, toIndex);
-  },
+  mutatePage: executeDocumentPageMutation,
+  describePageAssets: async (pageId) => describeDocumentPageAssets(pageId),
   setViewportZoom: (zoom) => useDocumentStore.getState().setZoom(zoom),
 });
 
@@ -222,6 +211,7 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onSelectionEvent,
   useSharedChrome,
   onRegisterFitPage,
+  sharedPageStrip,
 }) => {
   const pageId = useProjectSessionStore((state) => state.session?.activePageId);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
@@ -260,6 +250,7 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     <EditorShell
       onBackToDashboard={onBackToDashboard}
       useSharedChrome={useSharedChrome}
+      sharedPageStrip={sharedPageStrip}
     />
   );
 };

@@ -60,6 +60,14 @@
   font-family: Inter, var(--font-ui, Arial), sans-serif;
 }
 
+/* Embedded renderers size to the unified viewport host. The standalone
+   compatibility shell retains its legacy viewport behavior above. */
+.document-editor-shell--embedded {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+}
+
 .document-editor-shell *,
 .document-editor-shell *::before,
 .document-editor-shell *::after {

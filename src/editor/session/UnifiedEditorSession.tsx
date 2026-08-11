@@ -73,17 +73,20 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
       zoom={zoom}
       onBackToDashboard={onBackToDashboard}
     >
-      <PageViewport
-        session={snapshot}
-        zoom={zoom}
-        onViewportChange={setViewport}
-      >
-        <LegacyRenderer
-          onSelectionEvent={handleSelectionEvent}
-          useSharedChrome
-          onRegisterFitPage={registerFitPage}
-        />
-      </PageViewport>
+      {({ canvasPageStrip }) => (
+        <PageViewport
+          session={snapshot}
+          zoom={zoom}
+          onViewportChange={setViewport}
+        >
+          <LegacyRenderer
+            onSelectionEvent={handleSelectionEvent}
+            useSharedChrome
+            onRegisterFitPage={registerFitPage}
+            sharedPageStrip={mode === 'canvas' ? canvasPageStrip : undefined}
+          />
+        </PageViewport>
+      )}
     </UnifiedEditorShell>
   );
 };
