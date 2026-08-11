@@ -59,7 +59,10 @@ import {
     isCanvasObjectObservationTarget,
     withCanvasObjectMutationSuppressed,
 } from '../services/canvasMutationObservation';
-import type { CanvasCommittedMutationObserver } from '../services/canvasMutationObservation';
+import type {
+    CanvasCommittedMutation,
+    CanvasCommittedMutationObserver,
+} from '../services/canvasMutationObservation';
 import {
     assertSupportedDesignSpaceProjectSchema,
     extractProductProjectFields,
@@ -1285,6 +1288,24 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
         };
 
+        const observeSemanticMutation = (mutation: CanvasCommittedMutation) => {
+            const state = get();
+            const canvas = state.canvas;
+            if (
+                !state.committedMutationObserver
+                || !canvas
+                || state.syncLock.isLocked
+                || isCanvasObjectMutationSuppressed(canvas)
+            ) {
+                return;
+            }
+            try {
+                state.committedMutationObserver(mutation);
+            } catch {
+                // Runtime observation must never affect the legacy mutation path.
+            }
+        };
+
         return ({
             canvas: null,
         canvasReadyState: 'uninitialized',
@@ -1536,8 +1557,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
         }
-        groupObjects(canvas);
+        const mutation = groupObjects(canvas);
         syncCanvasToStore(canvas);
+        if (mutation) {
+            observeSemanticMutation(mutation);
+        }
     },
     ungroupSelectedObjects: () => {
         const { canvas, syncCanvasToStore } = get();
@@ -1545,8 +1569,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
         }
-        ungroupObjects(canvas);
+        const mutation = ungroupObjects(canvas);
         syncCanvasToStore(canvas);
+        if (mutation) {
+            observeSemanticMutation(mutation);
+        }
     },
     addLayer: (_layer) => {
         get().requestLayerSync();

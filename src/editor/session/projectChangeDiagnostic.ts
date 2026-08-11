@@ -77,6 +77,8 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasDrawing: true;
   /** The current erase tool does not produce semantic erase mutations. */
   canvasErase: false;
+  canvasGrouping: true;
+  canvasUngrouping: true;
   documentOverlayAdd: true;
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
@@ -142,6 +144,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasObjectRemove: true,
   canvasDrawing: true,
   canvasErase: false,
+  canvasGrouping: true,
+  canvasUngrouping: true,
   documentOverlayAdd: true,
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
@@ -154,7 +158,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   unobservedAuthoredChangeCategories: [
     'Tiptap text editing',
     'Fabric text editing',
-    'styles and grouping',
+    'styles',
     'flow-image metadata and structured flow mutations',
     'captions, image groups, and references',
     'unobserved page settings, document styles, and page metadata beyond orientation and column count',

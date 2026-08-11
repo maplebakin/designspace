@@ -33,6 +33,8 @@ export type ProjectChangeAction =
   | 'add-freeform-object'
   | 'remove-freeform-object'
   | 'modify-freeform-geometry'
+  | 'group-freeform-objects'
+  | 'ungroup-freeform-objects'
   | 'add-structured-overlay'
   | 'remove-structured-overlay'
   | 'add-structured-flow-image'
@@ -41,7 +43,7 @@ export type ProjectChangeAction =
   | 'modify-page-metadata';
 
 export type ProjectChangeTarget = Readonly<{
-  kind: 'page' | 'freeform-object' | 'structured-image' | 'structured-group';
+  kind: 'page' | 'freeform-object' | 'freeform-group' | 'structured-image' | 'structured-group';
   id: string;
 }>;
 

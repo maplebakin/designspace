@@ -299,6 +299,22 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    if ('groupId' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'freeform-group',
+          id: mutation.groupId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
     const assetEffect = mutation.action === 'modify-freeform-geometry'
       ? 'none'
       : mutation.assetEffect;

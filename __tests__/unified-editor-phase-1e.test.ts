@@ -147,7 +147,7 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
     expect(snapshot.coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
         'Tiptap text editing',
-        'styles and grouping',
+        'styles',
       ])
     );
 

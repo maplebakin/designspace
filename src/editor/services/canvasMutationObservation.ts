@@ -1,7 +1,7 @@
 import type { PageAssetEffect } from '../session/projectMutation';
 
 /**
- * The only Canvas object lifecycle facts that may cross the engine adapter
+ * The only normalized Canvas authored facts that may cross the engine adapter
  * boundary. These are stable product IDs; no Fabric instance is included.
  */
 export type CanvasCommittedMutation =
@@ -13,6 +13,10 @@ export type CanvasCommittedMutation =
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
       assetEffect: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'group-freeform-objects' | 'ungroup-freeform-objects';
+      groupId: string;
     }>;
 
 export type CanvasCommittedMutationObserver = (
