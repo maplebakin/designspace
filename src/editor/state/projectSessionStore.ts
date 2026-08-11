@@ -52,6 +52,7 @@ export const useProjectSessionStore = create<ProjectSessionState>((set) => ({
       ...descriptor,
       isDirty: false,
       saveStatus: 'saved',
+      legacyDirtyReason: null,
       canSave: true,
       canClose: true,
     },

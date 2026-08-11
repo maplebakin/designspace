@@ -134,14 +134,16 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
       coverage: {
         pageStructure: true,
         canvasGeometry: true,
+        canvasObjectAdd: true,
+        canvasObjectRemove: true,
         documentOverlayGeometry: true,
+        documentPageMetadata: true,
         completeAuthoredCoverage: false,
       },
     });
     expect(snapshot.coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
         'Tiptap text editing',
-        'Fabric object add/remove',
         'styles and grouping',
       ])
     );
@@ -267,8 +269,8 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
     expect(() => coordinator.observeCommitted(
       canvasGeometryObservation('listener-project')
     )).not.toThrow();
-    expect(throwingListener).toHaveBeenCalledTimes(1);
-    expect(healthyListener).toHaveBeenCalledTimes(1);
+    expect(throwingListener).toHaveBeenCalledTimes(2);
+    expect(healthyListener).toHaveBeenCalledTimes(2);
     expect(observer.view.getSnapshot().observedRevision).toBe(1);
 
     observer.dispose();

@@ -388,6 +388,25 @@ describe('live document editor UI', () => {
     expect(screen.getByTestId('document-drop-cap-toggle').getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('reports one committed page-metadata observation for a column-count command', async () => {
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-flow-editor')).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '2 columns' }));
+
+    expect(useDocumentStore.getState().project?.pages[0].columnCount).toBe(2);
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'modify-page-metadata',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+    });
+  });
+
   it('switches Letter, A4, and custom pages between orientations and reflows columns', async () => {
     await renderShell();
     fireEvent.click(screen.getByRole('button', { name: '3 columns' }));

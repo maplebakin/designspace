@@ -23,6 +23,7 @@ import { guideRegistry } from './guideRegistry';
 import { refitPageBorder } from '../services/pageBorderService';
 import { CanvasLayer, assignZIndex } from './zIndexManifest';
 import { isUserObject } from '../utils/objectUtils';
+import { withCanvasObjectMutationSuppressed } from '../services/canvasMutationObservation';
 
 let safeMarginGuides: fabric.Line[] = [];
 let bleedGuides: fabric.Object[] = []; // Changed to fabric.Object[]
@@ -355,7 +356,7 @@ export const clearAndResizeCanvas = (width: number, height: number): void => {
 
   clearSelection();
   setLayers([]);
-  canvas.clear();
+  withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
   requestLayerSync();
   resizeCanvas(width, height);
 };
@@ -565,7 +566,11 @@ export const resizeCanvasToFitContent = () => {
   }
 
   // Temporarily create a group of all objects to get their combined bounding box
-  const tempGroup = new fabric.Group(allObjects, { objectCaching: false });
+  const tempGroup = new fabric.Group(allObjects, {
+    objectCaching: false,
+    // This group exists only for measurement and must never look authored.
+    excludeFromSync: true,
+  } as any);
   canvas.add(tempGroup); // Must be added to canvas to calculate bounding box correctly
 
   const bbox = tempGroup.getBoundingRect(); // `true` for includeTransform

@@ -120,10 +120,26 @@ type DocumentEditorShellProps = {
   onCommittedMutation?: (mutation: DocumentCommittedMutation) => void;
 };
 
-export type DocumentCommittedMutation = Readonly<{
-  action: 'modify-structured-geometry';
-  overlayId: string;
-}>;
+export type DocumentCommittedMutation =
+  | Readonly<{
+      action: 'modify-structured-geometry';
+      overlayId: string;
+    }>
+  | Readonly<{
+      action: 'modify-page-metadata';
+      pageId: string;
+    }>;
+
+const notifyCommittedMutation = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  mutation: DocumentCommittedMutation
+) => {
+  try {
+    callback?.(mutation);
+  } catch {
+    // Optional diagnostics must never interrupt the legacy document action.
+  }
+};
 
 const isImageClipboardPaste = (event: ClipboardEvent) => {
   const data = event.clipboardData;
@@ -2135,7 +2151,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               page.size.heightIn
             ),
           })}
-          onColumnCountChange={(columnCount) => updatePage({ columnCount })}
+          onColumnCountChange={(columnCount) => {
+            if (columnCount === page.columnCount) return;
+            updatePage({ columnCount });
+            notifyCommittedMutation(onCommittedMutation, {
+              action: 'modify-page-metadata',
+              pageId: page.id,
+            });
+          }}
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
           onDocumentLanguageChange={updateDocumentLanguage}
           onPageLanguageChange={(language) =>
@@ -2297,7 +2320,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               onUpdateOverlay={(id, geometry) => {
                 const committed = commitOverlayGeometry(page.id, id, geometry);
                 if (committed) {
-                  onCommittedMutation?.({
+                  notifyCommittedMutation(onCommittedMutation, {
                     action: 'modify-structured-geometry',
                     overlayId: id,
                   });

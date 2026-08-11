@@ -62,6 +62,7 @@ type DocumentSessionState = {
   currentLibraryProjectId: string | null;
   isDirty: boolean;
   saveStatus: ReturnType<typeof useDocumentStore.getState>['saveStatus'];
+  lastDirtyReason: ReturnType<typeof useDocumentStore.getState>['lastDirtyReason'];
   zoom: number;
 };
 
@@ -180,15 +181,18 @@ export const useLegacyProjectSessionBridge = (
   );
   const documentIsDirty = useDocumentStore((state) => state.isDirty);
   const documentSaveStatus = useDocumentStore((state) => state.saveStatus);
+  const documentDirtyReason = useDocumentStore((state) => state.lastDirtyReason);
   const documentZoom = useDocumentStore((state) => state.zoom);
   const documentState = useMemo<DocumentSessionState>(() => ({
     project: documentProject,
     currentLibraryProjectId: documentLibraryProjectId,
     isDirty: documentIsDirty,
     saveStatus: documentSaveStatus,
+    lastDirtyReason: documentDirtyReason,
     zoom: documentZoom,
   }), [
     documentIsDirty,
+    documentDirtyReason,
     documentLibraryProjectId,
     documentProject,
     documentSaveStatus,
@@ -213,9 +217,22 @@ export const useLegacyProjectSessionBridge = (
       return createSessionSnapshot(
         descriptor,
         mode === 'document' ? documentState.isDirty : canvasState.isDirty,
-        mode === 'document' ? documentState.saveStatus : canvasState.saveStatus
+        mode === 'document' ? documentState.saveStatus : canvasState.saveStatus,
+        {
+          legacyDirtyReason: mode === 'document'
+            ? documentState.lastDirtyReason
+            : null,
+        }
       );
-    }, [canvasState.isDirty, canvasState.saveStatus, descriptor, documentState.isDirty, documentState.saveStatus, mode]
+    }, [
+      canvasState.isDirty,
+      canvasState.saveStatus,
+      descriptor,
+      documentState.isDirty,
+      documentState.lastDirtyReason,
+      documentState.saveStatus,
+      mode,
+    ]
   );
   const commands = useMemo(
     () => mode === 'document'
@@ -282,17 +299,25 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    const assetEffect = mutation.action === 'modify-freeform-geometry'
+      ? 'none'
+      : mutation.assetEffect;
+    const domains = mutation.action === 'modify-freeform-geometry'
+      ? ['geometry'] as const
+      : assetEffect === 'none'
+        ? ['freeform-content'] as const
+        : ['freeform-content', 'asset-reference'] as const;
     observeCommittedEngineChange(changeCoordinator, {
       projectId: currentSession.projectId,
       source: 'canvas',
       action: mutation.action,
       pageIds: [currentPageId],
-      domains: ['geometry'],
+      domains,
       target: {
         kind: 'freeform-object',
         id: mutation.objectId,
       },
-      assetEffect: 'none',
+      assetEffect,
     });
   }, [changeCoordinator]);
 
@@ -319,16 +344,16 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    const isPageMetadata = mutation.action === 'modify-page-metadata';
     observeCommittedEngineChange(changeCoordinator, {
       projectId: currentSession.projectId,
       source: 'document',
       action: mutation.action,
-      pageIds: [currentPageId],
-      domains: ['geometry'],
-      target: {
-        kind: 'structured-image',
-        id: mutation.overlayId,
-      },
+      pageIds: [isPageMetadata ? mutation.pageId : currentPageId],
+      domains: isPageMetadata ? ['page-structure'] : ['geometry'],
+      target: isPageMetadata
+        ? { kind: 'page', id: mutation.pageId }
+        : { kind: 'structured-image', id: mutation.overlayId },
       assetEffect: 'none',
     });
   }, [changeCoordinator]);

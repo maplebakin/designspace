@@ -52,12 +52,17 @@ import {
 } from '../../editor/services/fileDeliveryService';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
+export type DocumentLegacyDirtyReason =
+  | 'authored-content'
+  | 'navigation-persistence';
 
 type DocumentStoreState = {
   project: DocumentProjectPayload | null;
   currentLibraryProjectId: string | null;
   isDirty: boolean;
   saveStatus: DocumentSaveStatus;
+  /** Runtime-only explanation for the latest legacy dirty transition. */
+  lastDirtyReason: DocumentLegacyDirtyReason | null;
   revision: number;
   zoom: number;
   isReferenceAdjustMode: boolean;
@@ -362,11 +367,13 @@ const queueAutosave = () => {
 };
 
 const markDirty = (
-  set: (partial: Partial<DocumentStoreState> | ((state: DocumentStoreState) => Partial<DocumentStoreState>)) => void
+  set: (partial: Partial<DocumentStoreState> | ((state: DocumentStoreState) => Partial<DocumentStoreState>)) => void,
+  reason: DocumentLegacyDirtyReason = 'authored-content'
 ) => {
   set((state) => ({
     isDirty: true,
     saveStatus: 'unsaved',
+    lastDirtyReason: reason,
     revision: state.revision + 1,
   }));
   if (useDocumentStore.getState().currentLibraryProjectId) {
@@ -410,6 +417,7 @@ const initialState = {
   currentLibraryProjectId: null,
   isDirty: false,
   saveStatus: 'saved' as DocumentSaveStatus,
+  lastDirtyReason: null as DocumentLegacyDirtyReason | null,
   revision: 0,
   zoom: 0.75,
   isReferenceAdjustMode: false,
@@ -507,6 +515,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         currentLibraryProjectId: libraryId,
         isDirty: hasNewerChanges,
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
+        ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
         toastMessage: `Saved document: ${safeName}`,
       });
       if (hasNewerChanges) queueAutosave();
@@ -553,6 +562,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       project: payload,
       isDirty: false,
       saveStatus: 'saved',
+      lastDirtyReason: null,
       toastMessage: delivery.path
         ? `Downloaded project to ${delivery.path}`
         : `Downloaded project: ${payload.projectName}`,
@@ -689,7 +699,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     // Page selection is a discrete, persisted document preference. Advancing
     // the revision also prevents an in-flight save from restoring the older
     // activePageIndex when its write completes.
-    markDirty(set);
+    markDirty(set, 'navigation-persistence');
   },
 
   addPage: () => {
@@ -1090,6 +1100,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         ...(hasNewerChanges ? {} : { project: payload }),
         isDirty: hasNewerChanges,
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
+        ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
       });
       if (hasNewerChanges) queueAutosave();
     } catch (error) {

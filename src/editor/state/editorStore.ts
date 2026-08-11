@@ -54,6 +54,13 @@ import { type AccessibilitySettings, AccessibilityManager } from '../utils/acces
 import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
 import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 import {
+    getCanvasObjectAssetEffect,
+    isCanvasObjectMutationSuppressed,
+    isCanvasObjectObservationTarget,
+    withCanvasObjectMutationSuppressed,
+} from '../services/canvasMutationObservation';
+import type { CanvasCommittedMutationObserver } from '../services/canvasMutationObservation';
+import {
     assertSupportedDesignSpaceProjectSchema,
     extractProductProjectFields,
     getDesignSpaceProjectEditorMode,
@@ -1036,6 +1043,8 @@ interface EditorState {
   showOnboarding: boolean;
   layerSyncHandler: (() => void) | null;
   hasLayerSyncHandler: boolean;
+  /** Runtime-only observation callback; it is never a persistence source. */
+  committedMutationObserver: CanvasCommittedMutationObserver | null;
   batchDepth: number;
   batchNeedsSync: boolean;
   batchNeedsSave: boolean;
@@ -1071,6 +1080,7 @@ interface EditorState {
   setSelectedLayerIds: (ids: string[]) => void;
   setDirtyObjectsRef: (dirtyObjects: Set<string> | null) => void;
   setLayerSyncHandler: (handler: (() => void) | null) => void;
+  setCommittedMutationObserver: (observer: CanvasCommittedMutationObserver | null) => void;
   requestLayerSync: (options?: { force?: boolean }) => void;
 
   // PHASE 2.1: Canvas objects management (Primary source of truth)
@@ -1249,6 +1259,32 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
         };
 
+        const observeObjectMutation = (
+            action: 'add-freeform-object' | 'remove-freeform-object',
+            object: SerializedFabricObject | undefined
+        ) => {
+            const state = get();
+            const canvas = state.canvas;
+            if (
+                !state.committedMutationObserver
+                || !canvas
+                || state.syncLock.isLocked
+                || isCanvasObjectMutationSuppressed(canvas)
+                || !isCanvasObjectObservationTarget(object)
+            ) {
+                return;
+            }
+            try {
+                state.committedMutationObserver({
+                    action,
+                    objectId: object.id,
+                    assetEffect: getCanvasObjectAssetEffect(action, object),
+                });
+            } catch {
+                // Runtime observation must never affect the legacy mutation path.
+            }
+        };
+
         return ({
             canvas: null,
         canvasReadyState: 'uninitialized',
@@ -1296,6 +1332,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         showOnboarding: true,
         layerSyncHandler: null,
         hasLayerSyncHandler: false,
+        committedMutationObserver: null,
         batchDepth: 0,
         batchNeedsSync: false,
         batchNeedsSave: false,
@@ -1346,6 +1383,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setSelectedObjectId: (id) => set({ selectedObjectId: id }),
     setSelectedLayerIds: (ids) => set({ selectedLayerIds: ids }),
     setDirtyObjectsRef: (dirtyObjects) => set({ dirtyObjectsRef: dirtyObjects }),
+    setCommittedMutationObserver: (observer) => set({ committedMutationObserver: observer }),
     clearSelection: () => {
         const { canvas } = get();
         if (canvas) {
@@ -1612,6 +1650,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas.requestRenderAll();
             }
         }
+        observeObjectMutation('add-freeform-object', nextObject);
         get().requestLayerSync();
         if (shouldSelect && nextObject.id) {
             finalizeInsertionSelection(nextObject.id);
@@ -1653,6 +1692,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas.requestRenderAll();
             }
         }
+        nextObjects.forEach((nextObject) => {
+            observeObjectMutation('add-freeform-object', nextObject);
+        });
         get().requestLayerSync();
         if (selectionCandidate?.id) {
             finalizeInsertionSelection(selectionCandidate.id);
@@ -1673,6 +1715,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         get().saveState();
     },
     removeObject: (id, options) => {
+        const removedObject = get().canvasObjects.find((object) => object.id === id);
         const nextObjects = get().canvasObjects.filter((object) => object.id !== id);
         const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
         const selectionWasRemoved = get().selectedLayerIds.includes(id) || get().selectedObjectId === id;
@@ -1685,6 +1728,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (selectionWasRemoved) {
             get().clearSelection();
         }
+        observeObjectMutation('remove-freeform-object', removedObject);
         get().requestLayerSync();
         if (options?.save !== false) {
             get().saveState();
@@ -1901,7 +1945,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         setLayers([]);
         clearSelection();
-        canvas.clear();
+        withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
         const templateCanvasData = normalizePageCanvasData(template.canvasData);
         useThemeStore.getState().setCanvasBackgroundColor(
             typeof (templateCanvasData as any)?.background === 'string'
@@ -2019,7 +2063,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 selectedObjectId: null,
                 selectedLayerIds: [],
             });
-            canvas.clear();
+            withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
 
             resizeCanvas(nextWidth, nextHeight, { save: false, skipRender: true });
             setUnitMode(nextUnitMode);
@@ -2086,7 +2130,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
 
             clearSelection();
-            canvas.clear();
+            withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
             resizeCanvas(generatedProject.document.pageSize.width, generatedProject.document.pageSize.height, {
                 save: false,
                 skipRender: true,

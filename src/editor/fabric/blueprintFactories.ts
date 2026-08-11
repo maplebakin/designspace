@@ -3,6 +3,7 @@ import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { v4 as uuidv4 } from 'uuid';
+import { withCanvasObjectMutationSuppressed } from '../services/canvasMutationObservation';
 
 const commitBlueprintInsertion = (canvas: fabric.Canvas) => {
   const { clearSelection, syncCanvasToStore, requestLayerSync, saveState } = useEditorStore.getState();
@@ -22,7 +23,7 @@ const commitBlueprintInsertion = (canvas: fabric.Canvas) => {
 export const loadDailyPlannerTemplate = (canvas: fabric.Canvas, palette: string[]) => {
   // Clear the canvas first
   useEditorStore.getState().clearSelection();
-  canvas.clear();
+  withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
 
   // Get canvas dimensions
   const { width: canvasWidth, height: canvasHeight } = useCanvasStore.getState();
@@ -93,7 +94,9 @@ export const loadDailyPlannerTemplate = (canvas: fabric.Canvas, palette: string[
   });
 
   // Add all objects to the canvas
-  canvas.add(headerText, taskBox1, taskBox2, decorativeCircle);
+  withCanvasObjectMutationSuppressed(canvas, () => {
+    canvas.add(headerText, taskBox1, taskBox2, decorativeCircle);
+  });
 
   commitBlueprintInsertion(canvas);
 };
@@ -105,7 +108,7 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
   const accent = palette[6] || '#1d1b1b';
 
   useEditorStore.getState().clearSelection();
-  canvas.clear();
+  withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
   canvas.setDimensions({ width, height });
   useCanvasStore.getState().setCanvasSize(width, height);
   useEditorStore.getState().setCanvasBackgroundColor('#FDFBF7', { save: false });
@@ -253,16 +256,18 @@ export const loadRetroManualTemplate = (canvas: fabric.Canvas, palette: string[]
     strokeUniform: true,
   });
 
-  canvas.add(
-    header,
-    headerRule,
-    portraitLabel,
-    portraitFrame,
-    controllerTitle,
-    controllerBox,
-    dpad,
-    dpadVertical,
-    ...buttonGroup
-  );
+  withCanvasObjectMutationSuppressed(canvas, () => {
+    canvas.add(
+      header,
+      headerRule,
+      portraitLabel,
+      portraitFrame,
+      controllerTitle,
+      controllerBox,
+      dpad,
+      dpadVertical,
+      ...buttonGroup
+    );
+  });
   commitBlueprintInsertion(canvas);
 };

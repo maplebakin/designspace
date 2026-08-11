@@ -190,6 +190,9 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       projectId: 'diagnostic-project',
       observedRevision: 0,
       committedTransactionCount: 0,
+      recentCheckpoints: [
+        expect.objectContaining({ kind: 'session-opened' }),
+      ],
     });
 
     act(() => {

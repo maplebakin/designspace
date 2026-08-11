@@ -16,6 +16,7 @@ import { useThemeStore } from '../state/useThemeStore';
 import { captureCanvasState } from '../utils/serialization';
 import { BoardItem } from './BoardItem';
 import { loadCanvasFromJsonSafely } from '../fabric/initFabricCanvas';
+import { withCanvasObjectMutationSuppressed } from '../services/canvasMutationObservation';
 
 interface VisionBoardProps {
   onClose?: () => void;
@@ -97,7 +98,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           saveState();
           setToastMessage(`Loaded: ${item.label || 'Design state'}`);
         } else {
-          canvas.clear();
+          withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
           canvas.requestRenderAll();
           setToastMessage(`Loaded empty state: ${item.label || 'Design state'}`);
         }

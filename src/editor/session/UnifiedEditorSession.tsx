@@ -69,6 +69,8 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     return {
       ...commands,
       close: async () => {
+        diagnosticObserver?.checkpoint('before-close');
+        diagnosticObserver?.checkpoint('session-closed');
         diagnosticObserver?.dispose();
         changeCoordinator.dispose();
         clearSession();
@@ -114,6 +116,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
       // a real unmount has no newer generation and still disposes promptly.
       queueMicrotask(() => {
         if (runtimeLifecycleRef.current?.generation !== generation) return;
+        diagnosticObserver?.checkpoint('session-closed');
         diagnosticObserver?.dispose();
         changeCoordinator.dispose();
         runtimeLifecycleRef.current = null;
@@ -127,6 +130,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
       projectId: snapshot.projectId,
       legacyDirty: snapshot.isDirty,
       legacySaveStatus: snapshot.saveStatus,
+      legacyDirtyReason: snapshot.legacyDirtyReason,
     });
   }, [diagnosticObserver, snapshot]);
 

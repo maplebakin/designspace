@@ -28,6 +28,15 @@ export type ProjectSessionSource =
 
 export type SessionSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
+/**
+ * A normalized, read-only hint about why the legacy session is currently
+ * dirty. This is observational metadata, not a replacement for isDirty.
+ */
+export type ProjectSessionLegacyDirtyReason =
+  | 'authored-content'
+  | 'navigation-persistence'
+  | 'unknown';
+
 export type PageCoordinateSpace =
   | 'canvas-logical-px'
   | 'document-page-css-px';
@@ -82,6 +91,7 @@ export type ProjectSessionDescriptor = Readonly<{
 export type ProjectSessionSnapshot = ProjectSessionDescriptor & Readonly<{
   isDirty: boolean;
   saveStatus: SessionSaveStatus;
+  legacyDirtyReason: ProjectSessionLegacyDirtyReason | null;
   canSave: boolean;
   canClose: boolean;
 }>;
@@ -302,6 +312,7 @@ export const createSessionSnapshot = (
   isDirty: boolean,
   saveStatus: SessionSaveStatus,
   lifecycle: Readonly<{
+    legacyDirtyReason?: ProjectSessionLegacyDirtyReason | null;
     canSave?: boolean;
     canClose?: boolean;
   }> = {}
@@ -309,6 +320,7 @@ export const createSessionSnapshot = (
   ...descriptor,
   isDirty,
   saveStatus,
+  legacyDirtyReason: lifecycle.legacyDirtyReason ?? null,
   canSave: lifecycle.canSave ?? true,
   canClose: lifecycle.canClose ?? true,
 });

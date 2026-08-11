@@ -84,7 +84,12 @@ export const syncCanvasLayers = async (
   for (const current of currentObjects) {
     const currentId = (current as any).id;
     if (typeof currentId === 'string' && currentId.length > 0 && !desiredIds.has(currentId)) {
-      canvas.remove(current);
+      (current as any).__layerSyncing = true;
+      try {
+        canvas.remove(current);
+      } finally {
+        delete (current as any).__layerSyncing;
+      }
       changed = true;
     }
   }
@@ -111,7 +116,12 @@ export const syncCanvasLayers = async (
     if (existing.type !== desired.type || serializeForComparison(existing) !== serializeDesiredForComparison(desired)) {
       const replacement = await enlivenObject(desired);
       if (replacement) {
-        canvas.remove(existing);
+        (existing as any).__layerSyncing = true;
+        try {
+          canvas.remove(existing);
+        } finally {
+          delete (existing as any).__layerSyncing;
+        }
         (replacement as any).__layerSyncing = true;
         canvas.add(replacement);
         delete (replacement as any).__layerSyncing;

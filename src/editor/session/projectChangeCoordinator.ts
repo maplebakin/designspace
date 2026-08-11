@@ -20,7 +20,7 @@ export type ProjectChangeDomain =
   | 'asset-reference';
 
 /**
- * Actions currently observed by Phase 1D. This is deliberately small: a
+ * Actions currently observed by the unified shadow stream. This is deliberately small: a
  * future change can add a product action when it has a reliable committed
  * boundary instead of accepting arbitrary engine event names here.
  */
@@ -30,8 +30,11 @@ export type ProjectChangeAction =
   | 'remove-page'
   | 'reorder-page'
   | 'rename-page'
+  | 'add-freeform-object'
+  | 'remove-freeform-object'
   | 'modify-freeform-geometry'
-  | 'modify-structured-geometry';
+  | 'modify-structured-geometry'
+  | 'modify-page-metadata';
 
 export type ProjectChangeTarget = Readonly<{
   kind: 'page' | 'freeform-object' | 'structured-image' | 'structured-group';

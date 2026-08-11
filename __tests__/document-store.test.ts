@@ -507,6 +507,7 @@ describe('document project store', () => {
     expect(useDocumentStore.getState()).toMatchObject({
       isDirty: true,
       saveStatus: 'unsaved',
+      lastDirtyReason: 'navigation-persistence',
       revision: 1,
       project: { activePageIndex: 0 },
     });
@@ -518,6 +519,7 @@ describe('document project store', () => {
     expect(useDocumentStore.getState()).toMatchObject({
       isDirty: false,
       saveStatus: 'saved',
+      lastDirtyReason: null,
       project: { activePageIndex: 0 },
     });
   });

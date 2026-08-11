@@ -78,6 +78,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     setDirtyObjectsRef,
     showSafeZones,
     createProject,
+    setCommittedMutationObserver,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
@@ -108,6 +109,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       setDirtyObjectsRef: state.setDirtyObjectsRef,
       showSafeZones: state.showSafeZones,
       createProject: state.createProject,
+      setCommittedMutationObserver: state.setCommittedMutationObserver,
     }),
     shallow
   );
@@ -816,6 +818,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         });
       }, TaskPriority.High);
     });
+    setCommittedMutationObserver(onCommittedMutation ?? null);
     useEditorStore.getState().requestLayerSync({ force: true });
     dirtyObjects.clear();
     setDirtyObjectsRef(dirtyObjects);
@@ -888,6 +891,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       // Clean up all event handlers using the registry
       eventRegistry.cleanupAll();
       setDirtyObjectsRef(null);
+      setCommittedMutationObserver(null);
     };
   }, [
     scheduleUpdate,
@@ -900,6 +904,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     snapEnabled,
     gridEnabled,
     setDirtyObjectsRef,
+    setCommittedMutationObserver,
   ]);
 
   // Serialize mount/dispose work. In development StrictMode React runs an effect,

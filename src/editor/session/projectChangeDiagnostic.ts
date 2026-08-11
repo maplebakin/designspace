@@ -14,11 +14,44 @@ export type ProjectChangeDiagnosticLifecycle = Readonly<{
   projectId: string;
   legacyDirty: boolean;
   legacySaveStatus: ProjectChangeDiagnosticSaveStatus;
+  /** Normalized legacy hint; it does not establish dirty ownership. */
+  legacyDirtyReason?: 'authored-content' | 'navigation-persistence' | 'unknown' | null;
+}>;
+
+export type ProjectChangeDiagnosticLegacyDirtyReason =
+  | 'observed-authored-change'
+  | 'navigation-persistence'
+  | 'unobserved-authored-change'
+  | 'unknown';
+
+export type ProjectChangeDiagnosticCheckpointKind =
+  | 'session-opened'
+  | 'after-authored-commit'
+  | 'legacy-became-dirty'
+  | 'save-started'
+  | 'save-completed-clean'
+  | 'save-failed'
+  | 'before-close'
+  | 'session-closed';
+
+export type ProjectChangeDiagnosticCheckpoint = Readonly<{
+  checkpointId: string;
+  kind: ProjectChangeDiagnosticCheckpointKind;
+  timestamp: number;
+  projectId: string;
+  observedRevision: number;
+  legacyDirty: boolean | null;
+  legacySaveStatus: ProjectChangeDiagnosticSaveStatus | null;
+  legacyDirtyReason: ProjectChangeDiagnosticLegacyDirtyReason | null;
+  lastCommittedTransactionId: string | null;
+  comparison: ProjectChangeDiagnosticComparison;
+  coverage: ProjectChangeDiagnosticCoverage;
 }>;
 
 export type ProjectChangeDiagnosticComparisonState =
   | 'consistent-clean'
   | 'consistent-observed-dirty'
+  | 'legacy-dirty-with-navigation-persistence'
   | 'legacy-dirty-with-unobserved-change'
   | 'observed-change-while-legacy-clean'
   | 'save-in-progress'
@@ -33,7 +66,10 @@ export type ProjectChangeDiagnosticComparison = Readonly<{
 export type ProjectChangeDiagnosticCoverage = Readonly<{
   pageStructure: true;
   canvasGeometry: true;
+  canvasObjectAdd: true;
+  canvasObjectRemove: true;
   documentOverlayGeometry: true;
+  documentPageMetadata: true;
   completeAuthoredCoverage: false;
   unobservedAuthoredChangeCategories: readonly string[];
 }>;
@@ -51,10 +87,12 @@ export type ProjectChangeDiagnosticSnapshot = Readonly<{
   changedDomains: readonly ProjectChangeDomain[];
   legacyDirty: boolean | null;
   legacySaveStatus: ProjectChangeDiagnosticSaveStatus | null;
+  legacyDirtyReason: ProjectChangeDiagnosticLegacyDirtyReason | null;
   lastLegacyCleanRevision: number | null;
   changesSinceLegacyClean: number | null;
   comparison: ProjectChangeDiagnosticComparison;
   coverage: ProjectChangeDiagnosticCoverage;
+  recentCheckpoints: readonly ProjectChangeDiagnosticCheckpoint[];
 }>;
 
 export type ProjectChangeDiagnosticListener = (
@@ -73,6 +111,7 @@ export type ProjectChangeDiagnosticView = Readonly<{
 export type ProjectChangeDiagnosticObserver = Readonly<{
   view: ProjectChangeDiagnosticView;
   observeSession: (lifecycle: ProjectChangeDiagnosticLifecycle) => void;
+  checkpoint: (kind: ProjectChangeDiagnosticCheckpointKind) => void;
   dispose: () => void;
 }>;
 
@@ -84,21 +123,25 @@ export type ProjectChangeDiagnosticOptions = Readonly<{
 export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage = {
   pageStructure: true,
   canvasGeometry: true,
+  canvasObjectAdd: true,
+  canvasObjectRemove: true,
   documentOverlayGeometry: true,
+  documentPageMetadata: true,
   completeAuthoredCoverage: false,
   unobservedAuthoredChangeCategories: [
     'Tiptap text editing',
     'Fabric text editing',
-    'Fabric object add/remove',
     'styles and grouping',
     'captions, image groups, and references',
-    'page settings and structured flow mutations',
+    'unobserved page settings and structured flow mutations',
     'inspector changes and asset mutations',
     'drawing and erase operations',
+    'templates, recipes, and full-page restoration',
   ],
 };
 
 const MAX_CHANGED_PAGE_IDS = 512;
+const MAX_RECENT_CHECKPOINTS = 32;
 
 const noOp = () => undefined;
 
@@ -125,6 +168,23 @@ const isCleanLifecycle = (
   lifecycle: ProjectChangeDiagnosticLifecycle
 ) => lifecycle.legacyDirty === false
   && lifecycle.legacySaveStatus === 'saved';
+
+const deriveLegacyDirtyReason = (
+  lifecycle: ProjectChangeDiagnosticLifecycle,
+  changesSinceLegacyClean: number | null
+): ProjectChangeDiagnosticLegacyDirtyReason | null => {
+  if (!lifecycle.legacyDirty) return null;
+  if (changesSinceLegacyClean !== null && changesSinceLegacyClean > 0) {
+    return 'observed-authored-change';
+  }
+  if (lifecycle.legacyDirtyReason === 'navigation-persistence') {
+    return 'navigation-persistence';
+  }
+  if (lifecycle.legacyDirtyReason === 'authored-content') {
+    return 'unobserved-authored-change';
+  }
+  return 'unknown';
+};
 
 const deriveComparison = (
   snapshot: Omit<ProjectChangeDiagnosticSnapshot, 'comparison'>,
@@ -156,16 +216,22 @@ const deriveComparison = (
   }
 
   if (snapshot.legacyDirty) {
-    if (snapshot.lastLegacyCleanRevision === null) {
-      return {
-        state: 'insufficient-coverage',
-        detail: 'Legacy state is dirty, but no trustworthy clean baseline has been observed.',
-      };
-    }
     if ((snapshot.changesSinceLegacyClean ?? 0) > 0) {
       return {
         state: 'consistent-observed-dirty',
         detail: 'Legacy dirty state agrees with at least one committed observed transaction.',
+      };
+    }
+    if (snapshot.legacyDirtyReason === 'navigation-persistence') {
+      return {
+        state: 'legacy-dirty-with-navigation-persistence',
+        detail: 'Legacy dirty state reflects persisted active-page navigation; the transaction stream intentionally classifies page selection as non-authored session state.',
+      };
+    }
+    if (snapshot.lastLegacyCleanRevision === null) {
+      return {
+        state: 'insufficient-coverage',
+        detail: 'Legacy state is dirty, but no trustworthy clean baseline has been observed.',
       };
     }
     return {
@@ -209,11 +275,13 @@ const createSnapshot = ({
   sessionStartedAt,
   legacyDirty = null,
   legacySaveStatus = null,
+  legacyDirtyReason = null,
 }: {
   projectId: string | null;
   sessionStartedAt: number;
   legacyDirty?: boolean | null;
   legacySaveStatus?: ProjectChangeDiagnosticSaveStatus | null;
+  legacyDirtyReason?: ProjectChangeDiagnosticLegacyDirtyReason | null;
 }): ProjectChangeDiagnosticSnapshot => {
   const base: Omit<ProjectChangeDiagnosticSnapshot, 'comparison'> = {
     projectId,
@@ -228,9 +296,11 @@ const createSnapshot = ({
     changedDomains: [],
     legacyDirty,
     legacySaveStatus,
+    legacyDirtyReason,
     lastLegacyCleanRevision: null,
     changesSinceLegacyClean: null,
     coverage: PROJECT_CHANGE_DIAGNOSTIC_COVERAGE,
+    recentCheckpoints: [],
   };
   return {
     ...base,
@@ -252,6 +322,7 @@ export const createProjectChangeDiagnosticObserver = ({
   });
   let observedChangeWhileLegacyClean = false;
   let disposed = false;
+  let checkpointSequence = 0;
   const listeners = new Set<ProjectChangeDiagnosticListener>();
 
   const publish = (
@@ -270,6 +341,38 @@ export const createProjectChangeDiagnosticObserver = ({
     });
   };
 
+  const recordCheckpoint = (
+    kind: ProjectChangeDiagnosticCheckpointKind
+  ) => {
+    if (disposed || !snapshot.projectId) return;
+    checkpointSequence += 1;
+    const checkpoint: ProjectChangeDiagnosticCheckpoint = {
+      checkpointId: `diagnostic-checkpoint-${checkpointSequence}`,
+      kind,
+      timestamp: now(),
+      projectId: snapshot.projectId,
+      observedRevision: snapshot.observedRevision,
+      legacyDirty: snapshot.legacyDirty,
+      legacySaveStatus: snapshot.legacySaveStatus,
+      legacyDirtyReason: snapshot.legacyDirtyReason,
+      lastCommittedTransactionId: snapshot.lastCommittedTransaction?.transactionId
+        ?? null,
+      comparison: snapshot.comparison,
+      coverage: snapshot.coverage,
+    };
+    const recentCheckpoints = snapshot.recentCheckpoints.length
+      >= MAX_RECENT_CHECKPOINTS
+      ? [
+          ...snapshot.recentCheckpoints.slice(1),
+          checkpoint,
+        ]
+      : [...snapshot.recentCheckpoints, checkpoint];
+    publish({
+      ...snapshot,
+      recentCheckpoints,
+    });
+  };
+
   const resetForProject = (
     projectId: string,
     lifecycle?: ProjectChangeDiagnosticLifecycle
@@ -281,12 +384,20 @@ export const createProjectChangeDiagnosticObserver = ({
       sessionStartedAt: now(),
       legacyDirty: lifecycle?.legacyDirty ?? null,
       legacySaveStatus: lifecycle?.legacySaveStatus ?? null,
+      legacyDirtyReason: lifecycle && lifecycle.legacyDirty
+        ? lifecycle.legacyDirtyReason === 'navigation-persistence'
+          ? 'navigation-persistence'
+          : lifecycle.legacyDirtyReason === 'authored-content'
+            ? 'unobserved-authored-change'
+            : 'unknown'
+        : null,
     });
     publish({
       ...next,
       lastLegacyCleanRevision: clean ? 0 : null,
       changesSinceLegacyClean: clean ? 0 : null,
     });
+    recordCheckpoint('session-opened');
   };
 
   const observeSession = (lifecycle: ProjectChangeDiagnosticLifecycle) => {
@@ -319,16 +430,36 @@ export const createProjectChangeDiagnosticObserver = ({
       observedChangeWhileLegacyClean = false;
     }
 
+    const changesSinceLegacyClean = lastLegacyCleanRevision === null
+      ? null
+      : Math.max(0, snapshot.observedRevision - lastLegacyCleanRevision);
     const base: Omit<ProjectChangeDiagnosticSnapshot, 'comparison'> = {
       ...snapshot,
       legacyDirty: lifecycle.legacyDirty,
       legacySaveStatus: lifecycle.legacySaveStatus,
+      legacyDirtyReason: deriveLegacyDirtyReason(
+        lifecycle,
+        changesSinceLegacyClean
+      ),
       lastLegacyCleanRevision,
-      changesSinceLegacyClean: lastLegacyCleanRevision === null
-        ? null
-        : Math.max(0, snapshot.observedRevision - lastLegacyCleanRevision),
+      changesSinceLegacyClean,
     };
     publish(base);
+
+    if (lifecycle.legacyDirty && previousDirty !== true) {
+      recordCheckpoint('legacy-became-dirty');
+    }
+    if (lifecycle.legacySaveStatus === 'saving' && previousSaveStatus !== 'saving') {
+      recordCheckpoint('save-started');
+    }
+    if (isCleanLifecycle(lifecycle) && (
+      previousDirty === true || previousSaveStatus === 'saving'
+    )) {
+      recordCheckpoint('save-completed-clean');
+    }
+    if (lifecycle.legacySaveStatus === 'error' && previousSaveStatus !== 'error') {
+      recordCheckpoint('save-failed');
+    }
   };
 
   const handleTransaction = (transaction: ProjectChangeTransaction) => {
@@ -372,12 +503,14 @@ export const createProjectChangeDiagnosticObserver = ({
       changedDomains: isCommitted
         ? appendUniqueBounded(snapshot.changedDomains, transaction.domains, 32)
         : snapshot.changedDomains,
+      legacyDirtyReason: snapshot.legacyDirtyReason,
       lastLegacyCleanRevision,
       changesSinceLegacyClean: lastLegacyCleanRevision === null
         ? null
         : Math.max(0, observedRevision - lastLegacyCleanRevision),
     };
     publish(nextBase);
+    if (isCommitted) recordCheckpoint('after-authored-commit');
   };
 
   const unsubscribeCoordinator = coordinator.subscribe(handleTransaction);
@@ -401,6 +534,7 @@ export const createProjectChangeDiagnosticObserver = ({
   return {
     view,
     observeSession,
+    checkpoint: recordCheckpoint,
     dispose,
   };
 };

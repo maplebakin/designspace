@@ -7,6 +7,12 @@ import { drawSmartDistanceIndicators, clearSmartGuides } from '../utils/smartGui
 import { frameScheduler, TaskPriority } from '../utils/frameScheduler';
 import { isActiveSelection } from '../utils/typeGuards';
 import {
+    getCanvasObjectAssetEffect,
+    isCanvasObjectMutationSuppressed,
+    isCanvasObjectObservationTarget,
+} from './canvasMutationObservation';
+import type { CanvasCommittedMutation } from './canvasMutationObservation';
+import {
     handleTextboxMouseDown,
     handleTextboxMouseMove,
     handleTextboxMouseUp,
@@ -43,10 +49,7 @@ export interface CanvasEventCallbacks {
     onViewportChange?: (canvas: fabric.Canvas) => void;
 }
 
-export type CanvasCommittedMutation = Readonly<{
-    action: 'modify-freeform-geometry';
-    objectId: string;
-}>;
+export type { CanvasCommittedMutation } from './canvasMutationObservation';
 
 export interface EventHandlerCleanup {
     cleanup: () => void;
@@ -145,6 +148,22 @@ export function registerObjectEventHandlers(
         onCommittedMutation,
     } = callbacks;
 
+    const notifyCommittedMutation = (mutation: CanvasCommittedMutation) => {
+        try {
+            onCommittedMutation?.(mutation);
+        } catch {
+            // Optional diagnostics must never interrupt the legacy event path.
+        }
+    };
+
+    const canObserveObjectLifecycle = (
+        target?: fabric.Object
+    ): target is fabric.Object & { id: string } => {
+        if (!target || isCanvasObjectMutationSuppressed(canvas)) return false;
+        if (useEditorStore.getState().syncLock?.isLocked) return false;
+        return isCanvasObjectObservationTarget(target);
+    };
+
     const markDirtyObject = (target?: fabric.Object) => {
         if (!target || (target as any).isGuide) return;
         ensureObjectId(target, canvas);
@@ -187,6 +206,17 @@ export function registerObjectEventHandlers(
                 decrementAssetRef(id);
             }
         }
+
+        if (canObserveObjectLifecycle(target)) {
+            notifyCommittedMutation({
+                action: 'remove-freeform-object',
+                objectId: target.id,
+                assetEffect: getCanvasObjectAssetEffect(
+                    'remove-freeform-object',
+                    target
+                ),
+            });
+        }
     };
 
     const handleObjectModified = (event?: { target?: fabric.Object }) => {
@@ -206,7 +236,7 @@ export function registerObjectEventHandlers(
 
         const objectId = (target as any).id;
         if (typeof objectId === 'string' && objectId.trim().length > 0) {
-            onCommittedMutation?.({
+            notifyCommittedMutation({
                 action: 'modify-freeform-geometry',
                 objectId,
             });
@@ -274,6 +304,17 @@ export function registerObjectEventHandlers(
         }
 
         onUpdate?.(canvas, { persist: true });
+
+        if (canObserveObjectLifecycle(target)) {
+            notifyCommittedMutation({
+                action: 'add-freeform-object',
+                objectId: target.id,
+                assetEffect: getCanvasObjectAssetEffect(
+                    'add-freeform-object',
+                    target
+                ),
+            });
+        }
     };
 
     // Register event listeners
