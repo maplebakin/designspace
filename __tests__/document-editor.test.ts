@@ -1322,11 +1322,25 @@ describe('live document editor UI', () => {
 
   it('uses the selected overlay inspector to persist size, metadata, and placement', async () => {
     addOverlayFixture();
-    await renderShell();
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(DocumentEditorShell, { onCommittedMutation })
+    ));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-image-inspector')).not.toBeNull();
+    });
     expect(screen.queryByTestId('document-image-inspector')).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText('Image width'), {
       target: { value: '360' },
+    });
+    fireEvent.change(screen.getByLabelText('Image width'), {
+      target: { value: '360' },
+    });
+    fireEvent.change(screen.getByLabelText('Overlay X position'), {
+      target: { value: '96' },
     });
     fireEvent.change(screen.getByLabelText('Image caption'), {
       target: { value: 'Updated caption' },
@@ -1347,6 +1361,15 @@ describe('live document editor UI', () => {
       caption: 'Updated caption',
       altText: 'Updated portrait description',
       placement: 'behind',
+    });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(2);
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(1, {
+      action: 'modify-structured-geometry',
+      overlayId: overlay.id,
+    });
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(2, {
+      action: 'modify-structured-geometry',
+      overlayId: overlay.id,
     });
     expect(screen.getByTestId('document-image-width').getAttribute('value')).toBe('360');
     expect(screen.getByTestId('document-image-wrap').getAttribute('value')).toBeNull();
@@ -1385,6 +1408,64 @@ describe('live document editor UI', () => {
       action: 'modify-structured-geometry',
       overlayId: overlay.id,
     });
+  });
+
+  it('reports committed keyboard overlay nudges once and ignores stale or no-op targets', async () => {
+    addOverlayFixture();
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(DocumentEditorShell, { onCommittedMutation })
+    ));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-overlay-image')).not.toBeNull();
+    });
+
+    const workspace = screen.getByTestId('document-workspace');
+    fireEvent.keyDown(workspace, { key: 'ArrowRight' });
+    fireEvent.keyDown(workspace, { key: 'ArrowRight', shiftKey: true });
+
+    expect(onCommittedMutation).toHaveBeenCalledTimes(2);
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(1, {
+      action: 'modify-structured-geometry',
+      overlayId: overlay.id,
+    });
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(2, {
+      action: 'modify-structured-geometry',
+      overlayId: overlay.id,
+    });
+    expect(useDocumentStore.getState().project?.pages[0].overlayObjects[0].xPx)
+      .toBe(95);
+
+    act(() => {
+      useDocumentStore.getState().setSelectedOverlayId('stale-overlay');
+    });
+    fireEvent.keyDown(workspace, { key: 'ArrowRight' });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps overlay selection and hydration silent for geometry observation', async () => {
+    addOverlayFixture();
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-overlay-image')).not.toBeNull();
+    });
+
+    act(() => {
+      useDocumentStore.getState().setSelectedOverlayId(null);
+      useDocumentStore.getState().setSelectedOverlayId(overlay.id);
+      useDocumentStore.getState().hydrateProject(
+        structuredClone(useDocumentStore.getState().project)
+      );
+    });
+
+    expect(onCommittedMutation).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().project?.pages[0].overlayObjects[0].id)
+      .toBe(overlay.id);
   });
 
   it('serializes and renders every flow image wrapping mode with its document attributes', async () => {

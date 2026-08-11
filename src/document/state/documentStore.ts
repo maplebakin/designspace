@@ -1029,6 +1029,17 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         page.size.heightIn
       ),
     });
+    // `updatePage` already treats an equivalent page as a no-op. Keep the
+    // return value aligned with that behavior so passive observers do not
+    // report a geometry commit that never changed authored state.
+    if (
+      geometry.xPx === overlay.xPx
+      && geometry.yPx === overlay.yPx
+      && geometry.widthPx === overlay.widthPx
+      && geometry.heightPx === overlay.heightPx
+    ) {
+      return false;
+    }
     get().updatePage((currentPage) => ({
       ...currentPage,
       overlayObjects: currentPage.overlayObjects.map((candidate) =>

@@ -168,6 +168,64 @@ describe('document overlay store geometry contract', () => {
     });
   });
 
+  it('returns false and leaves the revision unchanged for normalized no-op geometry', () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('No-op overlay geometry');
+    const pageId = project.pages[0].id;
+    store.addOverlay(overlay('no-op-image'), pageId);
+    const revisionBefore = useDocumentStore.getState().revision;
+    const current = readOverlay(pageId, 'no-op-image');
+
+    expect(store.commitOverlayGeometry(pageId, 'no-op-image', {
+      xPx: current.xPx,
+      yPx: current.yPx,
+      widthPx: current.widthPx,
+      heightPx: current.heightPx,
+    })).toBe(false);
+    expect(store.nudgeOverlay(pageId, 'no-op-image', 0, 0)).toBe(false);
+
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore);
+    expect(readOverlay(pageId, 'no-op-image')).toEqual(current);
+  });
+
+  it('preserves committed geometry through the existing save and reopen path', async () => {
+    const store = useDocumentStore.getState();
+    const project = store.createBlankProject('Reopen overlay geometry');
+    const pageId = project.pages[0].id;
+    store.addOverlay(overlay('reopen-image'), pageId);
+    expect(store.nudgeOverlay(pageId, 'reopen-image', 12, 8)).toBe(true);
+
+    await store.saveProject();
+    const serialized = dbMocks.saveProject.mock.calls[0][1] as string;
+    expect(JSON.parse(serialized).pages[0].overlayObjects[0]).toMatchObject({
+      id: 'reopen-image',
+      xPx: 32,
+      yPx: 38,
+    });
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'overlay-geometry-project',
+        name: 'Reopen overlay geometry',
+      },
+      canvasData: serialized,
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('overlay-geometry-project');
+
+    const reopened = useDocumentStore.getState();
+    expect(reopened.project?.pages[0].overlayObjects[0]).toMatchObject({
+      id: 'reopen-image',
+      xPx: 32,
+      yPx: 38,
+    });
+    expect(reopened).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      revision: 0,
+    });
+  });
+
   it.each([0.5, 1, 2])(
     'applies 1 px and 10 px nudges in layout space at %d× zoom',
     (zoom) => {

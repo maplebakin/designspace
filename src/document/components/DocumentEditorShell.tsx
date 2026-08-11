@@ -141,6 +141,16 @@ const notifyCommittedMutation = (
   }
 };
 
+const notifyCommittedOverlayGeometry = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  overlayId: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-structured-geometry',
+    overlayId,
+  });
+};
+
 const isImageClipboardPaste = (event: ClipboardEvent) => {
   const data = event.clipboardData;
   if (!data) return false;
@@ -560,12 +570,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ? -distance
           : event.key === 'ArrowDown' ? distance : 0;
         event.preventDefault();
-        nudgeOverlay(
+        const committed = nudgeOverlay(
           page.id,
           selectedOverlayId,
           deltaXPx,
           deltaYPx
         );
+        if (committed) {
+          notifyCommittedOverlayGeometry(onCommittedMutation, selectedOverlayId);
+        }
         return;
       }
       if (
@@ -671,6 +684,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     nudgeOverlay,
+    onCommittedMutation,
     page,
     physicalMargins,
     project?.document.language,
@@ -1554,11 +1568,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       updateOverlay(selectedOverlay.id, metadata, page.id);
     }
     if (Object.keys(geometry).length > 0) {
-      commitOverlayGeometry(page.id, selectedOverlay.id, geometry);
+      const committed = commitOverlayGeometry(page.id, selectedOverlay.id, geometry);
+      if (committed) {
+        notifyCommittedOverlayGeometry(onCommittedMutation, selectedOverlay.id);
+      }
     }
   }, [
     availableColumnWidth,
     commitOverlayGeometry,
+    onCommittedMutation,
     page,
     selectedFlowImage,
     selectedOverlay,
@@ -2320,10 +2338,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               onUpdateOverlay={(id, geometry) => {
                 const committed = commitOverlayGeometry(page.id, id, geometry);
                 if (committed) {
-                  notifyCommittedMutation(onCommittedMutation, {
-                    action: 'modify-structured-geometry',
-                    overlayId: id,
-                  });
+                  notifyCommittedOverlayGeometry(onCommittedMutation, id);
                 }
               }}
               titleEditor={(

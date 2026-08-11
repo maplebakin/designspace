@@ -63,12 +63,18 @@ export type ProjectChangeDiagnosticComparison = Readonly<{
   detail: string;
 }>;
 
+export type ProjectChangeDiagnosticDocumentGeometryInput =
+  | 'pointer'
+  | 'keyboard'
+  | 'inspector';
+
 export type ProjectChangeDiagnosticCoverage = Readonly<{
   pageStructure: true;
   canvasGeometry: true;
   canvasObjectAdd: true;
   canvasObjectRemove: true;
   documentOverlayGeometry: true;
+  documentOverlayGeometryInputs: readonly ProjectChangeDiagnosticDocumentGeometryInput[];
   documentPageMetadata: true;
   completeAuthoredCoverage: false;
   unobservedAuthoredChangeCategories: readonly string[];
@@ -126,6 +132,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasObjectAdd: true,
   canvasObjectRemove: true,
   documentOverlayGeometry: true,
+  documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
   documentPageMetadata: true,
   completeAuthoredCoverage: false,
   unobservedAuthoredChangeCategories: [
@@ -134,7 +141,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'styles and grouping',
     'captions, image groups, and references',
     'unobserved page settings and structured flow mutations',
-    'inspector changes and asset mutations',
+    'inspector metadata and asset mutations',
     'drawing and erase operations',
     'templates, recipes, and full-page restoration',
   ],
