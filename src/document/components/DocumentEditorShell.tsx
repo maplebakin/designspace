@@ -176,6 +176,16 @@ const notifyCommittedOverlayLifecycle = (
   });
 };
 
+const notifyCommittedPageMetadata = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-page-metadata',
+    pageId,
+  });
+};
+
 const findDocumentFlowImagePositions = (
   editor: Editor,
   imageId: string
@@ -2271,7 +2281,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           }}
           onOrientationChange={(orientation: DocumentPageOrientation) => {
             setFitMode(true);
+            if (orientation === page.size.orientation) return;
             updatePage(updateDocumentPagePaper(page, { orientation }));
+            const committedPage = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            );
+            if (committedPage?.size.orientation === orientation) {
+              notifyCommittedPageMetadata(onCommittedMutation, page.id);
+            }
           }}
           onCustomSizeChange={(update) => {
             setFitMode(true);
@@ -2296,10 +2313,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onColumnCountChange={(columnCount) => {
             if (columnCount === page.columnCount) return;
             updatePage({ columnCount });
-            notifyCommittedMutation(onCommittedMutation, {
-              action: 'modify-page-metadata',
-              pageId: page.id,
-            });
+            notifyCommittedPageMetadata(onCommittedMutation, page.id);
           }}
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
           onDocumentLanguageChange={updateDocumentLanguage}

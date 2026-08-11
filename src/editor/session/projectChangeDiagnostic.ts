@@ -80,6 +80,7 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   documentOverlayGeometry: true;
   documentOverlayGeometryInputs: readonly ProjectChangeDiagnosticDocumentGeometryInput[];
   documentPageMetadata: true;
+  documentPageOrientation: true;
   completeAuthoredCoverage: false;
   unobservedAuthoredChangeCategories: readonly string[];
 }>;
@@ -142,6 +143,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   documentOverlayGeometry: true,
   documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
   documentPageMetadata: true,
+  documentPageOrientation: true,
   completeAuthoredCoverage: false,
   unobservedAuthoredChangeCategories: [
     'Tiptap text editing',
@@ -149,7 +151,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'styles and grouping',
     'flow-image metadata and structured flow mutations',
     'captions, image groups, and references',
-    'unobserved page settings and document styles',
+    'unobserved page settings, document styles, and page metadata beyond orientation and column count',
     'inspector metadata and asset mutations',
     'drawing and erase operations',
     'templates, recipes, and full-page restoration',

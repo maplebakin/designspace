@@ -61,6 +61,7 @@ import {
 } from '../src/document/extensions/DocumentImageExtension';
 import { documentExportService } from '../src/document/services/documentExportService';
 import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../src/document/utils/documentColor';
+import { updateDocumentPagePaper } from '../src/document/utils/documentPageOrientation';
 
 vi.mock('../src/document/services/documentReferenceService', () => ({
   ingestDocumentReference: vi.fn(),
@@ -454,6 +455,52 @@ describe('live document editor UI', () => {
       action: 'modify-page-metadata',
       pageId: useDocumentStore.getState().project!.pages[0].id,
     });
+  });
+
+  it('reports one committed page-metadata observation for orientation and none for a no-op', async () => {
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-page-orientation')).not.toBeNull();
+    });
+
+    const pageId = useDocumentStore.getState().project!.pages[0].id;
+    const baselineRevision = useDocumentStore.getState().revision;
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Landscape orientation',
+    }));
+
+    expect(useDocumentStore.getState().project?.pages[0].size.orientation)
+      .toBe('landscape');
+    expect(useDocumentStore.getState().revision).toBe(baselineRevision + 1);
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'modify-page-metadata',
+      pageId,
+    });
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Landscape orientation',
+    }));
+    expect(useDocumentStore.getState().revision).toBe(baselineRevision + 1);
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps page-orientation observation silent while mounting existing project content', async () => {
+    useDocumentStore.getState().updatePage((page) => updateDocumentPagePaper(page, {
+      orientation: 'landscape',
+    }));
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-page-orientation')).not.toBeNull();
+    });
+    expect(onCommittedMutation).not.toHaveBeenCalled();
   });
 
   it('switches Letter, A4, and custom pages between orientations and reflows columns', async () => {
