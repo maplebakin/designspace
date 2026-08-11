@@ -66,6 +66,29 @@ vi.mock('../src/document/services/documentReferenceService', () => ({
   ingestDocumentReference: vi.fn(),
 }));
 
+vi.mock('../src/document/services/documentAssetService', () => {
+  let assetIndex = 0;
+  const createAsset = (options: { id?: string; fileName?: string } = {}) => ({
+    id: options.id || `test-flow-asset-${++assetIndex}`,
+    source: 'data:image/png;base64,TEST-FLOW-ASSET',
+    mimeType: 'image/png',
+    fileName: options.fileName || 'test-flow.png',
+    naturalWidth: 1200,
+    naturalHeight: 800,
+  });
+  return {
+    ingestDocumentImage: vi.fn(async (
+      _input: File | Blob,
+      options: { id?: string; fileName?: string } = {}
+    ) => createAsset(options)),
+    ingestDocumentImageSource: vi.fn(async (
+      _source: string,
+      options: { id?: string; fileName?: string } = {}
+    ) => createAsset(options)),
+    isSafeDocumentImageSource: (source: string) => source.startsWith('data:image/'),
+  };
+});
+
 const originalRangeGetClientRects = Object.getOwnPropertyDescriptor(
   Range.prototype,
   'getClientRects'
@@ -230,6 +253,32 @@ const spanningBodyContent = (
       type: 'paragraph',
       content: [{ type: 'text', text: 'The article continues below the photograph.' }],
     },
+  ],
+});
+
+const flowImageBodyContent = (
+  id = 'flow-image-1',
+  assetId = 'asset-flow-image'
+): JSONContent => ({
+  type: 'doc',
+  content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Before image.' }] },
+    {
+      type: 'documentFlowImage',
+      attrs: {
+        id,
+        assetId,
+        altText: 'Flow image',
+        widthPx: 240,
+        heightPx: 160,
+        naturalWidth: 1200,
+        naturalHeight: 800,
+        wrap: 'float-left',
+        wrapPaddingPx: 12,
+        caption: '',
+      },
+    },
+    { type: 'paragraph', content: [{ type: 'text', text: 'After image.' }] },
   ],
 });
 
@@ -1448,6 +1497,175 @@ describe('live document editor UI', () => {
     expect(onCommittedMutation).not.toHaveBeenCalledWith(expect.objectContaining({
       action: 'remove-structured-overlay',
     }));
+    expect(onCommittedMutation).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'remove-structured-flow-image',
+    }));
+  });
+
+  it('reports one flow-image insertion for each successful imported file', async () => {
+    const store = useDocumentStore.getState();
+    const baselineRevision = store.revision;
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, { onCommittedMutation }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-context-image-file-input')).not.toBeNull();
+    });
+
+    const fileInput = screen.getByTestId(
+      'document-context-image-file-input'
+    ) as HTMLInputElement;
+    const liveFlowImageIds = () => new Set(
+      Array.from(document.querySelectorAll('.document-flow-prosemirror [data-image-id]'))
+        .map((node) => node.getAttribute('data-image-id'))
+        .filter((id): id is string => Boolean(id))
+    );
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['first'], 'first.png', { type: 'image/png' }),
+          new File(['second'], 'second.png', { type: 'image/png' }),
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(liveFlowImageIds().size).toBe(2);
+    });
+
+    expect(onCommittedMutation).toHaveBeenCalledTimes(2);
+    onCommittedMutation.mock.calls.forEach(([mutation]) => {
+      expect(mutation).toMatchObject({
+        action: 'add-structured-flow-image',
+        pageId: useDocumentStore.getState().project!.pages[0].id,
+        assetEffect: 'retained-reference',
+      });
+      expect(mutation).toHaveProperty('flowImageId');
+      expect(typeof mutation.flowImageId).toBe('string');
+    });
+    expect(new Set(
+      onCommittedMutation.mock.calls.map(([mutation]) => mutation.flowImageId)
+    ).size).toBe(2);
+    expect(useDocumentStore.getState().revision - baselineRevision)
+      .toBeGreaterThan(onCommittedMutation.mock.calls.length);
+    expect(useDocumentStore.getState().isDirty).toBe(true);
+  });
+
+  it('reports one flow-image removal for toolbar and node-selection deletion, without stale duplicates', async () => {
+    const store = useDocumentStore.getState();
+    store.addAsset('asset-flow-image', 'data:image/png;base64,FLOW');
+    store.updateBodyContent(flowImageBodyContent());
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(DocumentEditorShell, { onCommittedMutation })
+    ));
+
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="flow-image-1"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('.document-flow-prosemirror .document-image[data-image-id="flow-image-1"]')!);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Delete' })).not.toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="flow-image-1"]')).toBeNull();
+    });
+
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'remove-structured-flow-image',
+      pageId: store.project!.pages[0].id,
+      flowImageId: 'flow-image-1',
+      assetEffect: 'cleanup-delegated',
+    });
+
+    const replacementFileInput = screen.getByTestId(
+      'document-context-image-file-input'
+    ) as HTMLInputElement;
+    fireEvent.change(replacementFileInput, {
+      target: {
+        files: [new File(['replacement'], 'replacement.png', { type: 'image/png' })],
+      },
+    });
+    await waitFor(() => {
+      expect(new Set(
+        Array.from(document.querySelectorAll('.document-flow-prosemirror [data-image-id]'))
+          .map((node) => node.getAttribute('data-image-id'))
+      ).size).toBe(1);
+    });
+    fireEvent.click(document.querySelector('.document-flow-prosemirror [data-image-id]')!);
+    fireEvent.keyDown(screen.getByLabelText('Document body'), { key: 'Backspace' });
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id]')).toBeNull();
+    });
+
+    expect(onCommittedMutation).toHaveBeenCalledTimes(3);
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      action: 'remove-structured-flow-image',
+      assetEffect: 'cleanup-delegated',
+    }));
+    fireEvent.keyDown(screen.getByLabelText('Document body'), { key: 'Delete' });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps flow-image hydration, page switching, and teardown silent', async () => {
+    const store = useDocumentStore.getState();
+    store.addAsset('asset-flow-image', 'data:image/png;base64,FLOW');
+    store.updateBodyContent(flowImageBodyContent('hydrated-flow-image'));
+    store.addPage();
+    store.selectPage(0);
+    const onCommittedMutation = vi.fn();
+    const rendered = render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="hydrated-flow-image"]')).not.toBeNull();
+    });
+    act(() => {
+      useDocumentStore.getState().selectPage(1);
+      useDocumentStore.getState().selectPage(0);
+      useDocumentStore.getState().hydrateProject(
+        structuredClone(useDocumentStore.getState().project)
+      );
+    });
+    expect(onCommittedMutation).not.toHaveBeenCalled();
+    rendered.unmount();
+    expect(onCommittedMutation).not.toHaveBeenCalled();
+  });
+
+  it('keeps native flow-image undo and redo replay out of lifecycle observation', async () => {
+    const store = useDocumentStore.getState();
+    store.addAsset('asset-flow-image', 'data:image/png;base64,FLOW');
+    store.updateBodyContent(flowImageBodyContent('history-flow-image'));
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, { onCommittedMutation }));
+
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="history-flow-image"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('.document-flow-prosemirror .document-image[data-image-id="history-flow-image"]')!);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Delete' })).not.toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="history-flow-image"]')).toBeNull();
+    });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+
+    const body = screen.getByLabelText('Document body');
+    fireEvent.keyDown(body, { key: 'z', ctrlKey: true });
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="history-flow-image"]')).not.toBeNull();
+    });
+    fireEvent.keyDown(body, { key: 'y', ctrlKey: true });
+    await waitFor(() => {
+      expect(document.querySelector('.document-flow-prosemirror [data-image-id="history-flow-image"]')).toBeNull();
+    });
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
   });
 
   it('reports one committed overlay geometry observation after pointer movement', async () => {

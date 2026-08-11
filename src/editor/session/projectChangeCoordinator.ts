@@ -35,6 +35,8 @@ export type ProjectChangeAction =
   | 'modify-freeform-geometry'
   | 'add-structured-overlay'
   | 'remove-structured-overlay'
+  | 'add-structured-flow-image'
+  | 'remove-structured-flow-image'
   | 'modify-structured-geometry'
   | 'modify-page-metadata';
 

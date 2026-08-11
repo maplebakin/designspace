@@ -347,19 +347,27 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const isPageMetadata = mutation.action === 'modify-page-metadata';
     const isOverlayLifecycle = mutation.action === 'add-structured-overlay'
       || mutation.action === 'remove-structured-overlay';
+    const isFlowImageLifecycle = mutation.action === 'add-structured-flow-image'
+      || mutation.action === 'remove-structured-flow-image';
     observeCommittedEngineChange(changeCoordinator, {
       projectId: currentSession.projectId,
       source: 'document',
       action: mutation.action,
-      pageIds: [isPageMetadata ? mutation.pageId : currentPageId],
+      pageIds: [
+        isPageMetadata || isFlowImageLifecycle
+          ? mutation.pageId
+          : currentPageId,
+      ],
       domains: isPageMetadata
         ? ['page-structure']
-        : isOverlayLifecycle
+        : isOverlayLifecycle || isFlowImageLifecycle
           ? ['structured-content']
           : ['geometry'],
       target: isPageMetadata
         ? { kind: 'page', id: mutation.pageId }
-        : { kind: 'structured-image', id: mutation.overlayId },
+        : 'flowImageId' in mutation
+          ? { kind: 'structured-image', id: mutation.flowImageId }
+          : { kind: 'structured-image', id: mutation.overlayId },
       assetEffect: 'assetEffect' in mutation ? mutation.assetEffect : 'none',
     });
   }, [changeCoordinator]);

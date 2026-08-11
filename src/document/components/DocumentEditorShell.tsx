@@ -134,6 +134,12 @@ export type DocumentCommittedMutation =
       action: 'add-structured-overlay' | 'remove-structured-overlay';
       overlayId: string;
       assetEffect: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'add-structured-flow-image' | 'remove-structured-flow-image';
+      pageId: string;
+      flowImageId: string;
+      assetEffect: PageAssetEffect;
     }>;
 
 const notifyCommittedMutation = (
@@ -166,6 +172,45 @@ const notifyCommittedOverlayLifecycle = (
   notifyCommittedMutation(callback, {
     action,
     overlayId,
+    assetEffect,
+  });
+};
+
+const findDocumentFlowImagePositions = (
+  editor: Editor,
+  imageId: string
+) => {
+  const positions: number[] = [];
+  editor.state.doc.descendants((node, position) => {
+    if (
+      node.type.name === 'documentFlowImage'
+      && node.attrs.id === imageId
+    ) {
+      positions.push(position);
+    }
+    return true;
+  });
+  return positions;
+};
+
+const getActiveDocumentPageId = () => {
+  const project = useDocumentStore.getState().project;
+  return project?.pages.find(
+    (_page, index) => index === project.activePageIndex
+  )?.id;
+};
+
+const notifyCommittedFlowImageLifecycle = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  action: 'add-structured-flow-image' | 'remove-structured-flow-image',
+  pageId: string,
+  flowImageId: string,
+  assetEffect: PageAssetEffect
+) => {
+  notifyCommittedMutation(callback, {
+    action,
+    pageId,
+    flowImageId,
     assetEffect,
   });
 };
@@ -746,11 +791,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     asset: DocumentAsset,
     position?: number,
     wrap: DocumentFlowImageWrap = 'float-left'
-  ) => {
+  ): boolean => {
+    const pageId = getActiveDocumentPageId();
     const editor = bodyEditorRef.current;
-    if (!editor || editor.isDestroyed) {
+    if (!pageId || !editor || editor.isDestroyed) {
       setToastMessage('The document body is still initializing.');
-      return;
+      return false;
     }
     const assetId = addAsset(asset.id, asset.source, {
       mimeType: asset.mimeType,
@@ -776,28 +822,24 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionItalic: 'inherit',
       captionSpacingPx: 'inherit',
     }, position);
-    if (!inserted) return;
-    let imagePosition = -1;
-    editor.state.doc.descendants((node, nodePosition) => {
-      if (
-        imagePosition < 0
-        && (
-          node.type.name === 'documentFlowImage'
-          || node.type.name === 'documentInlineImage'
-        )
-        && node.attrs.id === imageId
-      ) {
-        imagePosition = nodePosition;
-        return false;
-      }
-      return true;
-    });
-    if (imagePosition >= 0) {
-      editor.chain().focus().setNodeSelection(imagePosition).run();
-    } else {
-      editor.commands.focus();
-    }
-  }, [addAsset, availableColumnWidth, setToastMessage]);
+    if (!inserted) return false;
+    const imagePositions = findDocumentFlowImagePositions(editor, imageId);
+    if (imagePositions.length !== 1) return false;
+    editor.chain().focus().setNodeSelection(imagePositions[0]).run();
+    notifyCommittedFlowImageLifecycle(
+      onCommittedMutation,
+      'add-structured-flow-image',
+      pageId,
+      imageId,
+      'retained-reference'
+    );
+    return true;
+  }, [
+    addAsset,
+    availableColumnWidth,
+    onCommittedMutation,
+    setToastMessage,
+  ]);
 
   const importImages = useCallback(async (
     files: File[],
@@ -807,8 +849,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     for (const file of files) {
       try {
         const asset = await ingestDocumentImage(file);
-        insertAssetIntoBody(asset, nextPosition);
-        nextPosition = undefined;
+        if (insertAssetIntoBody(asset, nextPosition)) {
+          nextPosition = undefined;
+        }
       } catch (error) {
         setToastMessage(error instanceof Error ? error.message : 'Could not import that image.');
       }
@@ -1861,48 +1904,87 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     updateOverlay,
   ]);
 
+  const commitFlowImageRemoval = useCallback((
+    editor: Editor,
+    flowImageId: string
+  ) => {
+    const pageId = getActiveDocumentPageId();
+    if (!pageId || editor.isDestroyed || !flowImageId) return false;
+    const imagePositions = findDocumentFlowImagePositions(editor, flowImageId);
+    if (imagePositions.length !== 1) return false;
+
+    const currentPage = useDocumentStore.getState().project?.pages.find(
+      (candidate) => candidate.id === pageId
+    );
+    const group = findDocumentImageGroupForImage(
+      currentPage?.imageGroups || [],
+      flowImageId
+    );
+    let committed = false;
+    if (group) {
+      const model = getStructuredLayoutModel();
+      const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
+      model?.images
+        .filter((image) => (
+          group.childImageIds.includes(image.imageId)
+          && image.imageId !== flowImageId
+        ))
+        .forEach((image) => {
+          updatesByImageId[image.imageId] = {
+            widthPx: image.renderedImageWidthPx,
+            heightPx: image.renderedImageHeightPx,
+            horizontalPlacement: 'custom',
+            verticalAnchor: 'page-position',
+            xOffsetPx: image.imageLeftPx - image.spanLeftPx,
+            yPx: image.imageTopPx,
+          };
+      });
+      const nextGroups = removeDocumentImageIdsFromGroups(
+        currentPage?.imageGroups || [],
+        [flowImageId]
+      );
+      const nextPrimary = group.childImageIds.find(
+        (imageId) => imageId !== flowImageId
+      ) || null;
+      committed = commitStructuredDocumentImageBatch(editor, {
+        updatesByImageId,
+        deleteImageIds: [flowImageId],
+        selectedImageId: nextPrimary,
+        imageGroupsMeta: nextGroups,
+      });
+    } else {
+      committed = editor.chain()
+        .focus()
+        .setNodeSelection(imagePositions[0])
+        .deleteSelection()
+        .run();
+    }
+    if (!committed || findDocumentFlowImagePositions(editor, flowImageId).length > 0) {
+      return false;
+    }
+    notifyCommittedFlowImageLifecycle(
+      onCommittedMutation,
+      'remove-structured-flow-image',
+      pageId,
+      flowImageId,
+      'cleanup-delegated'
+    );
+    return true;
+  }, [
+    getStructuredLayoutModel,
+    onCommittedMutation,
+    page,
+  ]);
+
   const deleteSelectedImage = useCallback(() => {
     if (selectedFlowImage) {
       const editor = bodyEditorRef.current;
-      const group = page
-        ? findDocumentImageGroupForImage(
-            page.imageGroups,
-            selectedFlowImage.attributes.id
-        )
-        : null;
-      const selectedPage = page;
-      if (editor && selectedPage && group) {
-        const model = getStructuredLayoutModel();
-        const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
-        model?.images
-          .filter((image) => (
-            group.childImageIds.includes(image.imageId)
-            && image.imageId !== selectedFlowImage.attributes.id
-          ))
-          .forEach((image) => {
-            updatesByImageId[image.imageId] = {
-              widthPx: image.renderedImageWidthPx,
-              heightPx: image.renderedImageHeightPx,
-              horizontalPlacement: 'custom',
-              verticalAnchor: 'page-position',
-              xOffsetPx: image.imageLeftPx - image.spanLeftPx,
-              yPx: image.imageTopPx,
-            };
-          });
-        const nextGroups = removeDocumentImageIdsFromGroups(
-          selectedPage.imageGroups,
-          [selectedFlowImage.attributes.id]
-        );
-        const nextPrimary = group.childImageIds.find(
-          (imageId) => imageId !== selectedFlowImage.attributes.id
-        ) || null;
-        commitStructuredDocumentImageBatch(editor, {
-          updatesByImageId,
-          deleteImageIds: [selectedFlowImage.attributes.id],
-          selectedImageId: nextPrimary,
-          imageGroupsMeta: nextGroups,
-        });
-      } else {
+      if (
+        editor
+        && selectedFlowImage.nodeType === 'documentFlowImage'
+      ) {
+        commitFlowImageRemoval(editor, selectedFlowImage.attributes.id);
+      } else if (editor) {
         editor?.chain()
           .focus()
           .setNodeSelection(selectedFlowImage.position)
@@ -1924,10 +2006,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       }
     }
   }, [
-    getStructuredLayoutModel,
+    commitFlowImageRemoval,
     onCommittedMutation,
-    page?.id,
-    page,
     removeOverlay,
     selectedFlowImage,
     selectedOverlay,
@@ -2486,6 +2566,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     handleStructuredImageSelectionRequest(imageId, additive);
                   }}
                   onRequestImageReplace={handleNodeReplaceRequest}
+                  onDeleteFlowImage={commitFlowImageRemoval}
                   onPasteDispatch={handlePasteDispatch}
                   onDropDispatch={handleDropDispatch}
                   onOverflowChange={setOverflowing}

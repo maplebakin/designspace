@@ -904,6 +904,85 @@ describe('document project store', () => {
     expect(reloaded.toastMessage).toBe('Loaded document: Field Notes');
   });
 
+  it('round-trips a flow-image insertion and removal through existing persistence', async () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Flow lifecycle');
+    store.addAsset('asset-flow-lifecycle', 'data:image/png;base64,FLOW');
+    const content: DocumentContentJson = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Before.' }] },
+        {
+          type: 'documentFlowImage',
+          attrs: {
+            id: 'flow-lifecycle-image',
+            assetId: 'asset-flow-lifecycle',
+            altText: 'Flow lifecycle image',
+            widthPx: 240,
+            heightPx: 160,
+            naturalWidth: 1200,
+            naturalHeight: 800,
+            wrap: 'float-left',
+            wrapPaddingPx: 12,
+            caption: '',
+          },
+        },
+        { type: 'paragraph', content: [{ type: 'text', text: 'After.' }] },
+      ],
+    };
+    store.updateBodyContent(content);
+
+    await store.saveProject('Flow lifecycle');
+    const addedSerialized = dbMocks.saveProject.mock.calls[0][1] as string;
+    const addedPayload = JSON.parse(addedSerialized);
+    expect(collectDocumentNodeIds(
+      addedPayload.pages[0].bodyContent,
+      'documentFlowImage'
+    )).toEqual(['flow-lifecycle-image']);
+    expect(addedPayload.assets['asset-flow-lifecycle']).toBe(
+      'data:image/png;base64,FLOW'
+    );
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: { id: 'flow-library-id', name: 'Flow lifecycle' },
+      canvasData: addedSerialized,
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('flow-library-id');
+    const reopened = useDocumentStore.getState();
+    expect(collectDocumentNodeIds(
+      reopened.project?.pages[0].bodyContent,
+      'documentFlowImage'
+    )).toEqual(['flow-lifecycle-image']);
+    expect(reopened.project?.assets['asset-flow-lifecycle']).toBe(
+      'data:image/png;base64,FLOW'
+    );
+
+    reopened.updateBodyContent({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'After removal.' }] }],
+    });
+    await useDocumentStore.getState().saveProject('Flow lifecycle removed');
+    const removedSerialized = dbMocks.saveProject.mock.calls.at(-1)?.[1] as string;
+    const removedPayload = JSON.parse(removedSerialized);
+    expect(collectDocumentNodeIds(
+      removedPayload.pages[0].bodyContent,
+      'documentFlowImage'
+    )).toEqual([]);
+    expect(removedPayload.assets?.['asset-flow-lifecycle']).toBeUndefined();
+
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: { id: 'flow-library-id-removed', name: 'Flow lifecycle removed' },
+      canvasData: removedSerialized,
+    });
+    useDocumentStore.getState().reset();
+    await useDocumentStore.getState().loadLibraryProject('flow-library-id-removed');
+    expect(collectDocumentNodeIds(
+      useDocumentStore.getState().project?.pages[0].bodyContent,
+      'documentFlowImage'
+    )).toEqual([]);
+  });
+
   it('loads previous v2 document projects from the library and project files', async () => {
     const legacyBody = {
       type: 'doc',

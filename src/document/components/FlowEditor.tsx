@@ -388,6 +388,7 @@ export interface FlowEditorProps {
   ) => string | null;
   onImageSelectionRequest?: (imageId: string, additive: boolean) => void;
   onRequestImageReplace?: (request: DocumentImageReplaceRequest) => void;
+  onDeleteFlowImage?: (editor: Editor, imageId: string) => boolean;
   onPasteDispatch?: DocumentPasteDispatcher;
   onDropDispatch?: DocumentDropDispatcher;
   onOverflowChange?: (overflowing: boolean) => void;
@@ -504,6 +505,7 @@ export const FlowEditor = ({
   onStructuredImageSelectionRequest,
   onImageSelectionRequest,
   onRequestImageReplace,
+  onDeleteFlowImage,
   onPasteDispatch,
   onDropDispatch,
   onOverflowChange,
@@ -532,6 +534,7 @@ export const FlowEditor = ({
     onImageSelectionRequest,
     selectedStructuredImageIds,
     onRequestImageReplace,
+    onDeleteFlowImage,
     onPasteDispatch,
     onDropDispatch,
     onOverflowChange,
@@ -550,6 +553,7 @@ export const FlowEditor = ({
     onImageSelectionRequest,
     selectedStructuredImageIds,
     onRequestImageReplace,
+    onDeleteFlowImage,
     onPasteDispatch,
     onDropDispatch,
     onOverflowChange,
@@ -714,6 +718,25 @@ export const FlowEditor = ({
             event.stopPropagation();
           }
           return handled;
+        },
+        handleKeyDown: (_view, event) => {
+          const activeEditor = editorInstanceRef.current;
+          const selection = activeEditor?.state.selection;
+          if (
+            !activeEditor
+            || !(selection instanceof NodeSelection)
+            || selection.node.type.name !== 'documentFlowImage'
+            || (event.key !== 'Delete' && event.key !== 'Backspace')
+          ) {
+            return false;
+          }
+          const handled = callbacksRef.current.onDeleteFlowImage?.(
+            activeEditor,
+            String(selection.node.attrs.id || '')
+          ) ?? false;
+          if (!handled) return false;
+          event.preventDefault();
+          return true;
         },
       },
       onCreate: ({ editor: createdEditor }) => {
