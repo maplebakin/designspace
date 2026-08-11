@@ -1334,6 +1334,40 @@ describe('live document editor UI', () => {
     expect((screen.getByTestId('document-image-wrap') as HTMLSelectElement).value).toBe('behind');
   });
 
+  it('reports one committed overlay geometry observation after pointer movement', async () => {
+    addOverlayFixture();
+    const onCommittedMutation = vi.fn();
+    render(React.createElement(DocumentEditorShell, {
+      onCommittedMutation,
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId('document-overlay-image')).not.toBeNull();
+    });
+
+    const figure = screen.getByTestId('document-overlay-image');
+    dispatchTestPointer(figure, 'pointerdown', {
+      pointerId: 91,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchTestPointer(figure, 'pointermove', {
+      pointerId: 91,
+      clientX: 120,
+      clientY: 130,
+    });
+    dispatchTestPointer(window, 'pointerup', {
+      pointerId: 91,
+      clientX: 120,
+      clientY: 130,
+    });
+
+    expect(onCommittedMutation).toHaveBeenCalledTimes(1);
+    expect(onCommittedMutation).toHaveBeenCalledWith({
+      action: 'modify-structured-geometry',
+      overlayId: overlay.id,
+    });
+  });
+
   it('serializes and renders every flow image wrapping mode with its document attributes', async () => {
     let editor: Editor | null = null;
     let latestContent: JSONContent | null = null;

@@ -117,7 +117,13 @@ type DocumentEditorShellProps = {
   onSelectionEvent?: (event: SelectionEvent) => void;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
+  onCommittedMutation?: (mutation: DocumentCommittedMutation) => void;
 };
+
+export type DocumentCommittedMutation = Readonly<{
+  action: 'modify-structured-geometry';
+  overlayId: string;
+}>;
 
 const isImageClipboardPaste = (event: ClipboardEvent) => {
   const data = event.clipboardData;
@@ -226,6 +232,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onSelectionEvent,
   useSharedChrome = false,
   onRegisterFitPage,
+  onCommittedMutation,
 }) => {
   const project = useDocumentStore((state) => state.project);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
@@ -2288,7 +2295,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 }
               }}
               onUpdateOverlay={(id, geometry) => {
-                commitOverlayGeometry(page.id, id, geometry);
+                const committed = commitOverlayGeometry(page.id, id, geometry);
+                if (committed) {
+                  onCommittedMutation?.({
+                    action: 'modify-structured-geometry',
+                    overlayId: id,
+                  });
+                }
               }}
               titleEditor={(
                 <TitleEditor

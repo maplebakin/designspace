@@ -31,6 +31,7 @@ import { AssetLibrary } from './AssetLibrary';
 import { BrandModal } from './BrandModal';
 import { ExportModal } from './ExportModal';
 import { CanvasStage } from './CanvasStage';
+import type { CanvasCommittedMutation } from '../services/canvasEventService';
 import { CanvasRuler } from './CanvasRuler';
 import { StatusBar } from './StatusBar';
 import { Inserter } from './Inserter';
@@ -68,12 +69,14 @@ interface EditorShellProps {
   onBackToDashboard?: () => void;
   useSharedChrome?: boolean;
   sharedPageStrip?: React.ReactNode;
+  onCommittedCanvasMutation?: (mutation: CanvasCommittedMutation) => void;
 }
 
 export const EditorShell: React.FC<EditorShellProps> = ({
   onBackToDashboard,
   useSharedChrome = false,
   sharedPageStrip,
+  onCommittedCanvasMutation,
 }) => {
   useKeyboardShortcuts();
   const {
@@ -968,7 +971,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({
         <main id="main-content" tabIndex={-1} data-testid="canvas-workspace" className="design-space-canvas flex-1 relative overflow-hidden bg-[color:var(--ui-bg)]">
             <CanvasRuler />
             <SelectionToolbar />
-            <CanvasStage onSelectNav={handleSelectNav} />
+            <CanvasStage
+              onSelectNav={handleSelectNav}
+              onCommittedMutation={onCommittedCanvasMutation}
+            />
         </main>
 
         <RightInspector

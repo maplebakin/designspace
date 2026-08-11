@@ -7,6 +7,7 @@ import type {
   PageMutationCommand,
   PageMutationResult,
 } from './projectMutation';
+import type { ProjectChangeCoordinator } from './projectChangeCoordinator';
 
 /**
  * The shared page viewport contract uses CSS pixels only for display geometry.
@@ -133,6 +134,8 @@ export type ProjectSessionCommands = Readonly<{
   mutatePage: (command: PageMutationCommand) => Promise<PageMutationResult>;
   /** Read-only adapter description; this is not a shared asset store. */
   describePageAssets?: (pageId: string) => Promise<PageAssetReferenceResult>;
+  /** Runtime-only observation seam; it does not own mutation or persistence. */
+  changeCoordinator?: ProjectChangeCoordinator;
   setViewportZoom: (zoom: number) => void;
   fitPage?: () => void;
 }>;

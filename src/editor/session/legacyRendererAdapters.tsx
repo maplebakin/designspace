@@ -14,6 +14,13 @@ import {
   type SelectionEvent,
   type SessionPayloadLike,
 } from './projectSession';
+import type { CanvasCommittedMutation } from '../services/canvasEventService';
+import type { DocumentCommittedMutation } from '../../document/components/DocumentEditorShell';
+import {
+  executeObservedPageMutation,
+  observeCommittedEngineChange,
+} from './projectChangeAdapters';
+import type { ProjectChangeCoordinator } from './projectChangeCoordinator';
 import {
   describeCanvasPageAssets,
   describeDocumentPageAssets,
@@ -26,6 +33,7 @@ import { useProjectSessionStore } from '../state/projectSessionStore';
 export type LegacyRendererAdapterProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent: (event: SelectionEvent) => void;
+  changeCoordinator?: ProjectChangeCoordinator;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
   /** Shared chrome may provide a page strip to the embedded engine surface. */
@@ -101,7 +109,9 @@ const createDocumentSessionDescriptor = (
   return createProjectSessionDescriptor(state.project, { source });
 };
 
-const createCanvasCommands = (): ProjectSessionCommands => ({
+const createCanvasCommands = (
+  changeCoordinator: ProjectChangeCoordinator
+): ProjectSessionCommands => ({
   save: async (name) => {
     const state = useEditorStore.getState();
     await state.saveProject(name?.trim() || state.projectName || 'Untitled Project');
@@ -115,13 +125,21 @@ const createCanvasCommands = (): ProjectSessionCommands => ({
   },
   isDirty: () => useEditorStore.getState().isDirty,
   renameProject: (name) => useEditorStore.getState().renameCurrentProject(name),
-  mutatePage: executeCanvasPageMutation,
+  mutatePage: (command) => executeObservedPageMutation({
+    command,
+    source: 'canvas',
+    coordinator: changeCoordinator,
+    execute: executeCanvasPageMutation,
+  }),
   describePageAssets: async (pageId) => describeCanvasPageAssets(pageId),
+  changeCoordinator,
   setViewportZoom: (zoom) => zoomToCenter(zoom),
   fitPage: () => useEditorStore.getState().resetViewCanvas(),
 });
 
-const createDocumentCommands = (): ProjectSessionCommands => ({
+const createDocumentCommands = (
+  changeCoordinator: ProjectChangeCoordinator
+): ProjectSessionCommands => ({
   save: (name) => useDocumentStore.getState().saveProject(name),
   download: () => useDocumentStore.getState().downloadProjectFile(),
   notify: (message) => useDocumentStore.getState().setToastMessage(message),
@@ -129,12 +147,20 @@ const createDocumentCommands = (): ProjectSessionCommands => ({
   renameProject: async (name) => {
     useDocumentStore.getState().renameProject(name);
   },
-  mutatePage: executeDocumentPageMutation,
+  mutatePage: (command) => executeObservedPageMutation({
+    command,
+    source: 'document',
+    coordinator: changeCoordinator,
+    execute: executeDocumentPageMutation,
+  }),
   describePageAssets: async (pageId) => describeDocumentPageAssets(pageId),
+  changeCoordinator,
   setViewportZoom: (zoom) => useDocumentStore.getState().setZoom(zoom),
 });
 
-export const useLegacyProjectSessionBridge = () => {
+export const useLegacyProjectSessionBridge = (
+  changeCoordinator: ProjectChangeCoordinator
+) => {
   const mode = useProjectSessionStore((state) => state.editorMode);
   const source = useProjectSessionStore((state) => state.session?.source);
   const canvasState = useEditorStore((state) => ({
@@ -192,8 +218,10 @@ export const useLegacyProjectSessionBridge = () => {
     }, [canvasState.isDirty, canvasState.saveStatus, descriptor, documentState.isDirty, documentState.saveStatus, mode]
   );
   const commands = useMemo(
-    () => mode === 'document' ? createDocumentCommands() : createCanvasCommands(),
-    [mode]
+    () => mode === 'document'
+      ? createDocumentCommands(changeCoordinator)
+      : createCanvasCommands(changeCoordinator),
+    [changeCoordinator, mode]
   );
   const zoom = mode === 'document' ? documentState.zoom : canvasState.zoom;
 
@@ -209,11 +237,13 @@ export const useLegacyProjectSessionBridge = () => {
 const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  changeCoordinator,
   useSharedChrome,
   onRegisterFitPage,
   sharedPageStrip,
 }) => {
-  const pageId = useProjectSessionStore((state) => state.session?.activePageId);
+  const session = useProjectSessionStore((state) => state.session);
+  const pageId = session?.activePageId;
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectedLayerIds = useEditorStore((state) => state.selectedLayerIds);
 
@@ -246,11 +276,32 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     return () => onRegisterFitPage(null);
   }, [onRegisterFitPage]);
 
+  const onCommittedCanvasMutation = React.useCallback((
+    mutation: CanvasCommittedMutation
+  ) => {
+    const currentSession = useProjectSessionStore.getState().session;
+    const currentPageId = currentSession?.activePageId;
+    if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    observeCommittedEngineChange(changeCoordinator, {
+      projectId: currentSession.projectId,
+      source: 'canvas',
+      action: mutation.action,
+      pageIds: [currentPageId],
+      domains: ['geometry'],
+      target: {
+        kind: 'freeform-object',
+        id: mutation.objectId,
+      },
+      assetEffect: 'none',
+    });
+  }, [changeCoordinator]);
+
   return (
     <EditorShell
       onBackToDashboard={onBackToDashboard}
       useSharedChrome={useSharedChrome}
       sharedPageStrip={sharedPageStrip}
+      onCommittedCanvasMutation={onCommittedCanvasMutation}
     />
   );
 };
@@ -258,16 +309,40 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
 const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  changeCoordinator,
   useSharedChrome,
   onRegisterFitPage,
-}) => (
-  <DocumentEditorShell
-    onBackToDashboard={onBackToDashboard}
-    onSelectionEvent={onSelectionEvent}
-    useSharedChrome={useSharedChrome}
-    onRegisterFitPage={onRegisterFitPage}
-  />
-);
+}) => {
+  const onCommittedDocumentMutation = React.useCallback((
+    mutation: DocumentCommittedMutation
+  ) => {
+    const currentSession = useProjectSessionStore.getState().session;
+    const currentPageId = currentSession?.activePageId;
+    if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    observeCommittedEngineChange(changeCoordinator, {
+      projectId: currentSession.projectId,
+      source: 'document',
+      action: mutation.action,
+      pageIds: [currentPageId],
+      domains: ['geometry'],
+      target: {
+        kind: 'structured-image',
+        id: mutation.overlayId,
+      },
+      assetEffect: 'none',
+    });
+  }, [changeCoordinator]);
+
+  return (
+    <DocumentEditorShell
+      onBackToDashboard={onBackToDashboard}
+      onSelectionEvent={onSelectionEvent}
+      useSharedChrome={useSharedChrome}
+      onRegisterFitPage={onRegisterFitPage}
+      onCommittedMutation={onCommittedDocumentMutation}
+    />
+  );
+};
 
 export const legacyRendererAdapters: Readonly<Record<LegacyRendererKind, LegacyRendererAdapter>> = {
   canvas: {

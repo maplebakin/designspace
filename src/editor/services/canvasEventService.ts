@@ -31,12 +31,22 @@ import {
 export interface CanvasEventCallbacks {
     onUpdate?: (canvas: fabric.Canvas, options?: { persist?: boolean }) => void;
     onHistoryDirty?: () => void;
+    /**
+     * A narrow adapter observation for committed user geometry changes. The
+     * callback receives a stable object ID, never the Fabric object itself.
+     */
+    onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
     onSelectedObjectId?: (id: string | null) => void;
     onSelectedLayerIds?: (ids: string[]) => void;
     onSelectionChange?: (canvas: fabric.Canvas) => void;
     onZoom?: (zoom: number) => void;
     onViewportChange?: (canvas: fabric.Canvas) => void;
 }
+
+export type CanvasCommittedMutation = Readonly<{
+    action: 'modify-freeform-geometry';
+    objectId: string;
+}>;
 
 export interface EventHandlerCleanup {
     cleanup: () => void;
@@ -128,7 +138,12 @@ export function registerObjectEventHandlers(
     options: CanvasEventHandlerOptions
 ): EventHandlerCleanup {
     const { canvas, abortSignal, callbacks, refs } = options;
-    const { onUpdate, onHistoryDirty, onSelectionChange } = callbacks;
+    const {
+        onUpdate,
+        onHistoryDirty,
+        onSelectionChange,
+        onCommittedMutation,
+    } = callbacks;
 
     const markDirtyObject = (target?: fabric.Object) => {
         if (!target || (target as any).isGuide) return;
@@ -187,6 +202,14 @@ export function registerObjectEventHandlers(
         // Clear smart guides when object movement is complete
         if (canvas) {
             clearSmartGuides(canvas);
+        }
+
+        const objectId = (target as any).id;
+        if (typeof objectId === 'string' && objectId.trim().length > 0) {
+            onCommittedMutation?.({
+                action: 'modify-freeform-geometry',
+                objectId,
+            });
         }
     };
 

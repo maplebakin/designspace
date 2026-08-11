@@ -7,6 +7,7 @@ import {
 import type { SelectionEvent } from './projectSession';
 import { useProjectSessionStore } from '../state/projectSessionStore';
 import { UnifiedEditorShell } from './UnifiedEditorChrome';
+import { createProjectChangeCoordinator } from './projectChangeCoordinator';
 
 export type UnifiedEditorSessionProps = {
   onBackToDashboard?: () => void;
@@ -20,6 +21,7 @@ export type UnifiedEditorSessionProps = {
 export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   onBackToDashboard,
 }) => {
+  const changeCoordinator = useMemo(() => createProjectChangeCoordinator(), []);
   const reportSelection = useProjectSessionStore((state) => state.reportSelection);
   const setSessionSnapshot = useProjectSessionStore((state) => state.setSessionSnapshot);
   const setViewport = useProjectSessionStore((state) => state.setViewport);
@@ -29,7 +31,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     snapshot,
     commands,
     zoom,
-  } = useLegacyProjectSessionBridge();
+  } = useLegacyProjectSessionBridge(changeCoordinator);
   const adapter = legacyRendererAdapters[mode];
   const LegacyRenderer = adapter.render;
   const fitPageRef = useRef<(() => void) | null>(null);
@@ -48,6 +50,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     return {
       ...commands,
       close: async () => {
+        changeCoordinator.dispose();
         clearSession();
         onBackToDashboard?.();
       },
@@ -59,7 +62,9 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
         fitPageRef.current?.();
       },
     };
-  }, [clearSession, commands, onBackToDashboard]);
+  }, [changeCoordinator, clearSession, commands, onBackToDashboard]);
+
+  useEffect(() => () => changeCoordinator.dispose(), [changeCoordinator]);
 
   useEffect(() => {
     if (!snapshot || !sharedCommands) return;
@@ -81,6 +86,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
         >
           <LegacyRenderer
             onSelectionEvent={handleSelectionEvent}
+            changeCoordinator={changeCoordinator}
             useSharedChrome
             onRegisterFitPage={registerFitPage}
             sharedPageStrip={mode === 'canvas' ? canvasPageStrip : undefined}

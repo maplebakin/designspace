@@ -72,6 +72,10 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       renameProject: expect.any(Function),
       mutatePage: expect.any(Function),
       describePageAssets: expect.any(Function),
+      changeCoordinator: expect.objectContaining({
+        subscribe: expect.any(Function),
+        observeCommitted: expect.any(Function),
+      }),
       close: expect.any(Function),
       fitPage: expect.any(Function),
     });
@@ -107,6 +111,10 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       renameProject: expect.any(Function),
       mutatePage: expect.any(Function),
       describePageAssets: expect.any(Function),
+      changeCoordinator: expect.objectContaining({
+        subscribe: expect.any(Function),
+        observeCommitted: expect.any(Function),
+      }),
       close: expect.any(Function),
       fitPage: expect.any(Function),
     });

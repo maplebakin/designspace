@@ -15,7 +15,11 @@ import { initFabricSerialization } from '../fabric/initFabricCanvas';
 import { resizeCanvas, updateGuides, fitCanvasToViewport, updateDocumentPaper, clearDocumentPaper } from '../fabric/canvasUtils';
 import { useCanvasLifecycle } from '../hooks/useCanvasLifecycle';
 import { resolveThemeValue } from '../utils/themeResolver';
-import { dirtyObjects, registerAllCanvasEventHandlers } from '../services/canvasEventService';
+import {
+  dirtyObjects,
+  registerAllCanvasEventHandlers,
+  type CanvasCommittedMutation,
+} from '../services/canvasEventService';
 import { ContextMenu, useContextMenu } from './ContextMenu';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { guideRegistry } from '../fabric/guideRegistry';
@@ -32,9 +36,13 @@ type CanvasNavKey = 'insert' | 'layers';
 
 type CanvasStageProps = {
   onSelectNav?: (nav: CanvasNavKey) => void;
+  onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
 };
 
-export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelectNav }) => {
+export const CanvasStage: React.FC<CanvasStageProps> = ({
+  onSelectNav: _onSelectNav,
+  onCommittedMutation,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -820,6 +828,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
       callbacks: {
         onUpdate: scheduleUpdate,
         onHistoryDirty: markHistoryDirty,
+        onCommittedMutation,
         onSelectedObjectId: setSelectedObjectId,
         onSelectedLayerIds: setSelectedLayerIds,
         onSelectionChange: (selectionCanvas) => useEditorStore.getState().syncSelectionFromCanvas(selectionCanvas),
@@ -884,6 +893,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({ onSelectNav: _onSelect
     scheduleUpdate,
     setLayerSyncHandler,
     markHistoryDirty,
+    onCommittedMutation,
     setSelectedObjectId,
     setSelectedLayerIds,
     setZoom,
