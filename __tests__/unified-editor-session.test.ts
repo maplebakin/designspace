@@ -152,4 +152,64 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       editor: 'body',
     });
   });
+
+  it('opts into one diagnostic subscription under React StrictMode', async () => {
+    useEditorStore.setState({
+      projectName: 'Diagnostic seam project',
+      currentLibraryProjectId: 'diagnostic-project',
+      pages: [{
+        id: 'diagnostic-page',
+        name: 'Page 1',
+        canvasSize: { width: 1200, height: 900 },
+      }] as any,
+      activePageIndex: 0,
+      isDirty: false,
+      saveStatus: 'saved',
+      zoom: 0.75,
+      unitMode: 'in',
+      productProjectFields: null,
+    });
+    useProjectSessionStore.getState().setEditorMode('canvas');
+
+    render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(UnifiedEditorSession, {
+        enableChangeDiagnostics: true,
+      })
+    ));
+
+    await waitFor(() => {
+      expect(useProjectSessionStore.getState().commands?.changeDiagnostic)
+        .toBeDefined();
+    });
+
+    const commands = useProjectSessionStore.getState().commands;
+    const diagnostic = commands?.changeDiagnostic;
+    expect(diagnostic?.getSnapshot()).toMatchObject({
+      projectId: 'diagnostic-project',
+      observedRevision: 0,
+      committedTransactionCount: 0,
+    });
+
+    act(() => {
+      commands?.changeCoordinator?.observeCommitted({
+        projectId: 'diagnostic-project',
+        source: 'canvas',
+        action: 'modify-freeform-geometry',
+        pageIds: ['diagnostic-page'],
+        domains: ['geometry'],
+        target: {
+          kind: 'freeform-object',
+          id: 'diagnostic-object',
+        },
+        assetEffect: 'none',
+      });
+    });
+
+    expect(diagnostic?.getSnapshot()).toMatchObject({
+      observedRevision: 1,
+      committedTransactionCount: 1,
+    });
+  });
 });

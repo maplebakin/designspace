@@ -8,6 +8,7 @@ import type {
   PageMutationResult,
 } from './projectMutation';
 import type { ProjectChangeCoordinator } from './projectChangeCoordinator';
+import type { ProjectChangeDiagnosticView } from './projectChangeDiagnostic';
 
 /**
  * The shared page viewport contract uses CSS pixels only for display geometry.
@@ -136,6 +137,8 @@ export type ProjectSessionCommands = Readonly<{
   describePageAssets?: (pageId: string) => Promise<PageAssetReferenceResult>;
   /** Runtime-only observation seam; it does not own mutation or persistence. */
   changeCoordinator?: ProjectChangeCoordinator;
+  /** Opt-in runtime shadow view; it does not own dirty state or persistence. */
+  changeDiagnostic?: ProjectChangeDiagnosticView;
   setViewportZoom: (zoom: number) => void;
   fitPage?: () => void;
 }>;
