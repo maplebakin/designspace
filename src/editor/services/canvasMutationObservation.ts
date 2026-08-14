@@ -15,6 +15,10 @@ export type CanvasCommittedMutation =
       style: 'border-style';
     }>
   | Readonly<{
+      action: 'modify-freeform-transform-lock';
+      objectId: string;
+    }>
+  | Readonly<{
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
       assetEffect: PageAssetEffect;

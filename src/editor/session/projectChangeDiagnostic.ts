@@ -80,6 +80,7 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasGrouping: true;
   canvasUngrouping: true;
   canvasBorderStyle: true;
+  canvasTransformLock: true;
   documentOverlayAdd: true;
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
@@ -148,6 +149,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasGrouping: true,
   canvasUngrouping: true,
   canvasBorderStyle: true,
+  canvasTransformLock: true,
   documentOverlayAdd: true,
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
@@ -162,6 +164,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'Fabric text editing',
     'remaining Canvas style controls',
     'Canvas text/style editing beyond Border Style',
+    'Canvas Selection Lock and full-object lock',
+    'other Canvas object metadata controls',
     'Document formatting/styles',
     'flow-image metadata and structured flow mutations',
     'captions, image groups, and references',

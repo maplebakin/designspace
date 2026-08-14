@@ -358,6 +358,15 @@ const buildLayerFromSerializedObject = (obj: SerializedFabricObject): Layer => (
   colorLocked: !!obj.colorLocked,
 });
 
+const matchesTransformLockState = (object: any, isLocked: boolean) => (
+  object?.lockMovementX === isLocked
+  && object?.lockMovementY === isLocked
+  && object?.lockRotation === isLocked
+  && object?.lockScalingX === isLocked
+  && object?.lockScalingY === isLocked
+  && object?.hasControls === !isLocked
+);
+
 const buildLayerStateFromSerializedObjects = (
     objects: SerializedFabricObject[],
     layersById: Record<string, fabric.Object> = {}
@@ -2636,6 +2645,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             syncCanvasToStore(canvas);
             requestLayerSync();
             saveState();
+
+            const objectId = (obj as any).id;
+            const serializedObject = get().canvasObjects.find(
+                (object) => object.id === objectId
+            );
+            if (
+                !canvas
+                || typeof objectId !== 'string'
+                || objectId.trim().length === 0
+                || !canvas.getObjects().includes(obj)
+                || get().canvasReadyState !== 'ready'
+                || isCanvasHydrating(canvas)
+                || !isCanvasObjectObservationTarget(obj)
+                || !matchesTransformLockState(obj, isLocked)
+                || !serializedObject
+                || !matchesTransformLockState(serializedObject, isLocked)
+            ) {
+                return;
+            }
+
+            observeSemanticMutation({
+                action: 'modify-freeform-transform-lock',
+                objectId,
+            });
         }
     },
 
