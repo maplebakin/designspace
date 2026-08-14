@@ -33,6 +33,7 @@ export type ProjectChangeAction =
   | 'add-freeform-object'
   | 'remove-freeform-object'
   | 'modify-freeform-geometry'
+  | 'modify-freeform-style'
   | 'group-freeform-objects'
   | 'ungroup-freeform-objects'
   | 'add-structured-overlay'

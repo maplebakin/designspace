@@ -315,6 +315,22 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       return;
     }
 
+    if (mutation.action === 'modify-freeform-style') {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['style'],
+        target: {
+          kind: 'freeform-object',
+          id: mutation.objectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
     const assetEffect = mutation.action === 'modify-freeform-geometry'
       ? 'none'
       : mutation.assetEffect;

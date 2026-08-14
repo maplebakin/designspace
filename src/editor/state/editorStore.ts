@@ -4,6 +4,7 @@ import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import {
     ensureObjectId,
+    isCanvasHydrating,
     loadCanvasFromJsonSafely,
     reviveCustomFabricProps,
 } from '../fabric/initFabricCanvas';
@@ -1077,6 +1078,8 @@ interface EditorState {
   distributeSelectedObjects: (direction: 'horizontal' | 'vertical') => void;
   groupSelectedObjects: () => void;
   ungroupSelectedObjects: () => void;
+  /** Reports the one narrow inspector style command proven by Phase 1M. */
+  reportCommittedCanvasBorderStyle: (objectId: string) => void;
   addLayer: (layer: Layer) => void;
   updateLayer: (id: string, partial: Partial<Layer>) => void;
   removeLayer: (id: string) => void;
@@ -1405,6 +1408,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setSelectedLayerIds: (ids) => set({ selectedLayerIds: ids }),
     setDirtyObjectsRef: (dirtyObjects) => set({ dirtyObjectsRef: dirtyObjects }),
     setCommittedMutationObserver: (observer) => set({ committedMutationObserver: observer }),
+    reportCommittedCanvasBorderStyle: (objectId) => {
+        const { canvas, selectedObjectId } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        if (
+            !canvas
+            || selectedObjectId !== objectId
+            || canvas.getActiveObject() !== target
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-style',
+            objectId,
+            style: 'border-style',
+        });
+    },
     clearSelection: () => {
         const { canvas } = get();
         if (canvas) {

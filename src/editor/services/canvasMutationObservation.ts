@@ -10,6 +10,11 @@ export type CanvasCommittedMutation =
       objectId: string;
     }>
   | Readonly<{
+      action: 'modify-freeform-style';
+      objectId: string;
+      style: 'border-style';
+    }>
+  | Readonly<{
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
       assetEffect: PageAssetEffect;

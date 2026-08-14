@@ -189,7 +189,10 @@ const CanvasEmptyState: React.FC = () => {
 // Shape Properties Section
 interface ShapePropertiesProps {
   object: fabric.Object;
-  onUpdate: (updates: Record<string, any>) => void;
+  onUpdate: (
+    updates: Record<string, any>,
+    styleCommit?: { kind: 'border-style'; value: 'solid' | 'dashed' | 'dotted' }
+  ) => void;
   onCornerRadius: (value: number) => void;
   onCornerRadiusXY: (rxValue: number, ryValue: number) => void;
   addColorToBrandKit: (color: string) => Promise<{ success: boolean; error?: string }>;
@@ -394,10 +397,14 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
       <ControlRow label="Border Style">
         <ControlSelect
           value={strokeStyle}
+          aria-label="Border style"
           onChange={(e) => {
             const style = e.target.value as 'solid' | 'dashed' | 'dotted';
             const dash = getDashFromStrokeStyle(style);
-            onUpdate({ strokeDashArray: dash || undefined });
+            onUpdate(
+              { strokeDashArray: dash || undefined },
+              { kind: 'border-style', value: style }
+            );
           }}
           className="w-36"
         >
@@ -1130,14 +1137,48 @@ export const PropertiesPanel: React.FC = () => {
     selectedObject?.type === 'triangle' ||
     selectedObject?.type === 'polygon';
 
-  const updateSelectedObject = (updates: Record<string, any>) => {
+  const updateSelectedObject = (
+    updates: Record<string, any>,
+    styleCommit?: { kind: 'border-style'; value: 'solid' | 'dashed' | 'dotted' }
+  ) => {
     if (!selectedObject || !canvas) return;
+
+    if (
+      styleCommit?.kind === 'border-style'
+      && getStrokeStyleFromDash((selectedObject as any).strokeDashArray) === styleCommit.value
+    ) {
+      return;
+    }
+
+    const objectId = (selectedObject as any).id;
     selectedObject.set(updates);
     selectedObject.setCoords();
     canvas.requestRenderAll();
     syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
+
+    if (
+      styleCommit?.kind !== 'border-style'
+      || typeof objectId !== 'string'
+      || objectId.trim().length === 0
+      || !canvas.getObjects().some((object) => object === selectedObject)
+      || getStrokeStyleFromDash((selectedObject as any).strokeDashArray) !== styleCommit.value
+    ) {
+      return;
+    }
+
+    const serializedObject = useEditorStore.getState().canvasObjects.find(
+      (object) => object.id === objectId
+    );
+    if (
+      !serializedObject
+      || getStrokeStyleFromDash((serializedObject as any).strokeDashArray) !== styleCommit.value
+    ) {
+      return;
+    }
+
+    useEditorStore.getState().reportCommittedCanvasBorderStyle(objectId);
   };
 
   const handleCornerRadius = (value: number) => {

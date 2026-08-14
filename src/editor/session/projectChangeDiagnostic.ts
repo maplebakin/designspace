@@ -79,6 +79,7 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasErase: false;
   canvasGrouping: true;
   canvasUngrouping: true;
+  canvasBorderStyle: true;
   documentOverlayAdd: true;
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
@@ -146,6 +147,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasErase: false,
   canvasGrouping: true,
   canvasUngrouping: true,
+  canvasBorderStyle: true,
   documentOverlayAdd: true,
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
@@ -158,7 +160,9 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   unobservedAuthoredChangeCategories: [
     'Tiptap text editing',
     'Fabric text editing',
-    'styles',
+    'remaining Canvas style controls',
+    'Canvas text/style editing beyond Border Style',
+    'Document formatting/styles',
     'flow-image metadata and structured flow mutations',
     'captions, image groups, and references',
     'unobserved page settings, document styles, and page metadata beyond orientation and column count',
