@@ -749,10 +749,10 @@ describe('Unified Editor Canvas coverage sweep', () => {
       expect.arrayContaining([
         'Canvas multi-selection z-order and other reorder paths',
         'Canvas full-object lock and unsupported Selection Lock invocation paths',
-        'Canvas manual fill colour, opacity, and other colour controls',
+        'Canvas native fill, stroke, shadow, and gradient colour pickers',
         'Canvas theme-token linking, unlinking, reset, and global theme application',
-        'Canvas text/style editing beyond Border Style',
-        'Document formatting/styles',
+        'Canvas font-size, corner-radius, style presets, and image-reset commands',
+        'Document native paper/text/drop-cap colour pickers',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('Canvas Selection Lock and full-object lock');

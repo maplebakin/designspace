@@ -647,11 +647,11 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas manual fill colour, opacity, and other colour controls',
+        'Canvas native fill, stroke, shadow, and gradient colour pickers',
         'Canvas theme-token linking, unlinking, reset, and global theme application',
         'Canvas theme color lock mutations from other commands',
         'Canvas full-object lock and unsupported Selection Lock invocation paths',
-        'Document formatting/styles',
+        'Document native paper/text/drop-cap colour pickers',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('styles');

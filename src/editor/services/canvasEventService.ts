@@ -156,6 +156,16 @@ export function registerObjectEventHandlers(
         }
     };
 
+    type TextEditingSession = {
+        initialText: string;
+    };
+
+    // Fabric 7 emits text:editing:exited before the changed-text
+    // object:modified event. Keep the session boundary until that completion
+    // event so legacy synchronization and saveState remain first.
+    const textEditingSessions = new Map<string, TextEditingSession>();
+    const textCommitsAwaitingObjectModified = new Map<string, TextEditingSession>();
+
     const canObserveObjectLifecycle = (
         target?: fabric.Object
     ): target is fabric.Object & { id: string } => {
@@ -198,6 +208,12 @@ export function registerObjectEventHandlers(
             onUpdate?.(canvas, { persist: true });
         }
 
+        const objectId = (target as any)?.id;
+        if (typeof objectId === 'string') {
+            textEditingSessions.delete(objectId);
+            textCommitsAwaitingObjectModified.delete(objectId);
+        }
+
         // Clean up blob URLs for images
         if (target?.type === 'image') {
             const id = (target as any).id as string | undefined;
@@ -222,6 +238,7 @@ export function registerObjectEventHandlers(
     const handleObjectModified = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
+        if (useEditorStore.getState().syncLock?.isLocked) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || (target as any).isGuide) return;
 
@@ -229,18 +246,93 @@ export function registerObjectEventHandlers(
         onHistoryDirty?.();
         onUpdate?.(canvas, { persist: true });
 
+        const objectId = (target as any).id;
+        const pendingTextSession = typeof objectId === 'string'
+            ? textCommitsAwaitingObjectModified.get(objectId)
+            : undefined;
+        if (pendingTextSession) {
+            textCommitsAwaitingObjectModified.delete(objectId);
+
+            // Fabric's changed-text object:modified is the completion event
+            // for the editing session. It must not be reinterpreted as a
+            // geometry command as well.
+            const finalText = String((target as any).text ?? '');
+            const serializedObject = useEditorStore.getState().canvasObjects.find(
+                (object) => object.id === objectId
+            );
+            if (
+                pendingTextSession.initialText !== finalText
+                && canvas.getObjects().includes(target)
+                && isCanvasObjectObservationTarget(target)
+                && !isCanvasObjectMutationSuppressed(canvas)
+                && !useEditorStore.getState().syncLock?.isLocked
+                && serializedObject
+                && String((serializedObject as any).text ?? '') === finalText
+            ) {
+                notifyCommittedMutation({
+                    action: 'modify-freeform-text-content',
+                    objectId,
+                });
+            }
+            return;
+        }
+
         // Clear smart guides when object movement is complete
         if (canvas) {
             clearSmartGuides(canvas);
         }
 
-        const objectId = (target as any).id;
-        if (typeof objectId === 'string' && objectId.trim().length > 0) {
+        if (
+            typeof objectId === 'string'
+            && objectId.trim().length > 0
+            && canvas.getObjects().includes(target)
+            && isCanvasObjectObservationTarget(target)
+        ) {
             notifyCommittedMutation({
                 action: 'modify-freeform-geometry',
                 objectId,
             });
         }
+    };
+
+    const handleTextEditingEntered = (event?: { target?: fabric.Object }) => {
+        if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
+        if (useEditorStore.getState().syncLock?.isLocked) return;
+        const target = event?.target as fabric.Object | undefined;
+        const objectId = (target as any)?.id;
+        if (
+            !target
+            || !isTextObject(target)
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || !canvas.getObjects().includes(target)
+            || !isCanvasObjectObservationTarget(target)
+        ) return;
+        textEditingSessions.set(objectId, {
+            initialText: String((target as any).text ?? ''),
+        });
+    };
+
+    const handleTextEditingExited = (event?: { target?: fabric.Object }) => {
+        if (checkAborted(abortSignal)) return;
+        if (isCanvasHydrating(canvas)) return;
+        if (useEditorStore.getState().syncLock?.isLocked) return;
+        const target = event?.target as fabric.Object | undefined;
+        const objectId = (target as any)?.id;
+        if (
+            !target
+            || !isTextObject(target)
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || !canvas.getObjects().includes(target)
+        ) return;
+        const session = textEditingSessions.get(objectId);
+        textEditingSessions.delete(objectId);
+        if (!session || String((target as any).text ?? '') === session.initialText) {
+            return;
+        }
+        textCommitsAwaitingObjectModified.set(objectId, session);
     };
 
     const handleTextChanged = (event?: { target?: fabric.Object }) => {
@@ -322,6 +414,8 @@ export function registerObjectEventHandlers(
     canvas.on('object:removed', handleObjectRemoved);
     canvas.on('object:modified', handleObjectModified);
     canvas.on('text:changed', handleTextChanged);
+    canvas.on('text:editing:entered', handleTextEditingEntered);
+    canvas.on('text:editing:exited', handleTextEditingExited);
     canvas.on('object:moving', handleObjectMoving);
     canvas.on('object:scaling', handleObjectScaling);
 
@@ -331,8 +425,12 @@ export function registerObjectEventHandlers(
             canvas.off('object:removed', handleObjectRemoved);
             canvas.off('object:modified', handleObjectModified);
             canvas.off('text:changed', handleTextChanged);
+            canvas.off('text:editing:entered', handleTextEditingEntered);
+            canvas.off('text:editing:exited', handleTextEditingExited);
             canvas.off('object:moving', handleObjectMoving);
             canvas.off('object:scaling', handleObjectScaling);
+            textEditingSessions.clear();
+            textCommitsAwaitingObjectModified.clear();
         },
         type: 'canvas',
     };

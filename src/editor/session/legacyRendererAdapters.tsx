@@ -331,6 +331,22 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       return;
     }
 
+    if (mutation.action === 'modify-freeform-text-content') {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'freeform-object',
+          id: mutation.objectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
     if (mutation.action === 'modify-freeform-transform-lock') {
       observeCommittedEngineChange(changeCoordinator, {
         projectId: currentSession.projectId,
@@ -435,6 +451,9 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
     const isPageMetadata = mutation.action === 'modify-page-metadata';
+    const isStructuredText = mutation.action === 'modify-structured-title-content'
+      || mutation.action === 'modify-structured-body-content';
+    const isDocumentStyleMetadata = mutation.action === 'modify-document-style-metadata';
     const isOverlayLifecycle = mutation.action === 'add-structured-overlay'
       || mutation.action === 'remove-structured-overlay';
     const isFlowImageLifecycle = mutation.action === 'add-structured-flow-image'
@@ -444,20 +463,28 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       source: 'document',
       action: mutation.action,
       pageIds: [
-        isPageMetadata || isFlowImageLifecycle
+        isPageMetadata || isFlowImageLifecycle || isStructuredText || isDocumentStyleMetadata
           ? mutation.pageId
           : currentPageId,
       ],
       domains: isPageMetadata
         ? ['page-structure']
+        : isDocumentStyleMetadata
+          ? ['style']
+          : isStructuredText
+            ? ['structured-content']
         : isOverlayLifecycle || isFlowImageLifecycle
           ? ['structured-content']
           : ['geometry'],
       target: isPageMetadata
         ? { kind: 'page', id: mutation.pageId }
+        : isStructuredText || isDocumentStyleMetadata
+        ? { kind: 'page', id: mutation.pageId }
         : 'flowImageId' in mutation
           ? { kind: 'structured-image', id: mutation.flowImageId }
-          : { kind: 'structured-image', id: mutation.overlayId },
+          : 'overlayId' in mutation
+            ? { kind: 'structured-image', id: mutation.overlayId }
+            : undefined,
       assetEffect: 'assetEffect' in mutation ? mutation.assetEffect : 'none',
     });
   }, [changeCoordinator]);

@@ -8,6 +8,7 @@ import {
   type JSONContent,
 } from '@tiptap/core';
 import { EditorContent, useEditor } from '@tiptap/react';
+import type { Transaction } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import {
   DocumentAlignmentExtension,
@@ -45,7 +46,7 @@ export interface TitleEditorProps {
   className?: string;
   baseFontSizePx?: number;
   language?: string;
-  onUpdate?: (content: JSONContent, editor: Editor) => void;
+  onUpdate?: (content: JSONContent, editor: Editor, transaction: Transaction) => void;
   onEditorReady?: (editor: Editor | null) => void;
   onFocusChange?: (focused: boolean, editor: Editor) => void;
   onSelectionChange?: (editor: Editor) => void;
@@ -136,10 +137,11 @@ export const TitleEditor = ({
       onCreate: ({ editor: createdEditor }) => {
         editorInstanceRef.current = createdEditor;
       },
-      onUpdate: ({ editor: updatedEditor }) => {
+      onUpdate: ({ editor: updatedEditor, transaction }) => {
         callbacksRef.current.onUpdate?.(
           updatedEditor.getJSON(),
-          updatedEditor
+          updatedEditor,
+          transaction
         );
       },
       onFocus: ({ editor: focusedEditor }) => {

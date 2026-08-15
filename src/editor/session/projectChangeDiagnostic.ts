@@ -80,6 +80,8 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasGrouping: true;
   canvasUngrouping: true;
   canvasBorderStyle: true;
+  canvasTextContent: true;
+  canvasExplicitStyleControls: true;
   canvasTransformLock: true;
   canvasThemeColorLock: true;
   canvasVisibility: true;
@@ -94,6 +96,10 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   documentOverlayGeometryInputs: readonly ProjectChangeDiagnosticDocumentGeometryInput[];
   documentPageMetadata: true;
   documentPageOrientation: true;
+  documentTitleContent: true;
+  documentBodyContent: true;
+  documentTextFormatting: true;
+  documentStyleMetadata: true;
   completeAuthoredCoverage: false;
   unobservedAuthoredChangeCategories: readonly string[];
 }>;
@@ -154,6 +160,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasGrouping: true,
   canvasUngrouping: true,
   canvasBorderStyle: true,
+  canvasTextContent: true,
+  canvasExplicitStyleControls: true,
   canvasTransformLock: true,
   canvasThemeColorLock: true,
   canvasVisibility: true,
@@ -168,22 +176,26 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
   documentPageMetadata: true,
   documentPageOrientation: true,
+  documentTitleContent: true,
+  documentBodyContent: true,
+  documentTextFormatting: true,
+  documentStyleMetadata: true,
   completeAuthoredCoverage: false,
   unobservedAuthoredChangeCategories: [
-    'Tiptap text editing',
-    'Fabric text editing',
-    'remaining Canvas style controls',
-    'Canvas text/style editing beyond Border Style',
-    'Canvas manual fill colour, opacity, and other colour controls',
+    'Canvas native fill, stroke, shadow, and gradient colour pickers',
+    'Canvas font-size, corner-radius, style presets, and image-reset commands',
+    'Canvas controls without a completed interaction boundary',
     'Canvas theme-token linking, unlinking, reset, and global theme application',
     'Canvas theme color lock mutations from other commands',
     'Canvas multi-selection z-order and other reorder paths',
     'Canvas full-object lock and unsupported Selection Lock invocation paths',
     'other Canvas object metadata controls',
-    'Document formatting/styles',
+    'Document native paper/text/drop-cap colour pickers',
+    'Document continuous page settings and named-style numeric controls',
+    'Document language, folio, reference, and remaining page metadata commands',
     'flow-image metadata and structured flow mutations',
     'captions, image groups, and references',
-    'unobserved page settings, document styles, and page metadata beyond orientation and column count',
+    'remaining page settings and metadata beyond the trusted discrete commands',
     'inspector metadata and asset mutations',
     'semantic Canvas eraser content changes (the current erase tool creates a regular PencilBrush path)',
     'templates, recipes, and full-page restoration',

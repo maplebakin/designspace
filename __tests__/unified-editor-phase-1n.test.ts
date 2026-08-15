@@ -603,11 +603,11 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'remaining Canvas style controls',
+        'Canvas native fill, stroke, shadow, and gradient colour pickers',
         'Canvas full-object lock and unsupported Selection Lock invocation paths',
         'other Canvas object metadata controls',
-        'Canvas text/style editing beyond Border Style',
-        'Document formatting/styles',
+        'Canvas font-size, corner-radius, style presets, and image-reset commands',
+        'Document native paper/text/drop-cap colour pickers',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('styles');

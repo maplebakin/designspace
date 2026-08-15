@@ -34,6 +34,7 @@ export type ProjectChangeAction =
   | 'remove-freeform-object'
   | 'modify-freeform-geometry'
   | 'modify-freeform-style'
+  | 'modify-freeform-text-content'
   | 'modify-freeform-transform-lock'
   | 'modify-freeform-theme-color-lock'
   | 'modify-freeform-visibility'
@@ -50,6 +51,9 @@ export type ProjectChangeAction =
   | 'add-structured-flow-image'
   | 'remove-structured-flow-image'
   | 'modify-structured-geometry'
+  | 'modify-structured-title-content'
+  | 'modify-structured-body-content'
+  | 'modify-document-style-metadata'
   | 'modify-page-metadata';
 
 export type ProjectChangeTarget = Readonly<{

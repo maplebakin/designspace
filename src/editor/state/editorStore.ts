@@ -58,12 +58,16 @@ import {
     getCanvasObjectAssetEffect,
     isCanvasObjectMutationSuppressed,
     isCanvasObjectObservationTarget,
+    readCanvasStyleValue,
+    areCanvasStyleValuesEqual,
     withCanvasObjectMutationSuppressed,
 } from '../services/canvasMutationObservation';
 import type {
   CanvasCommittedMutation,
   CanvasCommittedMutationObserver,
   CanvasDiscreteObjectMutationAction,
+  CanvasStyleCommitKind,
+  CanvasStyleValue,
 } from '../services/canvasMutationObservation';
 import {
     assertSupportedDesignSpaceProjectSchema,
@@ -1116,6 +1120,13 @@ interface EditorState {
   ungroupSelectedObjects: () => void;
   /** Reports the one narrow inspector style command proven by Phase 1M. */
   reportCommittedCanvasBorderStyle: (objectId: string) => void;
+  /** Reports an explicit, completed Canvas style interaction. */
+  reportCommittedCanvasStyle: (
+    objectId: string,
+    style: CanvasStyleCommitKind,
+    beforeValue: CanvasStyleValue | null | undefined,
+    expectedValue?: CanvasStyleValue | null,
+  ) => void;
   reportCommittedCanvasVisibility: (objectId: string, visible: boolean) => void;
   reportCommittedCanvasZOrder: (
     objectId: string,
@@ -1471,6 +1482,39 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             action: 'modify-freeform-style',
             objectId,
             style: 'border-style',
+        });
+    },
+    reportCommittedCanvasStyle: (objectId, style, beforeValue, expectedValue) => {
+        const { canvas } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        const serializedObject = get().canvasObjects.find(
+            (object) => object.id === objectId
+        );
+        const currentValue = target ? readCanvasStyleValue(target, style) : null;
+        const serializedValue = serializedObject
+            ? readCanvasStyleValue(serializedObject, style)
+            : null;
+        if (
+            !canvas
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+            || currentValue === null
+            || serializedValue === null
+            || areCanvasStyleValuesEqual(currentValue, beforeValue)
+            || !areCanvasStyleValuesEqual(currentValue, serializedValue)
+            || (
+                expectedValue !== undefined
+                && !areCanvasStyleValuesEqual(currentValue, expectedValue)
+            )
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-style',
+            objectId,
+            style,
         });
     },
     reportCommittedCanvasVisibility: (objectId, visible) => {

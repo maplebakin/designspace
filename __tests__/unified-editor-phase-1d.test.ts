@@ -360,12 +360,13 @@ describe('Unified Editor Phase 1D ProjectChangeCoordinator', () => {
 describe('Canvas committed event adapter boundary', () => {
   it('reports one object:modified geometry event and ignores cleanup after disposal', () => {
     const listeners = new Map<string, (event: { target?: Record<string, unknown> }) => void>();
+    const target = { id: 'fabric-object-1', type: 'rect' };
     const canvas = {
       on: vi.fn((name: string, listener: (event: { target?: Record<string, unknown> }) => void) => {
         listeners.set(name, listener);
       }),
       off: vi.fn((name: string) => listeners.delete(name)),
-      getObjects: vi.fn(() => []),
+      getObjects: vi.fn(() => [target]),
       remove: vi.fn(),
     };
     const onCommittedMutation = vi.fn();
@@ -375,7 +376,7 @@ describe('Canvas committed event adapter boundary', () => {
     });
 
     listeners.get('object:modified')?.({
-      target: { id: 'fabric-object-1', type: 'rect' },
+      target,
     });
 
     expect(onCommittedMutation).toHaveBeenCalledTimes(1);

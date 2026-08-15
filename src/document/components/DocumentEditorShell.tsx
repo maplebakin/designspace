@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import type { Editor, JSONContent } from '@tiptap/core';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
+import { isHistoryTransaction } from '@tiptap/pm/history';
 import { v4 as uuidv4 } from 'uuid';
 import { useDocumentStore } from '../state/documentStore';
 import type {
@@ -108,6 +109,10 @@ import {
 import type {
   DocumentNamedStyleRegistry,
 } from '../typography/documentTypography';
+import {
+  documentAuthoredContentDiffers,
+  documentAuthoredContentProjection,
+} from '../services/documentContentObservation';
 import type { SelectionEvent } from '../../editor/session/projectSession';
 import type { PageAssetEffect } from '../../editor/session/projectMutation';
 import '../styles/document-page.css';
@@ -122,6 +127,14 @@ type DocumentEditorShellProps = {
 };
 
 export type DocumentCommittedMutation =
+  | Readonly<{
+      action: 'modify-structured-title-content' | 'modify-structured-body-content';
+      pageId: string;
+    }>
+  | Readonly<{
+      action: 'modify-document-style-metadata';
+      pageId: string;
+    }>
   | Readonly<{
       action: 'modify-structured-geometry';
       overlayId: string;
@@ -182,6 +195,24 @@ const notifyCommittedPageMetadata = (
 ) => {
   notifyCommittedMutation(callback, {
     action: 'modify-page-metadata',
+    pageId,
+  });
+};
+
+const notifyCommittedStructuredContent = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  action: 'modify-structured-title-content' | 'modify-structured-body-content',
+  pageId: string
+) => {
+  notifyCommittedMutation(callback, { action, pageId });
+};
+
+const notifyCommittedDocumentStyleMetadata = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-document-style-metadata',
     pageId,
   });
 };
@@ -1027,6 +1058,55 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
     if (project) updateActiveTextFormatState(editor, 'body');
   }, [project, updateActiveTextFormatState]);
+
+  const handleStructuredEditorUpdate = useCallback((
+    region: DocumentEditorRegion,
+    pageId: string,
+    content: JSONContent,
+    transaction: import('@tiptap/pm/state').Transaction,
+  ) => {
+    const imageGroupsMeta = region === 'body'
+      ? transaction.getMeta(DOCUMENT_IMAGE_GROUPS_TRANSACTION_META)
+      : undefined;
+    if (region === 'body' && imageGroupsMeta !== undefined) {
+      commitPageImageState(pageId, content, imageGroupsMeta);
+    } else if (region === 'title') {
+      updateTitleContent(content, pageId);
+    } else {
+      updateBodyContent(content, pageId);
+    }
+
+    if (
+      !transaction.docChanged
+      || isHistoryTransaction(transaction)
+      || !documentAuthoredContentDiffers(transaction.before, transaction.doc)
+    ) return;
+
+    const committedPage = useDocumentStore.getState().project?.pages.find(
+      (candidate) => candidate.id === pageId
+    );
+    const committedContent = region === 'title'
+      ? committedPage?.titleContent
+      : committedPage?.bodyContent;
+    if (
+      !committedPage
+      || documentAuthoredContentProjection(committedContent)
+        !== documentAuthoredContentProjection(content)
+    ) return;
+
+    notifyCommittedStructuredContent(
+      onCommittedMutation,
+      region === 'title'
+        ? 'modify-structured-title-content'
+        : 'modify-structured-body-content',
+      pageId,
+    );
+  }, [
+    commitPageImageState,
+    onCommittedMutation,
+    updateBodyContent,
+    updateTitleContent,
+  ]);
 
   const selectedOverlay = page?.overlayObjects.find(
     (object) => object.id === selectedOverlayId
@@ -2277,7 +2357,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           selectedOverlayId={selectedOverlayId}
           onCollapsedChange={setSidebarCollapsed}
           onPresetChange={(preset) => {
+            const previousPreset = page.size.presetId;
             updatePage(updateDocumentPagePaper(page, { preset }));
+            const committedPage = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            );
+            if (
+              committedPage
+              && committedPage.size.presetId !== previousPreset
+            ) {
+              notifyCommittedPageMetadata(onCommittedMutation, page.id);
+            }
           }}
           onOrientationChange={(orientation: DocumentPageOrientation) => {
             setFitMode(true);
@@ -2300,9 +2390,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onPaperColorChange={updateDocumentBackground}
           onFolioSettingsChange={updateFolioSettings}
           onSuppressFolioChange={(suppressFolio) =>
-            updatePage({ suppressFolio })}
+            (() => {
+              if (suppressFolio === page.suppressFolio) return;
+              updatePage({ suppressFolio });
+              const committedPage = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              );
+              if (committedPage?.suppressFolio === suppressFolio) {
+                notifyCommittedPageMetadata(onCommittedMutation, page.id);
+              }
+            })()}
           onSuppressTitleChange={(suppressTitle) =>
-            updatePage({ suppressTitle })}
+            (() => {
+              if (suppressTitle === page.suppressTitle) return;
+              updatePage({ suppressTitle });
+              const committedPage = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              );
+              if (committedPage?.suppressTitle === suppressTitle) {
+                notifyCommittedPageMetadata(onCommittedMutation, page.id);
+              }
+            })()}
           onMarginChange={(side, value) => updatePage({
             margins: constrainDocumentPageMargins(
               { ...page.margins, [side]: value },
@@ -2318,9 +2426,58 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
           onDocumentLanguageChange={updateDocumentLanguage}
           onPageLanguageChange={(language) =>
-            updatePageLanguage(language, page.id)}
-          onStyleChange={updateDocumentStyle}
-          onDropCapChange={(update) => updateDropCap(update, page.id)}
+            (() => {
+              const previousLanguage = page.language;
+              updatePageLanguage(language, page.id);
+              const committedPage = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              );
+              if (
+                committedPage
+                && committedPage.language !== previousLanguage
+              ) {
+                notifyCommittedPageMetadata(onCommittedMutation, page.id);
+              }
+            })()}
+          onStyleChange={(styleId, update) => {
+            const discreteKeys = new Set([
+              'fontFamilyId',
+              'fontWeight',
+              'alignment',
+              'hyphenation',
+              'italic',
+            ]);
+            const keys = Object.keys(update);
+            const previousStyle = project.document.styles[styleId];
+            updateDocumentStyle(styleId, update);
+            const committedStyle = useDocumentStore.getState().project?.document.styles[styleId];
+            if (
+              keys.length > 0
+              && keys.every((key) => discreteKeys.has(key))
+              && committedStyle
+              && JSON.stringify(committedStyle) !== JSON.stringify(previousStyle)
+            ) {
+              notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+            }
+          }}
+          onDropCapChange={(update) => {
+            const discreteKeys = new Set(['enabled', 'fontFamilyId']);
+            const keys = Object.keys(update);
+            const previousDropCap = page.dropCap;
+            updateDropCap(update, page.id);
+            const committedPage = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            );
+            if (
+              keys.length > 0
+              && keys.every((key) => discreteKeys.has(key))
+              && committedPage
+              && JSON.stringify(committedPage.dropCap)
+                !== JSON.stringify(previousDropCap)
+            ) {
+              notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+            }
+          }}
           onImportImages={(files) => void importImages(files)}
           onImportReference={(file) => void handleReferenceImport(file)}
           onToggleReferenceVisibility={() => {
@@ -2502,8 +2659,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onSelectionChange={(editor) => {
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
-                  onUpdate={(content, editor) => {
-                    updateTitleContent(content, page.id);
+                  onUpdate={(content, editor, transaction) => {
+                    handleStructuredEditorUpdate(
+                      'title',
+                      page.id,
+                      content,
+                      transaction,
+                    );
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
                   onPasteDispatch={handlePasteDispatch}
@@ -2543,14 +2705,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onUpdate={(content, editor, transaction) => {
-                    const imageGroupsMeta = transaction.getMeta(
-                      DOCUMENT_IMAGE_GROUPS_TRANSACTION_META
+                    handleStructuredEditorUpdate(
+                      'body',
+                      page.id,
+                      content,
+                      transaction,
                     );
-                    if (imageGroupsMeta !== undefined) {
-                      commitPageImageState(page.id, content, imageGroupsMeta);
-                    } else {
-                      updateBodyContent(content, page.id);
-                    }
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onImageSelectionChange={(selection, editor) => {

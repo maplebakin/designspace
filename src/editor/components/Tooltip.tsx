@@ -403,19 +403,60 @@ interface SliderProps {
   max: number;
   value: number;
   onChange: (value: number) => void;
+  /**
+   * Optional completed interaction boundary. onChange remains the legacy live
+   * preview path; this callback fires once on pointer-up or one keyboard key
+   * completion, without timers or debounce.
+   */
+  onCommit?: (value: number, initialValue: number) => void;
   step?: number;
   disabled?: boolean;
 }
 
-export const ControlSlider: React.FC<SliderProps> = ({ min, max, value, onChange, step = 1, disabled = false }) => (
-  <input
-    type="range"
-    min={min}
-    max={max}
-    step={step}
-    value={value}
-    onChange={(e) => onChange(Number(e.target.value))}
-    disabled={disabled}
-    className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/55 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-  />
-);
+export const ControlSlider: React.FC<SliderProps> = ({
+  min,
+  max,
+  value,
+  onChange,
+  onCommit,
+  step = 1,
+  disabled = false,
+}) => {
+  const initialValueRef = useRef(value);
+  const interactionRef = useRef(false);
+
+  const beginInteraction = () => {
+    if (interactionRef.current) return;
+    initialValueRef.current = value;
+    interactionRef.current = true;
+  };
+
+  const completePointerInteraction = (event: React.PointerEvent<HTMLInputElement>) => {
+    if (!interactionRef.current) return;
+    interactionRef.current = false;
+    onCommit?.(Number(event.currentTarget.value), initialValueRef.current);
+  };
+
+  const completeKeyboardInteraction = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!interactionRef.current) return;
+    interactionRef.current = false;
+    onCommit?.(Number(event.currentTarget.value), initialValueRef.current);
+  };
+
+  return (
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      onPointerDown={beginInteraction}
+      onKeyDown={beginInteraction}
+      onChange={(event) => onChange(Number(event.target.value))}
+      onPointerUp={completePointerInteraction}
+      onKeyUp={completeKeyboardInteraction}
+      disabled={disabled}
+      className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/55 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+    />
+  );
+};

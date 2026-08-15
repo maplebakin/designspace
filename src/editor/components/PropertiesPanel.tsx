@@ -27,6 +27,14 @@ import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore'
 import { useCanvasStore } from '../state/useCanvasStore';
 import { useVisionPalette, useThemeStore } from '../state/useThemeStore';
 import { ThemeSidebar } from './ThemeSidebar';
+import type {
+  CanvasStyleCommitKind,
+  CanvasStyleValue,
+} from '../services/canvasMutationObservation';
+import {
+  areCanvasStyleValuesEqual,
+  readCanvasStyleValue,
+} from '../services/canvasMutationObservation';
 import {
   SectionHeader,
   SectionDivider,
@@ -187,14 +195,20 @@ const CanvasEmptyState: React.FC = () => {
 };
 
 // Shape Properties Section
+type CanvasStyleCommit = {
+  kind: CanvasStyleCommitKind;
+  value: CanvasStyleValue;
+};
+
 interface ShapePropertiesProps {
   object: fabric.Object;
   onUpdate: (
     updates: Record<string, any>,
-    styleCommit?: { kind: 'border-style'; value: 'solid' | 'dashed' | 'dotted' }
+    styleCommit?: CanvasStyleCommit
   ) => void;
   onCornerRadius: (value: number) => void;
   onCornerRadiusXY: (rxValue: number, ryValue: number) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
   addColorToBrandKit: (color: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -303,6 +317,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
   onUpdate,
   onCornerRadius,
   onCornerRadiusXY,
+  onStyleCommit,
   addColorToBrandKit,
 }) => {
   const isRect = object.type === 'rect';
@@ -369,6 +384,9 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             if (!fillIsString) return;
             onUpdate({ fill: applyFillAlpha(fillValue, val), tokenRole: null });
           }}
+          onCommit={(_value, initialValue) => {
+            if (fillIsString) onStyleCommit('fill-opacity', initialValue);
+          }}
         />
       </div>
 
@@ -391,6 +409,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           max={20}
           value={strokeWidthValue}
           onChange={(val) => onUpdate({ strokeWidth: val })}
+          onCommit={(_value, initialValue) => onStyleCommit('stroke-width', initialValue)}
         />
       </div>
 
@@ -419,7 +438,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => onUpdate({ fill: applyFillAlpha(fillValue, fillOpacity), tokenRole: null })}
+              onClick={() => onUpdate(
+                { fill: applyFillAlpha(fillValue, fillOpacity), tokenRole: null },
+                { kind: 'fill-mode', value: 'solid' }
+              )}
               className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${!isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'}`}
             >
               Solid
@@ -436,7 +458,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                     { offset: 1, color: gradientDefaults.to },
                   ],
                 });
-                onUpdate({ fill: grad, tokenRole: null });
+                onUpdate(
+                  { fill: grad, tokenRole: null },
+                  { kind: 'fill-mode', value: 'gradient' }
+                );
               }}
               className={`h-7 px-2 rounded-lg border text-[9px] uppercase tracking-widest ${isGradientFill ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]' : 'border-white/10 bg-white/5 text-[color:var(--ui-panel-text)] hover:bg-white/10'}`}
             >
@@ -501,16 +526,16 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           </ControlRow>
           <div className="space-y-2">
             <ControlRow label="Blur"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.blur || 0)}px</span></ControlRow>
-            <ControlSlider min={0} max={40} value={currentShadow?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: val, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })} />
+            <ControlSlider min={0} max={40} value={currentShadow?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: val, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })} onCommit={(_value, initialValue) => onStyleCommit('shadow-blur', initialValue)} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <ControlRow label="Offset X"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetX || 0)}</span></ControlRow>
-              <ControlSlider min={-30} max={30} value={currentShadow?.offsetX || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: val, offsetY: currentShadow?.offsetY || 0 }) })} />
+              <ControlSlider min={-30} max={30} value={currentShadow?.offsetX || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: val, offsetY: currentShadow?.offsetY || 0 }) })} onCommit={(_value, initialValue) => onStyleCommit('shadow-offset-x', initialValue)} />
             </div>
             <div className="space-y-2">
               <ControlRow label="Offset Y"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round(currentShadow?.offsetY || 0)}</span></ControlRow>
-              <ControlSlider min={-30} max={30} value={currentShadow?.offsetY || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: val }) })} />
+              <ControlSlider min={-30} max={30} value={currentShadow?.offsetY || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: (currentShadow?.color as string) || '#000000', blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: val }) })} onCommit={(_value, initialValue) => onStyleCommit('shadow-offset-y', initialValue)} />
             </div>
           </div>
         </div>
@@ -529,6 +554,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           step={0.01}
           value={(object as any).opacity ?? 1}
           onChange={(val) => onUpdate({ opacity: val })}
+          onCommit={(_value, initialValue) => onStyleCommit('opacity', initialValue)}
         />
       </div>
 
@@ -602,7 +628,8 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
 // Text Properties Section
 interface TextPropertiesProps {
   object: fabric.Text;
-  onUpdate: (updates: Record<string, any>) => void;
+  onUpdate: (updates: Record<string, any>, styleCommit?: CanvasStyleCommit) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
   setTextShadow: (opts: any) => void;
   setTextStroke: (opts: any) => void;
   setTextCharSpacing: (val: number) => void;
@@ -612,6 +639,7 @@ interface TextPropertiesProps {
 const TextProperties: React.FC<TextPropertiesProps> = ({
   object,
   onUpdate,
+  onStyleCommit,
   setTextShadow,
   setTextStroke,
   setTextCharSpacing,
@@ -632,7 +660,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
         <ControlRow label="Font Family" vertical>
           <FontPicker
             value={(object as any).fontFamily || 'Inter, sans-serif'}
-            onChange={(val) => onUpdate({ fontFamily: val })}
+            onChange={(val) => onUpdate(
+              { fontFamily: val },
+              { kind: 'font-family', value: val }
+            )}
           />
         </ControlRow>
 
@@ -650,7 +681,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
           <ControlRow label="Weight" vertical>
             <ControlSelect
               value={(object as any).fontWeight || 'normal'}
-              onChange={(e) => onUpdate({ fontWeight: e.target.value })}
+              onChange={(e) => onUpdate(
+                { fontWeight: e.target.value },
+                { kind: 'font-weight', value: e.target.value }
+              )}
               className="w-full"
             >
               <option value="lighter">Light</option>
@@ -665,7 +699,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
       <ControlRow label="Alignment" vertical>
         <TextAlignControl
           value={(object as any).textAlign || 'left'}
-          onChange={(val) => onUpdate({ textAlign: val })}
+          onChange={(val) => onUpdate(
+            { textAlign: val },
+            { kind: 'text-align', value: val }
+          )}
         />
       </ControlRow>
 
@@ -682,6 +719,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
           step={0.01}
           value={(object as any).opacity ?? 1}
           onChange={(val) => onUpdate({ opacity: val })}
+          onCommit={(_value, initialValue) => onStyleCommit('opacity', initialValue)}
         />
       </div>
 
@@ -733,6 +771,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             step={0.01}
             value={currentLineHeight}
             onChange={setTextLineHeight}
+            onCommit={(_value, initialValue) => onStyleCommit('text-line-height', initialValue)}
           />
         </div>
 
@@ -746,6 +785,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
             max={500}
             value={currentCharSpacing}
             onChange={setTextCharSpacing}
+            onCommit={(_value, initialValue) => onStyleCommit('text-letter-spacing', initialValue)}
           />
         </div>
 
@@ -772,6 +812,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
                 max={20}
                 value={currentShadow?.blur || 0}
                 onChange={(val) => setTextShadow({ blur: val })}
+                onCommit={(_value, initialValue) => onStyleCommit('shadow-blur', initialValue)}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -784,6 +825,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
                   max={20}
                   value={currentShadow?.offsetX || 0}
                   onChange={(val) => setTextShadow({ offsetX: val })}
+                  onCommit={(_value, initialValue) => onStyleCommit('shadow-offset-x', initialValue)}
                 />
               </div>
               <div className="space-y-2">
@@ -795,6 +837,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
                   max={20}
                   value={currentShadow?.offsetY || 0}
                   onChange={(val) => setTextShadow({ offsetY: val })}
+                  onCommit={(_value, initialValue) => onStyleCommit('shadow-offset-y', initialValue)}
                 />
               </div>
             </div>
@@ -824,6 +867,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
                 max={10}
                 value={currentStrokeWidth}
                 onChange={(val) => setTextStroke({ width: val })}
+                onCommit={(_value, initialValue) => onStyleCommit('text-stroke-width', initialValue)}
               />
             </div>
           </div>
@@ -836,7 +880,8 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
 // Image Properties Section
 interface ImagePropertiesProps {
   object: fabric.Image;
-  onUpdate: (updates: Partial<fabric.Object>) => void;
+  onUpdate: (updates: Partial<fabric.Object>, styleCommit?: CanvasStyleCommit) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
   setImageAdjustments: (opts: any) => void;
   resetImageAdjustments: () => void;
 }
@@ -844,6 +889,7 @@ interface ImagePropertiesProps {
 const ImageProperties: React.FC<ImagePropertiesProps> = ({
   object,
   onUpdate,
+  onStyleCommit,
   setImageAdjustments,
   resetImageAdjustments,
 }) => {
@@ -878,6 +924,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
           step={0.01}
           value={(object as any).opacity ?? 1}
           onChange={(val) => onUpdate({ opacity: val })}
+          onCommit={(_value, initialValue) => onStyleCommit('opacity', initialValue)}
         />
       </div>
 
@@ -896,7 +943,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
           </ControlRow>
           <div className="space-y-2">
             <ControlRow label="Blur"><span className="text-[10px] text-[color:var(--ui-panel-text)]">{Math.round((object.shadow as any)?.blur || 0)}px</span></ControlRow>
-            <ControlSlider min={0} max={40} value={(object.shadow as any)?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: ((object.shadow as any)?.color as string) || '#000000', blur: val, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })} />
+            <ControlSlider min={0} max={40} value={(object.shadow as any)?.blur || 0} onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: ((object.shadow as any)?.color as string) || '#000000', blur: val, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })} onCommit={(_value, initialValue) => onStyleCommit('shadow-blur', initialValue)} />
           </div>
         </div>
       </details>
@@ -914,6 +961,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
             step={0.01}
             value={currentAdjustments.brightness}
             onChange={(val) => setImageAdjustments({ brightness: val })}
+            onCommit={(_value, initialValue) => onStyleCommit('image-adjustment-brightness', initialValue)}
           />
         </div>
 
@@ -929,6 +977,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
             step={0.01}
             value={currentAdjustments.contrast}
             onChange={(val) => setImageAdjustments({ contrast: val })}
+            onCommit={(_value, initialValue) => onStyleCommit('image-adjustment-contrast', initialValue)}
           />
         </div>
 
@@ -944,6 +993,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
             step={0.01}
             value={currentAdjustments.saturation}
             onChange={(val) => setImageAdjustments({ saturation: val })}
+            onCommit={(_value, initialValue) => onStyleCommit('image-adjustment-saturation', initialValue)}
           />
         </div>
       </div>
@@ -1139,13 +1189,16 @@ export const PropertiesPanel: React.FC = () => {
 
   const updateSelectedObject = (
     updates: Record<string, any>,
-    styleCommit?: { kind: 'border-style'; value: 'solid' | 'dashed' | 'dotted' }
+    styleCommit?: CanvasStyleCommit
   ) => {
     if (!selectedObject || !canvas) return;
 
+    const beforeStyleValue = styleCommit
+      ? readCanvasStyleValue(selectedObject, styleCommit.kind)
+      : null;
     if (
-      styleCommit?.kind === 'border-style'
-      && getStrokeStyleFromDash((selectedObject as any).strokeDashArray) === styleCommit.value
+      styleCommit
+      && areCanvasStyleValuesEqual(beforeStyleValue, styleCommit.value)
     ) {
       return;
     }
@@ -1159,26 +1212,38 @@ export const PropertiesPanel: React.FC = () => {
     saveState();
 
     if (
-      styleCommit?.kind !== 'border-style'
+      !styleCommit
       || typeof objectId !== 'string'
       || objectId.trim().length === 0
       || !canvas.getObjects().some((object) => object === selectedObject)
-      || getStrokeStyleFromDash((selectedObject as any).strokeDashArray) !== styleCommit.value
     ) {
       return;
     }
 
-    const serializedObject = useEditorStore.getState().canvasObjects.find(
-      (object) => object.id === objectId
+    useEditorStore.getState().reportCommittedCanvasStyle(
+      objectId,
+      styleCommit.kind,
+      beforeStyleValue,
+      styleCommit.value,
     );
-    if (
-      !serializedObject
-      || getStrokeStyleFromDash((serializedObject as any).strokeDashArray) !== styleCommit.value
-    ) {
-      return;
-    }
+  };
 
-    useEditorStore.getState().reportCommittedCanvasBorderStyle(objectId);
+  const reportCanvasStyleCommit = (
+    style: CanvasStyleCommitKind,
+    beforeValue: CanvasStyleValue
+  ) => {
+    if (!selectedObject || !canvas) return;
+    // A few legacy style setters intentionally save through their own helper
+    // and do not synchronize the inspector projection. Sync at the explicit
+    // completed-interaction boundary before proving the postcondition.
+    syncCanvasToStore(canvas);
+    const objectId = (selectedObject as any).id;
+    if (typeof objectId !== 'string' || objectId.trim().length === 0) return;
+    useEditorStore.getState().reportCommittedCanvasStyle(
+      objectId,
+      style,
+      beforeValue,
+    );
   };
 
   const handleCornerRadius = (value: number) => {
@@ -1349,6 +1414,7 @@ export const PropertiesPanel: React.FC = () => {
                 onUpdate={updateSelectedObject}
                 onCornerRadius={handleCornerRadius}
                 onCornerRadiusXY={handleCornerRadiusXY}
+                onStyleCommit={reportCanvasStyleCommit}
                 addColorToBrandKit={addColorToBrandKit}
               />
             )}
@@ -1357,6 +1423,7 @@ export const PropertiesPanel: React.FC = () => {
               <TextProperties
                 object={selectedObject as fabric.Text}
                 onUpdate={updateSelectedObject}
+                onStyleCommit={reportCanvasStyleCommit}
                 setTextShadow={setTextShadow}
                 setTextStroke={setTextStroke}
                 setTextCharSpacing={setTextCharSpacing}
@@ -1368,6 +1435,7 @@ export const PropertiesPanel: React.FC = () => {
               <ImageProperties
                 object={selectedObject as fabric.Image}
                 onUpdate={updateSelectedObject}
+                onStyleCommit={reportCanvasStyleCommit}
                 setImageAdjustments={setImageAdjustments}
                 resetImageAdjustments={resetImageAdjustments}
               />

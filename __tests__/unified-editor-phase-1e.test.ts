@@ -146,8 +146,8 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
     });
     expect(snapshot.coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Tiptap text editing',
-        'remaining Canvas style controls',
+        'Canvas native fill, stroke, shadow, and gradient colour pickers',
+        'Canvas font-size, corner-radius, style presets, and image-reset commands',
       ])
     );
 

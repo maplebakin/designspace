@@ -15,6 +15,8 @@ type QaObject = {
   selectable?: boolean;
   evented?: boolean;
   lockMovementX?: boolean;
+  fill?: unknown;
+  opacity?: number;
   text?: string | null;
   isEditing?: boolean;
 };
@@ -257,6 +259,25 @@ test.describe('browser Fabric editor smoke', () => {
     await expect.poll(async () =>
       (await snapshot(page)).canvasObjects.find((object) => object.id === textbox?.id)?.text
     ).toBe('Inline QA text');
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('commits a Canvas fill-opacity slider through a real keyboard interaction', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const rectId = await addRectangleThroughUi(page, { hidePanels: false });
+    const panel = page.getByTestId('right-inspector-object-panel');
+    await expect(panel).toBeVisible();
+    const fillOpacitySlider = panel.getByRole('slider').first();
+    const before = (await snapshot(page)).canvasObjects.find((object) => object.id === rectId);
+    await fillOpacitySlider.focus();
+    await fillOpacitySlider.press('ArrowLeft');
+
+    await expect.poll(async () => {
+      const current = (await snapshot(page)).canvasObjects.find((object) => object.id === rectId);
+      return current?.fill;
+    }).not.toEqual(before?.fill);
     expect(fatalConsole).toEqual([]);
   });
 
