@@ -367,6 +367,10 @@ const matchesTransformLockState = (object: any, isLocked: boolean) => (
   && object?.hasControls === !isLocked
 );
 
+const matchesThemeColorLockState = (object: any, isLocked: boolean) => (
+    object?.colorLocked === isLocked
+);
+
 const buildLayerStateFromSerializedObjects = (
     objects: SerializedFabricObject[],
     layersById: Record<string, fabric.Object> = {}
@@ -2676,10 +2680,35 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { canvas, requestLayerSync, saveState, syncCanvasToStore } = get();
         const obj = canvas?.getObjects().find(o => (o as any).id === layerId);
         if (obj) {
-            (obj as any).colorLocked = !(obj as any).colorLocked;
+            const isLocked = !(obj as any).colorLocked;
+            (obj as any).colorLocked = isLocked;
             syncCanvasToStore(canvas);
             requestLayerSync();
             saveState();
+
+            const objectId = (obj as any).id;
+            const serializedObject = get().canvasObjects.find(
+                (object) => object.id === objectId
+            );
+            if (
+                !canvas
+                || typeof objectId !== 'string'
+                || objectId.trim().length === 0
+                || !canvas.getObjects().includes(obj)
+                || get().canvasReadyState !== 'ready'
+                || isCanvasHydrating(canvas)
+                || !isCanvasObjectObservationTarget(obj)
+                || !matchesThemeColorLockState(obj, isLocked)
+                || !serializedObject
+                || !matchesThemeColorLockState(serializedObject, isLocked)
+            ) {
+                return;
+            }
+
+            observeSemanticMutation({
+                action: 'modify-freeform-theme-color-lock',
+                objectId,
+            });
         }
     },
 

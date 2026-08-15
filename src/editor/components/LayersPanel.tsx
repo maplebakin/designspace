@@ -542,6 +542,7 @@ export const LayersPanel: React.FC = () => {
                       <Tooltip content={layer.colorLocked ? 'Unlock Color' : 'Lock Color'} side="top">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleToggleColorLock(layer.id); }}
+                          data-testid="layer-toggle-color-lock"
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           <Droplet className={`w-3.5 h-3.5 stroke-[1.5] transition-colors ${layer.colorLocked ? 'text-rose-400 fill-rose-400/20' : 'icon-muted'}`} />

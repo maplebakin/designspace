@@ -19,6 +19,10 @@ export type CanvasCommittedMutation =
       objectId: string;
     }>
   | Readonly<{
+      action: 'modify-freeform-theme-color-lock';
+      objectId: string;
+    }>
+  | Readonly<{
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
       assetEffect: PageAssetEffect;
