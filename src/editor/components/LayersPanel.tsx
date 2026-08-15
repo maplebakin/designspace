@@ -11,6 +11,11 @@ import { loadImageFromFile } from '../services/assetLoader';
 import { Tooltip } from './Tooltip';
 import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
+const getUserObjectOrder = (canvas: fabric.Canvas) => canvas.getObjects()
+  .filter(isUserObject)
+  .map((object) => (object as any).id)
+  .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+
 export const LayersPanel: React.FC = () => {
   const {
     canvas,
@@ -22,6 +27,8 @@ export const LayersPanel: React.FC = () => {
     toggleMovementLock,
     toggleObjectLock,
     toggleColorLock,
+    reportCommittedCanvasVisibility,
+    reportCommittedCanvasZOrder,
     saveState,
     selectObjectById,
     selectObjectsByIds,
@@ -38,6 +45,8 @@ export const LayersPanel: React.FC = () => {
       toggleMovementLock: state.toggleMovementLock,
       toggleObjectLock: state.toggleObjectLock,
       toggleColorLock: state.toggleColorLock,
+      reportCommittedCanvasVisibility: state.reportCommittedCanvasVisibility,
+      reportCommittedCanvasZOrder: state.reportCommittedCanvasZOrder,
       saveState: state.saveState,
       selectObjectById: state.selectObjectById,
       selectObjectsByIds: state.selectObjectsByIds,
@@ -99,22 +108,31 @@ export const LayersPanel: React.FC = () => {
         syncSelectionFromCanvas(canvas);
       }
       commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
+      reportCommittedCanvasVisibility(id, nextVisible);
     }
   };
   
   const handleMove = (id: string, direction: 'up' | 'down') => {
     const object = findObjectById(id);
     if (canvas && object) {
+      const previousObjectIds = getUserObjectOrder(canvas);
       if (direction === 'up') {
         canvas.bringObjectForward(object);
       } else {
         canvas.sendObjectBackwards(object);
       }
+      const expectedObjectIds = getUserObjectOrder(canvas);
       commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
+      reportCommittedCanvasZOrder(
+        id,
+        direction === 'up' ? 'move-freeform-forward' : 'move-freeform-backward',
+        previousObjectIds,
+        expectedObjectIds,
+      );
     }
   };
 
-  const applyLayerOrder = (nextOrder: Layer[]) => {
+  const applyLayerOrder = (nextOrder: Layer[], movedObjectId?: string) => {
     if (!canvas) return;
     // The panel is displayed front-to-back; Fabric stores its object array
     // back-to-front. Reverse the UI order before applying canvas indices.
@@ -123,6 +141,7 @@ export const LayersPanel: React.FC = () => {
       .filter((obj): obj is fabric.Object => !!obj);
     if (orderedObjects.length === 0) return;
 
+    const previousObjectIds = getUserObjectOrder(canvas);
     const allObjects = canvas.getObjects();
     const nonGuideCount = allObjects.filter(isUserObject).length;
     if (orderedObjects.length !== nonGuideCount) return;
@@ -138,7 +157,16 @@ export const LayersPanel: React.FC = () => {
       canvas.moveObjectTo(obj, index);
     });
 
+    const expectedObjectIds = getUserObjectOrder(canvas);
     commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
+    if (movedObjectId) {
+      reportCommittedCanvasZOrder(
+        movedObjectId,
+        'reorder-freeform-object',
+        previousObjectIds,
+        expectedObjectIds,
+      );
+    }
   };
 
   const handleReorder = (sourceId: string, targetId: string) => {
@@ -149,7 +177,7 @@ export const LayersPanel: React.FC = () => {
     const nextOrder = [...orderedLayers];
     const [moved] = nextOrder.splice(sourceIndex, 1);
     nextOrder.splice(targetIndex, 0, moved);
-    applyLayerOrder(nextOrder);
+    applyLayerOrder(nextOrder, sourceId);
   };
 
   const handleDragStart = (layerId: string) => (event: React.DragEvent<HTMLLIElement>) => {
@@ -502,6 +530,7 @@ export const LayersPanel: React.FC = () => {
                       <Tooltip content="Move Up" side="top">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'up'); }}
+                          data-testid="layer-move-up"
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           <ChevronUp className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />
@@ -510,6 +539,7 @@ export const LayersPanel: React.FC = () => {
                       <Tooltip content="Move Down" side="top">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleMove(layer.id, 'down'); }}
+                          data-testid="layer-move-down"
                           className="p-1 rounded hover:bg-white/10 active:scale-90 transition-all duration-150"
                         >
                           <ChevronDown className="icon-muted w-3.5 h-3.5 stroke-[1.5]" />

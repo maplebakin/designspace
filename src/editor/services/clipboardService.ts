@@ -2,6 +2,7 @@ import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import { useEditorStore } from '../state/editorStore';
 import { isActiveSelection } from '../utils/typeGuards';
+import { isUserObject } from '../utils/objectUtils';
 import { attachTextboxAutoFitHandlers } from './textboxDrawingService';
 
 /**
@@ -30,6 +31,22 @@ const CLIPBOARD_CUSTOM_PROPS = [
   'slotId',
   'semanticRole',
 ];
+
+type SingleObjectZOrderAction =
+  | 'move-freeform-forward'
+  | 'move-freeform-backward'
+  | 'bring-freeform-to-front'
+  | 'send-freeform-to-back';
+
+const getUserObjectOrder = (canvas: fabric.Canvas) => canvas.getObjects()
+  .filter(isUserObject)
+  .map((object) => (object as any).id)
+  .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+
+const areObjectIdListsEqual = (
+  first: readonly string[],
+  second: readonly string[]
+) => first.length === second.length && first.every((id, index) => id === second[index]);
 
 /**
  * Copies the currently selected object(s) to the clipboard buffer
@@ -191,97 +208,99 @@ const createObjectFromData = async (data: any): Promise<fabric.Object | null> =>
   }
 };
 
+const commitZOrderMutation = ({
+  action,
+  applyToSelection,
+  applyToObject,
+}: {
+  action: SingleObjectZOrderAction;
+  applyToSelection: (selection: fabric.ActiveSelection, canvas: fabric.Canvas) => void;
+  applyToObject: (object: fabric.Object, canvas: fabric.Canvas) => void;
+}): void => {
+  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
+  if (!canvas) return;
+
+  const activeObject = canvas.getActiveObject();
+  if (!activeObject) return;
+
+  const previousObjectIds = getUserObjectOrder(canvas);
+  const multiSelection = isActiveSelection(activeObject);
+  if (multiSelection) {
+    applyToSelection(activeObject as fabric.ActiveSelection, canvas);
+  } else {
+    applyToObject(activeObject, canvas);
+  }
+  const expectedObjectIds = getUserObjectOrder(canvas);
+
+  canvas.requestRenderAll();
+  syncCanvasToStore(canvas);
+  requestLayerSync();
+  saveState();
+
+  if (!multiSelection && !areObjectIdListsEqual(previousObjectIds, expectedObjectIds)) {
+    useEditorStore.getState().reportCommittedCanvasZOrder(
+      (activeObject as any).id,
+      action,
+      previousObjectIds,
+      expectedObjectIds,
+    );
+  }
+};
+
 /**
- * Brings the selected object(s) to the front of the canvas
+ * Brings the selected object(s) to the front of the canvas.
+ * Multi-selection remains legacy-owned because the shadow target is singular.
  */
 export const bringToFront = (): void => {
-  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
-  if (!canvas) return;
-
-  const activeObject = canvas.getActiveObject();
-  if (!activeObject) return;
-
-  if (isActiveSelection(activeObject)) {
-    const selection = activeObject as fabric.ActiveSelection;
-    selection.getObjects().forEach((obj) => canvas.bringObjectToFront(obj));
-  } else {
-    canvas.bringObjectToFront(activeObject);
-  }
-
-  canvas.requestRenderAll();
-  syncCanvasToStore(canvas);
-  requestLayerSync();
-  saveState();
+  commitZOrderMutation({
+    action: 'bring-freeform-to-front',
+    applyToSelection: (selection, canvas) => {
+      selection.getObjects().forEach((obj) => canvas.bringObjectToFront(obj));
+    },
+    applyToObject: (object, canvas) => canvas.bringObjectToFront(object),
+  });
 };
 
 /**
- * Sends the selected object(s) to the back of the canvas
+ * Sends the selected object(s) to the back of the canvas.
+ * Multi-selection remains legacy-owned because the shadow target is singular.
  */
 export const sendToBack = (): void => {
-  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
-  if (!canvas) return;
-
-  const activeObject = canvas.getActiveObject();
-  if (!activeObject) return;
-
-  if (isActiveSelection(activeObject)) {
-    const selection = activeObject as fabric.ActiveSelection;
-    // Reverse order to maintain relative stacking
-    [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectToBack(obj));
-  } else {
-    canvas.sendObjectToBack(activeObject);
-  }
-
-  canvas.requestRenderAll();
-  syncCanvasToStore(canvas);
-  requestLayerSync();
-  saveState();
+  commitZOrderMutation({
+    action: 'send-freeform-to-back',
+    applyToSelection: (selection, canvas) => {
+      [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectToBack(obj));
+    },
+    applyToObject: (object, canvas) => canvas.sendObjectToBack(object),
+  });
 };
 
 /**
- * Brings the selected object(s) forward by one level
+ * Brings the selected object(s) forward by one level.
+ * Multi-selection remains legacy-owned because the shadow target is singular.
  */
 export const bringForward = (): void => {
-  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
-  if (!canvas) return;
-
-  const activeObject = canvas.getActiveObject();
-  if (!activeObject) return;
-
-  if (isActiveSelection(activeObject)) {
-    const selection = activeObject as fabric.ActiveSelection;
-    selection.getObjects().forEach((obj) => canvas.bringObjectForward(obj));
-  } else {
-    canvas.bringObjectForward(activeObject);
-  }
-
-  canvas.requestRenderAll();
-  syncCanvasToStore(canvas);
-  requestLayerSync();
-  saveState();
+  commitZOrderMutation({
+    action: 'move-freeform-forward',
+    applyToSelection: (selection, canvas) => {
+      selection.getObjects().forEach((obj) => canvas.bringObjectForward(obj));
+    },
+    applyToObject: (object, canvas) => canvas.bringObjectForward(object),
+  });
 };
 
 /**
- * Sends the selected object(s) backward by one level
+ * Sends the selected object(s) backward by one level.
+ * Multi-selection remains legacy-owned because the shadow target is singular.
  */
 export const sendBackward = (): void => {
-  const { canvas, requestLayerSync, saveState, syncCanvasToStore } = useEditorStore.getState();
-  if (!canvas) return;
-
-  const activeObject = canvas.getActiveObject();
-  if (!activeObject) return;
-
-  if (isActiveSelection(activeObject)) {
-    const selection = activeObject as fabric.ActiveSelection;
-    [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectBackwards(obj));
-  } else {
-    canvas.sendObjectBackwards(activeObject);
-  }
-
-  canvas.requestRenderAll();
-  syncCanvasToStore(canvas);
-  requestLayerSync();
-  saveState();
+  commitZOrderMutation({
+    action: 'move-freeform-backward',
+    applyToSelection: (selection, canvas) => {
+      [...selection.getObjects()].reverse().forEach((obj) => canvas.sendObjectBackwards(obj));
+    },
+    applyToObject: (object, canvas) => canvas.sendObjectBackwards(object),
+  });
 };
 
 /**

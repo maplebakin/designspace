@@ -61,8 +61,9 @@ import {
     withCanvasObjectMutationSuppressed,
 } from '../services/canvasMutationObservation';
 import type {
-    CanvasCommittedMutation,
-    CanvasCommittedMutationObserver,
+  CanvasCommittedMutation,
+  CanvasCommittedMutationObserver,
+  CanvasDiscreteObjectMutationAction,
 } from '../services/canvasMutationObservation';
 import {
     assertSupportedDesignSpaceProjectSchema,
@@ -370,6 +371,28 @@ const matchesTransformLockState = (object: any, isLocked: boolean) => (
 const matchesThemeColorLockState = (object: any, isLocked: boolean) => (
     object?.colorLocked === isLocked
 );
+
+const matchesSelectionLockState = (object: any, isLocked: boolean) => (
+    object?.lockMovementX === isLocked
+    && object?.lockMovementY === isLocked
+    && object?.lockRotation === isLocked
+    && object?.lockScalingX === isLocked
+    && object?.lockScalingY === isLocked
+    && object?.lockSkewingX === isLocked
+    && object?.lockSkewingY === isLocked
+    && object?.hasControls === !isLocked
+    && object?.selectable === !isLocked
+);
+
+const getUserObjectIds = (objects: readonly any[]) => objects
+    .filter(isUserObject)
+    .map((object) => object?.id)
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+
+const areObjectIdListsEqual = (
+    first: readonly string[],
+    second: readonly string[]
+) => first.length === second.length && first.every((id, index) => id === second[index]);
 
 const buildLayerStateFromSerializedObjects = (
     objects: SerializedFabricObject[],
@@ -1093,6 +1116,18 @@ interface EditorState {
   ungroupSelectedObjects: () => void;
   /** Reports the one narrow inspector style command proven by Phase 1M. */
   reportCommittedCanvasBorderStyle: (objectId: string) => void;
+  reportCommittedCanvasVisibility: (objectId: string, visible: boolean) => void;
+  reportCommittedCanvasZOrder: (
+    objectId: string,
+    action: Exclude<CanvasDiscreteObjectMutationAction, 'modify-freeform-visibility' | 'modify-freeform-selection-lock'>,
+    previousObjectIds: readonly string[],
+    expectedObjectIds: readonly string[],
+  ) => void;
+  reportCommittedCanvasSelectionLock: (
+    objectId: string,
+    isLocked: boolean,
+    eventedBeforeMutation: boolean | undefined,
+  ) => void;
   addLayer: (layer: Layer) => void;
   updateLayer: (id: string, partial: Partial<Layer>) => void;
   removeLayer: (id: string) => void;
@@ -1436,6 +1471,85 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             action: 'modify-freeform-style',
             objectId,
             style: 'border-style',
+        });
+    },
+    reportCommittedCanvasVisibility: (objectId, visible) => {
+        const { canvas } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        const serializedObject = get().canvasObjects.find(
+            (object) => object.id === objectId
+        );
+        if (
+            !canvas
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+            || (target.visible ?? true) !== visible
+            || !serializedObject
+            || (serializedObject.visible ?? true) !== visible
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-visibility',
+            objectId,
+        });
+    },
+    reportCommittedCanvasZOrder: (
+        objectId,
+        action,
+        previousObjectIds,
+        expectedObjectIds,
+    ) => {
+        const { canvas } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        const actualObjectIds = canvas ? getUserObjectIds(canvas.getObjects()) : [];
+        const serializedObjectIds = getUserObjectIds(get().canvasObjects);
+        if (
+            !canvas
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+            || areObjectIdListsEqual(previousObjectIds, expectedObjectIds)
+            || !areObjectIdListsEqual(actualObjectIds, expectedObjectIds)
+            || !areObjectIdListsEqual(serializedObjectIds, expectedObjectIds)
+        ) return;
+        observeSemanticMutation({
+            action,
+            objectId,
+        });
+    },
+    reportCommittedCanvasSelectionLock: (
+        objectId,
+        isLocked,
+        eventedBeforeMutation,
+    ) => {
+        const { canvas } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        const serializedObject = get().canvasObjects.find(
+            (object) => object.id === objectId
+        );
+        if (
+            !canvas
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+            || !matchesSelectionLockState(target, isLocked)
+            || target.evented !== eventedBeforeMutation
+            || !serializedObject
+            || !matchesSelectionLockState(serializedObject, isLocked)
+            || serializedObject.evented !== eventedBeforeMutation
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-selection-lock',
+            objectId,
         });
     },
     clearSelection: () => {
@@ -3236,6 +3350,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         if (selectedObject && canvas) {
             const isCurrentlyLocked = selectedObject.lockMovementX;
             const nextLocked = !isCurrentlyLocked;
+            const objectId = (selectedObject as any).id;
+            const eventedBeforeMutation = selectedObject.evented;
             selectedObject.set({
                 lockMovementX: nextLocked,
                 lockMovementY: nextLocked,
@@ -3254,6 +3370,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
+            get().reportCommittedCanvasSelectionLock(
+                objectId,
+                nextLocked,
+                eventedBeforeMutation,
+            );
         }
     },
 

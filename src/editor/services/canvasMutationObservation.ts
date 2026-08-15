@@ -23,6 +23,10 @@ export type CanvasCommittedMutation =
       objectId: string;
     }>
   | Readonly<{
+      action: CanvasDiscreteObjectMutationAction;
+      objectId: string;
+    }>
+  | Readonly<{
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
       assetEffect: PageAssetEffect;
@@ -31,6 +35,15 @@ export type CanvasCommittedMutation =
       action: 'group-freeform-objects' | 'ungroup-freeform-objects';
       groupId: string;
     }>;
+
+export type CanvasDiscreteObjectMutationAction =
+  | 'modify-freeform-visibility'
+  | 'move-freeform-forward'
+  | 'move-freeform-backward'
+  | 'bring-freeform-to-front'
+  | 'send-freeform-to-back'
+  | 'modify-freeform-selection-lock'
+  | 'reorder-freeform-object';
 
 export type CanvasCommittedMutationObserver = (
   mutation: CanvasCommittedMutation

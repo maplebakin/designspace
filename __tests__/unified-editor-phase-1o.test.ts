@@ -508,7 +508,10 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
       fireEvent.click(screen.getByTestId('layer-toggle-lock'), { shiftKey: true });
     });
 
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-selection-lock',
+      objectId: 'theme-color-lock-shape',
+    });
     expect(shape.selectable).toBe(false);
     expect(shape.colorLocked).toBe(false);
   });
@@ -524,7 +527,10 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Lock Selection' }));
     });
 
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-selection-lock',
+      objectId: 'theme-color-lock-shape',
+    });
     expect(shape.colorLocked).toBe(false);
   });
 
@@ -644,7 +650,7 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
         'Canvas manual fill colour, opacity, and other colour controls',
         'Canvas theme-token linking, unlinking, reset, and global theme application',
         'Canvas theme color lock mutations from other commands',
-        'Canvas Selection Lock and full-object lock',
+        'Canvas full-object lock and unsupported Selection Lock invocation paths',
         'Document formatting/styles',
       ])
     );

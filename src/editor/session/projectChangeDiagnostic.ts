@@ -82,6 +82,10 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasBorderStyle: true;
   canvasTransformLock: true;
   canvasThemeColorLock: true;
+  canvasVisibility: true;
+  canvasZOrder: true;
+  canvasLayerReorder: true;
+  canvasSelectionLock: true;
   documentOverlayAdd: true;
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
@@ -152,6 +156,10 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasBorderStyle: true,
   canvasTransformLock: true,
   canvasThemeColorLock: true,
+  canvasVisibility: true,
+  canvasZOrder: true,
+  canvasLayerReorder: true,
+  canvasSelectionLock: true,
   documentOverlayAdd: true,
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
@@ -169,7 +177,8 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
     'Canvas manual fill colour, opacity, and other colour controls',
     'Canvas theme-token linking, unlinking, reset, and global theme application',
     'Canvas theme color lock mutations from other commands',
-    'Canvas Selection Lock and full-object lock',
+    'Canvas multi-selection z-order and other reorder paths',
+    'Canvas full-object lock and unsupported Selection Lock invocation paths',
     'other Canvas object metadata controls',
     'Document formatting/styles',
     'flow-image metadata and structured flow mutations',

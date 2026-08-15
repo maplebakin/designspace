@@ -549,7 +549,7 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
     expectTransformLockState(shape, false);
   });
 
-  it('keeps Shift-click and Context Menu Selection Lock outside transform-lock coverage', () => {
+  it('keeps Selection Lock separate from Transform Lock coverage', () => {
     const canvas = createCanvas();
     installCanvas(canvas);
     const shape = seedShape(canvas);
@@ -560,7 +560,10 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
       fireEvent.click(screen.getByTestId('layer-toggle-lock'), { shiftKey: true });
     });
 
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-selection-lock',
+      objectId: 'transform-lock-shape',
+    });
     expect(shape.selectable).toBe(false);
     expect(shape.lockSkewingX).toBe(true);
     expect(shape.lockSkewingY).toBe(true);
@@ -577,7 +580,10 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
     });
 
     expect(secondShape.selectable).toBe(false);
-    expect(secondDiagnostic.committed).not.toHaveBeenCalled();
+    expect(secondDiagnostic.committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-selection-lock',
+      objectId: 'transform-lock-shape',
+    });
   });
 
   it('reports only narrow transform-lock coverage and keeps authored coverage incomplete', () => {
@@ -598,7 +604,7 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
         'remaining Canvas style controls',
-        'Canvas Selection Lock and full-object lock',
+        'Canvas full-object lock and unsupported Selection Lock invocation paths',
         'other Canvas object metadata controls',
         'Canvas text/style editing beyond Border Style',
         'Document formatting/styles',

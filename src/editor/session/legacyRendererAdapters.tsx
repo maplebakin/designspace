@@ -363,9 +363,35 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       return;
     }
 
+    if (
+      mutation.action === 'modify-freeform-visibility'
+      || mutation.action === 'move-freeform-forward'
+      || mutation.action === 'move-freeform-backward'
+      || mutation.action === 'bring-freeform-to-front'
+      || mutation.action === 'send-freeform-to-back'
+      || mutation.action === 'modify-freeform-selection-lock'
+      || mutation.action === 'reorder-freeform-object'
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'freeform-object',
+          id: mutation.objectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
     const assetEffect = mutation.action === 'modify-freeform-geometry'
       ? 'none'
-      : mutation.assetEffect;
+      : 'assetEffect' in mutation
+        ? mutation.assetEffect
+        : 'none';
     const domains = mutation.action === 'modify-freeform-geometry'
       ? ['geometry'] as const
       : assetEffect === 'none'
