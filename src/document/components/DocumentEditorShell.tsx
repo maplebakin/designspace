@@ -132,8 +132,37 @@ export type DocumentCommittedMutation =
       pageId: string;
     }>
   | Readonly<{
+      action: 'add-page' | 'duplicate-page' | 'remove-page' | 'reorder-page';
+      pageId: string;
+    }>
+  | Readonly<{
       action: 'modify-document-style-metadata';
       pageId: string;
+    }>
+  | Readonly<{
+      action: 'modify-document-metadata';
+      pageId: string;
+    }>
+  | Readonly<{
+      action: 'modify-document-reference';
+      pageId: string;
+      assetEffect?: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'modify-structured-image-metadata';
+      pageId: string;
+      imageId: string;
+      assetEffect?: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'modify-structured-image-layout';
+      pageId: string;
+      imageId?: string;
+    }>
+  | Readonly<{
+      action: 'modify-structured-image-group';
+      pageId: string;
+      groupId: string;
     }>
   | Readonly<{
       action: 'modify-structured-geometry';
@@ -149,7 +178,10 @@ export type DocumentCommittedMutation =
       assetEffect: PageAssetEffect;
     }>
   | Readonly<{
-      action: 'add-structured-flow-image' | 'remove-structured-flow-image';
+      action:
+        | 'add-structured-flow-image'
+        | 'remove-structured-flow-image'
+        | 'remove-structured-inline-image';
       pageId: string;
       flowImageId: string;
       assetEffect: PageAssetEffect;
@@ -199,6 +231,15 @@ const notifyCommittedPageMetadata = (
   });
 };
 
+const notifyCommittedPageCommand = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  action: 'add-page' | 'duplicate-page' | 'remove-page' | 'reorder-page',
+  pageId: string
+) => {
+  if (!pageId) return;
+  notifyCommittedMutation(callback, { action, pageId });
+};
+
 const notifyCommittedStructuredContent = (
   callback: DocumentEditorShellProps['onCommittedMutation'],
   action: 'modify-structured-title-content' | 'modify-structured-body-content',
@@ -217,14 +258,81 @@ const notifyCommittedDocumentStyleMetadata = (
   });
 };
 
-const findDocumentFlowImagePositions = (
+const notifyCommittedDocumentMetadata = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-document-metadata',
+    pageId,
+  });
+};
+
+const notifyCommittedDocumentReference = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string,
+  assetEffect?: PageAssetEffect
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-document-reference',
+    pageId,
+    ...(assetEffect ? { assetEffect } : {}),
+  });
+};
+
+const notifyCommittedStructuredImageMetadata = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string,
+  imageId: string,
+  assetEffect?: PageAssetEffect
+) => {
+  if (!pageId || !imageId) return;
+  notifyCommittedMutation(callback, {
+    action: 'modify-structured-image-metadata',
+    pageId,
+    imageId,
+    ...(assetEffect ? { assetEffect } : {}),
+  });
+};
+
+const notifyCommittedStructuredImageLayout = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string,
+  imageId?: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-structured-image-layout',
+    pageId,
+    ...(imageId ? { imageId } : {}),
+  });
+};
+
+const notifyCommittedStructuredImageGroup = (
+  callback: DocumentEditorShellProps['onCommittedMutation'],
+  pageId: string,
+  groupId: string
+) => {
+  notifyCommittedMutation(callback, {
+    action: 'modify-structured-image-group',
+    pageId,
+    groupId,
+  });
+};
+
+const findDocumentImagePositions = (
   editor: Editor,
-  imageId: string
+  imageId: string,
+  nodeType?: 'documentFlowImage' | 'documentInlineImage'
 ) => {
   const positions: number[] = [];
   editor.state.doc.descendants((node, position) => {
     if (
-      node.type.name === 'documentFlowImage'
+      (!nodeType
+        || node.type.name === nodeType)
+      && (
+        node.type.name === 'documentFlowImage'
+        || node.type.name === 'documentInlineImage'
+      )
       && node.attrs.id === imageId
     ) {
       positions.push(position);
@@ -233,6 +341,11 @@ const findDocumentFlowImagePositions = (
   });
   return positions;
 };
+
+const findDocumentFlowImagePositions = (
+  editor: Editor,
+  imageId: string
+) => findDocumentImagePositions(editor, imageId, 'documentFlowImage');
 
 const getActiveDocumentPageId = () => {
   const project = useDocumentStore.getState().project;
@@ -243,7 +356,10 @@ const getActiveDocumentPageId = () => {
 
 const notifyCommittedFlowImageLifecycle = (
   callback: DocumentEditorShellProps['onCommittedMutation'],
-  action: 'add-structured-flow-image' | 'remove-structured-flow-image',
+  action:
+    | 'add-structured-flow-image'
+    | 'remove-structured-flow-image'
+    | 'remove-structured-inline-image',
   pageId: string,
   flowImageId: string,
   assetEffect: PageAssetEffect
@@ -650,6 +766,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ...page.reference,
           visible: !page.reference.visible,
         });
+        notifyCommittedDocumentReference(onCommittedMutation, page.id);
         return;
       }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedOverlayId) {
@@ -779,7 +896,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           },
         });
         event.preventDefault();
-        commitStructuredDocumentImagePosition(
+        const committed = commitStructuredDocumentImagePosition(
           editor,
           image.imagePosition,
           image.imageId,
@@ -790,6 +907,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ),
           moved.topPx
         );
+        if (committed) {
+          notifyCommittedStructuredImageLayout(
+            onCommittedMutation,
+            page.id,
+            image.imageId
+          );
+        }
         return;
       }
     };
@@ -952,8 +1076,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         offsetXPx: 0,
         offsetYPx: 0,
         visible: true,
-        locked: true,
-      });
+          locked: true,
+        });
+      const referencePageId = page?.id || getActiveDocumentPageId();
+      if (referencePageId) {
+        notifyCommittedDocumentReference(
+          onCommittedMutation,
+          referencePageId,
+          'retained-reference'
+        );
+      }
       setReferenceAdjustMode(false);
       setToastMessage('Reference page added. It will never be included in exports.');
     } catch (error) {
@@ -961,6 +1093,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
   }, [
     addAsset,
+    onCommittedMutation,
+    page?.id,
     setReference,
     setReferenceAdjustMode,
     setToastMessage,
@@ -1246,10 +1380,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       selectedImageId: ordered[0],
       imageGroupsMeta: [...page.imageGroups, group],
     })) return;
+    notifyCommittedStructuredImageGroup(onCommittedMutation, page.id, group.id);
     setSelectedStructuredImageIds(ordered);
     setSelectedImageGroupId(group.id);
   }, [
     commitStructuredDocumentImageBatch,
+    onCommittedMutation,
     page,
     selectedStructuredImageIds,
     setToastMessage,
@@ -1276,8 +1412,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           }
         : group
     ));
+    const changed = JSON.stringify(next) !== JSON.stringify(page.imageGroups);
     updateImageGroups(page.id, next);
-  }, [page, selectedImageGroup, updateImageGroups]);
+    if (changed && !Object.prototype.hasOwnProperty.call(update, 'gapPx')) {
+      notifyCommittedStructuredImageGroup(
+        onCommittedMutation,
+        page.id,
+        selectedImageGroup.id
+      );
+    }
+  }, [onCommittedMutation, page, selectedImageGroup, updateImageGroups]);
 
   const ungroupSelectedImages = useCallback(() => {
     if (!page || !selectedImageGroup) return;
@@ -1301,15 +1445,23 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       page.imageGroups,
       selectedImageGroup.id
     );
-    commitStructuredDocumentImageBatch(editor, {
+    const committed = commitStructuredDocumentImageBatch(editor, {
       updatesByImageId,
       selectedImageId: selectedFlowImage?.attributes.id || null,
       imageGroupsMeta: nextGroups,
     });
+    if (committed) {
+      notifyCommittedStructuredImageGroup(
+        onCommittedMutation,
+        page.id,
+        selectedImageGroup.id
+      );
+    }
     setSelectedImageGroupId(null);
   }, [
     commitStructuredDocumentImageBatch,
     getStructuredLayoutModel,
+    onCommittedMutation,
     page,
     selectedFlowImage,
     selectedImageGroup,
@@ -1426,14 +1578,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         yPx: Math.max(0, offset.yPx),
       };
     });
-    commitStructuredDocumentImageBatch(editor, {
+    const committed = commitStructuredDocumentImageBatch(editor, {
       updatesByImageId,
       selectedImageId: selectedFlowImage?.attributes.id || images[0].imageId,
-      imageGroupsMeta: page.imageGroups,
     });
+    if (committed) {
+      notifyCommittedStructuredImageLayout(onCommittedMutation, page.id);
+    }
   }, [
     commitStructuredDocumentImageBatch,
     getStructuredLayoutModel,
+    onCommittedMutation,
     page,
     selectedFlowImage,
     selectedImageGroup,
@@ -1542,10 +1697,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const updateSelectedImage = useCallback((
     update: Partial<DocumentImageInspectorValue>
-  ) => {
+  ): boolean => {
     if (selectedFlowImage) {
       const editor = bodyEditorRef.current;
-      if (!editor) return;
+      if (!editor || editor.isDestroyed) return false;
+      const imageId = selectedFlowImage.attributes.id;
+      const imagePositions = findDocumentImagePositions(editor, imageId);
+      if (imagePositions.length !== 1) return false;
+      const imagePosition = imagePositions[0];
+      const beforeNode = editor.state.doc.nodeAt(imagePosition);
+      if (!beforeNode) return false;
       const next: Partial<DocumentImageAttributes> = {
         ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
         ...(update.captionAlignment === 'inherit'
@@ -1660,13 +1821,25 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           next.heightPx = widthPx / Math.max(0.0001, aspectRatio);
         }
       }
-      editor.chain()
-        .setNodeSelection(selectedFlowImage.position)
+      const committed = editor.chain()
+        .setNodeSelection(imagePosition)
         .updateSelectedDocumentImage(next)
         .run();
-      return;
+      if (!committed) return false;
+      const afterPositions = findDocumentImagePositions(editor, imageId);
+      const afterNode = afterPositions.length === 1
+        ? editor.state.doc.nodeAt(afterPositions[0])
+        : null;
+      return Boolean(
+        afterNode
+        && JSON.stringify(beforeNode.attrs) !== JSON.stringify(afterNode.attrs)
+      );
     }
-    if (!selectedOverlay || !page) return;
+    if (!selectedOverlay || !page) return false;
+    const beforeOverlay = useDocumentStore.getState().project?.pages
+      .find((candidate) => candidate.id === page.id)
+      ?.overlayObjects.find((candidate) => candidate.id === selectedOverlay.id);
+    if (!beforeOverlay) return false;
     const metadata: Partial<DocumentOverlayImage> = {
       ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
       ...(update.captionAlignment === 'inherit'
@@ -1728,19 +1901,100 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       updateOverlay(selectedOverlay.id, metadata, page.id);
     }
     if (Object.keys(geometry).length > 0) {
-      const committed = commitOverlayGeometry(page.id, selectedOverlay.id, geometry);
-      if (committed) {
-        notifyCommittedOverlayGeometry(onCommittedMutation, selectedOverlay.id);
-      }
+      commitOverlayGeometry(page.id, selectedOverlay.id, geometry);
     }
+    const afterOverlay = useDocumentStore.getState().project?.pages
+      .find((candidate) => candidate.id === page.id)
+      ?.overlayObjects.find((candidate) => candidate.id === selectedOverlay.id);
+    return Boolean(
+      afterOverlay
+      && JSON.stringify(beforeOverlay) !== JSON.stringify(afterOverlay)
+    );
   }, [
     availableColumnWidth,
     commitOverlayGeometry,
-    onCommittedMutation,
     page,
     selectedFlowImage,
     selectedOverlay,
     updateOverlay,
+  ]);
+
+  const handleSelectedImageCommit = useCallback((
+    field: string,
+    initialValue: string
+  ) => {
+    if (!page) return;
+    const currentFlowImage = selectedFlowImage && bodyEditorRef.current
+      ? getSelectedDocumentImage(bodyEditorRef.current)
+      : null;
+    const currentValue = currentFlowImage
+      ? (currentFlowImage.attributes as unknown as Record<string, unknown>)[field]
+      : (useDocumentStore.getState().project?.pages.find(
+          (candidate) => candidate.id === page.id
+        )?.overlayObjects.find((candidate) => candidate.id === selectedOverlay?.id) as Record<string, unknown> | undefined)?.[
+          field
+        ];
+    if (currentValue === undefined || String(currentValue) === initialValue) return;
+    const layoutFields = new Set([
+      'widthPx',
+      'heightPx',
+      'xPx',
+      'yPx',
+      'xOffsetPx',
+      'verticalAnchor',
+      'horizontalPlacement',
+    ]);
+    if (layoutFields.has(field)) {
+      notifyCommittedStructuredImageLayout(
+        onCommittedMutation,
+        page.id,
+        currentFlowImage?.attributes.id || selectedOverlay?.id
+      );
+    } else {
+      notifyCommittedStructuredImageMetadata(
+        onCommittedMutation,
+        page.id,
+        currentFlowImage?.attributes.id || selectedOverlay?.id || ''
+      );
+    }
+  }, [onCommittedMutation, page, selectedFlowImage, selectedOverlay]);
+
+  const handleSelectedImageChange = useCallback((
+    update: Partial<DocumentImageInspectorValue>
+  ) => {
+    const changed = updateSelectedImage(update);
+    if (!changed) return;
+    const keys = Object.keys(update);
+    const layoutFields = new Set([
+      'widthPx',
+      'heightPx',
+      'xPx',
+      'yPx',
+      'xOffsetPx',
+      'verticalAnchor',
+      'horizontalPlacement',
+    ]);
+    const completedField = keys.find((key) => (
+      key === 'cropMode'
+      || key === 'captionAlignment'
+      || key === 'captionItalic'
+      || key === 'verticalAnchor'
+      || key === 'horizontalPlacement'
+    ));
+    if (!completedField || !page) return;
+    const imageId = selectedFlowImage?.attributes.id || selectedOverlay?.id;
+    if (!imageId) return;
+    if (layoutFields.has(completedField)) {
+      notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, imageId);
+    } else {
+      notifyCommittedStructuredImageMetadata(onCommittedMutation, page.id, imageId);
+    }
+  }, [
+    onCommittedMutation,
+    page,
+    selectedFlowImage,
+    selectedOverlay,
+    updateSelectedImage,
   ]);
 
   const convertSelectedFlowToOverlay = useCallback((
@@ -1749,11 +2003,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const editor = bodyEditorRef.current;
     if (!selectedFlowImage || !editor || !page) return;
     const attributes = selectedFlowImage.attributes;
-    editor.chain()
+    const removed = editor.chain()
       .focus()
       .setNodeSelection(selectedFlowImage.position)
       .deleteSelection()
       .run();
+    if (
+      !removed
+      || findDocumentImagePositions(editor, attributes.id).length > 0
+    ) return;
     const overlayId = attributes.id || uuidv4();
     const committed = addOverlay({
       id: overlayId,
@@ -1776,12 +2034,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       locked: false,
     }, page.id);
     if (!committed) return;
-    notifyCommittedOverlayLifecycle(
-      onCommittedMutation,
-      'add-structured-overlay',
-      overlayId,
-      'retained-reference'
-    );
+    const committedOverlay = useDocumentStore.getState().project?.pages
+      .find((candidate) => candidate.id === page.id)
+      ?.overlayObjects.find((candidate) => candidate.id === overlayId);
+    if (!committedOverlay) return;
+    notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, overlayId);
     setSelectedOverlayId(overlayId);
     setSelectedFlowImage(null);
     setSelectedStructuredImageIds([]);
@@ -1801,9 +2058,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     wrap: DocumentFlowImageWrap
   ) => {
     const editor = bodyEditorRef.current;
-    if (!editor) return;
-    removeOverlay(overlay.id, page?.id);
-    editor.commands.insertDocumentImage({
+    if (!editor || !page) return;
+    const removed = removeOverlay(overlay.id, page.id);
+    const remainingOverlay = useDocumentStore.getState().project?.pages
+      .find((candidate) => candidate.id === page.id)
+      ?.overlayObjects.some((candidate) => candidate.id === overlay.id);
+    if (!removed || remainingOverlay) return;
+    const inserted = editor.commands.insertDocumentImage({
       id: overlay.id,
       assetId: overlay.assetId,
       altText: overlay.altText,
@@ -1821,8 +2082,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       cropFocalX: overlay.cropFocalX,
       cropFocalY: overlay.cropFocalY,
     });
+    if (
+      !inserted
+      || findDocumentImagePositions(editor, overlay.id).length !== 1
+    ) return;
     editor.commands.focus();
-  }, [page?.id, removeOverlay]);
+    notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, overlay.id);
+  }, [onCommittedMutation, page, removeOverlay]);
 
   const handleLayoutChange = useCallback((
     layout: DocumentImageLayoutMode
@@ -1837,6 +2103,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       }
       const editor = bodyEditorRef.current;
       if (isSpan && editor && page) {
+        const beforeAttributes = selectedFlowImage.attributes;
         const spanStartColumn =
           spanCount === 2
           && page.columnCount === 3
@@ -1847,7 +2114,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           availableColumnWidth * spanCount
           + page.columnGapPx * (spanCount - 1)
         );
-        editor.chain()
+        const committed = editor.chain()
           .focus()
           .setNodeSelection(selectedFlowImage.position)
           .updateSelectedDocumentImage({
@@ -1863,25 +2130,66 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               selectedFlowImage.attributes.verticalAnchor || 'flow',
           })
           .run();
+        const afterImage = getSelectedDocumentImage(editor);
+        if (
+          committed
+          && afterImage
+          && JSON.stringify(beforeAttributes)
+            !== JSON.stringify(afterImage.attributes)
+        ) {
+          notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, selectedFlowImage.attributes.id);
+        }
         return;
       }
-      editor?.chain()
+      const beforeAttributes = selectedFlowImage.attributes;
+      const committed = editor?.chain()
         .focus()
         .setNodeSelection(selectedFlowImage.position)
         .setDocumentImageWrap(wrap as DocumentFlowImageWrap)
         .run();
+      const afterImage = editor ? getSelectedDocumentImage(editor) : null;
+      if (
+        committed
+        && page
+        && afterImage
+        && JSON.stringify(beforeAttributes)
+          !== JSON.stringify(afterImage.attributes)
+      ) {
+        notifyCommittedStructuredImageLayout(
+          onCommittedMutation,
+          page.id,
+          selectedFlowImage.attributes.id
+        );
+      }
       return;
     }
     if (!selectedOverlay) return;
     if (wrap === 'front' || wrap === 'behind') {
+      const beforePlacement = selectedOverlay.placement;
       updateOverlay(selectedOverlay.id, { placement: wrap }, page?.id);
+      const afterPlacement = useDocumentStore.getState().project?.pages
+        .find((candidate) => candidate.id === page?.id)
+        ?.overlayObjects.find((candidate) => candidate.id === selectedOverlay.id)
+        ?.placement;
+      if (
+        page
+        && afterPlacement !== undefined
+        && afterPlacement !== beforePlacement
+      ) {
+        notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, selectedOverlay.id);
+      }
     } else if (isSpan && page) {
       const widthPx = (
         availableColumnWidth * spanCount
         + page.columnGapPx * (spanCount - 1)
       );
-      removeOverlay(selectedOverlay.id, page.id);
-      bodyEditorRef.current?.commands.insertDocumentImage({
+      const removed = removeOverlay(selectedOverlay.id, page.id);
+      const remainingOverlay = useDocumentStore.getState().project?.pages
+        .find((candidate) => candidate.id === page.id)
+        ?.overlayObjects.some((candidate) => candidate.id === selectedOverlay.id);
+      const editor = bodyEditorRef.current;
+      const inserted = removed && !remainingOverlay && editor
+        ? editor.commands.insertDocumentImage({
         id: selectedOverlay.id,
         assetId: selectedOverlay.assetId,
         altText: selectedOverlay.altText,
@@ -1908,8 +2216,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         cropMode: selectedOverlay.cropMode,
         cropFocalX: selectedOverlay.cropFocalX,
         cropFocalY: selectedOverlay.cropFocalY,
-      });
-      bodyEditorRef.current?.commands.focus();
+      })
+        : false;
+      if (
+        inserted
+        && editor
+        && findDocumentImagePositions(editor, selectedOverlay.id).length === 1
+      ) {
+        editor.commands.focus();
+        notifyCommittedStructuredImageLayout(
+          onCommittedMutation,
+          page.id,
+          selectedOverlay.id
+        );
+      }
     } else {
       convertOverlayToFlow(selectedOverlay, wrap as DocumentFlowImageWrap);
     }
@@ -1919,6 +2239,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     convertSelectedFlowToOverlay,
     page,
     physicalMargins,
+    onCommittedMutation,
     removeOverlay,
     selectedFlowImage,
     selectedOverlay,
@@ -1928,12 +2249,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const handleSpanStartChange = useCallback((spanStartColumn: 1 | 2) => {
     const editor = bodyEditorRef.current;
     if (!selectedFlowImage || !editor) return;
-    editor.chain()
+    const beforeAttributes = selectedFlowImage.attributes;
+    const committed = editor.chain()
       .focus()
       .setNodeSelection(selectedFlowImage.position)
       .updateSelectedDocumentImage({ spanStartColumn })
       .run();
-  }, [selectedFlowImage]);
+    const afterImage = getSelectedDocumentImage(editor);
+    if (
+      committed
+      && page
+      && afterImage
+      && JSON.stringify(beforeAttributes)
+        !== JSON.stringify(afterImage.attributes)
+    ) {
+      notifyCommittedStructuredImageLayout(
+        onCommittedMutation,
+        page.id,
+        selectedFlowImage.attributes.id
+      );
+    }
+  }, [onCommittedMutation, page, selectedFlowImage]);
 
   const moveSelectedSpanImage = useCallback((
     direction: DocumentImageMoveDirection
@@ -1946,12 +2282,29 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     ) {
       return;
     }
-    editor.chain()
+    const beforePosition = selectedFlowImage.position;
+    const committed = editor.chain()
       .focus()
       .setNodeSelection(selectedFlowImage.position)
       .moveSelectedDocumentImage(direction)
       .run();
-  }, [selectedFlowImage]);
+    const afterPosition = findDocumentImagePositions(
+      editor,
+      selectedFlowImage.attributes.id,
+    )[0];
+    if (
+      committed
+      && page
+      && afterPosition !== undefined
+      && afterPosition !== beforePosition
+    ) {
+      notifyCommittedStructuredImageLayout(
+        onCommittedMutation,
+        page.id,
+        selectedFlowImage.attributes.id
+      );
+    }
+  }, [onCommittedMutation, page, selectedFlowImage]);
 
   const replaceSelectedImage = useCallback(async (file: File) => {
     try {
@@ -1964,7 +2317,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       });
       if (selectedFlowImage) {
         const widthPx = selectedFlowImage.attributes.widthPx;
-        bodyEditorRef.current?.chain()
+        const editor = bodyEditorRef.current;
+        const committed = editor?.chain()
           .focus()
           .setNodeSelection(selectedFlowImage.position)
           .updateSelectedDocumentImage({
@@ -1974,6 +2328,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             heightPx: widthPx * asset.naturalHeight / asset.naturalWidth,
           })
           .run();
+        const committedImage = editor ? getSelectedDocumentImage(editor) : null;
+        if (
+          committed
+          && page
+          && committedImage?.attributes.id === selectedFlowImage.attributes.id
+          && committedImage.attributes.assetId === assetId
+        ) {
+          notifyCommittedStructuredImageMetadata(
+            onCommittedMutation,
+            page.id,
+            committedImage.attributes.id,
+            'retained-reference'
+          );
+        }
       } else if (selectedOverlay) {
         updateOverlay(selectedOverlay.id, {
           assetId,
@@ -1981,12 +2349,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           naturalHeight: asset.naturalHeight,
           heightPx: selectedOverlay.widthPx * asset.naturalHeight / asset.naturalWidth,
         }, page?.id);
+        const committedOverlay = useDocumentStore.getState().project?.pages.find(
+          (candidate) => candidate.id === page?.id
+        )?.overlayObjects.find((overlay) => overlay.id === selectedOverlay.id);
+        if (
+          page
+          && committedOverlay?.assetId === assetId
+        ) {
+          notifyCommittedStructuredImageMetadata(
+            onCommittedMutation,
+            page.id,
+            selectedOverlay.id,
+            'retained-reference'
+          );
+        }
       }
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Could not replace the image.');
     }
   }, [
     addAsset,
+    onCommittedMutation,
     page?.id,
     selectedFlowImage,
     selectedOverlay,
@@ -2000,8 +2383,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   ) => {
     const pageId = getActiveDocumentPageId();
     if (!pageId || editor.isDestroyed || !flowImageId) return false;
-    const imagePositions = findDocumentFlowImagePositions(editor, flowImageId);
+    const imagePositions = findDocumentImagePositions(editor, flowImageId);
     if (imagePositions.length !== 1) return false;
+    const imageNodeType = editor.state.doc.nodeAt(imagePositions[0])?.type.name;
+    if (
+      imageNodeType !== 'documentFlowImage'
+      && imageNodeType !== 'documentInlineImage'
+    ) return false;
 
     const currentPage = useDocumentStore.getState().project?.pages.find(
       (candidate) => candidate.id === pageId
@@ -2011,7 +2399,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       flowImageId
     );
     let committed = false;
-    if (group) {
+    if (group && imageNodeType === 'documentFlowImage') {
       const model = getStructuredLayoutModel();
       const updatesByImageId: Record<string, Partial<DocumentImageAttributes>> = {};
       model?.images
@@ -2049,12 +2437,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         .deleteSelection()
         .run();
     }
-    if (!committed || findDocumentFlowImagePositions(editor, flowImageId).length > 0) {
+    if (!committed || findDocumentImagePositions(editor, flowImageId).length > 0) {
       return false;
     }
     notifyCommittedFlowImageLifecycle(
       onCommittedMutation,
-      'remove-structured-flow-image',
+      imageNodeType === 'documentInlineImage'
+        ? 'remove-structured-inline-image'
+        : 'remove-structured-flow-image',
       pageId,
       flowImageId,
       'cleanup-delegated'
@@ -2069,18 +2459,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const deleteSelectedImage = useCallback(() => {
     if (selectedFlowImage) {
       const editor = bodyEditorRef.current;
-      if (
-        editor
-        && selectedFlowImage.nodeType === 'documentFlowImage'
-      ) {
-        commitFlowImageRemoval(editor, selectedFlowImage.attributes.id);
-      } else if (editor) {
-        editor?.chain()
-          .focus()
-          .setNodeSelection(selectedFlowImage.position)
-          .deleteSelection()
-          .run();
-      }
+      if (editor) commitFlowImageRemoval(editor, selectedFlowImage.attributes.id);
       setSelectedFlowImage(null);
       setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
@@ -2114,18 +2493,32 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             + page.columnGapPx * ((selected.spanCount || 2) - 1)
           )
         : availableColumnWidth * 0.9;
-    updateSelectedImage({
+    const changed = updateSelectedImage({
       widthPx: Math.min(selected.naturalWidth, maximumWidth),
     });
-  }, [availableColumnWidth, page, selectedInspector, updateSelectedImage]);
+    if (changed && page) {
+      notifyCommittedStructuredImageLayout(
+        onCommittedMutation,
+        page.id,
+        selected.id
+      );
+    }
+  }, [availableColumnWidth, onCommittedMutation, page, selectedInspector, updateSelectedImage]);
 
   const resetSelectedImageCrop = useCallback(() => {
-    updateSelectedImage({
+    const changed = updateSelectedImage({
       cropMode: 'fit',
       cropFocalX: 0.5,
       cropFocalY: 0.5,
     });
-  }, [updateSelectedImage]);
+    if (changed && page && selectedInspector) {
+      notifyCommittedStructuredImageMetadata(
+        onCommittedMutation,
+        page.id,
+        selectedInspector.id
+      );
+    }
+  }, [onCommittedMutation, page, selectedInspector, updateSelectedImage]);
 
   const handleNodeReplaceRequest = useCallback((
     request: DocumentImageReplaceRequest
@@ -2138,6 +2531,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (enabled) {
       if (page?.reference?.locked) {
         setReference({ ...page.reference, locked: false });
+        const committedReference = useDocumentStore.getState().project?.pages.find(
+          (candidate) => candidate.id === page.id
+        )?.reference;
+        if (committedReference?.locked === false) {
+          notifyCommittedDocumentReference(onCommittedMutation, page.id);
+        }
       }
       setSelectedFlowImage(null);
       setSelectedStructuredImageIds([]);
@@ -2151,6 +2550,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setReference,
     setSelectedFlowImageId,
     setSelectedOverlayId,
+    onCommittedMutation,
   ]);
 
   const pageWidthIn = page?.size.widthIn || 8.5;
@@ -2307,6 +2707,43 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const shellClassName = `document-editor-shell${useSharedChrome ? ' document-editor-shell--embedded' : ''}`;
 
+  const handleSidebarNumericCommit = useCallback((
+    scope: 'page-size' | 'margin' | 'folio' | 'column-gap' | 'style' | 'drop-cap' | 'reference',
+    field: string,
+    initialValue: number
+  ) => {
+    if (!page || !project) return;
+    const currentProject = useDocumentStore.getState().project;
+    const currentPage = currentProject?.pages.find((candidate) => candidate.id === page.id);
+    const [styleId, styleField] = field.split(':');
+    const currentValue = scope === 'page-size'
+      ? (currentPage?.size as Record<string, unknown> | undefined)?.[field]
+      : scope === 'margin'
+        ? (currentPage?.margins as Record<string, unknown> | undefined)?.[field]
+        : scope === 'folio'
+          ? currentProject?.document.folios.startingNumber
+          : scope === 'column-gap'
+            ? currentPage?.columnGapPx
+            : scope === 'drop-cap'
+              ? (currentPage?.dropCap as Record<string, unknown> | undefined)?.[field]
+              : scope === 'reference'
+                ? (currentPage?.reference as Record<string, unknown> | undefined)?.[field]
+                : (currentProject?.document.styles as Record<string, Record<string, unknown>> | undefined)
+                  ?.[styleId]?.[styleField];
+    if (typeof currentValue !== 'number' || Math.abs(currentValue - initialValue) < 0.000001) {
+      return;
+    }
+    if (scope === 'folio') {
+      notifyCommittedDocumentMetadata(onCommittedMutation, page.id);
+    } else if (scope === 'style' || scope === 'drop-cap') {
+      notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+    } else if (scope === 'reference') {
+      notifyCommittedDocumentReference(onCommittedMutation, page.id);
+    } else {
+      notifyCommittedPageMetadata(onCommittedMutation, page.id);
+    }
+  }, [onCommittedMutation, page, project]);
+
   if (!project || !page) {
     return (
       <div data-testid="document-editor-shell" className={shellClassName}>
@@ -2329,6 +2766,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         exportBusy={isExporting}
         onBack={() => onBackToDashboard?.()}
         onRename={renameProject}
+        onRenameCommit={(name, initialName) => {
+          const currentName = useDocumentStore.getState().project?.projectName;
+          const normalizedInitial = initialName.trim() || 'Untitled Document';
+          const normalizedName = name.trim() || 'Untitled Document';
+          if (
+            currentName === normalizedName
+            && currentName !== normalizedInitial
+          ) {
+            notifyCommittedDocumentMetadata(onCommittedMutation, page.id);
+          }
+        }}
         onSave={() => void saveProject()}
         onDownloadProject={() => void downloadProjectFile()}
         onExport={(format, scope) => void exportDocument(format, scope)}
@@ -2387,8 +2835,33 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               ...update,
             }));
           }}
+          onNumericCommit={handleSidebarNumericCommit}
           onPaperColorChange={updateDocumentBackground}
-          onFolioSettingsChange={updateFolioSettings}
+          onPaperColorCommit={(value, initialValue) => {
+            const currentValue = useDocumentStore.getState().project?.document.background?.value;
+            if (
+              currentValue
+              && currentValue.toLowerCase() !== initialValue.toLowerCase()
+              && currentValue.toLowerCase() === value.toLowerCase()
+            ) {
+              notifyCommittedDocumentMetadata(onCommittedMutation, page.id);
+            }
+          }}
+          onFolioSettingsChange={(update) => {
+            const before = useDocumentStore.getState().project?.document.folios;
+            updateFolioSettings(update);
+            const after = useDocumentStore.getState().project?.document.folios;
+            const isLiveNumericUpdate = Object.keys(update).length === 1
+              && Object.prototype.hasOwnProperty.call(update, 'startingNumber');
+            if (
+              !isLiveNumericUpdate
+              && before
+              && after
+              && JSON.stringify(before) !== JSON.stringify(after)
+            ) {
+              notifyCommittedDocumentMetadata(onCommittedMutation, page.id);
+            }
+          }}
           onSuppressFolioChange={(suppressFolio) =>
             (() => {
               if (suppressFolio === page.suppressFolio) return;
@@ -2424,7 +2897,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             notifyCommittedPageMetadata(onCommittedMutation, page.id);
           }}
           onColumnGapChange={(columnGapPx) => updatePage({ columnGapPx })}
-          onDocumentLanguageChange={updateDocumentLanguage}
+          onDocumentLanguageChange={(language) => {
+            const previousLanguage = useDocumentStore.getState().project?.document.language;
+            updateDocumentLanguage(language);
+            const committedLanguage = useDocumentStore.getState().project?.document.language;
+            if (
+              previousLanguage !== undefined
+              && committedLanguage === language
+              && committedLanguage !== previousLanguage
+            ) {
+              notifyCommittedDocumentMetadata(onCommittedMutation, page.id);
+            }
+          }}
           onPageLanguageChange={(language) =>
             (() => {
               const previousLanguage = page.language;
@@ -2478,11 +2962,46 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
             }
           }}
+          onStyleColorCommit={(styleId, initialValue) => {
+            const currentValue = useDocumentStore.getState().project?.document.styles[styleId]?.color;
+            if (currentValue && currentValue.toLowerCase() !== initialValue.toLowerCase()) {
+              notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+            }
+          }}
+          onDropCapColorCommit={(initialValue) => {
+            const currentValue = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            )?.dropCap.color;
+            if (currentValue && currentValue.toLowerCase() !== initialValue.toLowerCase()) {
+              notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+            }
+          }}
+          onDropCapColorModeChange={(color) => {
+            const previousColor = page.dropCap.color;
+            updateDropCap({ color }, page.id);
+            const committedColor = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            )?.dropCap.color;
+            if (
+              committedColor !== undefined
+              && committedColor !== previousColor
+              && committedColor === color
+            ) {
+              notifyCommittedDocumentStyleMetadata(onCommittedMutation, page.id);
+            }
+          }}
           onImportImages={(files) => void importImages(files)}
           onImportReference={(file) => void handleReferenceImport(file)}
           onToggleReferenceVisibility={() => {
             if (page.reference) {
-              setReference({ ...page.reference, visible: !page.reference.visible });
+              const visible = !page.reference.visible;
+              setReference({ ...page.reference, visible });
+              const committedReference = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              )?.reference;
+              if (committedReference?.visible === visible) {
+                notifyCommittedDocumentReference(onCommittedMutation, page.id);
+              }
             }
           }}
           referenceAdjustMode={isReferenceAdjustMode}
@@ -2492,14 +3011,54 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               setReference({ ...page.reference, ...update });
             }
           }}
+          onReferenceDiscreteChange={(update) => {
+            if (!page.reference) return;
+            const previous = page.reference;
+            setReference({ ...previous, ...update });
+            const committedReference = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            )?.reference;
+            if (
+              committedReference
+              && JSON.stringify(committedReference) !== JSON.stringify(previous)
+              && Object.keys(update).every((key) => (
+                committedReference[key as keyof typeof committedReference]
+                === update[key as keyof typeof update]
+              ))
+            ) {
+              notifyCommittedDocumentReference(onCommittedMutation, page.id);
+            }
+          }}
+          onReferenceCommit={(field, initialValue) => {
+            const currentValue = (useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            )?.reference as Record<string, unknown> | undefined)?.[field];
+            if (typeof currentValue === 'number' && Math.abs(currentValue - initialValue) >= 0.000001) {
+              notifyCommittedDocumentReference(onCommittedMutation, page.id);
+            }
+          }}
           onResetReference={() => {
             if (page.reference) {
+              const before = page.reference;
               setReference({
                 ...page.reference,
                 offsetXPx: 0,
                 offsetYPx: 0,
                 scale: 1,
               });
+              const committedReference = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              )?.reference;
+              if (
+                committedReference
+                && (
+                  committedReference.offsetXPx !== before.offsetXPx
+                  || committedReference.offsetYPx !== before.offsetYPx
+                  || committedReference.scale !== before.scale
+                )
+              ) {
+                notifyCommittedDocumentReference(onCommittedMutation, page.id);
+              }
             }
           }}
           onToggleReferenceLock={() => {
@@ -2507,9 +3066,33 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               const locked = !page.reference.locked;
               setReference({ ...page.reference, locked });
               if (locked) setReferenceAdjustMode(false);
+              const committedReference = useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              )?.reference;
+              if (committedReference?.locked === locked) {
+                notifyCommittedDocumentReference(onCommittedMutation, page.id);
+              }
             }
           }}
-          onFitReferenceToPage={fitReferenceToPage}
+          onFitReferenceToPage={() => {
+            const before = page.reference;
+            fitReferenceToPage();
+            const committedReference = useDocumentStore.getState().project?.pages.find(
+              (candidate) => candidate.id === page.id
+            )?.reference;
+            if (
+              before
+              && committedReference
+              && (
+                committedReference.offsetXPx !== before.offsetXPx
+                || committedReference.offsetYPx !== before.offsetYPx
+                || committedReference.scale !== before.scale
+                || committedReference.fit !== before.fit
+              )
+            ) {
+              notifyCommittedDocumentReference(onCommittedMutation, page.id);
+            }
+          }}
           onSelectOverlay={(id) => {
             setSelectedOverlayId(id);
             setSelectedFlowImage(null);
@@ -2549,15 +3132,41 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             }}
             onResetReference={() => {
               if (page.reference) {
+                const before = page.reference;
                 setReference({
                   ...page.reference,
                   offsetXPx: 0,
                   offsetYPx: 0,
                   scale: 1,
                 });
+                const committedReference = useDocumentStore.getState().project?.pages.find(
+                  (candidate) => candidate.id === page.id
+                )?.reference;
+                if (
+                  committedReference
+                  && (
+                    committedReference.offsetXPx !== before.offsetXPx
+                    || committedReference.offsetYPx !== before.offsetYPx
+                    || committedReference.scale !== before.scale
+                  )
+                ) {
+                  notifyCommittedDocumentReference(onCommittedMutation, page.id);
+                }
               }
             }}
-            onSelectedImageChange={updateSelectedImage}
+            onReferenceCommit={(field, initialValue) => {
+              const currentValue = (useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              )?.reference as Record<string, unknown> | undefined)?.[field];
+              if (
+                typeof currentValue === 'number'
+                && Math.abs(currentValue - initialValue) >= 0.000001
+              ) {
+                notifyCommittedDocumentReference(onCommittedMutation, page.id);
+              }
+            }}
+            onSelectedImageChange={handleSelectedImageChange}
+            onSelectedImageCommit={handleSelectedImageCommit}
             onSelectedImageLayoutChange={handleLayoutChange}
             onSelectedImageSpanStartChange={handleSpanStartChange}
             onMoveSelectedImage={moveSelectedSpanImage}
@@ -2567,6 +3176,24 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onResetSelectedImageCrop={resetSelectedImageCrop}
             onArrangeSelectedImages={arrangeSelectedImages}
             onSelectedImageGroupChange={updateSelectedImageGroup}
+            onSelectedImageGroupCommit={(field, initialValue) => {
+              if (!selectedImageGroup) return;
+              const currentValue = (useDocumentStore.getState().project?.pages.find(
+                (candidate) => candidate.id === page.id
+              )?.imageGroups || []).find(
+                (group) => group.id === selectedImageGroup.id
+              )?.[field as 'gapPx'];
+              if (
+                typeof currentValue === 'number'
+                && Math.abs(currentValue - initialValue) >= 0.000001
+              ) {
+                notifyCommittedStructuredImageGroup(
+                  onCommittedMutation,
+                  page.id,
+                  selectedImageGroup.id
+                );
+              }
+            }}
             onUngroupSelectedImages={ungroupSelectedImages}
             onAlignSelectedImages={alignSelectedImages}
             onDistributeSelectedImages={distributeSelectedImages}
@@ -2577,23 +3204,77 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             activePageIndex={activePageIndex}
             startingFolio={project.document.folios.startingNumber}
             onSelectPage={selectPage}
-            onAddPage={addPage}
-            onDuplicatePage={() => duplicatePage()}
+            onAddPage={() => {
+              const beforePageIds = new Set(project.pages.map((candidate) => candidate.id));
+              addPage();
+              const nextProject = useDocumentStore.getState().project;
+              const createdPage = nextProject?.pages.find(
+                (candidate) => !beforePageIds.has(candidate.id)
+              );
+              if (createdPage) {
+                notifyCommittedPageCommand(
+                  onCommittedMutation,
+                  'add-page',
+                  createdPage.id
+                );
+              }
+            }}
+            onDuplicatePage={() => {
+              const beforePageIds = new Set(project.pages.map((candidate) => candidate.id));
+              duplicatePage();
+              const nextProject = useDocumentStore.getState().project;
+              const duplicatedPage = nextProject?.pages.find(
+                (candidate) => !beforePageIds.has(candidate.id)
+              );
+              if (duplicatedPage) {
+                notifyCommittedPageCommand(
+                  onCommittedMutation,
+                  'duplicate-page',
+                  duplicatedPage.id
+                );
+              }
+            }}
             onRemovePage={() => {
               if (
                 project.pages.length > 1
                 && window.confirm(`Remove ${page.name}? This cannot be undone.`)
               ) {
+                const removedPageId = page.id;
                 removePage();
+                const stillPresent = useDocumentStore.getState().project?.pages.some(
+                  (candidate) => candidate.id === removedPageId
+                );
+                if (!stillPresent) {
+                  notifyCommittedPageCommand(
+                    onCommittedMutation,
+                    'remove-page',
+                    removedPageId
+                  );
+                }
               }
             }}
             onMovePage={(direction) => {
+              const movedPageId = page.id;
+              const beforeOrder = project.pages.map((candidate) => candidate.id);
               reorderPages(
                 activePageIndex,
                 direction === 'left'
                   ? activePageIndex - 1
                   : activePageIndex + 1
               );
+              const afterOrder = useDocumentStore.getState().project?.pages.map(
+                (candidate) => candidate.id
+              ) ?? beforeOrder;
+              if (
+                beforeOrder.length === afterOrder.length
+                && beforeOrder.some((id, index) => id !== afterOrder[index])
+              ) {
+                notifyCommittedPageCommand(
+                  onCommittedMutation,
+                  'reorder-page',
+                  movedPageId
+                );
+              }
             }}
           />}
 
@@ -2619,6 +3300,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               onReferenceChange={(update: Partial<ScanReference>) => {
                 if (page.reference) {
                   setReference({ ...page.reference, ...update });
+                }
+              }}
+              onReferenceCommit={(initial) => {
+                const committedReference = useDocumentStore.getState().project?.pages.find(
+                  (candidate) => candidate.id === page.id
+                )?.reference;
+                if (
+                  committedReference
+                  && (
+                    committedReference.offsetXPx !== initial.offsetXPx
+                    || committedReference.offsetYPx !== initial.offsetYPx
+                  )
+                ) {
+                  notifyCommittedDocumentReference(onCommittedMutation, page.id);
                 }
               }}
               onSelectOverlay={(id) => {
@@ -2740,6 +3435,21 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     handleStructuredImageSelectionRequest(imageId, additive);
                   }}
                   onRequestImageReplace={handleNodeReplaceRequest}
+                  onCommittedImageLayout={(imageId) => {
+                    const editor = bodyEditorRef.current;
+                    if (
+                      !page.id
+                      || !imageId
+                      || !editor
+                      || editor.isDestroyed
+                      || findDocumentImagePositions(editor, imageId).length !== 1
+                    ) return;
+                    notifyCommittedStructuredImageLayout(
+                      onCommittedMutation,
+                      page.id,
+                      imageId
+                    );
+                  }}
                   onDeleteFlowImage={commitFlowImageRemoval}
                   onPasteDispatch={handlePasteDispatch}
                   onDropDispatch={handleDropDispatch}

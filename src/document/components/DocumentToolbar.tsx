@@ -39,6 +39,7 @@ import type {
 import type {
   DocumentFlowControl,
 } from '../extensions/DocumentFlowControlExtension';
+import { CommittedInput, ControlSlider } from '../../editor/components/Tooltip';
 
 export type DocumentImageInspectorValue = {
   id: string;
@@ -127,8 +128,10 @@ type DocumentToolbarProps = {
   onReferenceChange: (
     update: Partial<NonNullable<DocumentPage['reference']>>
   ) => void;
+  onReferenceCommit?: (field: string, initialValue: number) => void;
   onResetReference: () => void;
   onSelectedImageChange: (update: Partial<DocumentImageInspectorValue>) => void;
+  onSelectedImageCommit?: (field: string, initialValue: string) => void;
   onSelectedImageLayoutChange: (
     layout: DocumentImageLayoutMode
   ) => void;
@@ -144,6 +147,7 @@ type DocumentToolbarProps = {
       'kind' | 'gapPx' | 'sharedWidth'
     >>
   ) => void;
+  onSelectedImageGroupCommit?: (field: string, initialValue: number) => void;
   onUngroupSelectedImages?: () => void;
   onAlignSelectedImages?: (
     alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
@@ -184,6 +188,7 @@ const DocumentImageGroupControls = ({
   selectedImageGroup,
   onArrangeSelectedImages,
   onSelectedImageGroupChange,
+  onSelectedImageGroupCommit,
   onUngroupSelectedImages,
   onAlignSelectedImages,
   onDistributeSelectedImages,
@@ -199,6 +204,7 @@ const DocumentImageGroupControls = ({
       'kind' | 'gapPx' | 'sharedWidth'
     >>
   ) => void;
+  onSelectedImageGroupCommit?: (field: string, initialValue: number) => void;
   onUngroupSelectedImages?: () => void;
   onAlignSelectedImages?: (
     alignment: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
@@ -277,7 +283,7 @@ const DocumentImageGroupControls = ({
         <>
           <label className="document-context-field">
             <span>Group gap</span>
-            <input
+            <CommittedInput
               aria-label="Image group gap"
               data-testid="document-image-group-gap"
               type="number"
@@ -290,6 +296,10 @@ const DocumentImageGroupControls = ({
                   selectedImageGroup.gapPx
                 ),
               })}
+              onCommit={(_value, initialValue) => onSelectedImageGroupCommit?.(
+                'gapPx',
+                numericValue(initialValue, selectedImageGroup.gapPx)
+              )}
             />
           </label>
           {selectedImageGroup.kind === 'stack' && (
@@ -399,22 +409,23 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
           </div>
           <label className="document-context-field document-context-field--range">
             <span>Opacity</span>
-            <input
+            <ControlSlider
               aria-label="Adjusting opacity"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
+              min={0}
+              max={1}
+              step={0.05}
               value={reference.opacity}
-              onChange={(event) => props.onReferenceChange({
-                opacity: numericValue(event.target.value, reference.opacity),
-              })}
+              onChange={(value) => props.onReferenceChange({ opacity: value })}
+              onCommit={(_value, initialValue) => props.onReferenceCommit?.(
+                'opacity',
+                initialValue
+              )}
             />
             <output>{Math.round(reference.opacity * 100)}%</output>
           </label>
           <label className="document-context-field">
             <span>Scale</span>
-            <input
+            <CommittedInput
               aria-label="Adjusting scale"
               type="number"
               min="0.05"
@@ -427,28 +438,40 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                   numericValue(event.target.value, reference.scale)
                 ),
               })}
+              onCommit={(_value, initialValue) => props.onReferenceCommit?.(
+                'scale',
+                numericValue(initialValue, reference.scale)
+              )}
             />
           </label>
           <label className="document-context-field">
             <span>X</span>
-            <input
+            <CommittedInput
               aria-label="Adjusting X position"
               type="number"
               value={Math.round(reference.offsetXPx)}
               onChange={(event) => props.onReferenceChange({
                 offsetXPx: numericValue(event.target.value, reference.offsetXPx),
               })}
+              onCommit={(_value, initialValue) => props.onReferenceCommit?.(
+                'offsetXPx',
+                numericValue(initialValue, reference.offsetXPx)
+              )}
             />
           </label>
           <label className="document-context-field">
             <span>Y</span>
-            <input
+            <CommittedInput
               aria-label="Adjusting Y position"
               type="number"
               value={Math.round(reference.offsetYPx)}
               onChange={(event) => props.onReferenceChange({
                 offsetYPx: numericValue(event.target.value, reference.offsetYPx),
               })}
+              onCommit={(_value, initialValue) => props.onReferenceCommit?.(
+                'offsetYPx',
+                numericValue(initialValue, reference.offsetYPx)
+              )}
             />
           </label>
           <button
@@ -478,6 +501,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             selectedImageGroup={props.selectedImageGroup}
             onArrangeSelectedImages={props.onArrangeSelectedImages}
             onSelectedImageGroupChange={props.onSelectedImageGroupChange}
+            onSelectedImageGroupCommit={props.onSelectedImageGroupCommit}
             onUngroupSelectedImages={props.onUngroupSelectedImages}
             onAlignSelectedImages={props.onAlignSelectedImages}
             onDistributeSelectedImages={props.onDistributeSelectedImages}
@@ -563,7 +587,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                 {props.selectedImage.horizontalPlacement === 'custom' && (
                   <label className="document-context-field">
                     <span>Horizontal offset</span>
-                    <input
+                    <CommittedInput
                       aria-label="Image horizontal offset"
                       data-testid="document-image-x-offset"
                       type="number"
@@ -578,6 +602,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                           )
                         ),
                       })}
+                      onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                        'xOffsetPx',
+                        initialValue
+                      )}
                     />
                   </label>
                 )}
@@ -601,7 +629,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                 {props.selectedImage.verticalAnchor === 'page-position' && (
                   <label className="document-context-field">
                     <span>Position from body top</span>
-                    <input
+                    <CommittedInput
                       aria-label="Image Y position"
                       data-testid="document-image-y-position"
                       type="number"
@@ -616,6 +644,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                           )
                         ),
                       })}
+                      onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                        'yPx',
+                        initialValue
+                      )}
                     />
                   </label>
                 )}
@@ -652,7 +684,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             )}
           <label className="document-context-field">
             <span>Width</span>
-            <input
+            <CommittedInput
               aria-label="Image width"
               data-testid="document-image-width"
               type="number"
@@ -668,11 +700,15 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                   )
                 ),
               })}
+              onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                'widthPx',
+                initialValue
+              )}
             />
           </label>
           <label className="document-context-field">
             <span>Height</span>
-            <input
+            <CommittedInput
               aria-label="Image height"
               data-testid="document-image-height"
               type="number"
@@ -688,6 +724,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                   )
                 ),
               })}
+              onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                'heightPx',
+                initialValue
+              )}
             />
           </label>
           <label className="document-context-field">
@@ -708,39 +748,35 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             <>
               <label className="document-context-field document-context-field--range">
                 <span>Focal X</span>
-                <input
+                <ControlSlider
                   aria-label="Image crop focal X"
                   data-testid="document-image-crop-focal-x"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
+                  min={0}
+                  max={1}
+                  step={0.01}
                   value={props.selectedImage.cropFocalX ?? 0.5}
-                  onChange={(event) => props.onSelectedImageChange({
-                    cropFocalX: numericValue(
-                      event.target.value,
-                      props.selectedImage!.cropFocalX ?? 0.5
-                    ),
-                  })}
+                  onChange={(value) => props.onSelectedImageChange({ cropFocalX: value })}
+                  onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                    'cropFocalX',
+                    String(initialValue)
+                  )}
                 />
                 <output>{Math.round((props.selectedImage.cropFocalX ?? 0.5) * 100)}%</output>
               </label>
               <label className="document-context-field document-context-field--range">
                 <span>Focal Y</span>
-                <input
+                <ControlSlider
                   aria-label="Image crop focal Y"
                   data-testid="document-image-crop-focal-y"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
+                  min={0}
+                  max={1}
+                  step={0.01}
                   value={props.selectedImage.cropFocalY ?? 0.5}
-                  onChange={(event) => props.onSelectedImageChange({
-                    cropFocalY: numericValue(
-                      event.target.value,
-                      props.selectedImage!.cropFocalY ?? 0.5
-                    ),
-                  })}
+                  onChange={(value) => props.onSelectedImageChange({ cropFocalY: value })}
+                  onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                    'cropFocalY',
+                    String(initialValue)
+                  )}
                 />
                 <output>{Math.round((props.selectedImage.cropFocalY ?? 0.5) * 100)}%</output>
               </label>
@@ -763,7 +799,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             ] as const).map(([label, key]) => (
               <label className="document-context-field" key={key}>
                 <span>Wrap {label.toLowerCase()}</span>
-                <input
+                <CommittedInput
                   aria-label={`Image wrap padding ${label.toLowerCase()}`}
                   data-testid={`document-image-wrap-padding-${label.toLowerCase()}`}
                   type="number"
@@ -782,6 +818,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                       )
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                    key,
+                    initialValue
+                  )}
                 />
               </label>
             ))
@@ -789,7 +829,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             <>
               <label className="document-context-field">
                 <span>X</span>
-                <input
+                <CommittedInput
                   aria-label="Overlay X position"
                   type="number"
                   value={Math.round(props.selectedImage.xPx || 0)}
@@ -799,11 +839,15 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                       numericValue(event.target.value, props.selectedImage!.xPx || 0)
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                    'xPx',
+                    initialValue
+                  )}
                 />
               </label>
               <label className="document-context-field">
                 <span>Y</span>
-                <input
+                <CommittedInput
                   aria-label="Overlay Y position"
                   type="number"
                   value={Math.round(props.selectedImage.yPx || 0)}
@@ -813,13 +857,17 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                       numericValue(event.target.value, props.selectedImage!.yPx || 0)
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                    'yPx',
+                    initialValue
+                  )}
                 />
               </label>
             </>
           )}
           <label className="document-context-field document-context-field--wide">
             <span>Caption</span>
-            <input
+            <CommittedInput
               aria-label="Image caption"
               data-testid="document-image-caption"
               value={props.selectedImage.caption}
@@ -827,6 +875,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               onChange={(event) => props.onSelectedImageChange({
                 caption: event.target.value,
               })}
+              onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                'caption',
+                initialValue
+              )}
             />
           </label>
           <label className="document-context-field">
@@ -869,7 +921,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
           </label>
           <label className="document-context-field">
             <span>Caption spacing</span>
-            <input
+            <CommittedInput
               aria-label="Caption spacing"
               data-testid="document-image-caption-spacing"
               type="number"
@@ -892,11 +944,15 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
                       )
                     ),
               })}
+              onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                'captionSpacingPx',
+                initialValue
+              )}
             />
           </label>
           <label className="document-context-field document-context-field--wide">
             <span>Alt text</span>
-            <input
+            <CommittedInput
               aria-label="Image alt text"
               data-testid="document-image-alt"
               value={props.selectedImage.altText}
@@ -904,6 +960,10 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
               onChange={(event) => props.onSelectedImageChange({
                 altText: event.target.value,
               })}
+              onCommit={(_value, initialValue) => props.onSelectedImageCommit?.(
+                'altText',
+                initialValue
+              )}
             />
           </label>
           <button
@@ -952,6 +1012,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             selectedImageGroup={props.selectedImageGroup}
             onArrangeSelectedImages={props.onArrangeSelectedImages}
             onSelectedImageGroupChange={props.onSelectedImageGroupChange}
+            onSelectedImageGroupCommit={props.onSelectedImageGroupCommit}
             onUngroupSelectedImages={props.onUngroupSelectedImages}
             onAlignSelectedImages={props.onAlignSelectedImages}
             onDistributeSelectedImages={props.onDistributeSelectedImages}

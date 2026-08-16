@@ -26,6 +26,11 @@ import {
   type DocumentNamedStyleRegistry,
   type DocumentStyleId,
 } from '../typography/documentTypography';
+import {
+  CommittedColorInput,
+  CommittedInput,
+  ControlSlider,
+} from '../../editor/components/Tooltip';
 
 type DocumentSidebarProps = {
   page: DocumentPage;
@@ -41,7 +46,13 @@ type DocumentSidebarProps = {
   onPresetChange: (preset: 'letter' | 'a4' | 'custom') => void;
   onOrientationChange: (orientation: DocumentPageOrientation) => void;
   onCustomSizeChange: (update: { widthIn?: number; heightIn?: number }) => void;
+  onNumericCommit?: (
+    scope: 'page-size' | 'margin' | 'folio' | 'column-gap' | 'style' | 'drop-cap' | 'reference',
+    field: string,
+    initialValue: number
+  ) => void;
   onPaperColorChange: (value: string) => void;
+  onPaperColorCommit?: (value: string, initialValue: string) => void;
   onFolioSettingsChange: (update: Partial<DocumentFolioSettings>) => void;
   onSuppressFolioChange: (suppressed: boolean) => void;
   onSuppressTitleChange?: (suppressed: boolean) => void;
@@ -54,6 +65,12 @@ type DocumentSidebarProps = {
     styleId: DocumentStyleId,
     update: Partial<DocumentNamedStyleDefinition>
   ) => void;
+  onStyleColorCommit?: (
+    styleId: DocumentStyleId,
+    initialValue: string
+  ) => void;
+  onDropCapColorCommit?: (initialValue: string) => void;
+  onDropCapColorModeChange?: (color: DocumentDropCapSettings['color']) => void;
   onDropCapChange: (update: Partial<DocumentDropCapSettings>) => void;
   onImportImages: (files: File[]) => void;
   onImportReference: (file: File) => void;
@@ -63,6 +80,10 @@ type DocumentSidebarProps = {
   onReferenceChange: (
     update: Partial<NonNullable<DocumentPage['reference']>>
   ) => void;
+  onReferenceDiscreteChange?: (
+    update: Partial<NonNullable<DocumentPage['reference']>>
+  ) => void;
+  onReferenceCommit?: (field: string, initialValue: number) => void;
   onResetReference: () => void;
   onToggleReferenceLock?: () => void;
   onFitReferenceToPage?: () => void;
@@ -218,7 +239,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             >
               <label className="document-field">
                 <span>Width <small>inches</small></span>
-                <input
+                <CommittedInput
                   aria-label="Custom page width in inches"
                   type="number"
                   min="1"
@@ -237,11 +258,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       )
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                    'page-size',
+                    'widthIn',
+                    numberValue(initialValue, props.page.size.widthIn)
+                  )}
                 />
               </label>
               <label className="document-field">
                 <span>Height <small>inches</small></span>
-                <input
+                <CommittedInput
                   aria-label="Custom page height in inches"
                   type="number"
                   min="1"
@@ -260,6 +286,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       )
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                    'page-size',
+                    'heightIn',
+                    numberValue(initialValue, props.page.size.heightIn)
+                  )}
                 />
               </label>
             </div>
@@ -302,12 +333,12 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               Paper colour
               <output>{props.paperColor}</output>
             </span>
-            <input
+            <CommittedColorInput
               aria-label="Paper colour"
               data-testid="document-paper-color"
-              type="color"
               value={props.paperColor}
-              onChange={(event) => props.onPaperColorChange(event.target.value)}
+              onInput={props.onPaperColorChange}
+              onCommit={props.onPaperColorCommit}
             />
           </label>
 
@@ -317,7 +348,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               {MARGIN_FIELDS.map(({ key, label }) => (
                 <label key={key} className="document-field">
                   <span>{label}</span>
-                  <input
+                  <CommittedInput
                     aria-label={`${label} margin in inches`}
                     type="number"
                     min="0"
@@ -331,6 +362,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                         numberValue(event.target.value, props.page.margins[key])
                       )
                     )}
+                    onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                      'margin',
+                      key,
+                      numberValue(initialValue, props.page.margins[key])
+                    )}
                   />
                 </label>
               ))}
@@ -339,7 +375,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
 
           <label className="document-field">
             <span>Starting folio</span>
-            <input
+            <CommittedInput
               aria-label="Starting folio number"
               data-testid="document-starting-folio"
               type="number"
@@ -353,6 +389,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                   props.folios.startingNumber
                 ),
               })}
+              onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                'folio',
+                'startingNumber',
+                numberValue(initialValue, props.folios.startingNumber)
+              )}
             />
           </label>
 
@@ -433,7 +474,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
 
           <label className="document-field">
             <span>Column gap <small>px</small></span>
-            <input
+            <CommittedInput
               aria-label="Column gap in pixels"
               data-testid="document-column-gap"
               type="number"
@@ -445,6 +486,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                   0,
                   numberValue(event.target.value, props.page.columnGapPx)
                 )
+              )}
+              onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                'column-gap',
+                'columnGapPx',
+                numberValue(initialValue, props.page.columnGapPx)
               )}
             />
           </label>
@@ -566,7 +612,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
           <div className="document-margin-grid">
             <label className="document-field">
               <span>Size <small>px</small></span>
-              <input
+              <CommittedInput
                 aria-label="Named style font size"
                 type="number"
                 min="6"
@@ -579,11 +625,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     selectedStyle.fontSizePx
                   ),
                 })}
+                onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                  'style',
+                  `${selectedStyleId}:fontSizePx`,
+                  numberValue(initialValue, selectedStyle.fontSizePx)
+                )}
               />
             </label>
             <label className="document-field">
               <span>Line height</span>
-              <input
+              <CommittedInput
                 aria-label="Named style line height"
                 type="number"
                 min="0.75"
@@ -596,11 +647,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     selectedStyle.lineHeight
                   ),
                 })}
+                onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                  'style',
+                  `${selectedStyleId}:lineHeight`,
+                  numberValue(initialValue, selectedStyle.lineHeight)
+                )}
               />
             </label>
             <label className="document-field">
               <span>After <small>px</small></span>
-              <input
+              <CommittedInput
                 aria-label="Named style paragraph spacing"
                 type="number"
                 min="0"
@@ -612,11 +668,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     selectedStyle.paragraphSpacingPx
                   ),
                 })}
+                onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                  'style',
+                  `${selectedStyleId}:paragraphSpacingPx`,
+                  numberValue(initialValue, selectedStyle.paragraphSpacingPx)
+                )}
               />
             </label>
             <label className="document-field">
               <span>Indent <small>px</small></span>
-              <input
+              <CommittedInput
                 aria-label="Named style first line indent"
                 type="number"
                 min="0"
@@ -628,11 +689,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     selectedStyle.firstLineIndentPx
                   ),
                 })}
+                onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                  'style',
+                  `${selectedStyleId}:firstLineIndentPx`,
+                  numberValue(initialValue, selectedStyle.firstLineIndentPx)
+                )}
               />
             </label>
             <label className="document-field">
               <span>Tracking <small>em</small></span>
-              <input
+              <CommittedInput
                 aria-label="Named style tracking"
                 type="number"
                 min="-0.15"
@@ -645,6 +711,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     selectedStyle.trackingEm
                   ),
                 })}
+                onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                  'style',
+                  `${selectedStyleId}:trackingEm`,
+                  numberValue(initialValue, selectedStyle.trackingEm)
+                )}
               />
             </label>
             <label className="document-field">
@@ -667,13 +738,14 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
 
           <label className="document-field document-paper-color-field">
             <span>Text colour <output>{selectedStyle.color}</output></span>
-            <input
+            <CommittedColorInput
               aria-label="Named style text colour"
-              type="color"
               value={selectedStyle.color}
-              onChange={(event) => props.onStyleChange(selectedStyleId, {
-                color: event.target.value,
-              })}
+              onInput={(value) => props.onStyleChange(selectedStyleId, { color: value })}
+              onCommit={(_value, initialValue) => props.onStyleColorCommit?.(
+                selectedStyleId,
+                initialValue
+              )}
             />
           </label>
 
@@ -754,7 +826,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
             >
               <label className="document-field">
                 <span>Size <small>em</small></span>
-                <input
+                <CommittedInput
                   aria-label="Drop cap size"
                   type="number"
                   min="1"
@@ -767,11 +839,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       props.page.dropCap.sizeEm
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                    'drop-cap',
+                    'sizeEm',
+                    numberValue(initialValue, props.page.dropCap.sizeEm)
+                  )}
                 />
               </label>
               <label className="document-field">
                 <span>Lines</span>
-                <input
+                <CommittedInput
                   aria-label="Drop cap line span"
                   type="number"
                   min="1"
@@ -784,11 +861,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       props.page.dropCap.lineSpan
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                    'drop-cap',
+                    'lineSpan',
+                    numberValue(initialValue, props.page.dropCap.lineSpan)
+                  )}
                 />
               </label>
               <label className="document-field">
                 <span>Gap <small>px</small></span>
-                <input
+                <CommittedInput
                   aria-label="Drop cap spacing"
                   type="number"
                   min="0"
@@ -800,6 +882,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       props.page.dropCap.spacingPx
                     ),
                   })}
+                  onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                    'drop-cap',
+                    'spacingPx',
+                    numberValue(initialValue, props.page.dropCap.spacingPx)
+                  )}
                 />
               </label>
               <label className="document-field">
@@ -829,11 +916,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                       ? 'inherit'
                       : 'custom'
                   }
-                  onChange={(event) => props.onDropCapChange({
-                    color: event.target.value === 'inherit'
+                  onChange={(event) => {
+                    const color = event.currentTarget.value === 'inherit'
                       ? 'inherit'
-                      : props.styles.body.color,
-                  })}
+                      : props.styles.body.color;
+                    if (props.onDropCapColorModeChange) {
+                      props.onDropCapColorModeChange(color);
+                    } else {
+                      props.onDropCapChange({ color });
+                    }
+                  }}
                 >
                   <option value="inherit">Inherit body</option>
                   <option value="custom">Custom</option>
@@ -842,13 +934,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               {props.page.dropCap.color !== 'inherit' && (
                 <label className="document-field document-paper-color-field">
                   <span>Drop cap colour</span>
-                  <input
+                  <CommittedColorInput
                     aria-label="Drop cap custom colour"
-                    type="color"
                     value={props.page.dropCap.color}
-                    onChange={(event) => props.onDropCapChange({
-                      color: event.target.value,
-                    })}
+                    onInput={(value) => props.onDropCapChange({ color: value })}
+                    onCommit={(_value, initialValue) => props.onDropCapColorCommit?.(initialValue)}
                   />
                 </label>
               )}
@@ -974,17 +1064,18 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
 
               <label className="document-field">
                 <span>Opacity <output>{Math.round(reference.opacity * 100)}%</output></span>
-                <input
+                <ControlSlider
                   aria-label="Reference opacity"
                   data-testid="document-reference-opacity"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
+                  min={0}
+                  max={1}
+                  step={0.05}
                   value={reference.opacity}
-                  onChange={(event) => props.onReferenceChange({
-                    opacity: numberValue(event.target.value, 0.35),
-                  })}
+                  onChange={(value) => props.onReferenceChange({ opacity: value })}
+                  onCommit={(_value, initialValue) => props.onReferenceCommit?.(
+                    'opacity',
+                    initialValue
+                  )}
                 />
               </label>
 
@@ -993,7 +1084,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                 <select
                   aria-label="Reference fit"
                   value={reference.fit}
-                  onChange={(event) => props.onReferenceChange({
+                  onChange={(event) => props.onReferenceDiscreteChange?.({
                     fit: event.target.value as 'contain' | 'cover' | 'stretch',
                   })}
                 >
@@ -1006,7 +1097,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
               <div className="document-reference-number-grid">
                 <label className="document-field">
                   <span>Scale</span>
-                  <input
+                  <CommittedInput
                     aria-label="Reference scale"
                     type="number"
                     min="0.05"
@@ -1019,11 +1110,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                         numberValue(event.target.value, reference.scale)
                       ),
                     })}
+                    onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                      'reference',
+                      'scale',
+                      numberValue(initialValue, reference.scale)
+                    )}
                   />
                 </label>
                 <label className="document-field">
                   <span>X offset</span>
-                  <input
+                  <CommittedInput
                     aria-label="Reference X offset"
                     type="number"
                     step="1"
@@ -1031,11 +1127,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     onChange={(event) => props.onReferenceChange({
                       offsetXPx: numberValue(event.target.value, reference.offsetXPx),
                     })}
+                    onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                      'reference',
+                      'offsetXPx',
+                      numberValue(initialValue, reference.offsetXPx)
+                    )}
                   />
                 </label>
                 <label className="document-field">
                   <span>Y offset</span>
-                  <input
+                  <CommittedInput
                     aria-label="Reference Y offset"
                     type="number"
                     step="1"
@@ -1043,6 +1144,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
                     onChange={(event) => props.onReferenceChange({
                       offsetYPx: numberValue(event.target.value, reference.offsetYPx),
                     })}
+                    onCommit={(_value, initialValue) => props.onNumericCommit?.(
+                      'reference',
+                      'offsetYPx',
+                      numberValue(initialValue, reference.offsetYPx)
+                    )}
                   />
                 </label>
               </div>

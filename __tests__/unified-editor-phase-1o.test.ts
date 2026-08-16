@@ -393,6 +393,10 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
     });
 
     expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenLastCalledWith({
+      action: 'modify-freeform-theme-color-lock',
+      objectId: 'theme-color-lock-shape',
+    });
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(2);
     expect(canvas.getObjects()[0].colorLocked).toBe(false);
   });
@@ -446,6 +450,10 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
 
     expect((reopenedAgain.getObjects()[0] as any).colorLocked).toBe(false);
     expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenLastCalledWith({
+      action: 'modify-freeform-theme-color-lock',
+      objectId: 'theme-color-lock-shape',
+    });
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(2);
   });
 
@@ -557,11 +565,15 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
     expect(shape.colorLocked).toBe(false);
     expect(shape.tokenRole).toBe('brand.primary.value');
     expect(shape.fill).toBe('#333333');
-    expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenCalledTimes(3);
+    expect(committed).toHaveBeenLastCalledWith({
+      action: 'apply-freeform-theme',
+      pageScope: true,
+    });
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(2);
   });
 
-  it('allows manual fill editing while locked, clears tokenRole, and emits no Color Lock transaction', () => {
+  it('allows manual fill editing while locked and observes it as style editing, not Color Lock', () => {
     const canvas = createCanvas();
     installCanvas(canvas);
     const shape = seedShape(canvas, 'manual-fill-while-locked', true);
@@ -577,10 +589,14 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
       colorLocked: true,
       tokenRole: null,
     });
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-style',
+      objectId: 'manual-fill-while-locked',
+      style: 'fill-color',
+    });
   });
 
-  it('keeps explicit themed-fill and reset-to-default commands outside Color Lock coverage', () => {
+  it('observes explicit theme-link commands separately from Color Lock coverage', () => {
     const canvas = createCanvas();
     installCanvas(canvas);
     const shape = seedShape(canvas, 'theme-command-shape', true);
@@ -590,14 +606,21 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
     useEditorStore.getState().setObjectThemedFill('brand.accent.value');
     expect(shape.colorLocked).toBe(false);
     expect(shape.tokenRole).toBe('brand.accent.value');
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-theme-link',
+      objectId: 'theme-command-shape',
+    });
 
     shape.colorLocked = true;
     useEditorStore.getState().syncCanvasToStore(canvas);
     useEditorStore.getState().resetObjectToDefaultTheme();
     expect(shape.colorLocked).toBe(false);
     expect(shape.tokenRole).toBe('brand.primary.value');
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenLastCalledWith({
+      action: 'modify-freeform-theme-link',
+      objectId: 'theme-command-shape',
+    });
   });
 
   it('keeps sanityCheckCanvas defaulting missing colorLocked silent', () => {
@@ -643,15 +666,13 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
       canvasBorderStyle: true,
       canvasTransformLock: true,
       canvasThemeColorLock: true,
-      completeAuthoredCoverage: false,
+      completeAuthoredCoverage: true,
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas native fill, stroke, shadow, and gradient colour pickers',
-        'Canvas theme-token linking, unlinking, reset, and global theme application',
-        'Canvas theme color lock mutations from other commands',
-        'Canvas full-object lock and unsupported Selection Lock invocation paths',
-        'Document native paper/text/drop-cap colour pickers',
+        'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+        'Document selection, zoom, fit mode, and inspector focus state',
+        'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('styles');

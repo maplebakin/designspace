@@ -97,6 +97,7 @@ const VisionPaletteSection: React.FC<VisionPaletteProps> = ({ onColorSelect, dis
 const CanvasEmptyState: React.FC = () => {
   const {
     setCanvasBackgroundColor,
+    reportCommittedCanvasBackground,
     gridEnabled,
     setGridEnabled,
     snapEnabled,
@@ -104,6 +105,7 @@ const CanvasEmptyState: React.FC = () => {
   } = useEditorStore(
     (state) => ({
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+      reportCommittedCanvasBackground: state.reportCommittedCanvasBackground,
       gridEnabled: state.gridEnabled,
       setGridEnabled: state.setGridEnabled,
       snapEnabled: state.snapEnabled,
@@ -147,6 +149,7 @@ const CanvasEmptyState: React.FC = () => {
             <ColorPicker
               value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
               onChange={setCanvasBackgroundColor}
+              onCommit={(value, initialValue) => reportCommittedCanvasBackground(value, initialValue)}
               aria-label="Canvas background color"
             />
           </ControlRow>
@@ -208,7 +211,7 @@ interface ShapePropertiesProps {
   ) => void;
   onCornerRadius: (value: number) => void;
   onCornerRadiusXY: (rxValue: number, ryValue: number) => void;
-  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue?: CanvasStyleValue) => void;
   addColorToBrandKit: (color: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -358,6 +361,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
           <ColorPicker
             value={fillValue}
             onChange={(val) => onUpdate({ fill: applyFillAlpha(val, fillOpacity), tokenRole: null })}
+            onCommit={(_value, initialValue) => onStyleCommit(
+              'fill-color',
+              applyFillAlpha(initialValue, fillOpacity)
+            )}
             aria-label="Fill color"
           />
           {fillKindLabel && (
@@ -394,6 +401,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
         <ColorPicker
           value={strokeValue}
           onChange={(val) => onUpdate({ stroke: val })}
+          onCommit={(_value, initialValue) => onStyleCommit('stroke-color', initialValue)}
           aria-label="Stroke color"
         />
       </ControlRow>
@@ -486,6 +494,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                   });
                   onUpdate({ fill: grad, tokenRole: null });
                 }}
+                onCommit={(_value, initialValue) => onStyleCommit(
+                  'gradient-color',
+                  `${initialValue}|${gradientDefaults.to}`
+                )}
                 aria-label="Gradient from color"
               />
             </ControlRow>
@@ -504,6 +516,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                   });
                   onUpdate({ fill: grad, tokenRole: null });
                 }}
+                onCommit={(_value, initialValue) => onStyleCommit(
+                  'gradient-color',
+                  `${gradientDefaults.from}|${initialValue}`
+                )}
                 aria-label="Gradient to color"
               />
             </ControlRow>
@@ -521,6 +537,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
             <ColorPicker
               value={typeof currentShadow?.color === 'string' ? currentShadow.color : '#000000'}
               onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: val, blur: currentShadow?.blur || 0, offsetX: currentShadow?.offsetX || 0, offsetY: currentShadow?.offsetY || 0 }) })}
+              onCommit={(_value, initialValue) => onStyleCommit('shadow-color', initialValue)}
               aria-label="Shape shadow color"
             />
           </ControlRow>
@@ -580,6 +597,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
               max={80}
               value={rectCornerRadiusPx}
               onChange={onCornerRadius}
+              onCommit={(_value, initialValue) => onStyleCommit(
+                'corner-radius',
+                `${initialValue}:${initialValue}`
+              )}
             />
           ) : (
             <div className="space-y-3">
@@ -592,6 +613,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                   max={80}
                   value={rectCornerRadiusXPx}
                   onChange={(val) => onCornerRadiusXY(val, rectCornerRadiusYPx)}
+                  onCommit={(_value, initialValue) => onStyleCommit(
+                    'corner-radius',
+                    `${initialValue}:${rectCornerRadiusYPx}`
+                  )}
                 />
               </div>
               <div className="space-y-1">
@@ -603,6 +628,10 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
                   max={80}
                   value={rectCornerRadiusYPx}
                   onChange={(val) => onCornerRadiusXY(rectCornerRadiusXPx, val)}
+                  onCommit={(_value, initialValue) => onStyleCommit(
+                    'corner-radius',
+                    `${rectCornerRadiusXPx}:${initialValue}`
+                  )}
                 />
               </div>
             </div>
@@ -629,7 +658,7 @@ const ShapeProperties: React.FC<ShapePropertiesProps> = ({
 interface TextPropertiesProps {
   object: fabric.Text;
   onUpdate: (updates: Record<string, any>, styleCommit?: CanvasStyleCommit) => void;
-  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue?: CanvasStyleValue) => void;
   setTextShadow: (opts: any) => void;
   setTextStroke: (opts: any) => void;
   setTextCharSpacing: (val: number) => void;
@@ -675,6 +704,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               max={300}
               value={(object as any).fontSize || 16}
               onChange={(e) => onUpdate({ fontSize: Number(e.target.value) })}
+              onCommit={(_value, initialValue) => onStyleCommit(
+                'font-size',
+                Number(initialValue)
+              )}
               className="w-full"
             />
           </ControlRow>
@@ -733,8 +766,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
         <div className="grid grid-cols-3 gap-2">
           <button
             onClick={() => {
+              const beforeValue = readCanvasStyleValue(object, 'style-preset');
               setTextShadow({ color: '#00FFFF', blur: 10, offsetX: 0, offsetY: 0 });
               setTextStroke({ color: '#00FFFF', width: 0 });
+              onStyleCommit('style-preset', beforeValue ?? undefined);
             }}
             className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
@@ -742,8 +777,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
           </button>
           <button
             onClick={() => {
+              const beforeValue = readCanvasStyleValue(object, 'style-preset');
               onUpdate({ fill: 'transparent' });
               setTextStroke({ color: '#FFFFFF', width: 2 });
+              onStyleCommit('style-preset', beforeValue ?? undefined);
             }}
             className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
@@ -751,8 +788,10 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
           </button>
           <button
             onClick={() => {
+              const beforeValue = readCanvasStyleValue(object, 'style-preset');
               setTextShadow({ color: 'rgba(0,0,0,0.5)', blur: 2, offsetX: 1, offsetY: 1 });
               setTextStroke({ color: '', width: 0 });
+              onStyleCommit('style-preset', beforeValue ?? undefined);
             }}
             className="h-8 text-[9px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
           >
@@ -800,6 +839,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               <ColorPicker
                 value={currentShadow?.color || '#000000'}
                 onChange={(val) => setTextShadow({ color: val })}
+                onCommit={(_value, initialValue) => onStyleCommit('shadow-color', initialValue)}
                 aria-label="Shadow color"
               />
             </ControlRow>
@@ -855,6 +895,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
               <ColorPicker
                 value={currentStroke || '#000000'}
                 onChange={(val) => setTextStroke({ color: val })}
+                onCommit={(_value, initialValue) => onStyleCommit('stroke-color', initialValue)}
                 aria-label="Stroke color"
               />
             </ControlRow>
@@ -881,7 +922,7 @@ const TextProperties: React.FC<TextPropertiesProps> = ({
 interface ImagePropertiesProps {
   object: fabric.Image;
   onUpdate: (updates: Partial<fabric.Object>, styleCommit?: CanvasStyleCommit) => void;
-  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue: CanvasStyleValue) => void;
+  onStyleCommit: (style: CanvasStyleCommitKind, beforeValue?: CanvasStyleValue) => void;
   setImageAdjustments: (opts: any) => void;
   resetImageAdjustments: () => void;
 }
@@ -938,6 +979,7 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
             <ColorPicker
               value={typeof (object.shadow as any)?.color === 'string' ? (object.shadow as any).color : '#000000'}
               onChange={(val) => onUpdate({ shadow: new fabric.Shadow({ color: val, blur: (object.shadow as any)?.blur || 0, offsetX: (object.shadow as any)?.offsetX || 0, offsetY: (object.shadow as any)?.offsetY || 0 }) })}
+              onCommit={(_value, initialValue) => onStyleCommit('shadow-color', initialValue)}
               aria-label="Image shadow color"
             />
           </ControlRow>
@@ -1005,9 +1047,14 @@ const ImageProperties: React.FC<ImagePropertiesProps> = ({
 interface TransformControlsProps {
   object: fabric.Object;
   onUpdate: (updates: Record<string, any>) => void;
+  onGeometryCommit?: () => void;
 }
 
-const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate }) => {
+const TransformControls: React.FC<TransformControlsProps> = ({
+  object,
+  onUpdate,
+  onGeometryCommit,
+}) => {
   const left = Math.round(object.left ?? 0);
   const top = Math.round(object.top ?? 0);
   const width = Math.round((object.width ?? 0) * (object.scaleX ?? 1));
@@ -1052,6 +1099,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
             type="number"
             value={left}
             onChange={(e) => handlePositionChange('left', Number(e.target.value))}
+            onCommit={onGeometryCommit ? () => onGeometryCommit() : undefined}
             className="w-full"
           />
         </div>
@@ -1063,6 +1111,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
             type="number"
             value={top}
             onChange={(e) => handlePositionChange('top', Number(e.target.value))}
+            onCommit={onGeometryCommit ? () => onGeometryCommit() : undefined}
             className="w-full"
           />
         </div>
@@ -1079,6 +1128,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
             min={1}
             value={width}
             onChange={(e) => handleSizeChange('width', Number(e.target.value))}
+            onCommit={onGeometryCommit ? () => onGeometryCommit() : undefined}
             className="w-full"
           />
         </div>
@@ -1091,6 +1141,7 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
             min={1}
             value={height}
             onChange={(e) => handleSizeChange('height', Number(e.target.value))}
+            onCommit={onGeometryCommit ? () => onGeometryCommit() : undefined}
             className="w-full"
           />
         </div>
@@ -1104,9 +1155,10 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
               type="number"
               min={0}
               max={360}
-              value={angle}
-              onChange={(e) => handleRotationChange(Number(e.target.value))}
-              className="w-16"
+            value={angle}
+            onChange={(e) => handleRotationChange(Number(e.target.value))}
+            onCommit={onGeometryCommit ? () => onGeometryCommit() : undefined}
+            className="w-16"
             />
             <span className="text-[10px] text-[color:var(--ui-panel-text)]">°</span>
           </div>
@@ -1115,7 +1167,12 @@ const TransformControls: React.FC<TransformControlsProps> = ({ object, onUpdate 
           {[0, 45, 90, 180, 270].map((preset) => (
             <button
               key={preset}
-              onClick={() => handleRotationChange(preset)}
+              onClick={() => {
+                const currentAngle = ((object.angle ?? 0) % 360 + 360) % 360;
+                if (Math.abs(currentAngle - preset) < 0.000001) return;
+                handleRotationChange(preset);
+                onGeometryCommit?.();
+              }}
               className={`flex-1 h-6 text-[9px] rounded border transition-all duration-200 ${
                 angle === preset
                   ? 'border-[color:var(--brand-primary)] bg-[color:var(--brand-primary)]/10 text-[color:var(--brand-primary)]'
@@ -1230,7 +1287,7 @@ export const PropertiesPanel: React.FC = () => {
 
   const reportCanvasStyleCommit = (
     style: CanvasStyleCommitKind,
-    beforeValue: CanvasStyleValue
+    beforeValue?: CanvasStyleValue
   ) => {
     if (!selectedObject || !canvas) return;
     // A few legacy style setters intentionally save through their own helper
@@ -1391,7 +1448,10 @@ export const PropertiesPanel: React.FC = () => {
         <VisionPaletteSection
           onColorSelect={(color) => {
             if (selectedObject && (isShape || isText)) {
-              updateSelectedObject({ fill: color, tokenRole: null });
+              updateSelectedObject(
+                { fill: color, tokenRole: null },
+                { kind: 'fill-color', value: color }
+              );
             }
           }}
           disabled={!selectedObject || isImage}
@@ -1445,6 +1505,12 @@ export const PropertiesPanel: React.FC = () => {
             <TransformControls
               object={selectedObject}
               onUpdate={updateSelectedObject}
+              onGeometryCommit={() => {
+                const objectId = (selectedObject as any)?.id;
+                if (typeof objectId === 'string') {
+                  useEditorStore.getState().reportCommittedCanvasGeometry(objectId);
+                }
+              }}
             />
           </>
         )}

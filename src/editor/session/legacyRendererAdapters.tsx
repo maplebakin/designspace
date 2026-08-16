@@ -16,6 +16,7 @@ import {
 } from './projectSession';
 import type { CanvasCommittedMutation } from '../services/canvasEventService';
 import type { DocumentCommittedMutation } from '../../document/components/DocumentEditorShell';
+import type { PageAssetEffect } from './projectMutation';
 import {
   executeObservedPageMutation,
   observeCommittedEngineChange,
@@ -331,6 +332,219 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       return;
     }
 
+    if (
+      mutation.action === 'apply-freeform-style-preset'
+      || mutation.action === 'reset-freeform-image-adjustments'
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['style'],
+        target: {
+          kind: 'freeform-object',
+          id: mutation.objectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'modify-freeform-theme-link') {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['style'],
+        target: {
+          kind: 'freeform-object',
+          id: mutation.objectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (
+      mutation.action === 'apply-freeform-theme'
+      || mutation.action === 'reset-freeform-theme-links'
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['style'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'apply-freeform-design-state' && 'pageScope' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (
+      mutation.action === 'apply-freeform-template'
+      || mutation.action === 'apply-project-recipe'
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['page-structure', 'freeform-content'],
+        target: {
+          kind: 'project',
+          id: currentSession.projectId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (
+      mutation.action === 'add-page'
+      || mutation.action === 'remove-page'
+      || mutation.action === 'reorder-page'
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [mutation.pageId],
+        domains: ['page-structure'],
+        target: {
+          kind: 'page',
+          id: mutation.pageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'reorder-freeform-objects') {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'add-freeform-objects' && 'pageScope' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: mutation.assetEffect === 'none'
+          ? ['freeform-content']
+          : ['freeform-content', 'asset-reference'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: mutation.assetEffect,
+      });
+      return;
+    }
+
+    if (mutation.action === 'remove-freeform-objects' && 'pageScope' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: mutation.assetEffect === 'none'
+          ? ['freeform-content']
+          : ['freeform-content', 'asset-reference'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: mutation.assetEffect,
+      });
+      return;
+    }
+
+    if (
+      (mutation.action === 'resize-freeform-page'
+        || mutation.action === 'reset-freeform-page')
+      && 'pageScope' in mutation
+    ) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['page-structure', 'freeform-content', 'geometry'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'modify-freeform-geometry' && 'pageScope' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['geometry', 'freeform-content'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (mutation.action === 'modify-page-metadata' && 'pageScope' in mutation) {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['page-structure'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
     if (mutation.action === 'modify-freeform-text-content') {
       observeCommittedEngineChange(changeCoordinator, {
         projectId: currentSession.projectId,
@@ -403,6 +617,8 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       return;
     }
 
+    if (!('objectId' in mutation)) return;
+
     const assetEffect = mutation.action === 'modify-freeform-geometry'
       ? 'none'
       : 'assetEffect' in mutation
@@ -450,43 +666,116 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
     if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
-    const isPageMetadata = mutation.action === 'modify-page-metadata';
-    const isStructuredText = mutation.action === 'modify-structured-title-content'
-      || mutation.action === 'modify-structured-body-content';
-    const isDocumentStyleMetadata = mutation.action === 'modify-document-style-metadata';
-    const isOverlayLifecycle = mutation.action === 'add-structured-overlay'
-      || mutation.action === 'remove-structured-overlay';
-    const isFlowImageLifecycle = mutation.action === 'add-structured-flow-image'
-      || mutation.action === 'remove-structured-flow-image';
-    observeCommittedEngineChange(changeCoordinator, {
+    const observe = (
+      action: DocumentCommittedMutation['action'],
+      pageId: string,
+      domains: readonly ('project-metadata' | 'page-structure' | 'structured-content' | 'geometry' | 'style' | 'asset-reference')[],
+      target: { kind: 'project' | 'page' | 'structured-image' | 'structured-group'; id: string },
+      assetEffect: PageAssetEffect = 'none'
+    ) => observeCommittedEngineChange(changeCoordinator, {
       projectId: currentSession.projectId,
       source: 'document',
-      action: mutation.action,
-      pageIds: [
-        isPageMetadata || isFlowImageLifecycle || isStructuredText || isDocumentStyleMetadata
-          ? mutation.pageId
-          : currentPageId,
-      ],
-      domains: isPageMetadata
-        ? ['page-structure']
-        : isDocumentStyleMetadata
-          ? ['style']
-          : isStructuredText
-            ? ['structured-content']
-        : isOverlayLifecycle || isFlowImageLifecycle
-          ? ['structured-content']
-          : ['geometry'],
-      target: isPageMetadata
-        ? { kind: 'page', id: mutation.pageId }
-        : isStructuredText || isDocumentStyleMetadata
-        ? { kind: 'page', id: mutation.pageId }
-        : 'flowImageId' in mutation
-          ? { kind: 'structured-image', id: mutation.flowImageId }
-          : 'overlayId' in mutation
-            ? { kind: 'structured-image', id: mutation.overlayId }
-            : undefined,
-      assetEffect: 'assetEffect' in mutation ? mutation.assetEffect : 'none',
+      action,
+      pageIds: [pageId],
+      domains,
+      target,
+      assetEffect,
     });
+
+    switch (mutation.action) {
+      case 'add-page':
+      case 'duplicate-page':
+      case 'remove-page':
+      case 'reorder-page':
+        observe(mutation.action, mutation.pageId, ['page-structure'], {
+          kind: 'page',
+          id: mutation.pageId,
+        });
+        return;
+      case 'modify-document-metadata':
+        observe(mutation.action, mutation.pageId, ['project-metadata'], {
+          kind: 'project',
+          id: currentSession.projectId,
+        });
+        return;
+      case 'modify-document-reference':
+        observe(
+          mutation.action,
+          mutation.pageId,
+          ['project-metadata', 'asset-reference'],
+          { kind: 'page', id: mutation.pageId },
+          mutation.assetEffect || 'none'
+        );
+        return;
+      case 'modify-structured-image-metadata':
+        observe(
+          mutation.action,
+          mutation.pageId,
+          ['structured-content'],
+          {
+            kind: 'structured-image',
+            id: mutation.imageId,
+          },
+          mutation.assetEffect || 'none'
+        );
+        return;
+      case 'modify-structured-image-layout':
+        observe(
+          mutation.action,
+          mutation.pageId,
+          ['geometry'],
+          mutation.imageId
+            ? { kind: 'structured-image', id: mutation.imageId }
+            : { kind: 'page', id: mutation.pageId }
+        );
+        return;
+      case 'modify-structured-image-group':
+        observe(mutation.action, mutation.pageId, ['structured-content'], {
+          kind: 'structured-group',
+          id: mutation.groupId,
+        });
+        return;
+      case 'modify-document-style-metadata':
+        observe(mutation.action, mutation.pageId, ['style'], {
+          kind: 'page',
+          id: mutation.pageId,
+        });
+        return;
+      case 'modify-page-metadata':
+        observe(mutation.action, mutation.pageId, ['page-structure'], {
+          kind: 'page',
+          id: mutation.pageId,
+        });
+        return;
+      case 'modify-structured-title-content':
+      case 'modify-structured-body-content':
+        observe(mutation.action, mutation.pageId, ['structured-content'], {
+          kind: 'page',
+          id: mutation.pageId,
+        });
+        return;
+      case 'modify-structured-geometry':
+        observe(mutation.action, currentPageId, ['geometry'], {
+          kind: 'structured-image',
+          id: mutation.overlayId,
+        });
+        return;
+      case 'add-structured-overlay':
+      case 'remove-structured-overlay':
+        observe(mutation.action, currentPageId, ['structured-content'], {
+          kind: 'structured-image',
+          id: mutation.overlayId,
+        }, mutation.assetEffect);
+        return;
+      case 'add-structured-flow-image':
+      case 'remove-structured-flow-image':
+      case 'remove-structured-inline-image':
+        observe(mutation.action, mutation.pageId, ['structured-content'], {
+          kind: 'structured-image',
+          id: mutation.flowImageId,
+        }, mutation.assetEffect);
+        return;
+    }
   }, [changeCoordinator]);
 
   return (

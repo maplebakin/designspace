@@ -43,7 +43,7 @@ import { cleanupAssets } from '../services/assetLoader';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { SelectionToolbar } from './SelectionToolbar';
 import { ProjectBrowser } from './ProjectBrowser';
-import { Tooltip } from './Tooltip';
+import { CommittedColorInput, Tooltip } from './Tooltip';
 import { KeyboardShortcutHelp } from './KeyboardShortcutHelp';
 import { registerToastCallback } from '../utils/errorHandling';
 import { SaveStatusBadge } from './SaveStatusBadge';
@@ -92,6 +92,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
     setActiveTool,
     setBrushColor,
     setCanvasBackgroundColor,
+    reportCommittedCanvasBackground,
     snapEnabled,
     setSnapEnabled,
     gridEnabled,
@@ -123,6 +124,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
     setActiveTool: state.setActiveTool,
     setBrushColor: state.setBrushColor,
     setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+    reportCommittedCanvasBackground: state.reportCommittedCanvasBackground,
     snapEnabled: state.snapEnabled,
     setSnapEnabled: state.setSnapEnabled,
     gridEnabled: state.gridEnabled,
@@ -843,12 +845,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({
                     >
                         <div className="flex items-center justify-between">
                             <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Canvas</span>
-                                <input
-                                type="color"
+                                <CommittedColorInput
                                 value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
-                                onChange={(e) => {
-                                  setCanvasBackgroundColor(e.target.value);
-                                }}
+                                onInput={setCanvasBackgroundColor}
+                                onCommit={(value, initialValue) => reportCommittedCanvasBackground(value, initialValue)}
                                 className="h-6 w-10 cursor-pointer rounded border border-[color:var(--ui-border)] bg-transparent"
                                 aria-label="Canvas background color"
                             />

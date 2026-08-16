@@ -108,14 +108,24 @@ export const DocumentImageNodeView = ({
 
   const commitWidth = (requestedWidth: number) => {
     const widthPx = normalizeWidth(requestedWidth);
+    const nextHeightPx = calculateDocumentImageHeight(widthPx, aspectRatio);
+    const changed = widthPx !== attributes.widthPx
+      || (
+        attributes.cropMode !== 'fill'
+        && nextHeightPx !== attributes.heightPx
+      );
+    if (!changed) {
+      previewWidthRef.current = null;
+      setPreviewWidth(null);
+      return false;
+    }
     updateAttributes(attributes.cropMode === 'fill'
       ? { widthPx }
-      : {
-          widthPx,
-          heightPx: calculateDocumentImageHeight(widthPx, aspectRatio),
-        });
+      : { widthPx, heightPx: nextHeightPx });
+    options.onCommittedImageLayout?.(attributes.id);
     previewWidthRef.current = null;
     setPreviewWidth(null);
+    return true;
   };
 
   const handleResizeStart = (

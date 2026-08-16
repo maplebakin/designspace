@@ -281,6 +281,38 @@ test.describe('browser Fabric editor smoke', () => {
     expect(fatalConsole).toEqual([]);
   });
 
+  test('uses Chromium native color input for live preview and one completed change', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await openBlankEditor(page);
+
+    const rectId = await addRectangleThroughUi(page, { hidePanels: false });
+    const panel = page.getByTestId('right-inspector-object-panel');
+    const colorInput = panel.locator('input[type="color"]').first();
+    await expect(colorInput).toBeVisible();
+
+    await colorInput.evaluate((input) => {
+      const events: string[] = [];
+      input.addEventListener('input', () => events.push('input'));
+      input.addEventListener('change', () => events.push('change'));
+      (window as Window & { __closureEvents?: string[] }).__closureEvents = events;
+    });
+    await colorInput.evaluate((input) => {
+      const color = input as HTMLInputElement;
+      color.value = '#224466';
+      color.dispatchEvent(new Event('input', { bubbles: true }));
+      color.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await expect.poll(async () => {
+      const current = (await snapshot(page)).canvasObjects.find((object) => object.id === rectId);
+      return current?.fill;
+    }).toBe('#224466');
+    await expect.poll(async () => page.evaluate(
+      () => (window as Window & { __closureEvents?: string[] }).__closureEvents,
+    )).toEqual(['input', 'change']);
+    expect(fatalConsole).toEqual([]);
+  });
+
   test('resizes a selected rectangle through a Fabric corner control and blocks locked resizing', async ({ page }) => {
     const fatalConsole = installFatalConsoleCollector(page);
     await openBlankEditor(page);

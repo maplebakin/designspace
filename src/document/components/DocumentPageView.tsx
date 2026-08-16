@@ -52,6 +52,9 @@ type DocumentPageViewProps = {
   selectedOverlayId: string | null;
   isOverflowing: boolean;
   onReferenceChange: (update: Partial<ScanReference>) => void;
+  onReferenceCommit?: (
+    initial: Pick<ScanReference, 'offsetXPx' | 'offsetYPx'>
+  ) => void;
   onSelectOverlay: (id: string | null) => void;
   onUpdateOverlay: (id: string, update: Partial<DocumentOverlayImage>) => void;
 };
@@ -72,6 +75,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   selectedOverlayId,
   isOverflowing,
   onReferenceChange,
+  onReferenceCommit,
   onSelectOverlay,
   onUpdateOverlay,
 }) => {
@@ -133,6 +137,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
             adjustMode={referenceAdjustMode}
             zoom={zoom}
             onChange={onReferenceChange}
+            onCommit={onReferenceCommit}
           />
 
           <div

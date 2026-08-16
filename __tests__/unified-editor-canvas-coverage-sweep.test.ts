@@ -59,6 +59,7 @@ const acceptedActions = new Set([
   'bring-freeform-to-front',
   'send-freeform-to-back',
   'reorder-freeform-object',
+  'reorder-freeform-objects',
   'modify-freeform-selection-lock',
 ]);
 
@@ -164,7 +165,9 @@ const installDiagnostic = (projectId = 'canvas-coverage-sweep-project'): Diagnos
       action: mutation.action,
       pageIds: ['canvas-page'],
       domains: ['freeform-content'],
-      target: { kind: 'freeform-object', id: mutation.objectId },
+      target: mutation.action === 'reorder-freeform-objects'
+        ? { kind: 'page', id: 'canvas-page' }
+        : { kind: 'freeform-object', id: mutation.objectId },
       assetEffect: 'none',
     });
   });
@@ -449,7 +452,7 @@ describe('Unified Editor Canvas coverage sweep', () => {
     expect(committed).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps multi-selection z-order legacy-owned because the shadow target is singular', () => {
+  it('observes multi-selection z-order once with a page-level target', () => {
     const canvas = createCanvas();
     installCanvas(canvas);
     seedShapes(canvas);
@@ -459,8 +462,17 @@ describe('Unified Editor Canvas coverage sweep', () => {
     bringToFront();
 
     expect(userOrder(canvas)).toEqual(['top', 'bottom', 'middle']);
-    expect(committed).not.toHaveBeenCalled();
-    expect(diagnostic.view.getSnapshot().observedRevision).toBe(0);
+    expect(committed).toHaveBeenCalledWith({
+      action: 'reorder-freeform-objects',
+      pageScope: true,
+    });
+    expect(diagnostic.view.getSnapshot()).toMatchObject({
+      observedRevision: 1,
+      lastCommittedTransaction: {
+        action: 'reorder-freeform-objects',
+        target: { kind: 'page', id: 'canvas-page' },
+      },
+    });
   });
 
   it('observes one completed Layers drag reorder with a stable moved-object target', () => {
@@ -743,16 +755,13 @@ describe('Unified Editor Canvas coverage sweep', () => {
       canvasZOrder: true,
       canvasLayerReorder: true,
       canvasSelectionLock: true,
-      completeAuthoredCoverage: false,
+      completeAuthoredCoverage: true,
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas multi-selection z-order and other reorder paths',
-        'Canvas full-object lock and unsupported Selection Lock invocation paths',
-        'Canvas native fill, stroke, shadow, and gradient colour pickers',
-        'Canvas theme-token linking, unlinking, reset, and global theme application',
-        'Canvas font-size, corner-radius, style presets, and image-reset commands',
-        'Document native paper/text/drop-cap colour pickers',
+        'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+        'Document selection, zoom, fit mode, and inspector focus state',
+        'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('Canvas Selection Lock and full-object lock');

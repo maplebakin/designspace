@@ -7,6 +7,7 @@ import {
   Printer,
   Save,
 } from 'lucide-react';
+import { CommittedInput } from '../../editor/components/Tooltip';
 
 type DocumentTopBarProps = {
   projectName: string;
@@ -15,6 +16,7 @@ type DocumentTopBarProps = {
   exportBusy: boolean;
   onBack: () => void;
   onRename: (name: string) => void;
+  onRenameCommit?: (name: string, initialName: string) => void;
   onSave: () => void;
   onDownloadProject: () => void;
   onExport: (format: 'png' | 'pdf', scope?: 'current' | 'all') => void;
@@ -37,6 +39,7 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
   exportBusy,
   onBack,
   onRename,
+  onRenameCommit,
   onSave,
   onDownloadProject,
   onExport,
@@ -59,11 +62,12 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
     </button>}
 
     {showProjectControls && <div className="document-top-bar__identity">
-      <input
+      <CommittedInput
         aria-label="Document project name"
         data-testid="document-project-name"
         value={projectName}
         onChange={(event) => onRename(event.target.value)}
+        onCommit={(value, initialValue) => onRenameCommit?.(value, initialValue)}
         className="document-project-name-input"
       />
       <span

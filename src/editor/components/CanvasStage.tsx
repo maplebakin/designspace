@@ -774,6 +774,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     scheduleUpdate,
     setShowOnboarding,
     trackPromise,
+    onCommittedMutation,
   });
 
   // Setup function that registers all canvas event handlers using the canvas event service

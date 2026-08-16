@@ -141,13 +141,14 @@ describe('Unified Editor Phase 1E project change diagnostics', () => {
         documentOverlayGeometry: true,
         documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
         documentPageMetadata: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
     expect(snapshot.coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas native fill, stroke, shadow, and gradient colour pickers',
-        'Canvas font-size, corner-radius, style presets, and image-reset commands',
+      'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+      'Document selection, zoom, fit mode, and inspector focus state',
+      'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
       ])
     );
 

@@ -5,6 +5,8 @@ export type CommitCanvasMutationCallbacks = {
   syncActivePageFromCanvas?: () => void;
   saveState?: () => void;
   requestLayerSync?: () => void;
+  /** Optional product-level callback after the legacy commit has completed. */
+  onCommitted?: () => void;
 };
 
 export type CommitCanvasMutationOptions = {

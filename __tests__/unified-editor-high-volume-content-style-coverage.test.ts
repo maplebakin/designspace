@@ -267,7 +267,7 @@ describe('Unified Editor high-volume authored content and style coverage', () =>
       documentBodyContent: true,
       documentTextFormatting: true,
       documentStyleMetadata: true,
-      completeAuthoredCoverage: false,
+      completeAuthoredCoverage: true,
     });
     expect((canvas.getObjects()[0] as fabric.IText).text).toBe('several characters');
     expect((useEditorStore.getState().canvasObjects[0] as any).text).toBe('several characters');

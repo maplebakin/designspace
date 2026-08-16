@@ -7,6 +7,7 @@ type ScanReferenceLayerProps = {
   adjustMode: boolean;
   zoom: number;
   onChange: (update: Partial<ScanReference>) => void;
+  onCommit?: (initial: Pick<ScanReference, 'offsetXPx' | 'offsetYPx'>) => void;
 };
 
 export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
@@ -15,6 +16,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
   adjustMode,
   zoom,
   onChange,
+  onCommit,
 }) => {
   const dragStart = useRef<{
     pointerX: number;
@@ -47,9 +49,19 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
     });
   };
 
-  const stopDragging = (event: React.PointerEvent<HTMLDivElement>) => {
+  const stopDragging = (
+    event: React.PointerEvent<HTMLDivElement>,
+    completed = true
+  ) => {
+    const initial = dragStart.current;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (completed && initial) {
+      onCommit?.({
+        offsetXPx: initial.offsetX,
+        offsetYPx: initial.offsetY,
+      });
     }
     dragStart.current = null;
   };
@@ -64,7 +76,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={stopDragging}
-      onPointerCancel={stopDragging}
+      onPointerCancel={(event) => stopDragging(event, false)}
       style={{
         pointerEvents: canAdjust ? 'auto' : 'none',
         opacity: reference.opacity,

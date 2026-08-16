@@ -388,6 +388,7 @@ export interface FlowEditorProps {
   ) => string | null;
   onImageSelectionRequest?: (imageId: string, additive: boolean) => void;
   onRequestImageReplace?: (request: DocumentImageReplaceRequest) => void;
+  onCommittedImageLayout?: (imageId: string) => void;
   onDeleteFlowImage?: (editor: Editor, imageId: string) => boolean;
   onPasteDispatch?: DocumentPasteDispatcher;
   onDropDispatch?: DocumentDropDispatcher;
@@ -505,6 +506,7 @@ export const FlowEditor = ({
   onStructuredImageSelectionRequest,
   onImageSelectionRequest,
   onRequestImageReplace,
+  onCommittedImageLayout,
   onDeleteFlowImage,
   onPasteDispatch,
   onDropDispatch,
@@ -534,6 +536,7 @@ export const FlowEditor = ({
     onImageSelectionRequest,
     selectedStructuredImageIds,
     onRequestImageReplace,
+    onCommittedImageLayout,
     onDeleteFlowImage,
     onPasteDispatch,
     onDropDispatch,
@@ -553,6 +556,7 @@ export const FlowEditor = ({
     onImageSelectionRequest,
     selectedStructuredImageIds,
     onRequestImageReplace,
+    onCommittedImageLayout,
     onDeleteFlowImage,
     onPasteDispatch,
     onDropDispatch,
@@ -620,6 +624,8 @@ export const FlowEditor = ({
       callbacksRef.current.resolveAssetSource(assetId),
     onRequestReplace: (request: DocumentImageReplaceRequest) =>
       callbacksRef.current.onRequestImageReplace?.(request),
+    onCommittedImageLayout: (imageId: string) =>
+      callbacksRef.current.onCommittedImageLayout?.(imageId),
     onSelectImage: ({
       imageId,
       additive,
@@ -725,7 +731,9 @@ export const FlowEditor = ({
           if (
             !activeEditor
             || !(selection instanceof NodeSelection)
-            || selection.node.type.name !== 'documentFlowImage'
+            || !DOCUMENT_IMAGE_NODE_NAMES.includes(
+              selection.node.type.name as DocumentImageNodeName
+            )
             || (event.key !== 'Delete' && event.key !== 'Backspace')
           ) {
             return false;
@@ -1087,27 +1095,39 @@ export const FlowEditor = ({
             imageId,
             xOffsetPx,
             yPx
-          ) => commitStructuredDocumentImagePosition(
-            editor,
-            position,
-            imageId,
-            xOffsetPx,
-            yPx
-          )}
+          ) => {
+            const committed = commitStructuredDocumentImagePosition(
+              editor,
+              position,
+              imageId,
+              xOffsetPx,
+              yPx
+            );
+            if (committed) {
+              callbacksRef.current.onCommittedImageLayout?.(imageId);
+            }
+            return committed;
+          }}
           onCommitImageSize={(
             position,
             imageId,
             widthPx,
             heightPx,
             xOffsetPx
-          ) => commitStructuredDocumentImageSize(
-            editor,
-            position,
-            imageId,
-            widthPx,
-            heightPx,
-            xOffsetPx
-          )}
+          ) => {
+            const committed = commitStructuredDocumentImageSize(
+              editor,
+              position,
+              imageId,
+              widthPx,
+              heightPx,
+              xOffsetPx
+            );
+            if (committed) {
+              callbacksRef.current.onCommittedImageLayout?.(imageId);
+            }
+            return committed;
+          }}
           onEditText={() => {
             enteringStructuredTextRef.current = true;
             setEditingStructuredText(true);

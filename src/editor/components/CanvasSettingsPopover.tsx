@@ -15,6 +15,7 @@ import { PopoverSurface } from './PopoverSurface';
 import { PRINT_DPI } from '../utils/units';
 import { CANVAS_SETTINGS_PRESETS, type CanvasPreset } from '../config/canvasPresets';
 import { isUserObject } from '../utils/objectUtils';
+import { CommittedColorInput } from './Tooltip';
 
 type PendingResize = {
   width: number;
@@ -30,6 +31,8 @@ export const CanvasSettingsPopover: React.FC = () => {
     showGuides,
     toggleShowGuides,
     setCanvasBackgroundColor,
+    reportCommittedCanvasBackground,
+    reportCommittedCanvasPageResize,
     setProjectPresetsOpen,
   } = useEditorStore(
     (state) => ({
@@ -37,6 +40,8 @@ export const CanvasSettingsPopover: React.FC = () => {
       showGuides: state.showGuides,
       toggleShowGuides: state.toggleShowGuides,
       setCanvasBackgroundColor: state.setCanvasBackgroundColor,
+      reportCommittedCanvasBackground: state.reportCommittedCanvasBackground,
+      reportCommittedCanvasPageResize: state.reportCommittedCanvasPageResize,
       setProjectPresetsOpen: state.setProjectPresetsOpen,
     }),
     shallow
@@ -63,6 +68,17 @@ export const CanvasSettingsPopover: React.FC = () => {
 
   const currentSize = `${Math.round(docWidth)} × ${Math.round(docHeight)} px`;
 
+  const readResizeState = () => ({
+    width: useCanvasStore.getState().width,
+    height: useCanvasStore.getState().height,
+    objectIds: canvas
+      ? canvas.getObjects()
+        .filter(isUserObject)
+        .map((object) => (object as any).id)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      : [],
+  });
+
   const fitToViewport = () => {
     requestAnimationFrame(() => {
       const container = document.querySelector('.workspace');
@@ -78,6 +94,7 @@ export const CanvasSettingsPopover: React.FC = () => {
   };
 
   const applyResizeChoice = (choice: ResizeChoice, width: number, height: number) => {
+    const before = readResizeState();
     switch (choice) {
       case 'keep':
         resizeCanvasOnly(width, height);
@@ -90,6 +107,16 @@ export const CanvasSettingsPopover: React.FC = () => {
         break;
       default:
         break;
+    }
+
+    if (canvas) {
+      useEditorStore.getState().syncCanvasToStore(canvas);
+      useEditorStore.getState().syncActivePageFromCanvas();
+      reportCommittedCanvasPageResize(
+        before,
+        readResizeState(),
+        choice === 'clear',
+      );
     }
 
     fitToViewport();
@@ -135,7 +162,17 @@ export const CanvasSettingsPopover: React.FC = () => {
                 <h3 className="text-[11px] uppercase tracking-widest text-[color:var(--ui-text)]">Canvas Size</h3>
                 <button
                   onClick={() => {
+                    const before = readResizeState();
                     rotateCanvas();
+                    if (canvas) {
+                      useEditorStore.getState().syncCanvasToStore(canvas);
+                      useEditorStore.getState().syncActivePageFromCanvas();
+                      reportCommittedCanvasPageResize(
+                        before,
+                        readResizeState(),
+                        false,
+                      );
+                    }
                     fitToViewport();
                   }}
                   className="flex items-center gap-1.5 px-2 py-1 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)] bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] hover:text-[color:var(--ui-text)] transition-all duration-200"
@@ -227,10 +264,10 @@ export const CanvasSettingsPopover: React.FC = () => {
                 <h4 className="text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">Background</h4>
                 <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
                   <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-text)]">Fill Color</span>
-                  <input
-                    type="color"
+                  <CommittedColorInput
                     value={safeCanvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND}
-                    onChange={(event) => setCanvasBackgroundColor(event.target.value)}
+                    onInput={setCanvasBackgroundColor}
+                    onCommit={(value, initialValue) => reportCommittedCanvasBackground(value, initialValue)}
                     className="h-6 w-10 cursor-pointer rounded border border-white/10 bg-transparent"
                     aria-label="Canvas background color"
                   />

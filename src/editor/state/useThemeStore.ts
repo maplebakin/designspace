@@ -506,14 +506,15 @@ export const applyThemeToCanvas = (
         acquireSyncLock?: (reason: SyncLockReason) => void;
         releaseSyncLock?: () => void;
     }
-) => {
+): boolean => {
     const { acquireSyncLock, releaseSyncLock } = callbacks;
 
     // Acquire sync lock if provided
     acquireSyncLock?.('theme-apply');
 
+    let objectsChanged = false;
+    let committed = false;
     try {
-        let objectsChanged = false;
 
         const applyThemeToObject = (obj: fabric.Object) => {
             if ((obj as any).colorLocked) {
@@ -549,9 +550,12 @@ export const applyThemeToCanvas = (
 
         if (objectsChanged) {
             commitCanvasMutation(canvas, callbacks);
+            committed = true;
         }
+        return objectsChanged;
     } finally {
         releaseSyncLock?.();
+        if (committed) callbacks.onCommitted?.();
     }
 };
 

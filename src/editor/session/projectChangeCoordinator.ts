@@ -31,10 +31,23 @@ export type ProjectChangeAction =
   | 'reorder-page'
   | 'rename-page'
   | 'add-freeform-object'
+  | 'add-freeform-objects'
   | 'remove-freeform-object'
+  | 'remove-freeform-objects'
+  | 'replace-freeform-image'
   | 'modify-freeform-geometry'
   | 'modify-freeform-style'
   | 'modify-freeform-text-content'
+  | 'apply-freeform-style-preset'
+  | 'reset-freeform-image-adjustments'
+  | 'modify-freeform-theme-link'
+  | 'apply-freeform-theme'
+  | 'reset-freeform-theme-links'
+  | 'apply-freeform-design-state'
+  | 'apply-freeform-template'
+  | 'apply-project-recipe'
+  | 'resize-freeform-page'
+  | 'reset-freeform-page'
   | 'modify-freeform-transform-lock'
   | 'modify-freeform-theme-color-lock'
   | 'modify-freeform-visibility'
@@ -44,20 +57,27 @@ export type ProjectChangeAction =
   | 'send-freeform-to-back'
   | 'modify-freeform-selection-lock'
   | 'reorder-freeform-object'
+  | 'reorder-freeform-objects'
   | 'group-freeform-objects'
   | 'ungroup-freeform-objects'
   | 'add-structured-overlay'
   | 'remove-structured-overlay'
   | 'add-structured-flow-image'
   | 'remove-structured-flow-image'
+  | 'remove-structured-inline-image'
   | 'modify-structured-geometry'
   | 'modify-structured-title-content'
   | 'modify-structured-body-content'
   | 'modify-document-style-metadata'
+  | 'modify-document-metadata'
+  | 'modify-document-reference'
+  | 'modify-structured-image-metadata'
+  | 'modify-structured-image-layout'
+  | 'modify-structured-image-group'
   | 'modify-page-metadata';
 
 export type ProjectChangeTarget = Readonly<{
-  kind: 'page' | 'freeform-object' | 'freeform-group' | 'structured-image' | 'structured-group';
+  kind: 'project' | 'page' | 'freeform-object' | 'freeform-group' | 'structured-image' | 'structured-group';
   id: string;
 }>;
 

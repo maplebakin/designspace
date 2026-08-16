@@ -26,11 +26,19 @@ const edgePatterns: EdgePattern[] = ['dots', 'dashes', 'diamonds', 'stars'];
 const lineStyles: LineStyle[] = ['solid', 'dashed', 'dotted'];
 
 export const PageBorderPopover: React.FC = () => {
-  const { canvas, saveState, requestLayerSync } = useEditorStore(
+  const {
+    canvas,
+    saveState,
+    requestLayerSync,
+    syncActivePageFromCanvas,
+    reportCommittedCanvasPageBorder,
+  } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       saveState: state.saveState,
       requestLayerSync: state.requestLayerSync,
+      syncActivePageFromCanvas: state.syncActivePageFromCanvas,
+      reportCommittedCanvasPageBorder: state.reportCommittedCanvasPageBorder,
     }),
     shallow
   );
@@ -51,16 +59,23 @@ export const PageBorderPopover: React.FC = () => {
 
   const onApply = () => {
     if (!canvas) return;
+    const beforeSettings = getPageBorderGroup(canvas)?.borderSettings ?? null;
     applyPageBorder(canvas, settings);
+    syncActivePageFromCanvas();
     requestLayerSync({ force: true });
     saveState({ force: true });
+    reportCommittedCanvasPageBorder(beforeSettings, settings);
   };
 
   const onRemove = () => {
     if (!canvas) return;
+    const beforeSettings = getPageBorderGroup(canvas)?.borderSettings ?? null;
+    if (!beforeSettings) return;
     removePageBorder(canvas);
+    syncActivePageFromCanvas();
     requestLayerSync({ force: true });
     saveState({ force: true });
+    reportCommittedCanvasPageBorder(beforeSettings, null);
   };
 
   return (

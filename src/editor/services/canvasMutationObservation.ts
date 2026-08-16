@@ -10,6 +10,10 @@ export type CanvasCommittedMutation =
       objectId: string;
     }>
   | Readonly<{
+      action: 'modify-freeform-geometry';
+      pageScope: true;
+    }>
+  | Readonly<{
       action: 'modify-freeform-style';
       objectId: string;
       style: CanvasStyleCommitKind;
@@ -17,6 +21,42 @@ export type CanvasCommittedMutation =
   | Readonly<{
       action: 'modify-freeform-text-content';
       objectId: string;
+    }>
+  | Readonly<{
+      action: 'apply-freeform-style-preset';
+      objectId: string;
+    }>
+  | Readonly<{
+      action: 'reset-freeform-image-adjustments';
+      objectId: string;
+    }>
+  | Readonly<{
+      action: 'modify-freeform-theme-link';
+      objectId: string;
+    }>
+  | Readonly<{
+      action: 'apply-freeform-theme' | 'reset-freeform-theme-links';
+      pageScope: true;
+    }>
+  | Readonly<{
+      action: 'apply-freeform-design-state';
+      pageScope: true;
+    }>
+  | Readonly<{
+      action: 'apply-freeform-template' | 'apply-project-recipe';
+      projectScope: true;
+    }>
+  | Readonly<{
+      action: 'add-page' | 'remove-page' | 'reorder-page';
+      pageId: string;
+    }>
+  | Readonly<{
+      action: 'resize-freeform-page' | 'reset-freeform-page';
+      pageScope: true;
+    }>
+  | Readonly<{
+      action: 'modify-page-metadata';
+      pageScope: true;
     }>
   | Readonly<{
       action: 'modify-freeform-transform-lock';
@@ -31,8 +71,27 @@ export type CanvasCommittedMutation =
       objectId: string;
     }>
   | Readonly<{
+      action: 'reorder-freeform-objects';
+      pageScope: true;
+    }>
+  | Readonly<{
       action: 'add-freeform-object' | 'remove-freeform-object';
       objectId: string;
+      assetEffect: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'replace-freeform-image';
+      objectId: string;
+      assetEffect: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'add-freeform-objects';
+      pageScope: true;
+      assetEffect: PageAssetEffect;
+    }>
+  | Readonly<{
+      action: 'remove-freeform-objects';
+      pageScope: true;
       assetEffect: PageAssetEffect;
     }>
   | Readonly<{
@@ -57,7 +116,13 @@ export type CanvasDiscreteObjectMutationAction =
 export type CanvasStyleCommitKind =
   | 'border-style'
   | 'fill-mode'
+  | 'fill-color'
+  | 'gradient-color'
+  | 'stroke-color'
+  | 'shadow-color'
   | 'font-family'
+  | 'font-size'
+  | 'style-preset'
   | 'font-weight'
   | 'text-align'
   | 'opacity'
@@ -69,11 +134,17 @@ export type CanvasStyleCommitKind =
   | 'text-line-height'
   | 'text-letter-spacing'
   | 'text-stroke-width'
+  | 'corner-radius'
   | 'image-adjustment-brightness'
   | 'image-adjustment-contrast'
   | 'image-adjustment-saturation';
 
 export type CanvasStyleValue = string | number;
+
+const normalizeStyleColor = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  return value.trim().toLowerCase();
+};
 
 const readFillOpacity = (fill: unknown): number | null => {
   if (typeof fill !== 'string') return null;
@@ -122,8 +193,43 @@ export const readCanvasStyleValue = (
         && Array.isArray(object.fill.colorStops)
         ? 'gradient'
         : 'solid';
+    case 'fill-color':
+      return normalizeStyleColor(object?.fill);
+    case 'gradient-color':
+      return Array.isArray(object?.fill?.colorStops)
+        ? object.fill.colorStops
+          .map((stop: any) => normalizeStyleColor(stop?.color))
+          .join('|')
+        : '';
+    case 'stroke-color':
+      return normalizeStyleColor(object?.stroke);
+    case 'shadow-color':
+      return normalizeStyleColor(object?.shadow?.color);
+    case 'style-preset':
+      return JSON.stringify({
+        fill: typeof object?.fill === 'string'
+          ? normalizeStyleColor(object.fill)
+          : Array.isArray(object?.fill?.colorStops)
+            ? object.fill.colorStops.map((stop: any) => ({
+                offset: stop?.offset,
+                color: normalizeStyleColor(stop?.color),
+              }))
+            : null,
+        stroke: normalizeStyleColor(object?.stroke),
+        strokeWidth: object?.strokeWidth ?? null,
+        shadow: object?.shadow
+          ? {
+              color: normalizeStyleColor(object.shadow.color),
+              blur: object.shadow.blur,
+              offsetX: object.shadow.offsetX,
+              offsetY: object.shadow.offsetY,
+            }
+          : null,
+      });
     case 'font-family':
       return typeof object?.fontFamily === 'string' ? object.fontFamily : '';
+    case 'font-size':
+      return typeof object?.fontSize === 'number' ? object.fontSize : 0;
     case 'font-weight':
       return object?.fontWeight === undefined ? 'normal' : String(object.fontWeight);
     case 'text-align':
@@ -145,6 +251,11 @@ export const readCanvasStyleValue = (
       return typeof object?.lineHeight === 'number' ? object.lineHeight : 1;
     case 'text-letter-spacing':
       return typeof object?.charSpacing === 'number' ? object.charSpacing : 0;
+    case 'corner-radius': {
+      const rx = typeof object?.rx === 'number' ? object.rx : 0;
+      const ry = typeof object?.ry === 'number' ? object.ry : 0;
+      return `${rx}:${ry}`;
+    }
     case 'image-adjustment-brightness':
       return readImageAdjustmentValue(object, 'Brightness', 'brightness');
     case 'image-adjustment-contrast':

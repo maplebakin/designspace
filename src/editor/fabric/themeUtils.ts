@@ -19,7 +19,7 @@ export type { BrandCollection } from '../state/useThemeStore';
  * NOTE: This function now delegates to themeStore's applyThemeToCanvas for the actual
  * theme application logic.
  */
-export const applyActiveThemeToCanvas = () => {
+export const applyActiveThemeToCanvas = (options?: { observe?: boolean }) => {
     const {
         canvas,
         saveState,
@@ -52,6 +52,7 @@ export const applyActiveThemeToCanvas = () => {
         syncCanvasToStore,
         acquireSyncLock,
         releaseSyncLock,
+        ...(options?.observe === false ? {} : { onCommitted: undefined }),
     });
 };
 

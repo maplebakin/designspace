@@ -148,7 +148,7 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     vi.useRealTimers();
   });
 
-  it('defers fill colour because sequential picker changes create sequential legacy writes', async () => {
+  it('uses the native completed color change after live picker updates as one style commit', async () => {
     const canvas = createCanvas();
     installCanvas(canvas);
     seedShape(canvas);
@@ -159,13 +159,20 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     const initialRevision = useEditorStore.getState().changeRevision;
 
     act(() => {
-      fireEvent.change(fill, { target: { value: '#112233' } });
+      fireEvent.pointerDown(fill);
+      fireEvent.input(fill, { target: { value: '#112233' } });
+      fireEvent.input(fill, { target: { value: '#223344' } });
       fireEvent.change(fill, { target: { value: '#223344' } });
     });
 
     expect(useEditorStore.getState().changeRevision).toBe(initialRevision + 2);
     expect((canvas.getObjects()[0] as fabric.Rect).fill).toBe('#223344');
-    expect(committed).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-style',
+      objectId: 'border-shape',
+      style: 'fill-color',
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(350);
     });
@@ -393,7 +400,7 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(0);
   });
 
-  it('exposes only Border Style coverage while authored coverage remains incomplete', () => {
+  it('exposes the Border Style and closure coverage without a generic styles claim', () => {
     const coordinator = createProjectChangeCoordinator();
     const diagnostic = createProjectChangeDiagnosticObserver({ coordinator });
     diagnostic.observeSession({
@@ -405,13 +412,17 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     const coverage = diagnostic.view.getSnapshot().coverage;
     expect(coverage).toMatchObject({
       canvasBorderStyle: true,
-      completeAuthoredCoverage: false,
+      canvasCommittedColorControls: true,
+      canvasNumericControls: true,
+      canvasPresetResetCommands: true,
+      canvasThemeOperations: true,
+      completeAuthoredCoverage: true,
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas native fill, stroke, shadow, and gradient colour pickers',
-        'Canvas font-size, corner-radius, style presets, and image-reset commands',
-        'Document native paper/text/drop-cap colour pickers',
+        'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+        'Document selection, zoom, fit mode, and inspector focus state',
+        'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('styles');

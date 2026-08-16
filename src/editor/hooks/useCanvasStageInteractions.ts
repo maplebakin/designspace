@@ -4,6 +4,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { loadImageFromFile, safeLoadImage } from '../services/assetLoader';
 import { isActiveSelection } from '../utils/typeGuards';
 import { useEditorStore } from '../state/editorStore';
+import {
+  withCanvasObjectMutationSuppressed,
+  type CanvasCommittedMutation,
+} from '../services/canvasMutationObservation';
+import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
 type CanvasMutationOptions = { persist?: boolean; activate?: boolean };
 
@@ -21,6 +26,7 @@ type UseCanvasStageInteractionsArgs = {
   ) => void;
   setShowOnboarding: (show: boolean) => void;
   trackPromise: <T>(promise: Promise<T>, abortSignal?: AbortSignal) => Promise<T>;
+  onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
 };
 
 const getCanvasPointer = (canvas: fabric.Canvas, event: MouseEvent) => {
@@ -134,6 +140,15 @@ const createFrameClipPath = (
   });
 };
 
+const containsCanvasObject = (
+  objects: readonly fabric.Object[],
+  target: fabric.Object
+): boolean => objects.some((object) => (
+  object === target
+  || (typeof (object as any).getObjects === 'function'
+    && containsCanvasObject((object as any).getObjects(), target))
+));
+
 export const useCanvasStageInteractions = ({
   fabricCanvas,
   addImageAsset,
@@ -141,6 +156,7 @@ export const useCanvasStageInteractions = ({
   scheduleUpdate,
   setShowOnboarding,
   trackPromise,
+  onCommittedMutation,
 }: UseCanvasStageInteractionsArgs) => {
   const placeholderHighlightRef = useRef<{
     obj: fabric.Object;
@@ -311,27 +327,49 @@ export const useCanvasStageInteractions = ({
     const frameType = resolveFrameType(placeholder);
     img.clipPath = createFrameClipPath(frameType, clipWidth, clipHeight, angle);
 
-    if (group) {
-      const groupAny = group as any;
-      const groupIndex = group.getObjects().indexOf(placeholder);
-      group.remove(placeholder);
-      group.add(img);
-      if (groupIndex >= 0 && typeof groupAny.moveObjectTo === 'function') {
-        groupAny.moveObjectTo(img, groupIndex);
+    withCanvasObjectMutationSuppressed(canvas, () => {
+      if (group) {
+        const groupAny = group as any;
+        const groupIndex = group.getObjects().indexOf(placeholder);
+        group.remove(placeholder);
+        group.add(img);
+        if (groupIndex >= 0 && typeof groupAny.moveObjectTo === 'function') {
+          groupAny.moveObjectTo(img, groupIndex);
+        }
+        if (typeof groupAny.addWithUpdate === 'function') {
+          groupAny.addWithUpdate();
+        }
+      } else {
+        const placeholderIndex = canvas.getObjects().indexOf(placeholder);
+        canvas.remove(placeholder);
+        canvas.add(img);
+        if (options?.activate !== false) {
+          useEditorStore.getState().selectObjectById(String((img as any).id));
+        }
+        if (placeholderIndex >= 0) {
+          canvas.moveObjectTo(img, placeholderIndex);
+        }
       }
-      if (typeof groupAny.addWithUpdate === 'function') {
-        groupAny.addWithUpdate();
-      }
-    } else {
-      const placeholderIndex = canvas.getObjects().indexOf(placeholder);
-      canvas.remove(placeholder);
-      addObjectToCanvas(canvas, img, options);
-      if (placeholderIndex >= 0) {
-        canvas.moveObjectTo(img, placeholderIndex);
-      }
+    });
+    commitCanvasMutation(canvas, {
+      syncCanvasToStore: useEditorStore.getState().syncCanvasToStore,
+      saveState: useEditorStore.getState().saveState,
+      requestLayerSync: useEditorStore.getState().requestLayerSync,
+    });
+    scheduleUpdate(canvas, { ...options, persist: false });
+    if (!containsCanvasObject(canvas.getObjects(), img)) return;
+    const replacementId = String((img as any).id || '');
+    if (!replacementId.trim()) return;
+    try {
+      onCommittedMutation?.({
+        action: 'replace-freeform-image',
+        objectId: replacementId,
+        assetEffect: 'unknown-engine-owned',
+      });
+    } catch {
+      // Optional diagnostics must not affect the image replacement.
     }
-    scheduleUpdate(canvas, options);
-  }, [addObjectToCanvas, scheduleUpdate]);
+  }, [addObjectToCanvas, onCommittedMutation, scheduleUpdate]);
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -457,8 +495,28 @@ export const useCanvasStageInteractions = ({
             filters: targetObject.filters,
           });
           img.applyFilters();
-          fabricCanvas.remove(targetObject);
-          addObjectToCanvas(fabricCanvas, img, { persist: true });
+          withCanvasObjectMutationSuppressed(fabricCanvas, () => {
+            fabricCanvas.remove(targetObject);
+            fabricCanvas.add(img);
+            useEditorStore.getState().selectObjectById(String((img as any).id));
+          });
+          commitCanvasMutation(fabricCanvas, {
+            syncCanvasToStore: useEditorStore.getState().syncCanvasToStore,
+            saveState: useEditorStore.getState().saveState,
+            requestLayerSync: useEditorStore.getState().requestLayerSync,
+          });
+          if (!containsCanvasObject(fabricCanvas.getObjects(), img)) return;
+          const replacementId = String((img as any).id || '');
+          if (!replacementId.trim()) return;
+          try {
+            onCommittedMutation?.({
+              action: 'replace-freeform-image',
+              objectId: replacementId,
+              assetEffect: 'unknown-engine-owned',
+            });
+          } catch {
+            // Optional diagnostics must not affect the image replacement.
+          }
         } else {
           const maxWidth = isSticker ? 150 : 200;
           if (img.width && img.width > maxWidth) {
@@ -475,7 +533,7 @@ export const useCanvasStageInteractions = ({
           });
           addObjectToCanvas(fabricCanvas, img, { persist: true });
         }
-        scheduleUpdate(fabricCanvas, { persist: true });
+        scheduleUpdate(fabricCanvas, { persist: false });
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -493,6 +551,7 @@ export const useCanvasStageInteractions = ({
     scheduleUpdate,
     setShowOnboarding,
     trackPromise,
+    onCommittedMutation,
   ]);
 
   const handleImageUpload = useCallback(async (file?: File | null) => {

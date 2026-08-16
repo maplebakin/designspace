@@ -110,6 +110,7 @@ export interface DocumentImageReplaceRequest {
 export interface DocumentImageExtensionOptions {
   resolveAssetSource: (assetId: string) => string | undefined;
   onRequestReplace?: (request: DocumentImageReplaceRequest) => void;
+  onCommittedImageLayout?: (imageId: string) => void;
   onSelectImage?: (request: {
     editor: Editor;
     position: number | undefined;

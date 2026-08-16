@@ -85,7 +85,18 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
         const data = JSON.parse(item.canvasData);
         const objects = data.objects || [];
 
-        const { clearSelection, setCanvasBackgroundColor, syncCanvasToStore, saveState } = useEditorStore.getState();
+        const {
+          clearSelection,
+          setCanvasBackgroundColor,
+          syncCanvasToStore,
+          syncActivePageFromCanvas,
+          saveState,
+          reportCommittedCanvasPageContent,
+        } = useEditorStore.getState();
+        const beforeFingerprint = JSON.stringify({
+          objects: useEditorStore.getState().canvasObjects,
+          background: useThemeStore.getState().canvasBackgroundColor,
+        });
         clearSelection();
         setCanvasBackgroundColor(typeof data.background === 'string' ? data.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
         canvas.backgroundColor = 'transparent';
@@ -95,13 +106,22 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           canvas.backgroundColor = 'transparent';
           canvas.requestRenderAll();
           syncCanvasToStore();
-          saveState();
           setToastMessage(`Loaded: ${item.label || 'Design state'}`);
         } else {
           withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
           canvas.requestRenderAll();
           setToastMessage(`Loaded empty state: ${item.label || 'Design state'}`);
         }
+        syncCanvasToStore(canvas);
+        syncActivePageFromCanvas();
+        saveState();
+        reportCommittedCanvasPageContent(
+          beforeFingerprint,
+          JSON.stringify({
+            objects: useEditorStore.getState().canvasObjects,
+            background: useThemeStore.getState().canvasBackgroundColor,
+          }),
+        );
         } catch (error) {
           console.error('Failed to load design state:', error);
           setToastMessage('Failed to load design state');

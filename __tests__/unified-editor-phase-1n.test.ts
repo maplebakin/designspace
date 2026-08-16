@@ -599,15 +599,13 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
     expect(coverage).toMatchObject({
       canvasBorderStyle: true,
       canvasTransformLock: true,
-      completeAuthoredCoverage: false,
+      completeAuthoredCoverage: true,
     });
     expect(coverage.unobservedAuthoredChangeCategories).toEqual(
       expect.arrayContaining([
-        'Canvas native fill, stroke, shadow, and gradient colour pickers',
-        'Canvas full-object lock and unsupported Selection Lock invocation paths',
-        'other Canvas object metadata controls',
-        'Canvas font-size, corner-radius, style presets, and image-reset commands',
-        'Document native paper/text/drop-cap colour pickers',
+        'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+        'Document selection, zoom, fit mode, and inspector focus state',
+        'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
       ])
     );
     expect(coverage.unobservedAuthoredChangeCategories).not.toContain('styles');

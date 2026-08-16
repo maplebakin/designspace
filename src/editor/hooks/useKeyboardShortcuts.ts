@@ -4,6 +4,7 @@ import { useEditorStore } from '../state/editorStore';
 import * as objectFactories from '../fabric/objectFactories';
 import { copySelection, pasteFromClipboard, duplicateSelection } from '../services/clipboardService';
 import { zoomToSelection } from '../utils/zoomToSelection';
+import { isActiveSelection } from '../utils/typeGuards';
 
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
@@ -24,7 +25,18 @@ export const useKeyboardShortcuts = () => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
 
-      const { canvas, undo, redo, removeSelectedObject, requestLayerSync, syncCanvasToStore, saveState } =
+      const {
+        canvas,
+        undo,
+        redo,
+        removeSelectedObject,
+        requestLayerSync,
+        syncCanvasToStore,
+        saveState,
+        getCanvasGeometrySnapshot,
+        reportCommittedCanvasGeometry,
+        reportCommittedCanvasPageGeometry,
+      } =
         useEditorStore.getState();
       if (!canvas) return;
 
@@ -205,6 +217,8 @@ export const useKeyboardShortcuts = () => {
 
       event.preventDefault();
 
+      const beforeGeometry = getCanvasGeometrySnapshot();
+
       const lockedX = !!(activeObject as any).lockMovementX;
       const lockedY = !!(activeObject as any).lockMovementY;
       const nextLeft = (activeObject.left ?? 0) + (lockedX ? 0 : deltaX);
@@ -219,6 +233,18 @@ export const useKeyboardShortcuts = () => {
       syncCanvasToStore(canvas);
       requestLayerSync();
       saveState();
+      const afterGeometry = getCanvasGeometrySnapshot();
+      if (isActiveSelection(activeObject)) {
+        reportCommittedCanvasPageGeometry(beforeGeometry, afterGeometry);
+      } else {
+        const objectId = (activeObject as any).id;
+        if (typeof objectId === 'string') {
+          reportCommittedCanvasGeometry(
+            objectId,
+            beforeGeometry.find((item) => item.id === objectId)?.value,
+          );
+        }
+      }
       return;
     };
 

@@ -609,6 +609,10 @@ describe('live document editor UI', () => {
     );
     expect(exportRoot.style.backgroundColor).toBe('rgb(250, 248, 245)');
 
+    fireEvent.pointerDown(paperInput);
+    fireEvent.input(paperInput, {
+      target: { value: '#e7dcc8' },
+    });
     fireEvent.change(paperInput, {
       target: { value: '#e7dcc8' },
     });
@@ -1446,21 +1450,17 @@ describe('live document editor UI', () => {
     });
     expect(screen.queryByTestId('document-image-inspector')).not.toBeNull();
 
-    fireEvent.change(screen.getByLabelText('Image width'), {
-      target: { value: '360' },
-    });
-    fireEvent.change(screen.getByLabelText('Image width'), {
-      target: { value: '360' },
-    });
-    fireEvent.change(screen.getByLabelText('Overlay X position'), {
-      target: { value: '96' },
-    });
-    fireEvent.change(screen.getByLabelText('Image caption'), {
-      target: { value: 'Updated caption' },
-    });
-    fireEvent.change(screen.getByLabelText('Image alt text'), {
-      target: { value: 'Updated portrait description' },
-    });
+    const commitInput = (label: string, value: string) => {
+      const input = screen.getByLabelText(label);
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value } });
+      fireEvent.blur(input);
+    };
+    commitInput('Image width', '360');
+    commitInput('Image width', '360');
+    commitInput('Overlay X position', '96');
+    commitInput('Image caption', 'Updated caption');
+    commitInput('Image alt text', 'Updated portrait description');
     fireEvent.change(screen.getByLabelText('Image layout mode'), {
       target: { value: 'behind' },
     });
@@ -1475,21 +1475,38 @@ describe('live document editor UI', () => {
       altText: 'Updated portrait description',
       placement: 'behind',
     });
-    expect(onCommittedMutation).toHaveBeenCalledTimes(2);
+    expect(onCommittedMutation).toHaveBeenCalledTimes(5);
     expect(onCommittedMutation).toHaveBeenNthCalledWith(1, {
-      action: 'modify-structured-geometry',
-      overlayId: overlay.id,
+      action: 'modify-structured-image-layout',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+      imageId: overlay.id,
     });
     expect(onCommittedMutation).toHaveBeenNthCalledWith(2, {
-      action: 'modify-structured-geometry',
-      overlayId: overlay.id,
+      action: 'modify-structured-image-layout',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+      imageId: overlay.id,
+    });
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(3, {
+      action: 'modify-structured-image-metadata',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+      imageId: overlay.id,
+    });
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(4, {
+      action: 'modify-structured-image-metadata',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+      imageId: overlay.id,
+    });
+    expect(onCommittedMutation).toHaveBeenNthCalledWith(5, {
+      action: 'modify-structured-image-layout',
+      pageId: useDocumentStore.getState().project!.pages[0].id,
+      imageId: overlay.id,
     });
     expect(screen.getByTestId('document-image-width').getAttribute('value')).toBe('360');
     expect(screen.getByTestId('document-image-wrap').getAttribute('value')).toBeNull();
     expect((screen.getByTestId('document-image-wrap') as HTMLSelectElement).value).toBe('behind');
   });
 
-  it('reports one overlay add for a flow-to-overlay conversion without a paired removal', async () => {
+  it('reports one structured-image layout transaction for a flow-to-overlay conversion', async () => {
     const store = useDocumentStore.getState();
     store.addAsset('asset-flow-to-overlay', 'data:image/png;base64,FLOW');
     store.updateBodyContent({
@@ -1537,12 +1554,12 @@ describe('live document editor UI', () => {
     });
     expect(onCommittedMutation).toHaveBeenCalledTimes(1);
     expect(onCommittedMutation).toHaveBeenCalledWith({
-      action: 'add-structured-overlay',
-      overlayId: 'flow-to-overlay',
-      assetEffect: 'retained-reference',
+      action: 'modify-structured-image-layout',
+      pageId: store.project!.pages[0].id,
+      imageId: 'flow-to-overlay',
     });
     expect(onCommittedMutation).not.toHaveBeenCalledWith(expect.objectContaining({
-      action: 'remove-structured-overlay',
+      action: 'add-structured-overlay',
     }));
     expect(onCommittedMutation).not.toHaveBeenCalledWith(expect.objectContaining({
       action: 'remove-structured-flow-image',

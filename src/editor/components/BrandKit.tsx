@@ -4,7 +4,6 @@ import { useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { Palette, Type, Plus, Trash2 } from 'lucide-react';
 import * as objectFactories from '../fabric/objectFactories';
-import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 
 interface BrandKitData {
   colors: string[];
@@ -49,18 +48,14 @@ export const BrandKit: React.FC = () => {
     canvas,
     selectedObjectId,
     layersById,
-    syncCanvasToStore,
-    saveState,
-    requestLayerSync,
+    setObjectFill,
     addIText,
   } = useEditorStore(
     (state) => ({
       canvas: state.canvas,
       selectedObjectId: state.selectedObjectId,
       layersById: state.layersById,
-      syncCanvasToStore: state.syncCanvasToStore,
-      saveState: state.saveState,
-      requestLayerSync: state.requestLayerSync,
+      setObjectFill: state.setObjectFill,
       addIText: (text: string, fontSize: number, fontWeight: string, role: 'heading' | 'subheading' | 'body') => {
         if (state.canvas) {
           objectFactories.addIText(state.canvas, { text, fontSize, fontWeight, role });
@@ -75,14 +70,8 @@ export const BrandKit: React.FC = () => {
   }, [loadBrandKit]);
 
   const handleColorChange = (color: string) => {
-    if (!canvas) return;
-    
-    const selectedObject = selectedObjectId ? layersById[selectedObjectId] : null;
-    if (selectedObject) {
-      // Change the fill of the selected object
-      selectedObject.set({ fill: color });
-      commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync });
-    }
+    if (!canvas || !selectedObjectId || !layersById[selectedObjectId]) return;
+    setObjectFill(color);
   };
 
   const handleAddColor = () => {

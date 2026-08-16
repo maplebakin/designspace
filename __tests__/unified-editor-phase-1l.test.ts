@@ -177,7 +177,7 @@ describe('Unified Editor Phase 1L Canvas grouping observation', () => {
       coverage: {
         canvasGrouping: true,
         canvasUngrouping: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
     expect(useEditorStore.getState()).toMatchObject({

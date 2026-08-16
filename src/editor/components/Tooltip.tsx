@@ -156,16 +156,77 @@ export const ControlRow: React.FC<ControlRowProps> = ({ label, children, vertica
   </div>
 );
 
+export type CommittedInputProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  'onCommit'
+> & {
+  /** Optional completed interaction boundary; live onChange remains unchanged. */
+  onCommit?: (value: string, initialValue: string) => void;
+};
+
+/**
+ * Adds a deterministic keyboard/focus completion boundary to a native input.
+ * The input remains a live controlled input; the callback is only evidence for
+ * one completed interaction and never owns the legacy mutation.
+ */
+export const CommittedInput = React.forwardRef<HTMLInputElement, CommittedInputProps>(
+  ({ onCommit, onFocus, onBlur, onKeyDown, ...props }, forwardedRef) => {
+    const localRef = useRef<HTMLInputElement | null>(null);
+    const initialValueRef = useRef<string | null>(null);
+    const completedRef = useRef(false);
+
+    React.useImperativeHandle(forwardedRef, () => localRef.current as HTMLInputElement);
+
+    const readValue = () => localRef.current?.value ?? String(props.value ?? '');
+    const beginInteraction = () => {
+      if (initialValueRef.current === null || completedRef.current) {
+        initialValueRef.current = readValue();
+        completedRef.current = false;
+      }
+    };
+    const completeInteraction = () => {
+      const initialValue = initialValueRef.current;
+      if (initialValue === null || completedRef.current) return;
+      const finalValue = readValue();
+      completedRef.current = true;
+      if (finalValue !== initialValue) onCommit?.(finalValue, initialValue);
+    };
+
+    return (
+      <input
+        {...props}
+        ref={localRef}
+        onFocus={(event) => {
+          beginInteraction();
+          onFocus?.(event);
+        }}
+        onKeyDown={(event) => {
+          beginInteraction();
+          if (event.key === 'Enter') completeInteraction();
+          onKeyDown?.(event);
+        }}
+        onBlur={(event) => {
+          completeInteraction();
+          onBlur?.(event);
+          initialValueRef.current = null;
+          completedRef.current = false;
+        }}
+      />
+    );
+  }
+);
+CommittedInput.displayName = 'CommittedInput';
+
 // Consistent input styling
-export const ControlInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = (props) => (
-  <input
+export const ControlInput: React.FC<CommittedInputProps> = ({ className, ...props }) => (
+  <CommittedInput
     {...props}
     className={`
       h-8 rounded-lg border border-[color:var(--ui-border)] bg-white/70 px-3
       text-xs text-[color:var(--ui-panel-text)] placeholder:text-[color:var(--ui-panel-text)]/60
       focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]
       transition-all duration-200
-      ${props.className || ''}
+      ${className || ''}
     `}
   />
 );
@@ -190,28 +251,87 @@ import { useRecentColors } from '../hooks/useRecentColors';
 interface ColorPickerProps {
   value: string;
   onChange: (value: string) => void;
+  onCommit?: (value: string, initialValue: string) => void;
   'aria-label'?: string;
 }
 
-export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange, 'aria-label': ariaLabel }) => {
+export const CommittedColorInput: React.FC<{
+  value: string;
+  onInput: (value: string) => void;
+  onCommit?: (value: string, initialValue: string) => void;
+  'aria-label'?: string;
+  'data-testid'?: string;
+  className?: string;
+}> = ({ value, onInput, onCommit, 'aria-label': ariaLabel, 'data-testid': dataTestId, className }) => {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const initialValueRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const handleNativeChange = () => {
+      const finalValue = input.value;
+      const initialValue = initialValueRef.current ?? value;
+      initialValueRef.current = null;
+      if (finalValue.toLowerCase() !== initialValue.toLowerCase()) {
+        onCommit?.(finalValue, initialValue);
+      }
+    };
+    input.addEventListener('change', handleNativeChange);
+    return () => input.removeEventListener('change', handleNativeChange);
+  }, [onCommit, value]);
+
+  const beginInteraction = (force = false) => {
+    if (force || initialValueRef.current === null) {
+      initialValueRef.current = inputRef.current?.value ?? value;
+    }
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="color"
+      value={value}
+      onFocus={() => beginInteraction()}
+      onPointerDown={() => beginInteraction(true)}
+      onKeyDown={() => beginInteraction(true)}
+      onInput={(event) => onInput(event.currentTarget.value)}
+      aria-label={ariaLabel}
+      data-testid={dataTestId}
+      className={className}
+    />
+  );
+};
+
+export const ColorPicker: React.FC<ColorPickerProps> = ({
+  value,
+  onChange,
+  onCommit,
+  'aria-label': ariaLabel,
+}) => {
   const { recentColors, addColor } = useRecentColors();
 
   const handleColorChange = (newColor: string) => {
     onChange(newColor);
-    addColor(newColor);
   };
 
   const handleRecentColorClick = (color: string) => {
     onChange(color);
     addColor(color); // Ensure the clicked color becomes the most recent
+    if (color.toLowerCase() !== value.toLowerCase()) {
+      onCommit?.(color, value);
+    }
   };
 
   return (
     <div className="relative">
-      <input
-        type="color"
+      <CommittedColorInput
         value={value}
-        onChange={(e) => handleColorChange(e.target.value)}
+        onInput={handleColorChange}
+        onCommit={(newColor, initialColor) => {
+          addColor(newColor);
+          onCommit?.(newColor, initialColor);
+        }}
         aria-label={ariaLabel}
         className="h-8 w-12 cursor-pointer rounded-lg border border-[color:var(--ui-border)] bg-transparent transition-all duration-200 hover:border-white/20"
       />
@@ -411,6 +531,8 @@ interface SliderProps {
   onCommit?: (value: number, initialValue: number) => void;
   step?: number;
   disabled?: boolean;
+  'aria-label'?: string;
+  'data-testid'?: string;
 }
 
 export const ControlSlider: React.FC<SliderProps> = ({
@@ -421,6 +543,8 @@ export const ControlSlider: React.FC<SliderProps> = ({
   onCommit,
   step = 1,
   disabled = false,
+  'aria-label': ariaLabel,
+  'data-testid': dataTestId,
 }) => {
   const initialValueRef = useRef(value);
   const interactionRef = useRef(false);
@@ -434,13 +558,19 @@ export const ControlSlider: React.FC<SliderProps> = ({
   const completePointerInteraction = (event: React.PointerEvent<HTMLInputElement>) => {
     if (!interactionRef.current) return;
     interactionRef.current = false;
-    onCommit?.(Number(event.currentTarget.value), initialValueRef.current);
+    const finalValue = Number(event.currentTarget.value);
+    if (Math.abs(finalValue - initialValueRef.current) > Number.EPSILON) {
+      onCommit?.(finalValue, initialValueRef.current);
+    }
   };
 
   const completeKeyboardInteraction = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (!interactionRef.current) return;
     interactionRef.current = false;
-    onCommit?.(Number(event.currentTarget.value), initialValueRef.current);
+    const finalValue = Number(event.currentTarget.value);
+    if (Math.abs(finalValue - initialValueRef.current) > Number.EPSILON) {
+      onCommit?.(finalValue, initialValueRef.current);
+    }
   };
 
   return (
@@ -456,6 +586,8 @@ export const ControlSlider: React.FC<SliderProps> = ({
       onPointerUp={completePointerInteraction}
       onKeyUp={completeKeyboardInteraction}
       disabled={disabled}
+      aria-label={ariaLabel}
+      data-testid={dataTestId}
       className={`w-full h-1.5 accent-[color:var(--brand-primary)] rounded-full appearance-none bg-white/55 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
     />
   );

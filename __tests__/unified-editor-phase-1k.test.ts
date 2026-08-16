@@ -323,7 +323,7 @@ describe('Unified Editor Phase 1K Canvas freehand observation', () => {
         canvasObjectAdd: true,
         canvasDrawing: true,
         canvasErase: false,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
 

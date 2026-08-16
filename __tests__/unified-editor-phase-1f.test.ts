@@ -165,7 +165,7 @@ describe('Unified Editor Phase 1F diagnostic lifecycle', () => {
         canvasObjectAdd: true,
         canvasObjectRemove: true,
         documentPageMetadata: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
 

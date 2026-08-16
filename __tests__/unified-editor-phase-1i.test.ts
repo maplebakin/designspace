@@ -65,7 +65,7 @@ describe('Unified Editor Phase 1I flow-image lifecycle diagnostics', () => {
       coverage: {
         documentFlowImageAdd: true,
         documentFlowImageRemove: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
 

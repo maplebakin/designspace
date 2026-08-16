@@ -55,7 +55,7 @@ describe('Unified Editor Phase 1H overlay lifecycle diagnostics', () => {
       coverage: {
         documentOverlayAdd: true,
         documentOverlayRemove: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
     });
     expect(observer.view.getSnapshot().legacyDirty).toBe(false);

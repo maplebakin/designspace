@@ -52,7 +52,7 @@ import { isActiveSelection, isImage } from '../utils/typeGuards';
 import { showError, showInfo, ErrorMessages } from '../utils/errorHandling';
 import { coordinateSystem } from '../utils/coordinateSystem';
 import { type AccessibilitySettings, AccessibilityManager } from '../utils/accessibilityModes';
-import { applySuggestionToObjects, generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
+import { generateSuggestions, type LayoutSuggestion } from '../utils/aiLayoutSuggestions';
 import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 import {
     getCanvasObjectAssetEffect,
@@ -376,6 +376,34 @@ const matchesThemeColorLockState = (object: any, isLocked: boolean) => (
     object?.colorLocked === isLocked
 );
 
+/**
+ * Theme-link commands can update more than one legacy Fabric field. Keep the
+ * no-op proof limited to those product fields instead of observing arbitrary
+ * Fabric property churn.
+ */
+const readThemeLinkState = (object: any) => JSON.stringify({
+    tokenRole: object?.tokenRole ?? null,
+    colorLocked: object?.colorLocked ?? false,
+    fill: typeof object?.fill === 'string'
+        ? object.fill
+        : Array.isArray(object?.fill?.colorStops)
+            ? object.fill.colorStops.map((stop: any) => ({
+                offset: stop?.offset,
+                color: stop?.color,
+                opacity: stop?.opacity,
+            }))
+            : null,
+    blendColors: Array.isArray(object?.filters)
+        ? object.filters
+            .filter((filter: any) => filter?.type === 'BlendColor')
+            .map((filter: any) => ({
+                color: filter.color,
+                mode: filter.mode,
+                alpha: filter.alpha,
+            }))
+        : [],
+});
+
 const matchesSelectionLockState = (object: any, isLocked: boolean) => (
     object?.lockMovementX === isLocked
     && object?.lockMovementY === isLocked
@@ -397,6 +425,37 @@ const areObjectIdListsEqual = (
     first: readonly string[],
     second: readonly string[]
 ) => first.length === second.length && first.every((id, index) => id === second[index]);
+
+export type CanvasGeometryFingerprint = Readonly<{
+    id: string;
+    value: string;
+}>;
+
+const readCanvasObjectGeometryValue = (object: any) => JSON.stringify({
+    left: object?.left ?? 0,
+    top: object?.top ?? 0,
+    angle: object?.angle ?? 0,
+    scaleX: object?.scaleX ?? 1,
+    scaleY: object?.scaleY ?? 1,
+    skewX: object?.skewX ?? 0,
+    skewY: object?.skewY ?? 0,
+});
+
+const readCanvasGeometryFingerprints = (
+    canvas: fabric.Canvas
+): readonly CanvasGeometryFingerprint[] => canvas.getObjects()
+    .filter(isCanvasObjectObservationTarget)
+    .map((object) => ({
+        id: String((object as any).id),
+        value: readCanvasObjectGeometryValue(object),
+    }));
+
+const areCanvasGeometryFingerprintsEqual = (
+    first: readonly CanvasGeometryFingerprint[],
+    second: readonly CanvasGeometryFingerprint[]
+) => first.length === second.length && first.every((item, index) => (
+    item.id === second[index]?.id && item.value === second[index]?.value
+));
 
 const buildLayerStateFromSerializedObjects = (
     objects: SerializedFabricObject[],
@@ -1124,13 +1183,52 @@ interface EditorState {
   reportCommittedCanvasStyle: (
     objectId: string,
     style: CanvasStyleCommitKind,
-    beforeValue: CanvasStyleValue | null | undefined,
+    beforeValue?: CanvasStyleValue | null,
     expectedValue?: CanvasStyleValue | null,
+  ) => void;
+  reportCommittedCanvasGeometry: (objectId: string, beforeValue?: string) => void;
+  getCanvasGeometrySnapshot: () => readonly CanvasGeometryFingerprint[];
+  reportCommittedCanvasPageGeometry: (
+    before: readonly CanvasGeometryFingerprint[],
+    after: readonly CanvasGeometryFingerprint[]
+  ) => void;
+  reportCommittedCanvasObjectBatch: (
+    objectIds: readonly string[],
+    assetEffect: import('../session/projectMutation').PageAssetEffect
+  ) => void;
+  reportCommittedCanvasPageResize: (
+    before: Readonly<{
+      width: number;
+      height: number;
+      objectIds: readonly string[];
+    }>,
+    after: Readonly<{
+      width: number;
+      height: number;
+      objectIds: readonly string[];
+    }>,
+    resetContent: boolean
+  ) => void;
+  reportCommittedCanvasBackground: (
+    expectedColor: string,
+    beforeColor?: string
+  ) => void;
+  reportCommittedCanvasPageBorder: (
+    beforeSettings: unknown,
+    expectedSettings: unknown,
+  ) => void;
+  reportCommittedCanvasPageContent: (
+    beforeFingerprint: string,
+    expectedFingerprint: string,
   ) => void;
   reportCommittedCanvasVisibility: (objectId: string, visible: boolean) => void;
   reportCommittedCanvasZOrder: (
     objectId: string,
     action: Exclude<CanvasDiscreteObjectMutationAction, 'modify-freeform-visibility' | 'modify-freeform-selection-lock'>,
+    previousObjectIds: readonly string[],
+    expectedObjectIds: readonly string[],
+  ) => void;
+  reportCommittedCanvasPageOrder: (
     previousObjectIds: readonly string[],
     expectedObjectIds: readonly string[],
   ) => void;
@@ -1170,7 +1268,10 @@ interface EditorState {
   dismissToast: () => void;
   setToastMessage: (message: string | null) => void;
   setUnitMode: (mode: UnitMode) => void;
-  setCanvasBackgroundColor: (color: string, options?: { save?: boolean }) => void;
+  setCanvasBackgroundColor: (
+    color: string,
+    options?: { save?: boolean; observe?: boolean }
+  ) => void;
   setZoom: (zoom: number) => void;
   setVpt: (vpt: number[]) => void;
   setCanvasOffset: (offset: { x: number; y: number }) => void;
@@ -1220,7 +1321,7 @@ interface EditorState {
   // Theme Actions
   addThemeToVault: (jsonString: string) => void;
   setActiveBrandCollectionId: (id:string) => void;
-  applyTheme: (theme: ApocapaletteTheme) => void;
+  applyTheme: (theme: ApocapaletteTheme, options?: { observe?: boolean }) => void;
   resetTheme: () => void;
   toggleMovementLock: (layerId: string) => void;
   toggleColorLock: (layerId: string) => void;
@@ -1504,7 +1605,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             || !isCanvasObjectObservationTarget(target)
             || currentValue === null
             || serializedValue === null
-            || areCanvasStyleValuesEqual(currentValue, beforeValue)
+            || (
+                beforeValue !== undefined
+                && areCanvasStyleValuesEqual(currentValue, beforeValue)
+            )
             || !areCanvasStyleValuesEqual(currentValue, serializedValue)
             || (
                 expectedValue !== undefined
@@ -1512,9 +1616,185 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             )
         ) return;
         observeSemanticMutation({
-            action: 'modify-freeform-style',
+            action: style === 'style-preset'
+                ? 'apply-freeform-style-preset'
+                : 'modify-freeform-style',
             objectId,
             style,
+        });
+    },
+    reportCommittedCanvasGeometry: (objectId, beforeValue) => {
+        const { canvas } = get();
+        const target = canvas?.getObjects().find((object) => (object as any).id === objectId);
+        const serializedObject = get().canvasObjects.find(
+            (object) => object.id === objectId
+        );
+        const currentValue = target ? readCanvasObjectGeometryValue(target) : null;
+        const serializedValue = serializedObject
+            ? readCanvasObjectGeometryValue(serializedObject)
+            : null;
+        if (
+            !canvas
+            || typeof objectId !== 'string'
+            || objectId.trim().length === 0
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || !target
+            || !isCanvasObjectObservationTarget(target)
+            || !serializedObject
+            || typeof serializedObject.left !== 'number'
+            || typeof serializedObject.top !== 'number'
+            || currentValue === null
+            || serializedValue !== currentValue
+            || (beforeValue !== undefined && beforeValue === currentValue)
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-geometry',
+            objectId,
+        });
+    },
+    getCanvasGeometrySnapshot: () => {
+        const { canvas } = get();
+        return canvas ? readCanvasGeometryFingerprints(canvas) : [];
+    },
+    reportCommittedCanvasPageGeometry: (before, after) => {
+        const { canvas } = get();
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || areCanvasGeometryFingerprintsEqual(before, after)
+            || after.length === 0
+            || after.some((item) => item.id.trim().length === 0)
+            || after.some((item) => !canvas.getObjects().some(
+                (object) => String((object as any).id) === item.id
+            ))
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-freeform-geometry',
+            pageScope: true,
+        });
+    },
+    reportCommittedCanvasObjectBatch: (objectIds, assetEffect) => {
+        const { canvas, canvasObjects } = get();
+        const validIds = objectIds.filter(
+            (id) => typeof id === 'string' && id.trim().length > 0
+        );
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || validIds.length === 0
+            || new Set(validIds).size !== validIds.length
+            || validIds.some((id) => !canvas.getObjects().some(
+                (object) => (object as any).id === id
+            ))
+            || validIds.some((id) => !canvasObjects.some((object) => object.id === id))
+        ) return;
+        observeSemanticMutation({
+            action: 'add-freeform-objects',
+            pageScope: true,
+            assetEffect,
+        });
+    },
+    reportCommittedCanvasPageResize: (before, after, resetContent) => {
+        const { canvas, pages, activePageIndex } = get();
+        const persistedPage = pages[activePageIndex];
+        const persistedSize = persistedPage?.canvasSize;
+        const persistedObjects = (persistedPage?.canvasData as any)?.objects;
+        const persistedObjectIds = Array.isArray(persistedObjects)
+            ? persistedObjects
+                .map((object: any) => object?.id)
+                .filter((id: unknown): id is string => (
+                    typeof id === 'string' && id.trim().length > 0
+                ))
+            : [];
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || (before.width === after.width
+                && before.height === after.height
+                && areObjectIdListsEqual(before.objectIds, after.objectIds))
+            || after.width <= 0
+            || after.height <= 0
+            || after.objectIds.some((id) => id.trim().length === 0)
+            || !persistedPage
+            || !persistedSize
+            || persistedSize.width !== after.width
+            || persistedSize.height !== after.height
+            || !areObjectIdListsEqual(after.objectIds, persistedObjectIds)
+            || !areObjectIdListsEqual(
+                after.objectIds,
+                getUserObjectIds(canvas.getObjects())
+            )
+        ) return;
+        observeSemanticMutation({
+            action: resetContent ? 'reset-freeform-page' : 'resize-freeform-page',
+            pageScope: true,
+        });
+    },
+    reportCommittedCanvasBackground: (expectedColor, beforeColor) => {
+      const { canvas } = get();
+      const currentColor = useThemeStore.getState().canvasBackgroundColor;
+      if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+        || typeof expectedColor !== 'string'
+        || !currentColor
+        || currentColor.toLowerCase() !== expectedColor.toLowerCase()
+        || (
+            beforeColor !== undefined
+            && currentColor.toLowerCase() === beforeColor.toLowerCase()
+        )
+      ) return;
+        observeSemanticMutation({
+            action: 'modify-page-metadata',
+            pageScope: true,
+        });
+    },
+    reportCommittedCanvasPageBorder: (beforeSettings, expectedSettings) => {
+        const { canvas, pages, activePageIndex } = get();
+        const currentGroup = canvas?.getObjects().find(
+            (object) => (object as any).isPageBorder
+        ) as any;
+        const currentSettings = currentGroup?.borderSettings ?? null;
+        const serializedObjects = (pages[activePageIndex]?.canvasData as any)?.objects;
+        const serializedBorder = Array.isArray(serializedObjects)
+            ? serializedObjects.find((object: any) => object?.isPageBorder)?.borderSettings ?? null
+            : null;
+        const beforeFingerprint = JSON.stringify(beforeSettings ?? null);
+        const expectedFingerprint = JSON.stringify(expectedSettings ?? null);
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || beforeFingerprint === expectedFingerprint
+            || JSON.stringify(currentSettings) !== expectedFingerprint
+            || JSON.stringify(serializedBorder) !== expectedFingerprint
+        ) return;
+        observeSemanticMutation({
+            action: 'modify-page-metadata',
+            pageScope: true,
+        });
+    },
+    reportCommittedCanvasPageContent: (beforeFingerprint, expectedFingerprint) => {
+        const { canvas, canvasObjects } = get();
+        const currentFingerprint = JSON.stringify({
+            objects: canvasObjects,
+            background: getSerializedPageBackground(),
+        });
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || beforeFingerprint === expectedFingerprint
+            || currentFingerprint !== expectedFingerprint
+        ) return;
+        observeSemanticMutation({
+            action: 'apply-freeform-design-state',
+            pageScope: true,
         });
     },
     reportCommittedCanvasVisibility: (objectId, visible) => {
@@ -1565,6 +1845,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         observeSemanticMutation({
             action,
             objectId,
+        });
+    },
+    reportCommittedCanvasPageOrder: (previousObjectIds, expectedObjectIds) => {
+        const { canvas } = get();
+        const actualObjectIds = canvas ? getUserObjectIds(canvas.getObjects()) : [];
+        const serializedObjectIds = getUserObjectIds(get().canvasObjects);
+        if (
+            !canvas
+            || get().canvasReadyState !== 'ready'
+            || isCanvasHydrating(canvas)
+            || areObjectIdListsEqual(previousObjectIds, expectedObjectIds)
+            || !areObjectIdListsEqual(actualObjectIds, expectedObjectIds)
+            || !areObjectIdListsEqual(serializedObjectIds, expectedObjectIds)
+        ) return;
+        observeSemanticMutation({
+            action: 'reorder-freeform-objects',
+            pageScope: true,
         });
     },
     reportCommittedCanvasSelectionLock: (
@@ -1691,7 +1988,29 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
         if (isActiveSelection(activeObject)) {
             const selection = activeObject as fabric.ActiveSelection;
-            selection.getObjects().forEach((obj) => canvas.remove(obj));
+            const removedObjects = selection.getObjects().filter(isCanvasObjectObservationTarget);
+            const previousObjectIds = getUserObjectIds(canvas.getObjects());
+            withCanvasObjectMutationSuppressed(canvas, () => {
+                removedObjects.forEach((obj) => canvas.remove(obj));
+            });
+            clearSelection();
+            commitCanvasMutation(canvas, { syncCanvasToStore, saveState, requestLayerSync }, { render: false });
+            const expectedObjectIds = getUserObjectIds(canvas.getObjects());
+            if (
+                removedObjects.length > 0
+                && !areObjectIdListsEqual(previousObjectIds, expectedObjectIds)
+                && !areObjectIdListsEqual(previousObjectIds, getUserObjectIds(get().canvasObjects))
+                && areObjectIdListsEqual(expectedObjectIds, getUserObjectIds(get().canvasObjects))
+            ) {
+                observeSemanticMutation({
+                    action: 'remove-freeform-objects',
+                    pageScope: true,
+                    assetEffect: removedObjects.some((object) => object.type === 'image')
+                        ? 'cleanup-delegated'
+                        : 'none',
+                });
+            }
+            return;
         } else {
             canvas.remove(activeObject);
         }
@@ -1705,6 +2024,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
         }
+        const before = readCanvasGeometryFingerprints(canvas);
         startBatch();
         switch (direction) {
             case 'left':
@@ -1729,6 +2049,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 break;
         }
         endBatch();
+        get().reportCommittedCanvasPageGeometry(
+            before,
+            readCanvasGeometryFingerprints(canvas),
+        );
     },
     distributeSelectedObjects: (direction) => {
         const { canvas } = get();
@@ -1736,11 +2060,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
             return;
         }
+        const before = readCanvasGeometryFingerprints(canvas);
         if (direction === 'horizontal') {
             distributeHorizontally(canvas);
         } else {
             distributeVertically(canvas);
         }
+        get().reportCommittedCanvasPageGeometry(
+            before,
+            readCanvasGeometryFingerprints(canvas),
+        );
     },
     groupSelectedObjects: () => {
         const { canvas, syncCanvasToStore } = get();
@@ -2037,15 +2366,39 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     })),
     applySuggestion: (id) => {
         const suggestion = get().layoutSuggestions.find((entry) => entry.id === id);
-        if (!suggestion) return;
-        const nextObjects = applySuggestionToObjects(get().canvasObjects, suggestion);
-        const nextState = buildLayerStateFromSerializedObjects(nextObjects, get().layersById);
-        set({
-            ...nextState,
-            layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects).filter((entry) => entry.id !== id),
+        const { canvas, requestLayerSync, saveState, syncCanvasToStore } = get();
+        if (!suggestion || !canvas) return;
+        const before = readCanvasGeometryFingerprints(canvas);
+        const patchesById = new Map(
+            suggestion.patches.map((patch) => [patch.id, patch.changes])
+        );
+        let changed = false;
+        withCanvasObjectMutationSuppressed(canvas, () => {
+            canvas.getObjects().forEach((object) => {
+                const objectId = String((object as any).id || '');
+                const changes = patchesById.get(objectId);
+                if (!changes || !isCanvasObjectObservationTarget(object)) return;
+                const beforeObject = readCanvasGeometryFingerprints(canvas)
+                    .find((fingerprint) => fingerprint.id === objectId)?.value;
+                object.set(changes as Partial<fabric.Object>);
+                object.setCoords();
+                const afterObject = readCanvasGeometryFingerprints(canvas)
+                    .find((fingerprint) => fingerprint.id === objectId)?.value;
+                changed = changed || beforeObject !== afterObject;
+            });
         });
-        get().requestLayerSync();
-        get().saveState();
+        if (!changed) return;
+        canvas.requestRenderAll();
+        syncCanvasToStore(canvas);
+        requestLayerSync();
+        saveState();
+        set((state) => ({
+            layoutSuggestions: state.layoutSuggestions.filter((entry) => entry.id !== id),
+        }));
+        get().reportCommittedCanvasPageGeometry(
+            before,
+            readCanvasGeometryFingerprints(canvas),
+        );
     },
     updateAccessibilitySettings: (settings) => {
         const manager = AccessibilityManager.getInstance();
@@ -2209,12 +2562,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
             if (template.defaultThemeId) {
                 if (themeToApply) {
-                    applyTheme(themeToApply.themeData);
+                    applyTheme(themeToApply.themeData, { observe: false });
                     setToastMessage(`Applied template theme: ${themeToApply.name}`);
                 } else {
                     setToastMessage(`Template theme not found: ${template.defaultThemeId}`);
                 }
             }
+
+            observeSemanticMutation({
+                action: 'apply-freeform-template',
+                projectScope: true,
+            });
 
             });
     },
@@ -2388,6 +2746,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             requestLayerSync({ force: true });
             canvas.requestRenderAll();
             resetHistoryToCurrentCanvas();
+            observeSemanticMutation({
+                action: 'apply-project-recipe',
+                projectScope: true,
+            });
             setToastMessage(`Created project: ${generatedProject.productMetadata?.title ?? generatedProject.projectName}`);
         } catch (error) {
             console.error('[createProjectFromRecipe] Failed to generate recipe project:', error);
@@ -2454,10 +2816,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set((state) => ({ pages: [...state.pages, next] }));
         await get().switchToPage(get().pages.length - 1);
         markProjectDirty();
+        observeSemanticMutation({ action: 'add-page', pageId: next.id });
     },
     deletePage: async (index) => {
         const { pages, activePageIndex } = get();
         if (pages.length <= 1) return;
+        const removedPage = pages[index];
+        if (!removedPage) return;
         get().syncActivePageFromCanvas();
         const nextPages = pages.filter((_, i) => i !== index);
         let nextIndex = activePageIndex;
@@ -2467,6 +2832,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ pages: nextPages, activePageIndex: safeNextIndex });
         await get().switchToPage(safeNextIndex, { saveCurrent: false });
         markProjectDirty();
+        observeSemanticMutation({ action: 'remove-page', pageId: removedPage.id });
     },
     reorderPages: (from, to) => {
         const { pages, activePageIndex } = get();
@@ -2480,6 +2846,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         else if (from > activePageIndex && to <= activePageIndex) nextActive += 1;
         set({ pages: next, activePageIndex: nextActive });
         markProjectDirty();
+        observeSemanticMutation({ action: 'reorder-page', pageId: m.id });
     },
     downloadProjectFile: async () => {
         const {
@@ -2662,7 +3029,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             if (activeTheme) {
                 useThemeStore.getState().setThemeData(activeTheme);
                 useThemeStore.getState().setActiveBrandCollectionId(null);
-                applyActiveThemeToCanvas();
+                applyActiveThemeToCanvas({ observe: false });
                 const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
                 if (projectSyncEnabled) {
                     applyThemeFromTokens(activeTheme);
@@ -2737,6 +3104,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     syncCanvasToStore,
                     acquireSyncLock,
                     releaseSyncLock,
+                    onCommitted: () => observeSemanticMutation({
+                        action: 'apply-freeform-theme',
+                        pageScope: true,
+                    }),
                 });
             }
         } else {
@@ -2759,12 +3130,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     syncCanvasToStore,
                     acquireSyncLock,
                     releaseSyncLock,
+                    onCommitted: () => observeSemanticMutation({
+                        action: 'apply-freeform-theme',
+                        pageScope: true,
+                    }),
                 });
             }
         }
     },
 
-    applyTheme: (theme) => {
+    applyTheme: (theme, options) => {
         useThemeStore.getState().setThemeData(theme);
         // Apply theme to canvas if ready
         const { canvas, canvasReadyState, saveState, requestLayerSync, syncCanvasToStore, acquireSyncLock, releaseSyncLock } = get();
@@ -2775,6 +3150,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 syncCanvasToStore,
                 acquireSyncLock,
                 releaseSyncLock,
+                ...(options?.observe === false
+                    ? {}
+                    : {
+                        onCommitted: () => observeSemanticMutation({
+                            action: 'apply-freeform-theme',
+                            pageScope: true,
+                        }),
+                    }),
             });
         }
         // Sync UI vars after applying canvas theme
@@ -2787,7 +3170,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     resetTheme: () => {
         const { canvas, saveState, requestLayerSync, syncCanvasToStore } = get();
         if (!canvas) return;
+        const hadThemeLinks = canvas.getObjects().some(
+            (object) => typeof (object as any).tokenRole === 'string'
+                && (object as any).tokenRole.trim().length > 0
+        );
         resetAllThemeLinks(canvas, { saveState, requestLayerSync, syncCanvasToStore });
+        if (hadThemeLinks) {
+            observeSemanticMutation({
+                action: 'reset-freeform-theme-links',
+                pageScope: true,
+            });
+        }
         set({ toastMessage: 'Theme links reset' });
     },
 
@@ -2874,11 +3267,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
+            const beforeValue = readCanvasStyleValue(selectedObject, 'fill-color');
             selectedObject.set({ fill, tokenRole: null });
             canvas.requestRenderAll();
             syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
+            get().reportCommittedCanvasStyle(
+                (selectedObject as any).id,
+                'fill-color',
+                beforeValue,
+                readCanvasStyleValue(selectedObject, 'fill-color'),
+            );
         }
     },
 
@@ -2887,11 +3287,22 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const themeData = useThemeStore.getState().themeData;
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas && themeData) {
+            const before = readThemeLinkState(selectedObject);
             applyThemedFillToObject(selectedObject, canvas, tokenRole, themeData, {
                 saveState,
                 requestLayerSync,
                 syncCanvasToStore,
             });
+            if (
+                before !== readThemeLinkState(selectedObject)
+                && (selectedObject as any).tokenRole === tokenRole
+                && (selectedObject as any).colorLocked === false
+            ) {
+                observeSemanticMutation({
+                    action: 'modify-freeform-theme-link',
+                    objectId: (selectedObject as any).id,
+                });
+            }
         }
     },
 
@@ -2901,11 +3312,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         const image = selectedObject as fabric.Image;
         if (image && image.type === 'image' && canvas && themeData) {
+            const before = readThemeLinkState(image);
             applyThemeTintToImage(image, canvas, tokenRole, themeData, {
                 saveState,
                 requestLayerSync,
                 syncCanvasToStore,
             });
+            if (before !== readThemeLinkState(image)) {
+                observeSemanticMutation({
+                    action: 'modify-freeform-theme-link',
+                    objectId: (image as any).id,
+                });
+            }
         }
     },
 
@@ -2915,11 +3333,26 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (!selectedObject || !canvas || !themeData) return;
 
+        const before = readThemeLinkState(selectedObject);
         resetObjectTheme(selectedObject, canvas, themeData, {
             saveState,
             requestLayerSync,
             syncCanvasToStore,
         });
+        const defaultTokenRole = useThemeStore.getState().getDefaultTokenRole(
+            selectedObject.type || '',
+            (selectedObject as any).role,
+        );
+        if (
+            before !== readThemeLinkState(selectedObject)
+            && (selectedObject as any).tokenRole === defaultTokenRole
+            && (selectedObject as any).colorLocked === false
+        ) {
+            observeSemanticMutation({
+                action: 'modify-freeform-theme-link',
+                objectId: (selectedObject as any).id,
+            });
+        }
     },
 
     // Text Effects Actions
@@ -3020,11 +3453,24 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     resetImageAdjustments: () => {
         const { canvas, selectedObjectId, saveState, requestLayerSync } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
+        const before = selectedObject && isImage(selectedObject)
+            ? JSON.stringify((selectedObject as any).adjustments || {})
+            : null;
         resetAdjustmentsOnSelection(selectedObject, {
             canvas,
             onSaveState: saveState,
             onLayerSync: requestLayerSync,
         });
+        if (
+            selectedObject
+            && isImage(selectedObject)
+            && before !== JSON.stringify((selectedObject as any).adjustments || {})
+        ) {
+            observeSemanticMutation({
+                action: 'reset-freeform-image-adjustments',
+                objectId: (selectedObject as any).id,
+            });
+        }
     },
 
     exportCanvas: async (options) => {
@@ -3223,7 +3669,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             requestLayerSync();
 
             if (activeTheme) {
-                get().applyTheme(activeTheme);
+                get().applyTheme(activeTheme, { observe: false });
                 const { applyThemeFromTokens } = useUiThemeStore.getState();
                 if (typeof applyThemeFromTokens === 'function') {
                     applyThemeFromTokens(activeTheme);
@@ -3366,11 +3812,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { canvas, selectedObjectId, saveState, requestLayerSync, syncCanvasToStore } = get();
         const selectedObject = resolveSelectedObject(canvas, selectedObjectId);
         if (selectedObject && canvas) {
+            const beforeValue = readCanvasStyleValue(selectedObject, 'stroke-color');
             selectedObject.set({ stroke: color });
             canvas.requestRenderAll();
             syncCanvasToStore(canvas);
             saveState();
             requestLayerSync();
+            get().reportCommittedCanvasStyle(
+                (selectedObject as any).id,
+                'stroke-color',
+                beforeValue,
+                readCanvasStyleValue(selectedObject, 'stroke-color'),
+            );
         }
     },
 

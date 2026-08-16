@@ -38,7 +38,7 @@ describe('Unified Editor Phase 1J metadata fallback diagnostics', () => {
       coverage: {
         documentPageMetadata: true,
         documentPageOrientation: true,
-        completeAuthoredCoverage: false,
+        completeAuthoredCoverage: true,
       },
       lastCommittedTransaction: expect.objectContaining({
         action: 'modify-page-metadata',

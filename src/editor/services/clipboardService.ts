@@ -4,6 +4,7 @@ import { useEditorStore } from '../state/editorStore';
 import { isActiveSelection } from '../utils/typeGuards';
 import { isUserObject } from '../utils/objectUtils';
 import { attachTextboxAutoFitHandlers } from './textboxDrawingService';
+import { withCanvasObjectMutationSuppressed } from './canvasMutationObservation';
 
 /**
  * Clipboard Service
@@ -115,9 +116,12 @@ export const pasteFromClipboard = async (): Promise<boolean> => {
         attachTextboxAutoFitHandlers(obj as fabric.Textbox, canvas);
       }
 
-      canvas.add(obj);
       pastedObjects.push(obj);
     }
+
+    withCanvasObjectMutationSuppressed(canvas, () => {
+      pastedObjects.forEach((object) => canvas.add(object));
+    });
 
     // Select the pasted objects
     if (pastedObjects.length === 1) {
@@ -130,6 +134,13 @@ export const pasteFromClipboard = async (): Promise<boolean> => {
     syncCanvasToStore(canvas);
     requestLayerSync();
     saveState();
+
+    useEditorStore.getState().reportCommittedCanvasObjectBatch(
+      pastedObjects.map((object) => String((object as any).id)),
+      pastedObjects.some((object) => object.type === 'image')
+        ? 'unknown-engine-owned'
+        : 'none'
+    );
 
     // Update clipboard buffer with new positions for subsequent pastes
     clipboardBuffer = clipboardBuffer.map((data) => ({
@@ -237,7 +248,12 @@ const commitZOrderMutation = ({
   requestLayerSync();
   saveState();
 
-  if (!multiSelection && !areObjectIdListsEqual(previousObjectIds, expectedObjectIds)) {
+  if (multiSelection && !areObjectIdListsEqual(previousObjectIds, expectedObjectIds)) {
+    useEditorStore.getState().reportCommittedCanvasPageOrder(
+      previousObjectIds,
+      expectedObjectIds,
+    );
+  } else if (!multiSelection && !areObjectIdListsEqual(previousObjectIds, expectedObjectIds)) {
     useEditorStore.getState().reportCommittedCanvasZOrder(
       (activeObject as any).id,
       action,
@@ -249,7 +265,8 @@ const commitZOrderMutation = ({
 
 /**
  * Brings the selected object(s) to the front of the canvas.
- * Multi-selection remains legacy-owned because the shadow target is singular.
+ * Multi-selection is represented by a page-scoped reorder fact because the
+ * product intent is one authored order operation over several objects.
  */
 export const bringToFront = (): void => {
   commitZOrderMutation({
@@ -263,7 +280,8 @@ export const bringToFront = (): void => {
 
 /**
  * Sends the selected object(s) to the back of the canvas.
- * Multi-selection remains legacy-owned because the shadow target is singular.
+ * Multi-selection is represented by a page-scoped reorder fact because the
+ * product intent is one authored order operation over several objects.
  */
 export const sendToBack = (): void => {
   commitZOrderMutation({
@@ -277,7 +295,8 @@ export const sendToBack = (): void => {
 
 /**
  * Brings the selected object(s) forward by one level.
- * Multi-selection remains legacy-owned because the shadow target is singular.
+ * Multi-selection is represented by a page-scoped reorder fact because the
+ * product intent is one authored order operation over several objects.
  */
 export const bringForward = (): void => {
   commitZOrderMutation({
@@ -291,7 +310,8 @@ export const bringForward = (): void => {
 
 /**
  * Sends the selected object(s) backward by one level.
- * Multi-selection remains legacy-owned because the shadow target is singular.
+ * Multi-selection is represented by a page-scoped reorder fact because the
+ * product intent is one authored order operation over several objects.
  */
 export const sendBackward = (): void => {
   commitZOrderMutation({

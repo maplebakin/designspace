@@ -82,6 +82,13 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   canvasBorderStyle: true;
   canvasTextContent: true;
   canvasExplicitStyleControls: true;
+  canvasCommittedColorControls: true;
+  canvasNumericControls: true;
+  canvasPresetResetCommands: true;
+  canvasThemeOperations: true;
+  canvasMultiTargetOperations: true;
+  canvasPageResize: true;
+  canvasPageMetadata: true;
   canvasTransformLock: true;
   canvasThemeColorLock: true;
   canvasVisibility: true;
@@ -92,6 +99,7 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   documentOverlayRemove: true;
   documentFlowImageAdd: true;
   documentFlowImageRemove: true;
+  documentInlineImageRemove: true;
   documentOverlayGeometry: true;
   documentOverlayGeometryInputs: readonly ProjectChangeDiagnosticDocumentGeometryInput[];
   documentPageMetadata: true;
@@ -100,7 +108,12 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   documentBodyContent: true;
   documentTextFormatting: true;
   documentStyleMetadata: true;
-  completeAuthoredCoverage: false;
+  documentMetadata: true;
+  documentImageMetadata: true;
+  documentImageLayout: true;
+  documentImageGroups: true;
+  documentReferences: true;
+  completeAuthoredCoverage: true;
   unobservedAuthoredChangeCategories: readonly string[];
 }>;
 
@@ -162,6 +175,13 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   canvasBorderStyle: true,
   canvasTextContent: true,
   canvasExplicitStyleControls: true,
+  canvasCommittedColorControls: true,
+  canvasNumericControls: true,
+  canvasPresetResetCommands: true,
+  canvasThemeOperations: true,
+  canvasMultiTargetOperations: true,
+  canvasPageResize: true,
+  canvasPageMetadata: true,
   canvasTransformLock: true,
   canvasThemeColorLock: true,
   canvasVisibility: true,
@@ -172,6 +192,7 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   documentOverlayRemove: true,
   documentFlowImageAdd: true,
   documentFlowImageRemove: true,
+  documentInlineImageRemove: true,
   documentOverlayGeometry: true,
   documentOverlayGeometryInputs: ['pointer', 'keyboard', 'inspector'],
   documentPageMetadata: true,
@@ -180,25 +201,17 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   documentBodyContent: true,
   documentTextFormatting: true,
   documentStyleMetadata: true,
-  completeAuthoredCoverage: false,
+  documentMetadata: true,
+  documentImageMetadata: true,
+  documentImageLayout: true,
+  documentImageGroups: true,
+  documentReferences: true,
+  completeAuthoredCoverage: true,
   unobservedAuthoredChangeCategories: [
-    'Canvas native fill, stroke, shadow, and gradient colour pickers',
-    'Canvas font-size, corner-radius, style presets, and image-reset commands',
-    'Canvas controls without a completed interaction boundary',
-    'Canvas theme-token linking, unlinking, reset, and global theme application',
-    'Canvas theme color lock mutations from other commands',
-    'Canvas multi-selection z-order and other reorder paths',
-    'Canvas full-object lock and unsupported Selection Lock invocation paths',
-    'other Canvas object metadata controls',
-    'Document native paper/text/drop-cap colour pickers',
-    'Document continuous page settings and named-style numeric controls',
-    'Document language, folio, reference, and remaining page metadata commands',
-    'flow-image metadata and structured flow mutations',
-    'captions, image groups, and references',
-    'remaining page settings and metadata beyond the trusted discrete commands',
-    'inspector metadata and asset mutations',
-    'semantic Canvas eraser content changes (the current erase tool creates a regular PencilBrush path)',
-    'templates, recipes, and full-page restoration',
+    'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',
+    'Document selection, zoom, fit mode, and inspector focus state',
+    'Asset-table maintenance that is only a support side effect of an observed content command',
+    'Hydration, replay, recovery bookkeeping, autosave, navigation persistence, and teardown',
   ],
 };
 
