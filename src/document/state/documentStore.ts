@@ -52,6 +52,7 @@ import {
 } from '../../editor/services/fileDeliveryService';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
+export type DocumentLifecycleAuthorityMode = 'legacy' | 'shared';
 export type DocumentLegacyDirtyReason =
   | 'authored-content'
   | 'navigation-persistence';
@@ -59,8 +60,11 @@ export type DocumentLegacyDirtyReason =
 type DocumentStoreState = {
   project: DocumentProjectPayload | null;
   currentLibraryProjectId: string | null;
+  /** Runtime identity used to distinguish project replacement from page edits. */
+  sessionIdentity: string;
   isDirty: boolean;
   saveStatus: DocumentSaveStatus;
+  lifecycleAuthorityMode: DocumentLifecycleAuthorityMode;
   /** Runtime-only explanation for the latest legacy dirty transition. */
   lastDirtyReason: DocumentLegacyDirtyReason | null;
   revision: number;
@@ -74,7 +78,7 @@ type DocumentStoreState = {
   hydrateProject: (payload: unknown, libraryProjectId?: string | null) => DocumentProjectPayload;
   loadLibraryProject: (projectId: string) => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
-  saveProject: (name?: string) => Promise<void>;
+  saveProject: (name?: string) => Promise<boolean>;
   downloadProjectFile: () => Promise<FileDeliveryResult | null>;
   renameProject: (name: string) => void;
   updateDocumentBackground: (value: string) => void;
@@ -142,7 +146,8 @@ type DocumentStoreState = {
   setSelectedFlowImageId: (id: string | null) => void;
   setOverflowing: (overflowing: boolean) => void;
   setToastMessage: (message: string | null) => void;
-  flushAutosave: () => Promise<void>;
+  flushAutosave: () => Promise<boolean>;
+  setLifecycleAuthorityMode: (mode: DocumentLifecycleAuthorityMode) => void;
   reset: () => void;
 };
 
@@ -349,6 +354,7 @@ const documentPagesAreEquivalent = (
   === JSON.stringify(omitEmptyDocumentJsonMetadata(right));
 
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+let navigationPersistenceTimer: ReturnType<typeof setTimeout> | null = null;
 let projectSessionToken = 0;
 
 const cancelAutosave = () => {
@@ -358,11 +364,85 @@ const cancelAutosave = () => {
   }
 };
 
+const cancelNavigationPersistence = () => {
+  if (navigationPersistenceTimer) {
+    clearTimeout(navigationPersistenceTimer);
+    navigationPersistenceTimer = null;
+  }
+};
+
 const queueAutosave = () => {
+  if (useDocumentStore.getState().lifecycleAuthorityMode === 'shared') return;
   cancelAutosave();
   autosaveTimer = setTimeout(() => {
     autosaveTimer = null;
+    if (useDocumentStore.getState().lifecycleAuthorityMode === 'shared') return;
     void useDocumentStore.getState().flushAutosave();
+  }, 900);
+};
+
+const persistNavigationState = async (): Promise<boolean> => {
+  const {
+    currentLibraryProjectId,
+    isDirty,
+    lastDirtyReason,
+    project,
+    revision,
+  } = useDocumentStore.getState();
+  if (
+    !currentLibraryProjectId
+    || !isDirty
+    || lastDirtyReason !== 'navigation-persistence'
+    || !project
+  ) return false;
+
+  const sessionAtStart = projectSessionToken;
+  const payload = updateProjectTimestamp(project);
+  useDocumentStore.setState({ saveStatus: 'saving' });
+  try {
+    const { db } = await import('../../editor/db');
+    await db.updateProject(
+      currentLibraryProjectId,
+      payload.projectName,
+      JSON.stringify(payload),
+      undefined,
+      'document'
+    );
+    if (projectSessionToken !== sessionAtStart) return false;
+    const current = useDocumentStore.getState();
+    const hasNewerChanges = current.revision !== revision;
+    useDocumentStore.setState({
+      ...(hasNewerChanges ? {} : { project: payload }),
+      isDirty: hasNewerChanges,
+      saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
+      ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
+    });
+    if (hasNewerChanges) {
+      if (current.lastDirtyReason === 'navigation-persistence') {
+        queueNavigationPersistence();
+      } else if (current.lifecycleAuthorityMode === 'legacy') {
+        queueAutosave();
+      }
+    }
+    return true;
+  } catch (error) {
+    console.error('Document navigation persistence failed:', error);
+    if (projectSessionToken !== sessionAtStart) return false;
+    useDocumentStore.setState({
+      isDirty: true,
+      saveStatus: 'error',
+      toastMessage: 'Could not persist the active document page.',
+    });
+    return false;
+  }
+};
+
+const queueNavigationPersistence = () => {
+  cancelNavigationPersistence();
+  if (!useDocumentStore.getState().currentLibraryProjectId) return;
+  navigationPersistenceTimer = setTimeout(() => {
+    navigationPersistenceTimer = null;
+    void persistNavigationState();
   }, 900);
 };
 
@@ -370,15 +450,27 @@ const markDirty = (
   set: (partial: Partial<DocumentStoreState> | ((state: DocumentStoreState) => Partial<DocumentStoreState>)) => void,
   reason: DocumentLegacyDirtyReason = 'authored-content'
 ) => {
+  const before = useDocumentStore.getState();
+  const hadAuthoredDirtyState = before.isDirty
+    && before.lastDirtyReason === 'authored-content';
+  if (reason === 'authored-content') cancelNavigationPersistence();
   set((state) => ({
     isDirty: true,
     saveStatus: 'unsaved',
     lastDirtyReason: reason,
     revision: state.revision + 1,
   }));
-  if (useDocumentStore.getState().currentLibraryProjectId) {
-    queueAutosave();
+  const current = useDocumentStore.getState();
+  if (!current.currentLibraryProjectId) return;
+  if (reason === 'navigation-persistence') {
+    if (hadAuthoredDirtyState && current.lifecycleAuthorityMode === 'legacy') {
+      queueAutosave();
+    } else if (!hadAuthoredDirtyState) {
+      queueNavigationPersistence();
+    }
+    return;
   }
+  if (current.lifecycleAuthorityMode === 'legacy') queueAutosave();
 };
 
 const updateProjectTimestamp = (
@@ -415,8 +507,10 @@ const safeProjectFileName = (name: string) => {
 const initialState = {
   project: null,
   currentLibraryProjectId: null,
+  sessionIdentity: uuidv4(),
   isDirty: false,
   saveStatus: 'saved' as DocumentSaveStatus,
+  lifecycleAuthorityMode: 'legacy' as DocumentLifecycleAuthorityMode,
   lastDirtyReason: null as DocumentLegacyDirtyReason | null,
   revision: 0,
   zoom: 0.75,
@@ -432,23 +526,31 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
 
   createBlankProject: (name) => {
     cancelAutosave();
+    cancelNavigationPersistence();
     projectSessionToken += 1;
+    const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = createBlankDocumentProject(name);
     set({
       ...initialState,
       project,
+      lifecycleAuthorityMode,
+      sessionIdentity: uuidv4(),
     });
     return project;
   },
 
   hydrateProject: (payload, libraryProjectId = null) => {
     cancelAutosave();
+    cancelNavigationPersistence();
     projectSessionToken += 1;
+    const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = normalizeDocumentPayload(payload);
     set({
       ...initialState,
       project,
       currentLibraryProjectId: libraryProjectId,
+      lifecycleAuthorityMode,
+      sessionIdentity: uuidv4(),
     });
     return project;
   },
@@ -480,18 +582,24 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       .replace(/\.json$/i, '');
     const project = normalizeDocumentPayload(parsed, fallbackName);
     cancelAutosave();
+    cancelNavigationPersistence();
     projectSessionToken += 1;
+    const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     set({
       ...initialState,
       project,
       currentLibraryProjectId: null,
+      lifecycleAuthorityMode,
+      sessionIdentity: uuidv4(),
       toastMessage: `Opened document: ${project.projectName}`,
     });
   },
 
   saveProject: async (name) => {
+    cancelAutosave();
+    cancelNavigationPersistence();
     const project = get().project;
-    if (!project) return;
+    if (!project) return false;
     const safeName = name?.trim() || project.projectName.trim() || 'Untitled Document';
     const revisionAtStart = get().revision;
     const sessionAtStart = projectSessionToken;
@@ -508,7 +616,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       } else {
         libraryId = await db.saveProject(safeName, JSON.stringify(payload), undefined, 'document');
       }
-      if (projectSessionToken !== sessionAtStart) return;
+      if (projectSessionToken !== sessionAtStart) return false;
       const hasNewerChanges = get().revision !== revisionAtStart;
       set({
         ...(hasNewerChanges ? {} : { project: payload }),
@@ -518,15 +626,20 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
         toastMessage: `Saved document: ${safeName}`,
       });
-      if (hasNewerChanges) queueAutosave();
+      if (
+        hasNewerChanges
+        && get().lifecycleAuthorityMode === 'legacy'
+      ) queueAutosave();
+      return true;
     } catch (error) {
       console.error('Failed to save document project:', error);
-      if (projectSessionToken !== sessionAtStart) return;
+      if (projectSessionToken !== sessionAtStart) return false;
       set({
         saveStatus: 'error',
         isDirty: true,
         toastMessage: 'Failed to save the document project.',
       });
+      return false;
     }
   },
 
@@ -1118,8 +1231,20 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   setToastMessage: (toastMessage) => set({ toastMessage }),
 
   flushAutosave: async () => {
-    const { currentLibraryProjectId, isDirty, project, revision } = get();
-    if (!currentLibraryProjectId || !isDirty || !project) return;
+    cancelNavigationPersistence();
+    const {
+      currentLibraryProjectId,
+      isDirty,
+      project,
+      revision,
+      lifecycleAuthorityMode,
+    } = get();
+    if (
+      lifecycleAuthorityMode === 'shared'
+      || !currentLibraryProjectId
+      || !isDirty
+      || !project
+    ) return false;
     const sessionAtStart = projectSessionToken;
     const payload = updateProjectTimestamp(project);
     set({ project: payload, saveStatus: 'saving' });
@@ -1132,7 +1257,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         undefined,
         'document'
       );
-      if (projectSessionToken !== sessionAtStart) return;
+      if (projectSessionToken !== sessionAtStart) return false;
       const hasNewerChanges = get().revision !== revision;
       set({
         ...(hasNewerChanges ? {} : { project: payload }),
@@ -1140,21 +1265,31 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
         ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
       });
-      if (hasNewerChanges) queueAutosave();
+      if (hasNewerChanges && get().lifecycleAuthorityMode === 'legacy') {
+        queueAutosave();
+      }
+      return true;
     } catch (error) {
       console.error('Document autosave failed:', error);
-      if (projectSessionToken !== sessionAtStart) return;
+      if (projectSessionToken !== sessionAtStart) return false;
       set({
         isDirty: true,
         saveStatus: 'error',
         toastMessage: 'Autosave failed. Your changes remain in this editor.',
       });
+      return false;
     }
+  },
+
+  setLifecycleAuthorityMode: (mode) => {
+    if (mode === 'shared') cancelAutosave();
+    set({ lifecycleAuthorityMode: mode });
   },
 
   reset: () => {
     cancelAutosave();
+    cancelNavigationPersistence();
     projectSessionToken += 1;
-    set(initialState);
+    set({ ...initialState, sessionIdentity: uuidv4() });
   },
 }));

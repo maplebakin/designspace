@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { shallow } from 'zustand/shallow';
 import { DocumentEditorShell } from '../../document/components/DocumentEditorShell';
 import { useDocumentStore } from '../../document/state/documentStore';
@@ -22,6 +22,10 @@ import {
   observeCommittedEngineChange,
 } from './projectChangeAdapters';
 import type { ProjectChangeCoordinator } from './projectChangeCoordinator';
+import type {
+  ProjectLifecycleAuthority,
+  ProjectLifecycleSaveAdapter,
+} from './projectLifecycleAuthority';
 import {
   describeCanvasPageAssets,
   describeDocumentPageAssets,
@@ -47,9 +51,11 @@ export type LegacyRendererAdapter = Readonly<{
 }>;
 
 type CanvasSessionState = {
+  canvasReadyState: ReturnType<typeof useEditorStore.getState>['canvasReadyState'];
   projectName: string;
   productProjectFields: ReturnType<typeof useEditorStore.getState>['productProjectFields'];
   currentLibraryProjectId: string | null;
+  sessionIdentity: string;
   pages: ReturnType<typeof useEditorStore.getState>['pages'];
   activePageIndex: number;
   isDirty: boolean;
@@ -61,6 +67,7 @@ type CanvasSessionState = {
 type DocumentSessionState = {
   project: ReturnType<typeof useDocumentStore.getState>['project'];
   currentLibraryProjectId: string | null;
+  sessionIdentity: string;
   isDirty: boolean;
   saveStatus: ReturnType<typeof useDocumentStore.getState>['saveStatus'];
   lastDirtyReason: ReturnType<typeof useDocumentStore.getState>['lastDirtyReason'];
@@ -112,20 +119,28 @@ const createDocumentSessionDescriptor = (
 };
 
 const createCanvasCommands = (
-  changeCoordinator: ProjectChangeCoordinator
+  changeCoordinator: ProjectChangeCoordinator,
+  lifecycleAuthority: ProjectLifecycleAuthority
 ): ProjectSessionCommands => ({
   save: async (name) => {
     const state = useEditorStore.getState();
-    await state.saveProject(name?.trim() || state.projectName || 'Untitled Project');
+    await lifecycleAuthority.save(name?.trim() || state.projectName || 'Untitled Project');
   },
-  download: () => useEditorStore.getState().downloadProjectFile(),
+  download: async () => {
+    const revision = lifecycleAuthority.getSnapshot().authoredRevision;
+    const result = await useEditorStore.getState().downloadProjectFile();
+    if (result?.status === 'saved') {
+      lifecycleAuthority.markPersistedRevision(revision);
+    }
+    return result;
+  },
   notify: (message) => {
     useEditorStore.getState().setToast({
       message,
       variant: 'error',
     });
   },
-  isDirty: () => useEditorStore.getState().isDirty,
+  isDirty: () => lifecycleAuthority.getSnapshot().isDirty,
   renameProject: (name) => useEditorStore.getState().renameCurrentProject(name),
   mutatePage: (command) => executeObservedPageMutation({
     command,
@@ -140,12 +155,22 @@ const createCanvasCommands = (
 });
 
 const createDocumentCommands = (
-  changeCoordinator: ProjectChangeCoordinator
+  changeCoordinator: ProjectChangeCoordinator,
+  lifecycleAuthority: ProjectLifecycleAuthority
 ): ProjectSessionCommands => ({
-  save: (name) => useDocumentStore.getState().saveProject(name),
-  download: () => useDocumentStore.getState().downloadProjectFile(),
+  save: async (name) => {
+    await lifecycleAuthority.save(name);
+  },
+  download: async () => {
+    const revision = lifecycleAuthority.getSnapshot().authoredRevision;
+    const result = await useDocumentStore.getState().downloadProjectFile();
+    if (result?.status === 'saved') {
+      lifecycleAuthority.markPersistedRevision(revision);
+    }
+    return result;
+  },
   notify: (message) => useDocumentStore.getState().setToastMessage(message),
-  isDirty: () => useDocumentStore.getState().isDirty,
+  isDirty: () => lifecycleAuthority.getSnapshot().isDirty,
   renameProject: async (name) => {
     useDocumentStore.getState().renameProject(name);
   },
@@ -161,14 +186,17 @@ const createDocumentCommands = (
 });
 
 export const useLegacyProjectSessionBridge = (
-  changeCoordinator: ProjectChangeCoordinator
+  changeCoordinator: ProjectChangeCoordinator,
+  lifecycleAuthority: ProjectLifecycleAuthority
 ) => {
   const mode = useProjectSessionStore((state) => state.editorMode);
   const source = useProjectSessionStore((state) => state.session?.source);
   const canvasState = useEditorStore((state) => ({
+    canvasReadyState: state.canvasReadyState,
     projectName: state.projectName,
     productProjectFields: state.productProjectFields,
     currentLibraryProjectId: state.currentLibraryProjectId,
+    sessionIdentity: state.sessionIdentity,
     pages: state.pages,
     activePageIndex: state.activePageIndex,
     isDirty: state.isDirty,
@@ -180,6 +208,9 @@ export const useLegacyProjectSessionBridge = (
   const documentLibraryProjectId = useDocumentStore(
     (state) => state.currentLibraryProjectId
   );
+  const documentSessionIdentity = useDocumentStore(
+    (state) => state.sessionIdentity
+  );
   const documentIsDirty = useDocumentStore((state) => state.isDirty);
   const documentSaveStatus = useDocumentStore((state) => state.saveStatus);
   const documentDirtyReason = useDocumentStore((state) => state.lastDirtyReason);
@@ -187,6 +218,7 @@ export const useLegacyProjectSessionBridge = (
   const documentState = useMemo<DocumentSessionState>(() => ({
     project: documentProject,
     currentLibraryProjectId: documentLibraryProjectId,
+    sessionIdentity: documentSessionIdentity,
     isDirty: documentIsDirty,
     saveStatus: documentSaveStatus,
     lastDirtyReason: documentDirtyReason,
@@ -212,34 +244,124 @@ export const useLegacyProjectSessionBridge = (
       : createCanvasSessionDescriptor(canvasState, sessionSource),
     [canvasState, documentState, mode, sessionSource]
   );
+  const lifecycleSnapshot = useSyncExternalStore(
+    lifecycleAuthority.subscribe,
+    lifecycleAuthority.getSnapshot,
+    lifecycleAuthority.getSnapshot
+  );
+  const sessionIdentity = mode === 'document'
+    ? documentState.sessionIdentity
+    : canvasState.sessionIdentity;
+  const sessionKey = `${mode}:${sessionIdentity}`;
+  const lifecycleAdapter = useMemo<ProjectLifecycleSaveAdapter>(() => (
+    mode === 'document'
+      ? {
+          canSave: () => Boolean(useDocumentStore.getState().project),
+          canAutosave: () => {
+            const state = useDocumentStore.getState();
+            return Boolean(state.currentLibraryProjectId && state.project);
+          },
+          autosaveDelayMs: 900,
+          save: async (name) => useDocumentStore.getState().saveProject(name),
+          autosave: async () => useDocumentStore.getState().flushAutosave(),
+        }
+      : {
+          canSave: () => Boolean(useEditorStore.getState().canvas),
+          canAutosave: () => {
+            const state = useEditorStore.getState();
+            return Boolean(state.currentLibraryProjectId && state.canvas);
+          },
+          autosaveDelayMs: 2000,
+          save: async (name) => {
+            const state = useEditorStore.getState();
+            return state.saveProject(
+              name?.trim() || state.projectName || 'Untitled Project'
+            );
+          },
+          autosave: async () => {
+            await useEditorStore.getState().updateCurrentProject();
+            return true;
+          },
+        }
+  ), [mode]);
+
+  useEffect(() => {
+    if (!descriptor) {
+      lifecycleAuthority.endSession();
+      useEditorStore.getState().setLifecycleAuthorityMode('legacy');
+      useDocumentStore.getState().setLifecycleAuthorityMode('legacy');
+      return;
+    }
+
+    if (mode === 'document') {
+      useEditorStore.getState().setLifecycleAuthorityMode('legacy');
+      useDocumentStore.getState().setLifecycleAuthorityMode('shared');
+    } else {
+      useEditorStore.getState().setLifecycleAuthorityMode('shared');
+      useDocumentStore.getState().setLifecycleAuthorityMode('legacy');
+    }
+    lifecycleAuthority.startSession({
+      projectId: descriptor.projectId,
+      sessionIdentity: sessionKey,
+      adapter: lifecycleAdapter,
+    });
+
+    return () => {
+      lifecycleAuthority.endSession();
+      useEditorStore.getState().setLifecycleAuthorityMode('legacy');
+      useDocumentStore.getState().setLifecycleAuthorityMode('legacy');
+    };
+  }, [
+    descriptor !== null,
+    lifecycleAdapter,
+    lifecycleAuthority,
+    mode,
+    sessionKey,
+  ]);
+
+  useEffect(() => {
+    if (!descriptor) return;
+    lifecycleAuthority.startSession({
+      projectId: descriptor.projectId,
+      sessionIdentity: sessionKey,
+      adapter: lifecycleAdapter,
+    });
+  }, [
+    canvasState.canvasReadyState,
+    canvasState.currentLibraryProjectId,
+    descriptor?.projectId,
+    documentState.currentLibraryProjectId,
+    documentState.project !== null,
+    lifecycleAdapter,
+    lifecycleAuthority,
+    sessionKey,
+  ]);
   const snapshot = useMemo(
     () => {
       if (!descriptor) return null;
       return createSessionSnapshot(
         descriptor,
-        mode === 'document' ? documentState.isDirty : canvasState.isDirty,
-        mode === 'document' ? documentState.saveStatus : canvasState.saveStatus,
+        lifecycleSnapshot.isDirty,
+        lifecycleSnapshot.saveStatus,
         {
-          legacyDirtyReason: mode === 'document'
-            ? documentState.lastDirtyReason
+          legacyDirtyReason: lifecycleSnapshot.isDirty
+            ? 'authored-content'
             : null,
+          canSave: lifecycleSnapshot.canSave,
+          canClose: lifecycleSnapshot.canClose,
         }
       );
     }, [
-      canvasState.isDirty,
-      canvasState.saveStatus,
       descriptor,
-      documentState.isDirty,
-      documentState.lastDirtyReason,
-      documentState.saveStatus,
+      lifecycleSnapshot,
       mode,
     ]
   );
   const commands = useMemo(
     () => mode === 'document'
-      ? createDocumentCommands(changeCoordinator)
-      : createCanvasCommands(changeCoordinator),
-    [changeCoordinator, mode]
+      ? createDocumentCommands(changeCoordinator, lifecycleAuthority)
+      : createCanvasCommands(changeCoordinator, lifecycleAuthority),
+    [changeCoordinator, lifecycleAuthority, mode]
   );
   const zoom = mode === 'document' ? documentState.zoom : canvasState.zoom;
 
@@ -249,6 +371,17 @@ export const useLegacyProjectSessionBridge = (
     snapshot,
     commands,
     zoom,
+    legacyLifecycle: mode === 'document'
+      ? {
+          isDirty: documentState.isDirty,
+          saveStatus: documentState.saveStatus,
+          legacyDirtyReason: documentState.lastDirtyReason,
+        }
+      : {
+          isDirty: canvasState.isDirty,
+          saveStatus: canvasState.saveStatus,
+          legacyDirtyReason: null,
+        },
   };
 };
 

@@ -113,6 +113,12 @@ export type ProjectChangeDiagnosticCoverage = Readonly<{
   documentImageLayout: true;
   documentImageGroups: true;
   documentReferences: true;
+  sharedDirtyAuthority: true;
+  sharedAutosaveAuthority: true;
+  sharedHistoryAuthority: false;
+  sharedPersistenceAuthority: false;
+  sharedRecoveryAuthority: false;
+  sharedAssetAuthority: false;
   completeAuthoredCoverage: true;
   unobservedAuthoredChangeCategories: readonly string[];
 }>;
@@ -206,6 +212,12 @@ export const PROJECT_CHANGE_DIAGNOSTIC_COVERAGE: ProjectChangeDiagnosticCoverage
   documentImageLayout: true,
   documentImageGroups: true,
   documentReferences: true,
+  sharedDirtyAuthority: true,
+  sharedAutosaveAuthority: true,
+  sharedHistoryAuthority: false,
+  sharedPersistenceAuthority: false,
+  sharedRecoveryAuthority: false,
+  sharedAssetAuthority: false,
   completeAuthoredCoverage: true,
   unobservedAuthoredChangeCategories: [
     'Canvas editor chrome, viewport, guides, snap/grid settings, and selection state',

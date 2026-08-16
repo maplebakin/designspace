@@ -8,6 +8,7 @@ import type { SelectionEvent } from './projectSession';
 import { useProjectSessionStore } from '../state/projectSessionStore';
 import { UnifiedEditorShell } from './UnifiedEditorChrome';
 import { createProjectChangeCoordinator } from './projectChangeCoordinator';
+import { createProjectLifecycleAuthority } from './projectLifecycleAuthority';
 import {
   createProjectChangeDiagnosticObserver,
   type ProjectChangeDiagnosticObserver,
@@ -29,6 +30,10 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   enableChangeDiagnostics = false,
 }) => {
   const changeCoordinator = useMemo(() => createProjectChangeCoordinator(), []);
+  const lifecycleAuthority = useMemo(
+    () => createProjectLifecycleAuthority({ coordinator: changeCoordinator }),
+    [changeCoordinator]
+  );
   const diagnosticObserver = useMemo<ProjectChangeDiagnosticObserver | null>(
     () => enableChangeDiagnostics
       ? createProjectChangeDiagnosticObserver({ coordinator: changeCoordinator })
@@ -44,13 +49,15 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     snapshot,
     commands,
     zoom,
-  } = useLegacyProjectSessionBridge(changeCoordinator);
+    legacyLifecycle,
+  } = useLegacyProjectSessionBridge(changeCoordinator, lifecycleAuthority);
   const adapter = legacyRendererAdapters[mode];
   const LegacyRenderer = adapter.render;
   const fitPageRef = useRef<(() => void) | null>(null);
   const lifecycleGenerationRef = useRef(0);
   const runtimeLifecycleRef = useRef<{
     coordinator: typeof changeCoordinator;
+    lifecycleAuthority: typeof lifecycleAuthority;
     diagnosticObserver: ProjectChangeDiagnosticObserver | null;
     generation: number;
   } | null>(null);
@@ -71,6 +78,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
       close: async () => {
         diagnosticObserver?.checkpoint('before-close');
         diagnosticObserver?.checkpoint('session-closed');
+        lifecycleAuthority.endSession();
         diagnosticObserver?.dispose();
         changeCoordinator.dispose();
         clearSession();
@@ -92,13 +100,18 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     clearSession,
     commands,
     diagnosticObserver,
+    lifecycleAuthority,
     onBackToDashboard,
   ]);
 
   useEffect(() => {
     const previousRuntime = runtimeLifecycleRef.current;
-    if (previousRuntime?.coordinator !== changeCoordinator) {
+    if (
+      previousRuntime?.coordinator !== changeCoordinator
+      || previousRuntime?.lifecycleAuthority !== lifecycleAuthority
+    ) {
       previousRuntime?.coordinator.dispose();
+      previousRuntime?.lifecycleAuthority.dispose();
     }
     if (previousRuntime?.diagnosticObserver !== diagnosticObserver) {
       previousRuntime?.diagnosticObserver?.dispose();
@@ -107,6 +120,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     lifecycleGenerationRef.current = generation;
     runtimeLifecycleRef.current = {
       coordinator: changeCoordinator,
+      lifecycleAuthority,
       diagnosticObserver,
       generation,
     };
@@ -119,20 +133,21 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
         diagnosticObserver?.checkpoint('session-closed');
         diagnosticObserver?.dispose();
         changeCoordinator.dispose();
+        lifecycleAuthority.dispose();
         runtimeLifecycleRef.current = null;
       });
     };
-  }, [changeCoordinator, diagnosticObserver]);
+  }, [changeCoordinator, diagnosticObserver, lifecycleAuthority]);
 
   useEffect(() => {
     if (!diagnosticObserver || !snapshot) return;
     diagnosticObserver.observeSession({
       projectId: snapshot.projectId,
-      legacyDirty: snapshot.isDirty,
-      legacySaveStatus: snapshot.saveStatus,
-      legacyDirtyReason: snapshot.legacyDirtyReason,
+      legacyDirty: legacyLifecycle.isDirty,
+      legacySaveStatus: legacyLifecycle.saveStatus,
+      legacyDirtyReason: legacyLifecycle.legacyDirtyReason,
     });
-  }, [diagnosticObserver, snapshot]);
+  }, [diagnosticObserver, legacyLifecycle, snapshot]);
 
   useEffect(() => {
     if (!snapshot || !sharedCommands) return;

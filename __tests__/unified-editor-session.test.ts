@@ -215,4 +215,60 @@ describe('UnifiedEditorSession legacy renderer seam', () => {
       committedTransactionCount: 1,
     });
   });
+
+  it('derives unified dirty and save status from ProjectChange, not legacy flags', async () => {
+    useEditorStore.setState({
+      projectName: 'Shared lifecycle project',
+      currentLibraryProjectId: 'shared-lifecycle-project',
+      pages: [{
+        id: 'shared-lifecycle-page',
+        name: 'Page 1',
+        canvasSize: { width: 1200, height: 900 },
+      }] as any,
+      activePageIndex: 0,
+      isDirty: false,
+      saveStatus: 'saved',
+      zoom: 0.75,
+      unitMode: 'in',
+      productProjectFields: null,
+    });
+    useProjectSessionStore.getState().setEditorMode('canvas');
+
+    render(React.createElement(UnifiedEditorSession));
+
+    await waitFor(() => {
+      expect(useProjectSessionStore.getState().session?.isDirty).toBe(false);
+      expect(useEditorStore.getState().lifecycleAuthorityMode).toBe('shared');
+    });
+
+    const commands = useProjectSessionStore.getState().commands;
+    act(() => {
+      commands?.changeCoordinator?.observeCommitted({
+        projectId: 'shared-lifecycle-project',
+        source: 'canvas',
+        action: 'modify-freeform-style',
+        pageIds: ['shared-lifecycle-page'],
+        domains: ['style'],
+        target: {
+          kind: 'freeform-object',
+          id: 'shared-lifecycle-object',
+        },
+        assetEffect: 'none',
+      });
+    });
+
+    await waitFor(() => {
+      expect(useProjectSessionStore.getState().session).toMatchObject({
+        isDirty: true,
+        saveStatus: 'unsaved',
+      });
+      expect(useProjectSessionStore.getState().commands?.isDirty()).toBe(true);
+    });
+
+    act(() => {
+      useEditorStore.setState({ isDirty: false, saveStatus: 'saved' });
+    });
+    expect(useProjectSessionStore.getState().session?.isDirty).toBe(true);
+    expect(useProjectSessionStore.getState().session?.saveStatus).toBe('unsaved');
+  });
 });

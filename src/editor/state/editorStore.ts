@@ -99,6 +99,7 @@ const MAX_EMBEDDED_ASSET_STRING_BYTES = 100 * 1024 * 1024;
 
 export type AutoSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 export type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
+export type LifecycleAuthorityMode = 'legacy' | 'shared';
 export type ToastVariant = 'success' | 'info' | 'warning' | 'error';
 
 export type ToastAction = {
@@ -1136,6 +1137,8 @@ interface EditorState {
   projectName: string;
   productProjectFields: ProductProjectFields | null;
   currentLibraryProjectId: string | null;
+  /** Runtime identity used to distinguish project replacement from page edits. */
+  sessionIdentity: string;
   pages: ProjectPage[];
   activePageIndex: number;
   isDirty: boolean;
@@ -1154,6 +1157,7 @@ interface EditorState {
   autoSaveStatus: AutoSaveStatus;
   saveStatus: SaveStatus;
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
+  lifecycleAuthorityMode: LifecycleAuthorityMode;
   changeRevision: number;
 
   // PHASE 2.2: Sync Lock Mechanism
@@ -1346,7 +1350,7 @@ interface EditorState {
   exportCanvas: (options: { format: 'png' | 'jpeg' | 'svg'; quality?: number; multiplier: number; clipToCanvas: boolean }) => Promise<void>;
 
   // Project Persistence Actions
-  saveProject: (name: string) => Promise<void>;
+  saveProject: (name: string) => Promise<boolean>;
   loadProject: (projectId: string) => Promise<void>;
   deleteProject: (projectId: string) => Promise<void>;
   duplicateProject: (projectId: string, newName: string) => Promise<void>;
@@ -1354,6 +1358,7 @@ interface EditorState {
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
   setAutoSaveStatus: (status: AutoSaveStatus) => void;
+  setLifecycleAuthorityMode: (mode: LifecycleAuthorityMode) => void;
 
   // History Actions
   takeSnapshot: () => void;
@@ -1420,7 +1425,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 changeRevision: state.changeRevision + 1,
             }));
             get().setAutoSaveStatus('dirty');
-            if (get().currentLibraryProjectId) {
+            if (
+                get().currentLibraryProjectId
+                && get().lifecycleAuthorityMode === 'legacy'
+            ) {
                 get().triggerAutoSave();
             }
         };
@@ -1506,6 +1514,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         projectName: 'Untitled Project',
         productProjectFields: null,
         currentLibraryProjectId: null,
+        sessionIdentity: uuidv4(),
         pages: [{ id: uuidv4(), name: 'Page 1', canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE }, thumbnail: undefined }],
         activePageIndex: 0,
         isDirty: false,
@@ -1523,6 +1532,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         autoSaveStatus: 'idle',
         saveStatus: 'saved',
         autoSaveTimer: null,
+        lifecycleAuthorityMode: 'legacy',
         changeRevision: 0,
         showHelpModal: false,
         showExportModal: false,
@@ -2660,6 +2670,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: nextProjectName,
             productProjectFields: null,
             currentLibraryProjectId: null,
+            sessionIdentity: uuidv4(),
             pages: [{
                 id: uuidv4(),
                 name: 'Page 1',
@@ -3507,7 +3518,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { canvas, currentLibraryProjectId, projectName, unitMode } = get();
         if (!canvas) {
             set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
-            return;
+            return false;
         }
         const safeName = name.trim() || projectName?.trim() || 'Untitled Project';
         const { themeData } = useThemeStore.getState();
@@ -3579,9 +3590,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                         ? `Saved to library with ${exportData.failedAssetIds.length} linked image(s)`
                         : `Saved to library: ${safeName}`,
             });
+            return true;
         } catch (error) {
             console.error('Failed to save project:', error);
             set({ toastMessage: 'Failed to save project.' });
+            return false;
         }
     },
 
@@ -3803,6 +3816,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     setAutoSaveStatus: (status) => set({ autoSaveStatus: status, saveStatus: deriveSaveStatus(status) }),
+    setLifecycleAuthorityMode: (mode) => {
+        const currentTimer = get().autoSaveTimer;
+        if (mode === 'shared' && currentTimer !== null) {
+            clearTimeout(currentTimer);
+        }
+        set({
+            lifecycleAuthorityMode: mode,
+            autoSaveTimer: mode === 'shared' ? null : currentTimer,
+        });
+    },
     setDirty: (dirty) => set({ isDirty: dirty }),
     setShowHelpModal: (show) => set({ showHelpModal: show }),
     setShowExportModal: (show) => set({ showExportModal: show }),
@@ -3889,8 +3912,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     triggerAutoSave: () => {
-        const { currentLibraryProjectId, updateCurrentProject, setAutoSaveStatus } = get();
-        if (!currentLibraryProjectId) return;
+        const {
+            currentLibraryProjectId,
+            lifecycleAuthorityMode,
+            updateCurrentProject,
+            setAutoSaveStatus,
+        } = get();
+        if (!currentLibraryProjectId || lifecycleAuthorityMode === 'shared') return;
 
         // Debounced save - wait 2 seconds of inactivity before saving
         const currentTimer = get().autoSaveTimer;
@@ -3899,11 +3927,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         const timer = setTimeout(async () => {
+            if (get().lifecycleAuthorityMode === 'shared') return;
             const revisionAtStart = get().changeRevision;
             set({ autoSaveTimer: null });
             setAutoSaveStatus('saving');
             try {
                 await updateCurrentProject();
+                if (get().lifecycleAuthorityMode === 'shared') return;
                 if (get().changeRevision !== revisionAtStart) {
                     setAutoSaveStatus('dirty');
                     get().triggerAutoSave();
@@ -3914,7 +3944,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
                 // Reset status after 2 seconds
                 setTimeout(() => {
-                    if (get().autoSaveStatus === 'saved') {
+                    if (
+                        get().lifecycleAuthorityMode === 'legacy'
+                        && get().autoSaveStatus === 'saved'
+                    ) {
                         setAutoSaveStatus('idle');
                     }
                 }, 2000);
@@ -3944,6 +3977,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 isDirty: _isDirty,
                 autoSaveStatus: _autoSaveStatus,
                 saveStatus: _saveStatus,
+                lifecycleAuthorityMode: _lifecycleAuthorityMode,
+                sessionIdentity: _sessionIdentity,
                 userTemplates: _userTemplates,
                 assets: _assets,
                 ...preferences

@@ -524,6 +524,37 @@ describe('document project store', () => {
     });
   });
 
+  it('keeps navigation persistence separate from shared authored autosave', async () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Shared Navigation');
+    store.addPage();
+    store.hydrateProject(useDocumentStore.getState().project!, 'shared-navigation-id');
+    useDocumentStore.getState().setLifecycleAuthorityMode('shared');
+
+    store.selectPage(0);
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+      lastDirtyReason: 'navigation-persistence',
+      lifecycleAuthorityMode: 'shared',
+    });
+
+    await vi.advanceTimersByTimeAsync(899);
+    expect(dbMocks.updateProject).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(dbMocks.updateProject).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(dbMocks.updateProject.mock.calls[0][2] as string))
+      .toMatchObject({ activePageIndex: 0 });
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      lastDirtyReason: null,
+    });
+  });
+
   it('does not roll active page selection back when a manual save is in flight', async () => {
     let finishWrite: (() => void) | undefined;
     dbMocks.saveProject.mockReturnValueOnce(new Promise<string>((resolve) => {
