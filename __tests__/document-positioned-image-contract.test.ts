@@ -55,12 +55,14 @@ const positionedImage = ({
   xOffsetPx,
   yPx,
   caption = `${id} caption`,
+  verticalAnchor = 'page-position' as const,
 }: {
   id: string;
   spanStartColumn: 1 | 2;
   xOffsetPx: number;
   yPx: number;
   caption?: string;
+  verticalAnchor?: 'flow' | 'page-position';
 }): JSONContent => ({
   type: 'documentFlowImage',
   attrs: {
@@ -76,7 +78,7 @@ const positionedImage = ({
     spanStartColumn,
     wrapPaddingPx: 12,
     verticalSpacingPx: 10,
-    verticalAnchor: 'page-position',
+    verticalAnchor,
     yPx,
     horizontalPlacement: 'custom',
     xOffsetPx,
@@ -581,7 +583,7 @@ describe('positioned document image contract', () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('resolves initially overlapping positioned images into non-overlapping rectangles', async () => {
+  it('preserves initially overlapping positioned image rectangles', async () => {
     const overlapContent: JSONContent = {
       type: 'doc',
       content: [
@@ -623,7 +625,13 @@ describe('positioned document image contract', () => {
     expect(rectanglesOverlap(
       model.collisionRectangles[0],
       model.collisionRectangles[1]
-    )).toBe(false);
+    )).toBe(true);
+    model.images.forEach((image) => {
+      expect(image.imageLeftPx).toBe(image.authoredFrame.leftPx);
+      expect(image.imageTopPx).toBe(image.authoredFrame.topPx);
+      expect(image.renderedImageWidthPx).toBe(image.authoredFrame.widthPx);
+      expect(image.renderedImageHeightPx).toBe(image.authoredFrame.heightPx);
+    });
     expect(findImages(editor).map((image) => ({
       id: image.attrs?.id,
       xOffsetPx: image.attrs?.xOffsetPx,
@@ -670,5 +678,220 @@ describe('positioned document image contract', () => {
       'blocked-a',
       'blocked-b',
     ]);
+  });
+
+  it('keeps existing positioned frames stable when other photos are added', async () => {
+    const firstContent = {
+      type: 'doc',
+      content: [positionedImage({
+        id: 'photo-a',
+        spanStartColumn: 1,
+        xOffsetPx: 24,
+        yPx: 96,
+        caption: '',
+      })],
+    } satisfies JSONContent;
+    const allContent = {
+      type: 'doc',
+      content: [
+        positionedImage({
+          id: 'photo-a',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 96,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'photo-b',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 96,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'photo-c',
+          spanStartColumn: 2,
+          xOffsetPx: 18,
+          yPx: 360,
+          caption: '',
+        }),
+      ],
+    } satisfies JSONContent;
+    const first = await renderFlowEditor({ content: firstContent });
+    const all = await renderFlowEditor({ content: allContent });
+    const firstModel = buildMultiDocumentSpanLayoutModel(
+      first.editor,
+      3,
+      24,
+      720,
+      640
+    )!;
+    const allModel = buildMultiDocumentSpanLayoutModel(
+      all.editor,
+      3,
+      24,
+      720,
+      640
+    )!;
+    const firstPhoto = firstModel.images.find(
+      (image) => image.imageId === 'photo-a'
+    )!;
+    const existingPhoto = allModel.images.find(
+      (image) => image.imageId === 'photo-a'
+    )!;
+    expect(existingPhoto).toMatchObject({
+      imageLeftPx: firstPhoto.imageLeftPx,
+      imageTopPx: firstPhoto.imageTopPx,
+      renderedImageWidthPx: firstPhoto.renderedImageWidthPx,
+      renderedImageHeightPx: firstPhoto.renderedImageHeightPx,
+      authoredFrame: firstPhoto.authoredFrame,
+    });
+    expect(allModel.images.map((image) => image.imageId)).toEqual([
+      'photo-a',
+      'photo-b',
+      'photo-c',
+    ]);
+  });
+
+  it('keeps positioned frames independent of document traversal order', async () => {
+    const makeContent = (ids: Array<'photo-a' | 'photo-b'>) => ({
+      type: 'doc',
+      content: ids.map((id) => positionedImage({
+        id,
+        spanStartColumn: id === 'photo-a' ? 1 : 2,
+        xOffsetPx: id === 'photo-a' ? 24 : 18,
+        yPx: id === 'photo-a' ? 96 : 300,
+        caption: '',
+      })),
+    } satisfies JSONContent);
+    const forward = await renderFlowEditor({
+      content: makeContent(['photo-a', 'photo-b']),
+    });
+    const reverse = await renderFlowEditor({
+      content: makeContent(['photo-b', 'photo-a']),
+    });
+    const getFrames = (editor: Editor) => {
+      const model = buildMultiDocumentSpanLayoutModel(
+        editor,
+        3,
+        24,
+        720,
+        640
+      )!;
+      return new Map(model.images.map((image) => [image.imageId, {
+        leftPx: image.imageLeftPx,
+        topPx: image.imageTopPx,
+        widthPx: image.renderedImageWidthPx,
+        heightPx: image.renderedImageHeightPx,
+      }]));
+    };
+    expect(getFrames(forward.editor)).toEqual(getFrames(reverse.editor));
+  });
+
+  it('resolves a flow image around positioned obstacles without moving them', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        positionedImage({
+          id: 'positioned-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 12,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'flow-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 0,
+          caption: '',
+          verticalAnchor: 'flow',
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640
+    )!;
+    const positioned = model.images.find(
+      (image) => image.imageId === 'positioned-photo'
+    )!;
+    const flow = model.images.find(
+      (image) => image.imageId === 'flow-photo'
+    )!;
+    expect(positioned.imageLeftPx).toBe(positioned.authoredFrame.leftPx);
+    expect(positioned.imageTopPx).toBe(positioned.authoredFrame.topPx);
+    expect(rectanglesOverlap(
+      model.collisionRectangles.find(
+        (rectangle) => rectangle.imageId === 'positioned-photo'
+      )!,
+      model.collisionRectangles.find(
+        (rectangle) => rectangle.imageId === 'flow-photo'
+      )!
+    )).toBe(false);
+    expect(
+      flow.imageLeftPx !== flow.authoredFrame.leftPx
+      || flow.imageTopPx !== flow.authoredFrame.topPx
+    ).toBe(true);
+  });
+
+  it('keeps an authored row group stable when an unrelated photo is added', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        positionedImage({
+          id: 'group-left',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 120,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'group-right',
+          spanStartColumn: 1,
+          xOffsetPx: 210,
+          yPx: 120,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'unrelated-photo',
+          spanStartColumn: 2,
+          xOffsetPx: 30,
+          yPx: 400,
+          caption: '',
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640,
+      {},
+      {},
+      [{
+        id: 'photo-group',
+        kind: 'row',
+        childImageIds: ['group-left', 'group-right'],
+        gapPx: 16,
+        sharedWidth: false,
+      }]
+    )!;
+    expect(model.imageGroups).toHaveLength(1);
+    model.images
+      .filter((image) => image.imageId.startsWith('group-'))
+      .forEach((image) => {
+        expect(image.imageLeftPx).toBe(image.authoredFrame.leftPx);
+        expect(image.imageTopPx).toBe(image.authoredFrame.topPx);
+      });
+    expect(model.images.find(
+      (image) => image.imageId === 'unrelated-photo'
+    )?.groupId).toBeUndefined();
   });
 });

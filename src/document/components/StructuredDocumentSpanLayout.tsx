@@ -101,11 +101,14 @@ export type StructuredImageLayout = {
   imageId: string;
   imagePosition: number;
   attributes: DocumentImageAttributes;
+  /** Persistent/user-controlled frame projection before collision layout. */
+  authoredFrame: StructuredImageFrameGeometry;
   imageHtml: string;
   spanLeftPx: number;
   spanWidthPx: number;
   renderedImageWidthPx: number;
   renderedImageHeightPx: number;
+  renderedXOffsetPx: number;
   imageRegionHeightPx: number;
   imageLeftPx: number;
   imageTopPx: number;
@@ -1351,19 +1354,41 @@ export const buildMultiDocumentSpanLayoutModel = (
       ...groupUnits.map((unit) => ({ type: 'group' as const, ...unit })),
       ...imageUnits.map((unit) => ({ type: 'image' as const, ...unit })),
     ].sort((left, right) => left.position - right.position);
+    const positionedUnits = units.filter((unit) => (
+      unit.type === 'group'
+      || unit.image.attributes.verticalAnchor === 'page-position'
+    ));
+    const flowUnits = units.filter((unit) => (
+      unit.type === 'image'
+        ? unit.image.attributes.verticalAnchor !== 'page-position'
+        : false
+    ));
     const resolvedRectangles = new Map<string, BodyRectangle>();
     const resolvedGroupLayouts = new Map<string, DocumentImageGroupLayout>();
     const structuredGroups: StructuredImageGroupLayout[] = [];
 
-    units.forEach((unit) => {
+    // `requestedRectangle` is the authored/layout request. The rectangle
+    // stored in `resolvedObstacles` is render-only geometry. Positioned image
+    // units are fixed obstacles: passive rendering must never move them.
+    [...positionedUnits, ...flowUnits].forEach((unit) => {
       const requestedRectangle = unit.type === 'group'
         ? unit.layout.bounds
         : unit.rectangle;
-      const overlapResolution = resolveInitialRectangleOverlaps({
-        rectangle: requestedRectangle,
-        obstacles: resolvedObstacles,
-        bounds: unit.bounds,
-      });
+      const existingCollisions = findKernelRectangleCollisions(
+        requestedRectangle,
+        resolvedObstacles
+      );
+      const overlapResolution = positionedUnits.includes(unit)
+        ? {
+            rectangle: requestedRectangle,
+            resolved: existingCollisions.length === 0,
+            collisionIds: existingCollisions.map((obstacle) => obstacle.id),
+          }
+        : resolveInitialRectangleOverlaps({
+            rectangle: requestedRectangle,
+            obstacles: resolvedObstacles,
+            bounds: unit.bounds,
+          });
       if (!overlapResolution.resolved) {
         unresolvedCollisionIds.add(unit.id);
         overlapResolution.collisionIds.forEach((id) => {
@@ -1430,6 +1455,19 @@ export const buildMultiDocumentSpanLayoutModel = (
             renderedImageWidthPx
           )
         );
+      const authoredFrame = groupChild
+        ? {
+            leftPx: groupChild.imageRectangle.leftPx,
+            topPx: groupChild.imageRectangle.topPx,
+            widthPx: groupChild.imageRectangle.widthPx,
+            heightPx: groupChild.imageRectangle.heightPx,
+          }
+        : {
+            leftPx: image.requestedRectangle.leftPx,
+            topPx: image.requestedRectangle.topPx,
+            widthPx: image.renderedImageWidthPx,
+            heightPx: image.renderedImageHeightPx,
+          };
       const imageRegionHeightPx = resolvedRectangle.heightPx;
       image.imageElement.classList.add(
         'document-span-layout__image',
@@ -1463,24 +1501,17 @@ export const buildMultiDocumentSpanLayoutModel = (
         frame.style.width = `${renderedImageWidthPx}px`;
         frame.style.height = `${renderedImageHeightPx}px`;
       }
-      const resolvedXOffsetPx = clampDocumentImageXOffset(
-        resolvedRectangle.leftPx - image.spanLeftPx,
-        image.spanWidthPx,
-        renderedImageWidthPx
-      );
       return [{
         imageId: image.imageId,
         imagePosition: image.imagePosition,
-        attributes: {
-          ...image.attributes,
-          xOffsetPx: resolvedXOffsetPx,
-          yPx: resolvedRectangle.topPx,
-        },
+        attributes: image.attributes,
+        authoredFrame,
         imageHtml: image.imageElement.outerHTML,
         spanLeftPx: image.spanLeftPx,
         spanWidthPx: image.spanWidthPx,
         renderedImageWidthPx,
         renderedImageHeightPx,
+        renderedXOffsetPx: resolvedRectangle.leftPx - image.spanLeftPx,
         imageRegionHeightPx,
         imageLeftPx: resolvedRectangle.leftPx,
         imageTopPx: resolvedRectangle.topPx,
@@ -2852,7 +2883,7 @@ export const StructuredDocumentSpanLayout = ({
       })))}
       data-image-top-px={representativeImage?.imageTopPx}
       data-image-left-px={representativeImage?.imageLeftPx}
-      data-image-x-offset-px={representativeImage?.attributes.xOffsetPx}
+      data-image-x-offset-px={representativeImage?.renderedXOffsetPx}
       data-image-y-max-px={representativeImage?.maximumImageYPx}
       data-vertical-anchor={representativeImage?.attributes.verticalAnchor}
       data-image-selected={selectedImage ? 'true' : 'false'}
@@ -2961,7 +2992,7 @@ export const StructuredDocumentSpanLayout = ({
             }
             data-image-left-px={image.imageLeftPx}
             data-image-top-px={image.imageTopPx}
-            data-image-x-offset-px={image.attributes.xOffsetPx}
+            data-image-x-offset-px={image.renderedXOffsetPx}
             data-image-selected={imageSelected ? 'true' : 'false'}
             data-horizontal-placement={image.attributes.horizontalPlacement}
             data-vertical-anchor={image.attributes.verticalAnchor}

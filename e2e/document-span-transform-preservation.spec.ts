@@ -22,6 +22,34 @@ const openDocumentWithPhoto = async (page: Page) => {
   await page.locator('.document-image-node').click();
 };
 
+const addPhoto = async (page: Page, fileName: string) => {
+  const previousCount = await page.locator('.document-image-node').count();
+  await page.getByTestId('document-image-file-input').setInputFiles({
+    name: fileName,
+    mimeType: 'image/png',
+    buffer: Buffer.from(PHOTO_PNG_BASE64, 'base64'),
+  });
+  await expect(page.locator('.document-image-node')).toHaveCount(
+    previousCount + 1
+  );
+};
+
+const readStructuredPhotoGeometry = async (page: Page, imageId: string) => {
+  const slot = page.locator(
+    `[data-layout-role="occupied-columns"][data-image-id="${imageId}"]`
+  );
+  await expect(slot).toBeVisible();
+  return slot.evaluate((element) => ({
+    left: Number(element.getAttribute('data-image-left-px')),
+    top: Number(element.getAttribute('data-image-top-px')),
+    xOffset: Number(element.getAttribute('data-image-x-offset-px')),
+    width: Number(element.querySelector('[data-rendered-width-px]')
+      ?.getAttribute('data-rendered-width-px')),
+    height: Number(element.querySelector('[data-rendered-height-px]')
+      ?.getAttribute('data-rendered-height-px')),
+  }));
+};
+
 test('preserves fit and fill transforms across span transitions and reopen', async ({ page }) => {
   await openDocumentWithPhoto(page);
 
@@ -234,4 +262,68 @@ test('converts an overlay to a span without replacing its transformed frame', as
   expect(Math.abs(spanFrameBox!.y - spanChromeBox!.y)).toBeLessThan(1);
   expect(Math.abs(spanFrameBox!.width - spanChromeBox!.width)).toBeLessThan(1);
   expect(Math.abs(spanFrameBox!.height - spanChromeBox!.height)).toBeLessThan(1);
+});
+
+test('keeps existing transformed photos stable as additional photos enter the layout', async ({ page }) => {
+  await openDocumentWithPhoto(page);
+
+  const firstImageId = await page.locator('.document-image-node')
+    .first()
+    .getAttribute('data-image-id');
+  expect(firstImageId).not.toBeNull();
+  await page.getByTestId('document-image-wrap').selectOption('span-2');
+  await page.getByTestId('document-image-vertical-anchor')
+    .selectOption('page-position');
+  await page.getByTestId('document-image-horizontal-placement')
+    .selectOption('custom');
+  await page.getByTestId('document-image-x-offset').fill('36');
+  await page.getByTestId('document-image-y-position').fill('120');
+  await page.getByLabel('Image width').fill('210');
+  const photoABefore = await readStructuredPhotoGeometry(page, firstImageId!);
+
+  await addPhoto(page, 'span-photo-b.png');
+  const secondImageId = await page.locator('.document-image-node')
+    .nth(1)
+    .getAttribute('data-image-id');
+  expect(secondImageId).not.toBeNull();
+  await page.getByTestId('document-image-wrap').selectOption('span-2');
+  await page.getByTestId('document-image-vertical-anchor')
+    .selectOption('page-position');
+  await page.getByTestId('document-image-horizontal-placement')
+    .selectOption('custom');
+  await page.getByTestId('document-image-x-offset').fill('240');
+  await page.getByTestId('document-image-y-position').fill('360');
+  await page.getByLabel('Image width').fill('180');
+  const photoBBefore = await readStructuredPhotoGeometry(page, secondImageId!);
+  expect(await readStructuredPhotoGeometry(page, firstImageId!))
+    .toEqual(photoABefore);
+
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page.getByTestId('dashboard-project-card')
+    .filter({ hasText: 'Document Span Transform Preservation' })
+    .getByRole('button')
+    .first()
+    .click();
+
+  expect(await readStructuredPhotoGeometry(page, firstImageId!))
+    .toEqual(photoABefore);
+  expect(await readStructuredPhotoGeometry(page, secondImageId!))
+    .toEqual(photoBBefore);
+
+  await addPhoto(page, 'span-photo-c.png');
+  const thirdImageId = await page.locator('.document-image-node')
+    .nth(2)
+    .getAttribute('data-image-id');
+  expect(thirdImageId).not.toBeNull();
+  await page.getByTestId('document-image-wrap').selectOption('span-2');
+  await expect(page.locator(
+    `[data-layout-role="occupied-columns"][data-image-id="${thirdImageId}"]`
+  )).toBeVisible();
+
+  expect(await readStructuredPhotoGeometry(page, firstImageId!))
+    .toEqual(photoABefore);
+  expect(await readStructuredPhotoGeometry(page, secondImageId!))
+    .toEqual(photoBBefore);
 });
