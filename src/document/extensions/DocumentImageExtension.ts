@@ -1023,6 +1023,7 @@ const renderImageHtml = (
     'div',
     {
       class: 'document-image__frame',
+      'data-document-image-frame': 'true',
       'data-crop-mode': attributes.cropMode,
       'data-crop-focal-x': String(attributes.cropFocalX),
       'data-crop-focal-y': String(attributes.cropFocalY),

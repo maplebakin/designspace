@@ -25,6 +25,7 @@ import {
 import {
   buildMultiDocumentSpanLayoutModel,
   clampResizeWidthWithoutCollisions,
+  getStructuredImageFrameGeometry,
   moveRectangleWithoutCollisions,
   rectanglesOverlap,
 } from '../src/document/components/StructuredDocumentSpanLayout';
@@ -175,6 +176,58 @@ const dispatchPointer = (
 };
 
 describe('positioned document image contract', () => {
+  it('anchors transform chrome to the rendered frame, not caption flow', async () => {
+    const { container, editor } = await renderFlowEditor();
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640
+    );
+    const image = model!.images[0];
+    const frameGeometry = getStructuredImageFrameGeometry(image);
+
+    expect(frameGeometry).toEqual({
+      leftPx: image.imageLeftPx,
+      topPx: image.imageTopPx,
+      widthPx: image.renderedImageWidthPx,
+      heightPx: image.renderedImageHeightPx,
+    });
+    expect(image.imageRegionHeightPx).toBeGreaterThan(
+      frameGeometry.heightPx
+    );
+
+    const slot = container.querySelector<HTMLElement>(
+      `[data-layout-role="occupied-columns"][data-image-id="${image.imageId}"]`
+    );
+    expect(slot).not.toBeNull();
+    fireEvent.click(slot!);
+
+    const chrome = await waitFor(() => {
+      const value = slot!.querySelector<HTMLElement>(
+        '[data-document-image-frame-chrome="true"]'
+      );
+      expect(value).not.toBeNull();
+      return value!;
+    });
+    const frame = slot!.querySelector<HTMLElement>(
+      '[data-document-image-frame="true"]'
+    );
+    expect(frame).not.toBeNull();
+    expect(Number.parseFloat(chrome.style.width)).toBe(
+      Number.parseFloat(frame!.style.width)
+    );
+    expect(Number.parseFloat(chrome.style.height)).toBe(
+      Number.parseFloat(frame!.style.height)
+    );
+    expect(chrome.classList).toContain(
+      'document-span-layout__image-transform-chrome--selected'
+    );
+    expect(chrome.getAttribute('data-document-editor-only')).toBe('true');
+    expect(chrome.getAttribute('data-document-export-exclude')).toBe('true');
+  });
+
   it('derives one caption-aware exclusion rectangle per stable image ID', async () => {
     const { editor } = await renderFlowEditor();
     const model = buildMultiDocumentSpanLayoutModel(

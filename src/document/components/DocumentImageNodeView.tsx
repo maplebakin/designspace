@@ -227,16 +227,38 @@ export const DocumentImageNodeView = ({
   const imageContent = (
     <>
       <div
-        className="document-image__frame"
-        data-crop-mode={attributes.cropMode}
-        data-crop-focal-x={attributes.cropFocalX}
-        data-crop-focal-y={attributes.cropFocalY}
+        className="document-image__frame-container"
         style={{
           width: `${renderedWidth}px`,
           height: `${renderedHeight}px`,
         }}
       >
-        {media}
+        <div
+          className="document-image__frame"
+          data-document-image-frame="true"
+          data-crop-mode={attributes.cropMode}
+          data-crop-focal-x={attributes.cropFocalX}
+          data-crop-focal-y={attributes.cropFocalY}
+          style={{
+            width: `${renderedWidth}px`,
+            height: `${renderedHeight}px`,
+          }}
+        >
+          {media}
+        </div>
+        {selected && (
+          <button
+            type="button"
+            className="document-image__resize-handle"
+            aria-label="Resize image"
+            data-document-editor-only="true"
+            data-document-export-exclude="true"
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeCancel}
+          />
+        )}
       </div>
       {attributes.caption && (
         nodeType === 'documentInlineImage' ? (
@@ -260,19 +282,6 @@ export const DocumentImageNodeView = ({
             {attributes.caption}
           </figcaption>
         )
-      )}
-      {selected && (
-        <button
-          type="button"
-          className="document-image__resize-handle"
-          aria-label="Resize image"
-          data-document-editor-only="true"
-          data-document-export-exclude="true"
-          onPointerDown={handleResizeStart}
-          onPointerMove={handleResizeMove}
-          onPointerUp={handleResizeEnd}
-          onPointerCancel={handleResizeCancel}
-        />
       )}
     </>
   );

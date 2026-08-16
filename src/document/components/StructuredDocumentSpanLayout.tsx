@@ -114,6 +114,36 @@ export type StructuredImageLayout = {
   groupId?: string;
 };
 
+export type StructuredImageFrameGeometry = Readonly<{
+  leftPx: number;
+  topPx: number;
+  widthPx: number;
+  heightPx: number;
+}>;
+
+/**
+ * The transformable photo frame excludes caption flow. The structured layout
+ * model is the canonical page-space source for both the rendered frame and
+ * its editor-only chrome.
+ */
+export const getStructuredImageFrameGeometry = ({
+  imageLeftPx,
+  imageTopPx,
+  renderedImageWidthPx,
+  renderedImageHeightPx,
+}: Pick<
+  StructuredImageLayout,
+  | 'imageLeftPx'
+  | 'imageTopPx'
+  | 'renderedImageWidthPx'
+  | 'renderedImageHeightPx'
+>): StructuredImageFrameGeometry => ({
+  leftPx: imageLeftPx,
+  topPx: imageTopPx,
+  widthPx: renderedImageWidthPx,
+  heightPx: renderedImageHeightPx,
+});
+
 export type StructuredImageGroupLayout = {
   groupId: string;
   kind: DocumentImageGroup['kind'];
@@ -2909,6 +2939,7 @@ export const StructuredDocumentSpanLayout = ({
         const imageSelected = selectedImageIds.length > 0
           ? selectedImageIds.includes(image.imageId)
           : imagePrimary;
+        const frameGeometry = getStructuredImageFrameGeometry(image);
         return (
           <div
             key={image.imageId}
@@ -2953,25 +2984,40 @@ export const StructuredDocumentSpanLayout = ({
               className="document-span-layout__image-content"
               dangerouslySetInnerHTML={{ __html: image.imageHtml }}
             />
-            {imagePrimary && (
-              <button
-                type="button"
-                className="document-image__resize-handle"
-                aria-label="Resize image"
-                data-document-editor-only="true"
-                data-document-export-exclude="true"
-                style={{
-                  width: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
-                  height: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
-                }}
-                onPointerDown={(event) =>
-                  handleResizePointerDown(event, image)}
-                onPointerMove={handleResizePointerMove}
-                onPointerUp={handleResizePointerUp}
-                onPointerCancel={handleResizePointerCancel}
-                onClick={handleResizeClick}
-              />
-            )}
+            <div
+              className={`document-span-layout__image-transform-chrome ${
+                imageSelected
+                  ? 'document-span-layout__image-transform-chrome--selected'
+                  : ''
+              }`}
+              data-document-editor-only="true"
+              data-document-export-exclude="true"
+              data-document-image-frame-chrome="true"
+              style={{
+                width: `${frameGeometry.widthPx}px`,
+                height: `${frameGeometry.heightPx}px`,
+              }}
+            >
+              {imagePrimary && (
+                <button
+                  type="button"
+                  className="document-image__resize-handle"
+                  aria-label="Resize image"
+                  data-document-editor-only="true"
+                  data-document-export-exclude="true"
+                  style={{
+                    width: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                    height: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                  }}
+                  onPointerDown={(event) =>
+                    handleResizePointerDown(event, image)}
+                  onPointerMove={handleResizePointerMove}
+                  onPointerUp={handleResizePointerUp}
+                  onPointerCancel={handleResizePointerCancel}
+                  onClick={handleResizeClick}
+                />
+              )}
+            </div>
           </div>
         );
       })}
