@@ -767,7 +767,9 @@ test.describe('document reconstruction MVP', () => {
     await expect(columnTwoAbove).toContainText(
       'anchor belongs in the lower portion of the article.'
     );
-    await expect(columnTwoBelow).not.toBeEmpty();
+    await expect(columnTwoBelow).toBeAttached();
+    expect(Number(await layout.getAttribute('data-rendered-image-width-px')))
+      .toBeLessThan(Number(await layout.getAttribute('data-span-width-px')));
     await expect(columnThreeAbove).toBeAttached();
     await expect(layout.locator('[data-layout-role="occupied-columns"]'))
       .not.toContainText('Column one continues beside');
@@ -909,6 +911,10 @@ test.describe('document reconstruction MVP', () => {
 
     const slotBox = await imageSlot.boundingBox();
     expect(slotBox).not.toBeNull();
+    const snapTargetColumnBox = await layout.locator(
+      '[data-layout-role="physical-column"][data-column="2"]'
+    ).boundingBox();
+    expect(snapTargetColumnBox).not.toBeNull();
     const imageYBeforeDrag = Number(
       await layout.getAttribute('data-image-top-px')
     );
@@ -925,7 +931,8 @@ test.describe('document reconstruction MVP', () => {
     );
     await page.mouse.down();
     await page.mouse.move(
-      slotBox!.x + slotBox!.width / 2 - 30,
+      slotBox!.x + slotBox!.width / 2
+        + (snapTargetColumnBox!.x - slotBox!.x),
       slotBox!.y + Math.min(40, slotBox!.height / 2) + 40
     );
     const snapXGuidePosition = await layout.locator(
@@ -1048,7 +1055,7 @@ test.describe('document reconstruction MVP', () => {
     );
     await expect(reloadedLayout.locator(
       '[data-layout-role="explicit-text-column"][data-column="2"]'
-    ).last()).not.toBeEmpty();
+    ).last()).toBeAttached();
 
     const pngDownloadPromise = page.waitForEvent('download');
     await (await openExportFormat(page, 'PNG')).click();

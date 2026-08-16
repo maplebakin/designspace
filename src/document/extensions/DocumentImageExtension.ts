@@ -346,6 +346,34 @@ export const calculateDocumentImageFrameHeight = (
       )
     );
 
+export const getDocumentImageSpanDimensions = (
+  attributes: Pick<
+    DocumentImageAttributes,
+    'widthPx' | 'heightPx' | 'cropMode' | 'naturalWidth' | 'naturalHeight'
+  >,
+  spanWidthPx: number
+) => {
+  const currentWidthPx = Math.max(
+    1,
+    Number.isFinite(attributes.widthPx) ? attributes.widthPx : 1
+  );
+  const maximumWidthPx = Math.max(
+    1,
+    Number.isFinite(spanWidthPx) ? spanWidthPx : 1
+  );
+  const widthPx = Math.min(currentWidthPx, maximumWidthPx);
+  return {
+    widthPx,
+    heightPx: widthPx < currentWidthPx
+      && attributes.cropMode === 'fit'
+      ? calculateDocumentImageFrameHeight(attributes, widthPx)
+      : Math.max(
+          1,
+          Number.isFinite(attributes.heightPx) ? attributes.heightPx : 1
+        ),
+  };
+};
+
 export const clampDocumentImageWidth = (
   value: unknown,
   minimumWidthPx: number,

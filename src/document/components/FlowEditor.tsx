@@ -26,6 +26,7 @@ import {
   DocumentImageCommandsExtension,
   DocumentInlineImageExtension,
   calculateDocumentImageXOffset,
+  getDocumentImageSpanDimensions,
   normalizeDocumentImageAttributes,
   normalizeDocumentImageSpanForColumnCount,
   type DocumentImageAttributes,
@@ -880,17 +881,17 @@ export const FlowEditor = ({
           columnWidth * normalized.spanCount
           + columnGapPx * (normalized.spanCount - 1)
         );
-        if (normalized.widthPx > spanWidth) {
+        const spanDimensions = getDocumentImageSpanDimensions(
+          normalized,
+          spanWidth
+        );
+        if (
+          spanDimensions.widthPx !== normalized.widthPx
+          || spanDimensions.heightPx !== normalized.heightPx
+        ) {
           normalized = {
             ...normalized,
-            widthPx: spanWidth,
-            ...(normalized.cropMode === 'fit'
-              ? {
-                  heightPx: spanWidth
-                    * normalized.naturalHeight
-                    / Math.max(1, normalized.naturalWidth),
-                }
-              : {}),
+            ...spanDimensions,
           };
         }
         normalized = {

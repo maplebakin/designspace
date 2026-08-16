@@ -44,7 +44,7 @@ import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
-  calculateDocumentImageFrameHeight,
+  getDocumentImageSpanDimensions,
   type DocumentImageAttributes,
   type DocumentImageMoveDirection,
   type DocumentImageReplaceRequest,
@@ -2110,9 +2110,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           && selectedFlowImage.attributes.spanStartColumn === 2
             ? 2
             : 1;
-        const spanWidth = (
+        const spanWidthPx = (
           availableColumnWidth * spanCount
           + page.columnGapPx * (spanCount - 1)
+        );
+        const spanDimensions = getDocumentImageSpanDimensions(
+          beforeAttributes,
+          spanWidthPx
+        );
+        const xOffsetPx = clampDocumentImageXOffset(
+          beforeAttributes.xOffsetPx,
+          spanWidthPx,
+          spanDimensions.widthPx
         );
         const committed = editor.chain()
           .focus()
@@ -2121,11 +2130,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             wrap: 'span-columns',
             spanCount,
             spanStartColumn,
-            widthPx: spanWidth,
-            heightPx: calculateDocumentImageFrameHeight(
-              selectedFlowImage.attributes,
-              spanWidth
-            ),
+            ...spanDimensions,
+            xOffsetPx,
             verticalAnchor:
               selectedFlowImage.attributes.verticalAnchor || 'flow',
           })
@@ -2179,10 +2185,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, selectedOverlay.id);
       }
     } else if (isSpan && page) {
-      const widthPx = (
+      const spanWidthPx = (
         availableColumnWidth * spanCount
         + page.columnGapPx * (spanCount - 1)
       );
+      const naturalWidth = selectedOverlay.naturalWidth || selectedOverlay.widthPx;
+      const naturalHeight = selectedOverlay.naturalHeight || selectedOverlay.heightPx;
+      const spanDimensions = getDocumentImageSpanDimensions({
+        widthPx: selectedOverlay.widthPx,
+        heightPx: selectedOverlay.heightPx,
+        cropMode: selectedOverlay.cropMode || 'fit',
+        naturalWidth,
+        naturalHeight,
+      }, spanWidthPx);
       const removed = removeOverlay(selectedOverlay.id, page.id);
       const remainingOverlay = useDocumentStore.getState().project?.pages
         .find((candidate) => candidate.id === page.id)
@@ -2193,11 +2208,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         id: selectedOverlay.id,
         assetId: selectedOverlay.assetId,
         altText: selectedOverlay.altText,
-        widthPx,
-        heightPx:
-          widthPx * selectedOverlay.heightPx / Math.max(1, selectedOverlay.widthPx),
-        naturalWidth: selectedOverlay.naturalWidth || selectedOverlay.widthPx,
-        naturalHeight: selectedOverlay.naturalHeight || selectedOverlay.heightPx,
+        widthPx: spanDimensions.widthPx,
+        heightPx: spanDimensions.heightPx,
+        naturalWidth,
+        naturalHeight,
         wrap: 'span-columns',
         spanCount,
         spanStartColumn: 1,

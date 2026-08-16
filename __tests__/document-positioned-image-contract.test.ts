@@ -23,6 +23,9 @@ import {
   FlowEditor,
 } from '../src/document/components/FlowEditor';
 import {
+  getDocumentImageSpanDimensions,
+} from '../src/document/extensions/DocumentImageExtension';
+import {
   buildMultiDocumentSpanLayoutModel,
   clampResizeWidthWithoutCollisions,
   getStructuredImageFrameGeometry,
@@ -176,6 +179,41 @@ const dispatchPointer = (
 };
 
 describe('positioned document image contract', () => {
+  it.each([
+    {
+      cropMode: 'fit' as const,
+      widthPx: 240,
+      heightPx: 160,
+      spanWidthPx: 180,
+      expected: { widthPx: 180, heightPx: 120 },
+    },
+    {
+      cropMode: 'fill' as const,
+      widthPx: 240,
+      heightPx: 190,
+      spanWidthPx: 180,
+      expected: { widthPx: 180, heightPx: 190 },
+    },
+    {
+      cropMode: 'fit' as const,
+      widthPx: 180,
+      heightPx: 120,
+      spanWidthPx: 360,
+      expected: { widthPx: 180, heightPx: 120 },
+    },
+  ])(
+    'preserves span dimensions and clamps only when the frame is too wide',
+    ({ cropMode, widthPx, heightPx, spanWidthPx, expected }) => {
+      expect(getDocumentImageSpanDimensions({
+        cropMode,
+        widthPx,
+        heightPx,
+        naturalWidth: 900,
+        naturalHeight: 600,
+      }, spanWidthPx)).toEqual(expected);
+    }
+  );
+
   it('anchors transform chrome to the rendered frame, not caption flow', async () => {
     const { container, editor } = await renderFlowEditor();
     const model = buildMultiDocumentSpanLayoutModel(
