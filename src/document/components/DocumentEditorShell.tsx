@@ -44,6 +44,8 @@ import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
+  findDocumentImagePositionById,
+  findDocumentImagePositions,
   getDocumentImageSpanDimensions,
   type DocumentImageAttributes,
   type DocumentImageMoveDirection,
@@ -317,29 +319,6 @@ const notifyCommittedStructuredImageGroup = (
     pageId,
     groupId,
   });
-};
-
-const findDocumentImagePositions = (
-  editor: Editor,
-  imageId: string,
-  nodeType?: 'documentFlowImage' | 'documentInlineImage'
-) => {
-  const positions: number[] = [];
-  editor.state.doc.descendants((node, position) => {
-    if (
-      (!nodeType
-        || node.type.name === nodeType)
-      && (
-        node.type.name === 'documentFlowImage'
-        || node.type.name === 'documentInlineImage'
-      )
-      && node.attrs.id === imageId
-    ) {
-      positions.push(position);
-    }
-    return true;
-  });
-  return positions;
 };
 
 const findDocumentFlowImagePositions = (
@@ -1260,8 +1239,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     additive: boolean
   ): string | null => {
     if (!page) return imageId;
+    const editor = bodyEditorRef.current;
+    if (
+      !editor
+      || findDocumentImagePositionById(editor, imageId) === null
+    ) return null;
     const group = findDocumentImageGroupForImage(page.imageGroups, imageId);
     if (group && !additive) {
+      if (group.childImageIds.some(
+        (childImageId) => findDocumentImagePositionById(editor, childImageId)
+          === null
+      )) return null;
       if (selectedImageGroupId === group.id) {
         setSelectedImageGroupId(null);
         setSelectedStructuredImageIds([imageId]);
@@ -1280,8 +1268,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const current = selectedStructuredImageIds;
     if (current.includes(imageId)) {
       const remaining = current.filter((candidate) => candidate !== imageId);
+      const nextPrimary = remaining[0] || imageId;
+      if (findDocumentImagePositionById(editor, nextPrimary) === null) {
+        return null;
+      }
       setSelectedStructuredImageIds(remaining);
-      return remaining[0] || imageId;
+      return nextPrimary;
     }
     const next = [...current, imageId];
     setSelectedStructuredImageIds(next);
@@ -2003,9 +1995,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const editor = bodyEditorRef.current;
     if (!selectedFlowImage || !editor || !page) return;
     const attributes = selectedFlowImage.attributes;
+    const imagePosition = findDocumentImagePositionById(
+      editor,
+      attributes.id,
+      selectedFlowImage.nodeType
+    );
+    if (imagePosition === null) return;
     const removed = editor.chain()
       .focus()
-      .setNodeSelection(selectedFlowImage.position)
+      .setNodeSelection(imagePosition)
       .deleteSelection()
       .run();
     if (
@@ -2772,6 +2770,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       className={shellClassName}
       data-testid="document-editor-shell"
       data-editor-mode="document"
+      data-selected-flow-image-id={selectedFlowImage?.attributes.id || undefined}
+      data-selected-structured-image-ids={selectedStructuredImageIds.join(',')}
+      data-selected-image-group-id={selectedImageGroupId || undefined}
     >
       <DocumentTopBar
         projectName={project.projectName}
@@ -3445,9 +3446,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onImageSelectionRequest={(
                     imageId,
                     additive
-                  ) => {
-                    handleStructuredImageSelectionRequest(imageId, additive);
-                  }}
+                  ) => handleStructuredImageSelectionRequest(imageId, additive)}
                   onRequestImageReplace={handleNodeReplaceRequest}
                   onCommittedImageLayout={(imageId) => {
                     const editor = bodyEditorRef.current;

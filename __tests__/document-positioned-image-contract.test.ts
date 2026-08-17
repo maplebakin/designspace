@@ -5,6 +5,7 @@ import type {
 } from '@tiptap/core';
 import { NodeSelection } from '@tiptap/pm/state';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,7 +24,10 @@ import {
   FlowEditor,
 } from '../src/document/components/FlowEditor';
 import {
+  findDocumentImagePositionById,
+  findDocumentImagePositions,
   getDocumentImageSpanDimensions,
+  selectDocumentImageById,
 } from '../src/document/extensions/DocumentImageExtension';
 import {
   buildMultiDocumentSpanLayoutModel,
@@ -266,6 +270,83 @@ describe('positioned document image contract', () => {
     );
     expect(chrome.getAttribute('data-document-editor-only')).toBe('true');
     expect(chrome.getAttribute('data-document-export-exclude')).toBe('true');
+    expect(slot?.getAttribute('data-document-visible-image-id')).toBe(
+      image.imageId
+    );
+    expect(frame?.getAttribute('data-document-visible-image-id')).toBe(
+      image.imageId
+    );
+    expect(frame?.getAttribute('data-document-image-hit-target')).toBe('true');
+  });
+
+  it('selects a visible image by ID after its cached visual position is stale', async () => {
+    const { container, editor } = await renderFlowEditor();
+    const rightSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="photo-right"]'
+    );
+    expect(rightSlot).not.toBeNull();
+    const originalPosition = findDocumentImagePositionById(
+      editor,
+      'photo-right',
+      'documentFlowImage'
+    );
+    expect(originalPosition).not.toBeNull();
+
+    act(() => {
+      const paragraph = editor.schema.nodes.paragraph.create(
+        null,
+        editor.schema.text('Inserted before the second photo.')
+      );
+      editor.view.dispatch(
+        editor.state.tr.insert(originalPosition!, paragraph)
+      );
+      // The DOM handler still belongs to the old layout model here. Its
+      // position hint is intentionally stale when the click is dispatched.
+      fireEvent.click(rightSlot!);
+    });
+
+    await waitFor(() => {
+      expect(editor.state.selection).toBeInstanceOf(NodeSelection);
+      expect((editor.state.selection as NodeSelection).node.attrs.id).toBe(
+        'photo-right'
+      );
+    });
+    const currentPosition = findDocumentImagePositionById(
+      editor,
+      'photo-right',
+      'documentFlowImage'
+    );
+    expect(currentPosition).not.toBe(originalPosition);
+    expect(editor.state.selection.from).toBe(currentPosition);
+  });
+
+  it('fails closed when an image ID is missing or duplicated', async () => {
+    const duplicateContent: JSONContent = {
+      type: 'doc',
+      content: [
+        positionedImage({
+          id: 'duplicate-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 10,
+          yPx: 80,
+          caption: '',
+        }),
+        positionedImage({
+          id: 'duplicate-photo',
+          spanStartColumn: 2,
+          xOffsetPx: 10,
+          yPx: 260,
+          caption: '',
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content: duplicateContent });
+
+    expect(findDocumentImagePositions(editor, 'duplicate-photo')).toHaveLength(2);
+    expect(findDocumentImagePositionById(editor, 'duplicate-photo')).toBeNull();
+    expect(findDocumentImagePositionById(editor, 'missing-photo')).toBeNull();
+    expect(selectDocumentImageById(editor, 'duplicate-photo')).toBeNull();
+    expect(selectDocumentImageById(editor, 'missing-photo')).toBeNull();
   });
 
   it('derives one caption-aware exclusion rectangle per stable image ID', async () => {

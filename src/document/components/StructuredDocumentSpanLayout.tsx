@@ -1498,6 +1498,11 @@ export const buildMultiDocumentSpanLayoutModel = (
         '.document-image__frame'
       );
       if (frame) {
+        frame.setAttribute(
+          'data-document-visible-image-id',
+          image.imageId
+        );
+        frame.setAttribute('data-document-image-hit-target', 'true');
         frame.style.width = `${renderedImageWidthPx}px`;
         frame.style.height = `${renderedImageHeightPx}px`;
       }
@@ -2231,11 +2236,12 @@ export const StructuredDocumentSpanLayout = ({
 
   if (!model) return null;
 
-  const selectedPosition = editor.state.selection instanceof NodeSelection
-    ? editor.state.selection.from
+  const selectedImageId = editor.state.selection instanceof NodeSelection
+    && editor.state.selection.node.type.name === 'documentFlowImage'
+    ? String(editor.state.selection.node.attrs.id || '')
     : null;
   const selectedImage = model.images.find(
-    (image) => image.imagePosition === selectedPosition
+    (image) => image.imageId === selectedImageId
   );
   const normalizedDropCap = normalizeDocumentDropCap(dropCap);
   const style = {
@@ -2412,11 +2418,6 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     pointerSelectedImageIdRef.current = image.imageId;
-    window.setTimeout(() => {
-      if (pointerSelectedImageIdRef.current === image.imageId) {
-        pointerSelectedImageIdRef.current = null;
-      }
-    }, 50);
     onSelectImage(
       image.imagePosition,
       image.imageId,
@@ -2855,6 +2856,7 @@ export const StructuredDocumentSpanLayout = ({
         ' ',
         ' '
       )}
+      data-document-selected-image-id={selectedImageId || undefined}
       data-column-count={columnCount}
       data-column-width-px={model.columnWidthPx}
       data-span-width-px={representativeImage?.spanWidthPx}
@@ -2966,7 +2968,7 @@ export const StructuredDocumentSpanLayout = ({
         ))}
       </div>
       {model.images.map((image) => {
-        const imagePrimary = selectedPosition === image.imagePosition;
+        const imagePrimary = selectedImageId === image.imageId;
         const imageSelected = selectedImageIds.length > 0
           ? selectedImageIds.includes(image.imageId)
           : imagePrimary;
@@ -2977,6 +2979,8 @@ export const StructuredDocumentSpanLayout = ({
             className="document-span-layout__image-slot"
             data-layout-role="occupied-columns"
             data-image-id={image.imageId}
+            data-document-visible-image-id={image.imageId}
+            data-document-image-position={image.imagePosition}
             data-image-group-id={image.groupId}
             data-image-group-kind={
               image.groupId

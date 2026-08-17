@@ -26,9 +26,11 @@ import {
   DocumentImageCommandsExtension,
   DocumentInlineImageExtension,
   calculateDocumentImageXOffset,
+  findDocumentImagePositionById,
   getDocumentImageSpanDimensions,
   normalizeDocumentImageAttributes,
   normalizeDocumentImageSpanForColumnCount,
+  selectDocumentImageById,
   type DocumentImageAttributes,
   type DocumentImageNodeName,
   type DocumentImageReplaceRequest,
@@ -101,33 +103,18 @@ export const getSelectedDocumentImage = (
 
 export const commitStructuredDocumentImagePosition = (
   editor: Editor,
-  expectedPosition: number,
+  _expectedPosition: number,
   imageId: string,
   xOffsetPx: number,
   yPx: number
 ) => {
   if (editor.isDestroyed) return false;
-  const nodeAtExpectedPosition = editor.state.doc.nodeAt(expectedPosition);
-  let targetPosition = (
-    nodeAtExpectedPosition?.type.name === 'documentFlowImage'
-    && nodeAtExpectedPosition.attrs.id === imageId
-  )
-    ? expectedPosition
-    : -1;
-  if (targetPosition < 0) {
-    editor.state.doc.descendants((node, position) => {
-      if (targetPosition >= 0) return false;
-      if (
-        node.type.name === 'documentFlowImage'
-        && node.attrs.id === imageId
-      ) {
-        targetPosition = position;
-        return false;
-      }
-      return true;
-    });
-  }
-  if (targetPosition < 0) return false;
+  const targetPosition = findDocumentImagePositionById(
+    editor,
+    imageId,
+    'documentFlowImage'
+  );
+  if (targetPosition === null) return false;
   const targetNode = editor.state.doc.nodeAt(targetPosition);
   if (!targetNode) return false;
 
@@ -159,34 +146,19 @@ export const commitStructuredDocumentImagePosition = (
 
 export const commitStructuredDocumentImageSize = (
   editor: Editor,
-  expectedPosition: number,
+  _expectedPosition: number,
   imageId: string,
   widthPx: number,
   heightPx: number,
   xOffsetPx: number
 ) => {
   if (editor.isDestroyed) return false;
-  const nodeAtExpectedPosition = editor.state.doc.nodeAt(expectedPosition);
-  let targetPosition = (
-    nodeAtExpectedPosition?.type.name === 'documentFlowImage'
-    && nodeAtExpectedPosition.attrs.id === imageId
-  )
-    ? expectedPosition
-    : -1;
-  if (targetPosition < 0) {
-    editor.state.doc.descendants((node, position) => {
-      if (targetPosition >= 0) return false;
-      if (
-        node.type.name === 'documentFlowImage'
-        && node.attrs.id === imageId
-      ) {
-        targetPosition = position;
-        return false;
-      }
-      return true;
-    });
-  }
-  if (targetPosition < 0) return false;
+  const targetPosition = findDocumentImagePositionById(
+    editor,
+    imageId,
+    'documentFlowImage'
+  );
+  if (targetPosition === null) return false;
   const targetNode = editor.state.doc.nodeAt(targetPosition);
   if (!targetNode) return false;
 
@@ -387,7 +359,10 @@ export interface FlowEditorProps {
     imageId: string,
     additive: boolean
   ) => string | null;
-  onImageSelectionRequest?: (imageId: string, additive: boolean) => void;
+  onImageSelectionRequest?: (
+    imageId: string,
+    additive: boolean
+  ) => string | null;
   onRequestImageReplace?: (request: DocumentImageReplaceRequest) => void;
   onCommittedImageLayout?: (imageId: string) => void;
   onDeleteFlowImage?: (editor: Editor, imageId: string) => boolean;
@@ -631,7 +606,11 @@ export const FlowEditor = ({
       imageId,
       additive,
     }: { imageId: string; additive: boolean }) => {
-      callbacksRef.current.onImageSelectionRequest?.(imageId, additive);
+      const requestedImageId = callbacksRef.current.onImageSelectionRequest?.(
+        imageId,
+        additive
+      );
+      return requestedImageId === undefined ? imageId : requestedImageId;
     },
     isImageSelected: (imageId: string) =>
       callbacksRef.current.selectedStructuredImageIds.includes(imageId),
@@ -1056,39 +1035,31 @@ export const FlowEditor = ({
           language={language}
           imageGroups={imageGroups}
           selectedImageIds={selectedStructuredImageIds}
-          onSelectImage={(position, imageId, additive) => {
+          onSelectImage={(_position, imageId, additive) => {
             enteringStructuredTextRef.current = false;
             setEditingStructuredText(false);
+            const clickedPosition = findDocumentImagePositionById(
+              editor,
+              imageId,
+              'documentFlowImage'
+            );
+            if (clickedPosition === null) return;
             const requestedPrimaryId =
               callbacksRef.current.onStructuredImageSelectionRequest?.(
                 imageId,
                 additive
-              ) ?? imageId;
-            let primaryPosition = requestedPrimaryId === imageId
-              ? position
-              : -1;
+              );
+            const primaryId = requestedPrimaryId === undefined
+              ? imageId
+              : requestedPrimaryId;
             if (
-              requestedPrimaryId
-              && primaryPosition < 0
-            ) {
-              editor.state.doc.descendants((node, nodePosition) => {
-                if (
-                  primaryPosition < 0
-                  && (
-                    node.type.name === 'documentFlowImage'
-                    || node.type.name === 'documentInlineImage'
-                  )
-                  && node.attrs.id === requestedPrimaryId
-                ) {
-                  primaryPosition = nodePosition;
-                  return false;
-                }
-                return true;
-              });
-            }
-            if (primaryPosition >= 0) {
-              editor.commands.setNodeSelection(primaryPosition);
-            }
+              !primaryId
+              || selectDocumentImageById(
+                editor,
+                primaryId,
+                'documentFlowImage'
+              ) === null
+            ) return;
             editor.commands.focus(undefined, { scrollIntoView: false });
           }}
           onCommitImagePosition={(

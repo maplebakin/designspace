@@ -495,6 +495,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
         <div
           className="document-context-toolbar__content document-image-inspector"
           data-testid="document-image-inspector"
+          data-selected-image-id={props.selectedImage.id}
         >
           <DocumentImageGroupControls
             selectedImageIds={props.selectedImageIds ?? [props.selectedImage.id]}

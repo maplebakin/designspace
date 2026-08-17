@@ -1472,7 +1472,7 @@
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__image-slot {
   visibility: visible;
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 .document-span-layout__column-stacks {
@@ -1565,6 +1565,9 @@
   min-width: 0;
   max-width: var(--document-span-width, 100%);
   overflow: visible;
+  /* Only the visible frame and actual caption are interactive. The slot's
+     box also contains caption flow and must not shield another photo. */
+  pointer-events: none;
 }
 
 .document-span-layout__image-slot[data-image-selected="true"] {
@@ -1583,6 +1586,12 @@
 
 .document-span-layout__image-content {
   width: 100%;
+  pointer-events: none;
+}
+
+.document-span-layout__image-content .document-image__frame,
+.document-span-layout__image-content .document-image__caption {
+  pointer-events: auto;
 }
 
 .document-span-layout__image-content > .document-image {

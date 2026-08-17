@@ -21,6 +21,7 @@ import {
   calculateDocumentImageResizeWidth,
   clampDocumentImageWidth,
   getDocumentImageAspectRatio,
+  selectDocumentImageById,
   normalizeDocumentImageAttributes,
 } from '../extensions/DocumentImageExtension';
 
@@ -35,7 +36,6 @@ export const DocumentImageNodeView = ({
   node,
   editor,
   extension,
-  getPos,
   selected,
   updateAttributes,
 }: ReactNodeViewProps) => {
@@ -236,6 +236,8 @@ export const DocumentImageNodeView = ({
         <div
           className="document-image__frame"
           data-document-image-frame="true"
+          data-document-visible-image-id={attributes.id}
+          data-document-image-hit-target="true"
           data-crop-mode={attributes.cropMode}
           data-crop-focal-x={attributes.cropFocalX}
           data-crop-focal-y={attributes.cropFocalY}
@@ -301,15 +303,20 @@ export const DocumentImageNodeView = ({
       onClick={(event: ReactMouseEvent<HTMLElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        const position = getPos();
-        options.onSelectImage?.({
+        const requestedImageId = options.onSelectImage?.({
           editor,
-          position: typeof position === 'number' ? position : undefined,
+          position: undefined,
           imageId: attributes.id,
           additive: event.shiftKey || event.metaKey || event.ctrlKey,
         });
-        if (typeof position === 'number') {
-          editor.commands.setNodeSelection(position);
+        const selectionImageId = requestedImageId === undefined
+          ? attributes.id
+          : requestedImageId;
+        if (
+          selectionImageId
+          && selectDocumentImageById(editor, selectionImageId, nodeType)
+            !== null
+        ) {
           editor.commands.focus();
         }
       }}

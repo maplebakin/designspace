@@ -43,6 +43,99 @@ export const DOCUMENT_IMAGE_NODE_NAMES = [
 export type DocumentImageNodeName =
   typeof DOCUMENT_IMAGE_NODE_NAMES[number];
 
+/**
+ * Returns every persistent document image position for an ID in the current
+ * editor state. Callers that need selection authority should use
+ * `findDocumentImagePositionById`, which rejects duplicate IDs.
+ */
+export const findDocumentImagePositions = (
+  editor: Editor,
+  imageId: string,
+  nodeType?: DocumentImageNodeName
+) => {
+  const positions: number[] = [];
+  if (editor.isDestroyed || !imageId) return positions;
+  editor.state.doc.descendants((node, position) => {
+    const isDocumentImage = DOCUMENT_IMAGE_NODE_NAMES.includes(
+      node.type.name as DocumentImageNodeName
+    );
+    if (
+      isDocumentImage
+      && (!nodeType || node.type.name === nodeType)
+      && node.attrs.id === imageId
+    ) {
+      positions.push(position);
+    }
+    return true;
+  });
+  return positions;
+};
+
+/**
+ * Resolves a document image position from its persistent ID in the current
+ * ProseMirror document. A cached visual position is intentionally not part of
+ * this API: IDs are authoritative and duplicate/ambiguous IDs fail closed.
+ */
+export const findDocumentImagePositionById = (
+  editor: Editor,
+  imageId: string,
+  expectedNodeType?: DocumentImageNodeName
+): number | null => {
+  const positions = findDocumentImagePositions(editor, imageId);
+  if (positions.length !== 1) return null;
+  const position = positions[0];
+  const node = editor.state.doc.nodeAt(position);
+  if (
+    !node
+    || !DOCUMENT_IMAGE_NODE_NAMES.includes(
+      node.type.name as DocumentImageNodeName
+    )
+    || node.attrs.id !== imageId
+    || (expectedNodeType && node.type.name !== expectedNodeType)
+  ) {
+    return null;
+  }
+  return position;
+};
+
+/**
+ * Selects exactly one current document image by persistent ID and verifies
+ * the resulting NodeSelection before reporting success.
+ */
+export const selectDocumentImageById = (
+  editor: Editor,
+  imageId: string,
+  expectedNodeType?: DocumentImageNodeName
+): number | null => {
+  const position = findDocumentImagePositionById(
+    editor,
+    imageId,
+    expectedNodeType
+  );
+  if (position === null || editor.isDestroyed) return null;
+  const node = editor.state.doc.nodeAt(position);
+  if (!node) return null;
+  try {
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        NodeSelection.create(editor.state.doc, position)
+      )
+    );
+  } catch {
+    return null;
+  }
+  const selection = editor.state.selection;
+  if (
+    !(selection instanceof NodeSelection)
+    || selection.from !== position
+    || selection.node.attrs.id !== imageId
+    || selection.node.type.name !== node.type.name
+  ) {
+    return null;
+  }
+  return position;
+};
+
 export type DocumentImageMoveDirection = 'earlier' | 'later';
 
 export type DocumentImageWrap =
@@ -116,7 +209,7 @@ export interface DocumentImageExtensionOptions {
     position: number | undefined;
     imageId: string;
     additive: boolean;
-  }) => void;
+  }) => string | null | undefined;
   isImageSelected?: (imageId: string) => boolean;
   getViewScale: () => number;
   minWidthPx: number;
