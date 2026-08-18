@@ -110,21 +110,36 @@ const assertSelected = async (page: Page, imageId: string) => {
   await expect.poll(async () => shell.getAttribute(
     'data-selected-flow-image-id'
   )).toBe(imageId);
+  await expect(shell).toHaveAttribute(
+    'data-selected-structured-image-ids',
+    imageId
+  );
+  expect(await shell.getAttribute('data-selected-image-group-id')).toBeNull();
   await expect(layout).toHaveAttribute(
     'data-document-selected-image-id',
     imageId
   );
   await expect(page.getByTestId('document-image-inspector'))
     .toHaveAttribute('data-selected-image-id', imageId);
-  await expect(layout.locator(
+  const spanSlot = layout.locator(
     `[data-layout-role="occupied-columns"][data-image-id="${imageId}"]`
-  )).toHaveAttribute('data-image-selected', 'true');
-  await expect(layout.locator(
-    `[data-layout-role="occupied-columns"][data-image-id="${imageId}"] [data-document-image-frame-chrome="true"]`
-  )).toHaveClass(/selected/);
-  await expect(layout.locator(
-    `[data-layout-role="occupied-columns"][data-image-id="${imageId}"]`
-  ).getByRole('button', { name: 'Resize image' })).toBeVisible();
+  );
+  if (await spanSlot.count() > 0) {
+    await expect(spanSlot).toHaveAttribute('data-image-selected', 'true');
+    await expect(spanSlot.locator('[data-document-image-frame-chrome="true"]'))
+      .toHaveClass(/selected/);
+    await expect(spanSlot.getByRole('button', { name: 'Resize image' }))
+      .toBeVisible();
+    return;
+  }
+  const flowHitTarget = layout.locator(
+    `[data-layout-role="flow-image-hit-target"][data-image-id="${imageId}"]`
+  );
+  await expect(flowHitTarget).toHaveAttribute('data-image-selected', 'true');
+  await expect(flowHitTarget.locator('[data-document-image-frame-chrome="true"]'))
+    .toHaveClass(/selected/);
+  await expect(flowHitTarget.getByRole('button', { name: 'Resize image' }))
+    .toBeVisible();
 };
 
 const readVisibleHitTarget = async (
@@ -137,47 +152,248 @@ const readVisibleHitTarget = async (
     ?.dataset.documentVisibleImageId || null;
 }, point);
 
-const setupTwoPhotos = async (
+const auditVisibleImageOwner = async (page: Page, imageId: string) =>
+  page.evaluate((requestedImageId) => {
+    const toRect = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-image-id]')
+    )
+      .filter((element) => element.dataset.imageId === requestedImageId)
+      .map((element) => {
+        const style = getComputedStyle(element);
+        const rect = toRect(element);
+        const frame = element.matches('[data-document-image-frame="true"]')
+          ? element
+          : element.querySelector<HTMLElement>('[data-document-image-frame="true"]');
+        const frameRect = toRect(frame);
+        return {
+          tagName: element.tagName,
+          className: element.className,
+          rect,
+          frameTagName: frame?.tagName || null,
+          frameClassName: frame?.className || null,
+          frameRect,
+          framePointerEvents: frame
+            ? getComputedStyle(frame).pointerEvents
+            : null,
+          display: style.display,
+          visibility: style.visibility,
+          pointerEvents: style.pointerEvents,
+          hitTargetId: element.dataset.documentVisibleImageId || null,
+          hitTarget: element.dataset.documentImageHitTarget || null,
+          closestTextBand: Boolean(
+            element.closest('[data-layout-role="explicit-text-column"]')
+          ),
+          closestStructuredLayout: Boolean(
+            element.closest('[data-document-span-layout]')
+          ),
+        };
+      });
+    const visibleCandidates = candidates.filter((candidate) => {
+      const rect = candidate.frameRect || candidate.rect;
+      return Boolean(
+        rect
+        && rect.width > 0
+        && rect.height > 0
+        && candidate.display !== 'none'
+        && candidate.visibility !== 'hidden'
+      );
+    });
+    const visibleOwner = visibleCandidates.find((candidate) => candidate.frameRect)
+      || visibleCandidates[0]
+      || null;
+    const visibleRect = visibleOwner?.frameRect || visibleOwner?.rect || null;
+    const center = visibleRect
+      ? {
+        x: visibleRect.left + visibleRect.width / 2,
+        y: visibleRect.top + visibleRect.height / 2,
+      }
+      : null;
+    const target = center ? document.elementFromPoint(center.x, center.y) : null;
+    const targetImage = target?.closest<HTMLElement>('[data-image-id]');
+    const targetHit = target?.closest<HTMLElement>(
+      '[data-document-image-hit-target="true"]'
+    );
+    return {
+      candidates,
+      visibleCandidates,
+      center,
+      elementFromPoint: target
+        ? {
+          tagName: target.tagName,
+          className: target.className,
+          pointerEvents: getComputedStyle(target).pointerEvents,
+        }
+        : null,
+      elementFromPointImageId: targetImage?.dataset.imageId || null,
+      elementFromPointHitTargetId:
+        targetHit?.dataset.documentVisibleImageId || null,
+      elementFromPointClosestTextBand: Boolean(
+        target?.closest('[data-layout-role="explicit-text-column"]')
+      ),
+    };
+  }, imageId);
+
+const readVisiblePhotoFrameIds = async (page: Page) => page.evaluate(() => (
+  Array.from(document.querySelectorAll<HTMLElement>(
+    '[data-document-span-layout] .document-image__frame'
+  ))
+    .filter((frame) => {
+      const rect = frame.getBoundingClientRect();
+      const style = getComputedStyle(frame);
+      return (
+        rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+      );
+    })
+    .map((frame) => frame.closest<HTMLElement>('[data-image-id]')?.dataset.imageId)
+    .filter((imageId): imageId is string => Boolean(imageId))
+));
+
+const setupAAsSpanAndAddDefaultB = async (
   page: Page,
   name: string,
-  positions: {
-    a: { xOffset: number; y: number; caption?: string; cropMode?: 'fit' | 'fill' };
-    b: { xOffset: number; y: number; caption?: string; cropMode?: 'fit' | 'fill' };
-  }
+  position: {
+    xOffset: number;
+    y: number;
+    width?: number;
+    caption?: string;
+    cropMode?: 'fit' | 'fill';
+  } = { xOffset: 32, y: 160, caption: 'Caption A' }
 ) => {
   await openDocumentWithFirstPhoto(page, name);
   const firstImageId = await page.locator('.document-image-node')
     .getAttribute('data-image-id');
   expect(firstImageId).not.toBeNull();
-  await configureSelectedSpan(page, positions.a);
+  await configureSelectedSpan(page, position);
 
   await addSecondPhoto(page);
   const secondImageId = await page.locator('.document-image-node')
     .nth(1)
     .getAttribute('data-image-id');
   expect(secondImageId).not.toBeNull();
-  await configureSelectedSpan(page, positions.b);
+  await expect(page.locator('.document-image-node').nth(1))
+    .toHaveAttribute('data-wrap', 'float-left');
   await expect(page.locator('[data-document-span-layout]'))
-    .toHaveAttribute('data-structured-image-count', '2');
+    .toHaveAttribute('data-structured-image-count', '1');
   return {
     firstImageId: firstImageId!,
     secondImageId: secondImageId!,
   };
 };
 
+const configureDefaultBAsSpan = async (
+  page: Page,
+  position: {
+    xOffset: number;
+    y: number;
+    width?: number;
+    caption?: string;
+    cropMode?: 'fit' | 'fill';
+  }
+) => {
+  await configureSelectedSpan(page, position);
+  await expect(page.locator('[data-document-span-layout]'))
+    .toHaveAttribute('data-structured-image-count', '2');
+};
+
 test.describe('secondary structured photo selection', () => {
   test.describe.configure({ timeout: 120_000 });
   test.use({ viewport: { width: 1920, height: 1080 } });
 
-  test('selects B, resizes and moves only B, and switches A/B through text mode', async ({ page }) => {
-    const { firstImageId, secondImageId } = await setupTwoPhotos(
+  test('selects a newly added default photo while another photo spans columns', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
       page,
-      'Secondary Photo Selection Transform Flow',
-      {
-        a: { xOffset: 32, y: 160, caption: 'Caption A' },
-        b: { xOffset: 300, y: 360 },
-      }
+      'Default Photo In Structured Mode'
     );
+    expect((await readVisiblePhotoFrameIds(page)).sort()).toEqual(
+      [firstImageId, secondImageId].sort()
+    );
+
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+
+    const ownerEvidence = await auditVisibleImageOwner(page, secondImageId);
+    console.log('default B owner after fix', JSON.stringify(ownerEvidence));
+    expect(ownerEvidence.visibleCandidates.length).toBeGreaterThan(0);
+    expect(ownerEvidence.center).not.toBeNull();
+    expect(ownerEvidence.elementFromPointImageId).toBe(secondImageId);
+    expect(ownerEvidence.elementFromPointHitTargetId).toBe(secondImageId);
+
+    const point = ownerEvidence.center!;
+    await page.mouse.click(point.x, point.y);
+    await assertSelected(page, secondImageId);
+    await expect(page.getByTestId('document-image-inspector'))
+      .toHaveAttribute('data-selected-image-id', secondImageId);
+    await expect(page.getByTestId('document-image-wrap')).toHaveValue('float-left');
+    await expect(page.getByTestId('document-image-crop-mode')).toHaveValue('fit');
+    await expect(page.getByTestId('document-image-caption')).toHaveValue('');
+
+    const beforeA = await readFrameGeometry(page, firstImageId);
+    const beforeB = await readFrameGeometry(page, secondImageId);
+    const defaultBResize = page.locator(
+      `[data-layout-role="flow-image-hit-target"][data-image-id="${secondImageId}"]`
+    ).getByRole('button', { name: 'Resize image' });
+    const resizeBox = await defaultBResize.boundingBox();
+    expect(resizeBox).not.toBeNull();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2,
+      resizeBox!.y + resizeBox!.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2 - 24,
+      resizeBox!.y + resizeBox!.height / 2
+    );
+    await page.mouse.up();
+    await expect.poll(async () => (await readFrameGeometry(page, secondImageId)).width)
+      .toBeLessThan(beforeB.width);
+    expect(await readFrameGeometry(page, firstImageId)).toEqual(beforeA);
+
+    const textBand = page.locator(
+      '[data-document-span-layout] [data-layout-role="explicit-text-column"]'
+    ).first();
+    const textBox = await textBand.boundingBox();
+    expect(textBox).not.toBeNull();
+    await page.mouse.click(textBox!.x + 5, textBox!.y + 5);
+    await expect(page.locator('[data-document-span-layout]'))
+      .toHaveAttribute('data-text-editing', 'true');
+    await page.keyboard.type('default B text-mode regression');
+    const textModeB = await auditVisibleImageOwner(page, secondImageId);
+    console.log('default B owner in text mode', JSON.stringify(textModeB));
+    expect(textModeB.center).not.toBeNull();
+    await page.mouse.click(textModeB.center!.x, textModeB.center!.y);
+    await assertSelected(page, secondImageId);
+  });
+
+  test('selects B, resizes and moves only B, and switches A/B through text mode', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
+      page,
+      'Secondary Photo Selection Transform Flow'
+    );
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+    await clickFrame(page, secondImageId);
+    await assertSelected(page, secondImageId);
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+    await clickFrame(page, secondImageId);
+    await assertSelected(page, secondImageId);
+    await configureDefaultBAsSpan(page, { xOffset: 300, y: 360 });
+    await assertSelected(page, secondImageId);
     const beforeA = await readFrameGeometry(page, firstImageId);
 
     await clickFrame(page, secondImageId);
@@ -258,15 +474,41 @@ test.describe('secondary structured photo selection', () => {
     await assertSelected(page, secondImageId);
   });
 
+  test('selects ordinary flow photos in float-left, float-right, and top-bottom modes', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
+      page,
+      'Secondary Photo Ordinary Flow Modes'
+    );
+    for (const mode of ['float-left', 'float-right', 'top-bottom'] as const) {
+      await clickFrame(page, secondImageId);
+      await assertSelected(page, secondImageId);
+      await page.getByTestId('document-image-wrap').selectOption(mode);
+      await expect(page.getByTestId('document-image-wrap')).toHaveValue(mode);
+      const evidence = await auditVisibleImageOwner(page, secondImageId);
+      expect(evidence.center).not.toBeNull();
+      expect(evidence.elementFromPointImageId).toBe(secondImageId);
+      expect(evidence.elementFromPointHitTargetId).toBe(secondImageId);
+      await page.mouse.click(evidence.center!.x, evidence.center!.y);
+      await assertSelected(page, secondImageId);
+      await clickFrame(page, firstImageId);
+      await assertSelected(page, firstImageId);
+      await clickFrame(page, secondImageId);
+      await assertSelected(page, secondImageId);
+    }
+  });
+
   test('uses the top visible frame for partial overlap and does not hit-test caption flow', async ({ page }) => {
-    const { firstImageId, secondImageId } = await setupTwoPhotos(
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
       page,
       'Secondary Photo Overlap Hit Testing',
-      {
-        a: { xOffset: 36, y: 150, caption: 'Caption A' },
-        b: { xOffset: 190, y: 220 },
-      }
+      { xOffset: 36, y: 150, caption: 'Caption A' }
     );
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+    await clickFrame(page, secondImageId);
+    await assertSelected(page, secondImageId);
+    await configureDefaultBAsSpan(page, { xOffset: 190, y: 220 });
+    await assertSelected(page, secondImageId);
     const a = await readFrameGeometry(page, firstImageId);
     const b = await readFrameGeometry(page, secondImageId);
     const overlap = {
@@ -297,15 +539,51 @@ test.describe('secondary structured photo selection', () => {
     await assertSelected(page, firstImageId);
   });
 
-  test('resolves B by ID after text insertion changes its document position', async ({ page }) => {
-    const { secondImageId } = await setupTwoPhotos(
+  test('resolves default B by ID after text insertion changes its document position', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
       page,
-      'Secondary Photo Stable Position Selection',
-      {
-        a: { xOffset: 32, y: 160 },
-        b: { xOffset: 300, y: 360 },
-      }
+      'Default Photo Stable Position Selection'
     );
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+    const flowTarget = page.locator(
+      `[data-layout-role="flow-image-hit-target"][data-image-id="${secondImageId}"]`
+    );
+    const originalPosition = Number(
+      await flowTarget.getAttribute('data-document-image-position')
+    );
+    expect(Number.isFinite(originalPosition)).toBe(true);
+
+    const textBand = page.locator(
+      '[data-document-span-layout] [data-layout-role="explicit-text-column"]'
+    ).first();
+    const textBox = await textBand.boundingBox();
+    expect(textBox).not.toBeNull();
+    await page.mouse.click(textBox!.x + 5, textBox!.y + 5);
+    await expect(page.locator('[data-document-span-layout]'))
+      .toHaveAttribute('data-text-editing', 'true');
+    await page.keyboard.type('Inserted text before default B. ');
+    await expect.poll(async () => Number(
+      await flowTarget.getAttribute('data-document-image-position')
+    )).not.toBe(originalPosition);
+
+    const evidence = await auditVisibleImageOwner(page, secondImageId);
+    expect(evidence.elementFromPointHitTargetId).toBe(secondImageId);
+    await page.mouse.click(evidence.center!.x, evidence.center!.y);
+    await assertSelected(page, secondImageId);
+  });
+
+  test('resolves B by ID after text insertion changes its document position', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
+      page,
+      'Secondary Photo Stable Position Selection'
+    );
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+    await clickFrame(page, secondImageId);
+    await assertSelected(page, secondImageId);
+    await configureDefaultBAsSpan(page, { xOffset: 300, y: 360 });
+    await assertSelected(page, secondImageId);
     const layout = page.locator('[data-document-span-layout]');
     const secondSlot = layout.locator(
       `[data-layout-role="occupied-columns"][data-image-id="${secondImageId}"]`
@@ -333,14 +611,12 @@ test.describe('secondary structured photo selection', () => {
 
   test('keeps B selectable after page switching and save/reopen', async ({ page }) => {
     const projectName = 'Secondary Photo Page Reopen Selection';
-    const { firstImageId, secondImageId } = await setupTwoPhotos(
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
       page,
-      projectName,
-      {
-        a: { xOffset: 32, y: 160 },
-        b: { xOffset: 300, y: 360 },
-      }
+      projectName
     );
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
     await clickFrame(page, secondImageId);
     await assertSelected(page, secondImageId);
 

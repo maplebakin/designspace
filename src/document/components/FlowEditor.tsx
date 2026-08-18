@@ -745,10 +745,7 @@ export const FlowEditor = ({
       },
       onFocus: ({ editor: focusedEditor }) => {
         const selectedImage = getSelectedDocumentImage(focusedEditor);
-        setEditingStructuredText(
-          !selectedImage
-          || selectedImage.attributes.wrap !== 'span-columns'
-        );
+        setEditingStructuredText(!selectedImage);
         callbacksRef.current.onFocusChange?.(true, focusedEditor);
       },
       onBlur: ({ editor: blurredEditor }) => {
@@ -761,13 +758,7 @@ export const FlowEditor = ({
         const selectedImage = getSelectedDocumentImage(updatedEditor);
         setEditingStructuredText(
           enteringStructuredTextRef.current
-          || (
-            updatedEditor.isFocused
-          && (
-            !selectedImage
-            || selectedImage.attributes.wrap !== 'span-columns'
-          )
-          )
+          || (updatedEditor.isFocused && !selectedImage)
         );
         callbacksRef.current.onSelectionChange?.(updatedEditor);
         callbacksRef.current.onImageSelectionChange?.(
@@ -1030,18 +1021,24 @@ export const FlowEditor = ({
           textEditing={editingStructuredText}
           viewScale={viewScale}
           minimumImageWidthPx={minImageWidthPx}
+          maximumFlowImageWidthPx={maxImageWidthPx}
           typographyStyle={typographyStyle}
           dropCap={normalizedDropCap}
           language={language}
           imageGroups={imageGroups}
           selectedImageIds={selectedStructuredImageIds}
-          onSelectImage={(_position, imageId, additive) => {
+          onSelectImage={(
+            _position,
+            imageId,
+            additive,
+            nodeType = 'documentFlowImage'
+          ) => {
             enteringStructuredTextRef.current = false;
             setEditingStructuredText(false);
             const clickedPosition = findDocumentImagePositionById(
               editor,
               imageId,
-              'documentFlowImage'
+              nodeType
             );
             if (clickedPosition === null) return;
             const requestedPrimaryId =
@@ -1057,7 +1054,7 @@ export const FlowEditor = ({
               || selectDocumentImageById(
                 editor,
                 primaryId,
-                'documentFlowImage'
+                nodeType
               ) === null
             ) return;
             editor.commands.focus(undefined, { scrollIntoView: false });

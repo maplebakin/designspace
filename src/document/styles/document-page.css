@@ -1450,7 +1450,7 @@
 }
 
 .document-flow-editor__content--structured-text-editing
-  .document-image-node[data-wrap="span-columns"] {
+  .document-image-node {
   display: none;
 }
 
@@ -1591,6 +1591,31 @@
 
 .document-span-layout__image-content .document-image__frame,
 .document-span-layout__image-content .document-image__caption {
+  pointer-events: auto;
+}
+
+/* Ordinary flow/inline photos stay in the text-band visual layout, but their
+   frame is inert. The explicit React hit target is the sole image-selection
+   owner while structured composition is active; captions remain text-band
+   interaction surfaces. */
+.document-span-layout__text-column
+  [data-document-structured-flow-image="true"]
+  .document-image__frame,
+.document-span-layout__text-column
+  [data-document-structured-flow-image="true"]
+  .document-image__frame * {
+  pointer-events: none;
+}
+
+.document-span-layout__flow-image-hit-target {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__flow-image-hit-target {
   pointer-events: auto;
 }
 

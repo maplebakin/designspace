@@ -288,6 +288,37 @@ describe('document export', () => {
       .toThrow(/root is marked as excluded/i);
   });
 
+  it('removes ordinary-flow image hit targets while retaining the visible photo', () => {
+    const source = document.createElement('article');
+    source.innerHTML = `
+      <div data-document-span-layout="true">
+        <div
+          data-layout-role="flow-image-hit-target"
+          data-document-visible-image-id="flow-b"
+          data-document-image-hit-target="true"
+          data-document-editor-only="true"
+          data-document-export-exclude="true"
+        >
+          <div data-document-image-frame-chrome="true"></div>
+        </div>
+        <figure data-document-image="true" data-image-id="flow-b">
+          <div class="document-image__frame">
+            <img src="data:image/png;base64,photo" alt="Flow B">
+          </div>
+        </figure>
+      </div>
+    `;
+
+    const clone = createCleanDocumentClone(source, {
+      copyComputedStyles: false,
+    });
+
+    expect(clone.querySelector('[data-layout-role="flow-image-hit-target"]'))
+      .toBeNull();
+    expect(clone.querySelector('[data-image-id="flow-b"] img'))
+      .not.toBeNull();
+  });
+
   it('waits for fonts and retained images but ignores an excluded scan reference', async () => {
     const source = document.createElement('div');
     source.innerHTML = `

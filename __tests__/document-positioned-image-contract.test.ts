@@ -93,6 +93,38 @@ const positionedImage = ({
   },
 });
 
+const ordinaryFlowImage = (id: string, wrap = 'float-left'): JSONContent => ({
+  type: 'documentFlowImage',
+  attrs: {
+    id,
+    assetId: `asset-${id}`,
+    altText: `${id} photograph`,
+    widthPx: 180,
+    heightPx: 120,
+    naturalWidth: 900,
+    naturalHeight: 600,
+    wrap,
+    spanCount: 1,
+    spanStartColumn: 1,
+    verticalAnchor: 'flow',
+    yPx: 0,
+    horizontalPlacement: 'left',
+    xOffsetPx: 0,
+    caption: '',
+    captionAlignment: 'inherit',
+    captionItalic: 'inherit',
+    captionSpacingPx: 'inherit',
+    cropMode: 'fit',
+    cropFocalX: 0.5,
+    cropFocalY: 0.5,
+  },
+});
+
+const ordinaryInlineImage = (id: string): JSONContent => ({
+  ...ordinaryFlowImage(id, 'inline'),
+  type: 'documentInlineImage',
+});
+
 const multiImageContent = ({
   firstY = 90,
   secondY = 360,
@@ -277,6 +309,81 @@ describe('positioned document image contract', () => {
       image.imageId
     );
     expect(frame?.getAttribute('data-document-image-hit-target')).toBe('true');
+  });
+
+  it('retains ordinary flow photos as explicit structured interaction records', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Text before the mixed images.'),
+        positionedImage({
+          id: 'mixed-span-a',
+          spanStartColumn: 1,
+          xOffsetPx: 20,
+          yPx: 100,
+          caption: '',
+        }),
+        ordinaryFlowImage('mixed-flow-b'),
+        {
+          type: 'paragraph',
+          attrs: { documentStyleId: 'body' },
+          content: [
+            { type: 'text', text: 'Inline before ' },
+            ordinaryInlineImage('mixed-inline-c'),
+            { type: 'text', text: ' inline after.' },
+          ],
+        },
+        textParagraph('Text after the mixed images.'),
+      ],
+    };
+    const { container, editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640
+    );
+
+    expect(model).not.toBeNull();
+    expect(model!.images.map((image) => image.imageId)).toEqual([
+      'mixed-span-a',
+    ]);
+    expect(model!.flowImages).toMatchObject([{
+      imageId: 'mixed-flow-b',
+      nodeType: 'documentFlowImage',
+      attributes: { wrap: 'float-left' },
+    }, {
+      imageId: 'mixed-inline-c',
+      nodeType: 'documentInlineImage',
+      attributes: { wrap: 'inline' },
+    }]);
+    expect(model!.flowImages).toHaveLength(2);
+    const bandHtml = model!.textBands.map((band) => band.html).join('');
+    expect(bandHtml).toContain('data-document-structured-flow-image="true"');
+    expect(bandHtml).toContain('data-image-id="mixed-flow-b"');
+
+    const bandImage = container.querySelector<HTMLElement>(
+      '[data-document-structured-flow-image="true"][data-image-id="mixed-flow-b"]'
+    );
+    expect(bandImage).not.toBeNull();
+    expect(bandHtml).toContain('data-image-id="mixed-inline-c"');
+    expect(selectDocumentImageById(
+      editor,
+      'mixed-flow-b',
+      'documentFlowImage'
+    )).not.toBeNull();
+    expect((editor.state.selection as NodeSelection).node.attrs.id).toBe(
+      'mixed-flow-b'
+    );
+    expect(selectDocumentImageById(
+      editor,
+      'mixed-inline-c',
+      'documentInlineImage'
+    )).not.toBeNull();
+    expect((editor.state.selection as NodeSelection).node.attrs.id).toBe(
+      'mixed-inline-c'
+    );
   });
 
   it('selects a visible image by ID after its cached visual position is stale', async () => {

@@ -1,4 +1,5 @@
 import {
+  useLayoutEffect,
   useEffect,
   useMemo,
   useRef,
@@ -15,10 +16,12 @@ import {
 } from '@tiptap/pm/state';
 import type {
   DocumentImageAttributes,
+  DocumentImageNodeName,
 } from '../extensions/DocumentImageExtension';
 import {
   calculateDocumentImageHeight,
   calculateDocumentImageFrameHeight,
+  calculateDocumentImageResizeWidth,
   calculateDocumentImageXOffset,
   clampDocumentImageXOffset,
   clampDocumentImageWidth,
@@ -117,6 +120,19 @@ export type StructuredImageLayout = {
   groupId?: string;
 };
 
+/**
+ * A persistent image that remains in ordinary flow/inline content while the
+ * structured compositor is active because another image spans columns. The
+ * image itself stays in its semantic text-band position; this record owns the
+ * explicit editor hit target that is projected over its measured frame.
+ */
+export type StructuredFlowImageLayout = {
+  imageId: string;
+  imagePosition: number;
+  nodeType: DocumentImageNodeName;
+  attributes: DocumentImageAttributes;
+};
+
 export type StructuredImageFrameGeometry = Readonly<{
   leftPx: number;
   topPx: number;
@@ -182,6 +198,7 @@ export type StructuredTextBand = {
 
 export type MultiDocumentSpanLayoutModel = {
   images: StructuredImageLayout[];
+  flowImages: StructuredFlowImageLayout[];
   imageGroups: StructuredImageGroupLayout[];
   exclusions: DocumentImageRectangle[];
   collisionRectangles: DocumentImageRectangle[];
@@ -342,6 +359,31 @@ export const markFirstEligibleDocumentDropCapParagraph = (
 
 const serializeElements = (elements: Element[]) =>
   elements.map((element) => element.outerHTML).join('');
+
+const markStructuredFlowImageElements = (
+  elements: Element[],
+  flowImageIds: ReadonlySet<string>
+) => {
+  elements.forEach((element) => {
+    const candidates = [
+      ...(element.matches('[data-image-id]') ? [element] : []),
+      ...Array.from(element.querySelectorAll('[data-image-id]')),
+    ];
+    candidates.forEach((candidate) => {
+      const imageId = candidate.getAttribute('data-image-id');
+      if (
+        imageId
+        && flowImageIds.has(imageId)
+        && candidate.getAttribute('data-wrap') !== 'span-columns'
+      ) {
+        candidate.setAttribute(
+          'data-document-structured-flow-image',
+          'true'
+        );
+      }
+    });
+  });
+};
 
 const DOCUMENT_TEXT_FROM_ATTRIBUTE = 'data-document-from';
 const DOCUMENT_TEXT_TO_ATTRIBUTE = 'data-document-to';
@@ -1047,6 +1089,7 @@ export const buildMultiDocumentSpanLayoutModel = (
     position: number;
     attributes: DocumentImageAttributes;
   }> = [];
+  const flowImages: StructuredFlowImageLayout[] = [];
   editor.state.doc.descendants((node, position) => {
     if (
       node.type.name === 'documentFlowImage'
@@ -1058,6 +1101,20 @@ export const buildMultiDocumentSpanLayoutModel = (
       });
       positionedNodes.push({ position, attributes: normalized });
       return false;
+    }
+    if (
+      node.type.name === 'documentFlowImage'
+      || node.type.name === 'documentInlineImage'
+    ) {
+      flowImages.push({
+        imageId: String(node.attrs.id || ''),
+        imagePosition: position,
+        nodeType: node.type.name as DocumentImageNodeName,
+        attributes: normalizeDocumentImageAttributes(
+          node.attrs as Partial<DocumentImageAttributes>,
+          node.type.name === 'documentInlineImage' ? 'inline' : 'float-left'
+        ),
+      });
     }
     return true;
   });
@@ -1078,6 +1135,10 @@ export const buildMultiDocumentSpanLayoutModel = (
     element.getAttribute('data-wrap') === 'span-columns'
     && structuredIds.has(element.getAttribute('data-image-id') || '')
   ));
+  markStructuredFlowImageElements(
+    textElements,
+    new Set(flowImages.map((image) => image.imageId))
+  );
   const dropCap = normalizeDocumentDropCap(
     typographyOptions.dropCap ?? false
   );
@@ -1686,6 +1747,7 @@ export const buildMultiDocumentSpanLayoutModel = (
       : 0;
     return {
       images,
+      flowImages,
       imageGroups: structuredGroups,
       exclusions,
       collisionRectangles,
@@ -1716,6 +1778,7 @@ type StructuredDocumentSpanLayoutProps = {
   textEditing: boolean;
   viewScale: number;
   minimumImageWidthPx: number;
+  maximumFlowImageWidthPx: number;
   typographyStyle?: CSSProperties;
   dropCap?: DocumentDropCapSettings | boolean;
   language?: string;
@@ -1724,7 +1787,8 @@ type StructuredDocumentSpanLayoutProps = {
   onSelectImage: (
     position: number,
     imageId: string,
-    additive: boolean
+    additive: boolean,
+    nodeType?: DocumentImageNodeName
   ) => void;
   onCommitImagePosition: (
     position: number,
@@ -2064,6 +2128,7 @@ export const StructuredDocumentSpanLayout = ({
   textEditing,
   viewScale,
   minimumImageWidthPx,
+  maximumFlowImageWidthPx,
   typographyStyle,
   dropCap = false,
   language,
@@ -2078,6 +2143,12 @@ export const StructuredDocumentSpanLayout = ({
     Record<string, Partial<DocumentImageAttributes>>
   >({});
   const [snapGuides, setSnapGuides] = useState<readonly DocumentSnapGuide[]>([]);
+  const [flowImageFrames, setFlowImageFrames] = useState<
+    Record<string, StructuredImageFrameGeometry>
+  >({});
+  const [flowImageResizePreview, setFlowImageResizePreview] = useState<
+    Record<string, StructuredImageFrameGeometry>
+  >({});
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const pointerSelectedImageIdRef = useRef<string | null>(null);
   const model = useMemo(
@@ -2109,6 +2180,63 @@ export const StructuredDocumentSpanLayout = ({
       language,
     ]
   );
+
+  useLayoutEffect(() => {
+    const root = layoutRef.current;
+    if (!root || !model) {
+      setFlowImageFrames({});
+      return undefined;
+    }
+
+    const measureFlowImages = () => {
+      const rootRect = root.getBoundingClientRect();
+      const scaleX = rootRect.width / Math.max(1, root.offsetWidth);
+      const scaleY = rootRect.height / Math.max(1, root.offsetHeight);
+      const next: Record<string, StructuredImageFrameGeometry> = {};
+      model.flowImages.forEach((image) => {
+        const candidates = Array.from(
+          root.querySelectorAll<HTMLElement>(
+            '[data-document-structured-flow-image="true"]'
+          )
+        ).filter((candidate) => (
+          candidate.dataset.imageId === image.imageId
+        ));
+        const frame = candidates
+          .map((candidate) => (
+            candidate.matches('.document-image__frame')
+              ? candidate
+              : candidate.querySelector<HTMLElement>('.document-image__frame')
+          ))
+          .find((candidate) => {
+            if (!candidate) return false;
+            const rect = candidate.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+        if (!frame) return;
+        const rect = frame.getBoundingClientRect();
+        next[image.imageId] = {
+          leftPx: (rect.left - rootRect.left) / Math.max(0.05, scaleX),
+          topPx: (rect.top - rootRect.top) / Math.max(0.05, scaleY),
+          widthPx: rect.width / Math.max(0.05, scaleX),
+          heightPx: rect.height / Math.max(0.05, scaleY),
+        };
+      });
+      setFlowImageFrames((current) => (
+        JSON.stringify(current) === JSON.stringify(next) ? current : next
+      ));
+    };
+
+    measureFlowImages();
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(measureFlowImages)
+      : null;
+    resizeObserver?.observe(root);
+    root.addEventListener('load', measureFlowImages, true);
+    return () => {
+      resizeObserver?.disconnect();
+      root.removeEventListener('load', measureFlowImages, true);
+    };
+  }, [model]);
   const dragRef = useRef<{
     pointerId: number;
     imageId: string;
@@ -2159,6 +2287,23 @@ export const StructuredDocumentSpanLayout = ({
     heightPx: number;
     xOffsetPx: number;
   } | null>(null);
+  const flowResizeRef = useRef<{
+    pointerId: number;
+    imageId: string;
+    position: number;
+    startClientX: number;
+    startWidth: number;
+    minimumWidth: number;
+    maximumWidth: number;
+    aspectRatio: number;
+    attributes: DocumentImageAttributes;
+    startFrame: StructuredImageFrameGeometry;
+    captureElement: HTMLButtonElement;
+    moved: boolean;
+  } | null>(null);
+  const flowResizePreviewRef = useRef<StructuredImageFrameGeometry | null>(
+    null
+  );
   const textSelectionDragRef = useRef<{
     pointerId: number;
     anchorPosition: number;
@@ -2176,14 +2321,19 @@ export const StructuredDocumentSpanLayout = ({
     pointerId: number,
     cancelled: boolean
   ) => void>(() => undefined);
+  const finishFlowResizeRef = useRef<(
+    pointerId: number,
+    cancelled: boolean
+  ) => void>(() => undefined);
   const finishDragRef = useRef<(
     pointerId: number,
     cancelled: boolean
   ) => void>(() => undefined);
 
   useEffect(() => {
-    if (dragRef.current || resizeRef.current) return;
+    if (dragRef.current || resizeRef.current || flowResizeRef.current) return;
     setPreviewOverrides({});
+    setFlowImageResizePreview({});
   }, [revision]);
 
   useEffect(() => () => {
@@ -2199,11 +2349,13 @@ export const StructuredDocumentSpanLayout = ({
     const handlePointerUp = (event: globalThis.PointerEvent) => {
       finishDragRef.current(event.pointerId, false);
       finishResizeRef.current(event.pointerId, false);
+      finishFlowResizeRef.current(event.pointerId, false);
       finishTextSelectionRef.current(event.pointerId);
     };
     const handlePointerCancel = (event: globalThis.PointerEvent) => {
       finishDragRef.current(event.pointerId, true);
       finishResizeRef.current(event.pointerId, true);
+      finishFlowResizeRef.current(event.pointerId, true);
       finishTextSelectionRef.current(event.pointerId);
     };
     const handleMouseUp = () => {
@@ -2211,6 +2363,8 @@ export const StructuredDocumentSpanLayout = ({
       if (drag) finishDragRef.current(drag.pointerId, false);
       const resize = resizeRef.current;
       if (resize) finishResizeRef.current(resize.pointerId, false);
+      const flowResize = flowResizeRef.current;
+      if (flowResize) finishFlowResizeRef.current(flowResize.pointerId, false);
       const textSelection = textSelectionDragRef.current;
       if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
     };
@@ -2219,6 +2373,8 @@ export const StructuredDocumentSpanLayout = ({
       if (drag) finishDragRef.current(drag.pointerId, true);
       const resize = resizeRef.current;
       if (resize) finishResizeRef.current(resize.pointerId, true);
+      const flowResize = flowResizeRef.current;
+      if (flowResize) finishFlowResizeRef.current(flowResize.pointerId, true);
       const textSelection = textSelectionDragRef.current;
       if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
     };
@@ -2237,10 +2393,16 @@ export const StructuredDocumentSpanLayout = ({
   if (!model) return null;
 
   const selectedImageId = editor.state.selection instanceof NodeSelection
-    && editor.state.selection.node.type.name === 'documentFlowImage'
+    && (
+      editor.state.selection.node.type.name === 'documentFlowImage'
+      || editor.state.selection.node.type.name === 'documentInlineImage'
+    )
     ? String(editor.state.selection.node.attrs.id || '')
     : null;
   const selectedImage = model.images.find(
+    (image) => image.imageId === selectedImageId
+  );
+  const selectedFlowImage = model.flowImages.find(
     (image) => image.imageId === selectedImageId
   );
   const normalizedDropCap = normalizeDocumentDropCap(dropCap);
@@ -2656,6 +2818,130 @@ export const StructuredDocumentSpanLayout = ({
     event.stopPropagation();
   };
 
+  const handleFlowResizePointerDown = (
+    event: PointerEvent<HTMLButtonElement>,
+    image: StructuredFlowImageLayout
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (dragRef.current || resizeRef.current || flowResizeRef.current) return;
+    onSelectImage(image.imagePosition, image.imageId, false, image.nodeType);
+    const minimumWidth = Math.max(32, minimumImageWidthPx);
+    const maximumWidth = Math.max(
+      minimumWidth,
+      maximumFlowImageWidthPx
+    );
+    const startWidth = image.attributes.widthPx;
+    const startFrame = flowImageFrames[image.imageId] || {
+      leftPx: 0,
+      topPx: 0,
+      widthPx: startWidth,
+      heightPx: calculateDocumentImageFrameHeight(
+        image.attributes,
+        startWidth
+      ),
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    flowResizeRef.current = {
+      pointerId: event.pointerId,
+      imageId: image.imageId,
+      position: image.imagePosition,
+      startClientX: event.clientX,
+      startWidth,
+      minimumWidth,
+      maximumWidth,
+      aspectRatio: getDocumentImageAspectRatio(image.attributes),
+      attributes: image.attributes,
+      startFrame,
+      captureElement: event.currentTarget,
+      moved: false,
+    };
+    flowResizePreviewRef.current = {
+      ...startFrame,
+      widthPx: startFrame.widthPx,
+      heightPx: startFrame.heightPx,
+    };
+    setFlowImageResizePreview({
+      [image.imageId]: flowResizePreviewRef.current,
+    });
+  };
+
+  const handleFlowResizePointerMove = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    const resize = flowResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const widthPx = calculateDocumentImageResizeWidth({
+      startWidthPx: resize.startWidth,
+      pointerDeltaX: event.clientX - resize.startClientX,
+      viewScale,
+      minimumWidthPx: resize.minimumWidth,
+      maximumWidthPx: resize.maximumWidth,
+    });
+    const heightPx = resize.attributes.cropMode === 'fill'
+      ? resize.attributes.heightPx
+      : calculateDocumentImageHeight(widthPx, resize.aspectRatio);
+    resize.moved = resize.moved
+      || Math.abs(widthPx - resize.startWidth) > 0.5;
+    const frame = resize.startFrame;
+    const startFrameWidth = Math.max(1, resize.startWidth);
+    const startFrameHeight = Math.max(
+      1,
+      calculateDocumentImageFrameHeight(
+        resize.attributes,
+        resize.startWidth
+      )
+    );
+    const preview = {
+      leftPx: frame.leftPx,
+      topPx: frame.topPx,
+      widthPx: frame.widthPx * widthPx / startFrameWidth,
+      heightPx: frame.heightPx * heightPx / startFrameHeight,
+    };
+    flowResizePreviewRef.current = preview;
+    setFlowImageResizePreview({ [resize.imageId]: preview });
+  };
+
+  const finishFlowResize = (pointerId: number, cancelled: boolean) => {
+    const resize = flowResizeRef.current;
+    if (!resize || resize.pointerId !== pointerId) return;
+    if (resize.captureElement.hasPointerCapture?.(pointerId)) {
+      resize.captureElement.releasePointerCapture?.(pointerId);
+    }
+    const preview = flowResizePreviewRef.current;
+    flowResizeRef.current = null;
+    flowResizePreviewRef.current = null;
+    setFlowImageResizePreview({});
+    if (!cancelled && resize.moved && preview) {
+      onCommitImageSize(
+        resize.position,
+        resize.imageId,
+        preview.widthPx,
+        preview.heightPx,
+        resize.attributes.xOffsetPx
+      );
+    }
+  };
+  finishFlowResizeRef.current = finishFlowResize;
+
+  const handleFlowResizePointerUp = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishFlowResize(event.pointerId, false);
+  };
+
+  const handleFlowResizePointerCancel = (
+    event: PointerEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishFlowResize(event.pointerId, true);
+  };
+
   const handleImagePointerMove = (
     event: PointerEvent<HTMLDivElement>
   ) => {
@@ -2830,6 +3116,42 @@ export const StructuredDocumentSpanLayout = ({
     }
   };
 
+  const handleFlowImagePointerDown = (
+    event: PointerEvent<HTMLDivElement>,
+    image: StructuredFlowImageLayout
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    pointerSelectedImageIdRef.current = image.imageId;
+    onSelectImage(
+      image.imagePosition,
+      image.imageId,
+      event.shiftKey || event.metaKey || event.ctrlKey,
+      image.nodeType
+    );
+  };
+
+  const handleFlowImageClick = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const imageId = event.currentTarget.dataset.imageId || '';
+    if (pointerSelectedImageIdRef.current === imageId) {
+      pointerSelectedImageIdRef.current = null;
+      return;
+    }
+    const image = model.flowImages.find(
+      (candidate) => candidate.imageId === imageId
+    );
+    if (image) {
+      onSelectImage(
+        image.imagePosition,
+        image.imageId,
+        event.shiftKey || event.metaKey || event.ctrlKey,
+        image.nodeType
+      );
+    }
+  };
+
   const representativeImage = selectedImage || model.images[0];
 
   return (
@@ -2847,6 +3169,8 @@ export const StructuredDocumentSpanLayout = ({
       data-span-start-column={representativeImage?.attributes.spanStartColumn}
       data-span-image-id={representativeImage?.imageId}
       data-structured-image-count={model.images.length}
+      data-structured-flow-image-count={model.flowImages.length}
+      data-interactive-image-count={model.images.length + model.flowImages.length}
       data-image-group-count={model.imageGroups.length}
       data-document-selection-from={editor.state.selection.from}
       data-document-selection-to={editor.state.selection.to}
@@ -2888,7 +3212,7 @@ export const StructuredDocumentSpanLayout = ({
       data-image-x-offset-px={representativeImage?.renderedXOffsetPx}
       data-image-y-max-px={representativeImage?.maximumImageYPx}
       data-vertical-anchor={representativeImage?.attributes.verticalAnchor}
-      data-image-selected={selectedImage ? 'true' : 'false'}
+      data-image-selected={selectedImage || selectedFlowImage ? 'true' : 'false'}
       data-image-resizing={resizeRef.current ? 'true' : 'false'}
       data-text-editing={textEditing ? 'true' : 'false'}
       data-hidden-for-editing="false"
@@ -3049,6 +3373,74 @@ export const StructuredDocumentSpanLayout = ({
                   onPointerMove={handleResizePointerMove}
                   onPointerUp={handleResizePointerUp}
                   onPointerCancel={handleResizePointerCancel}
+                  onClick={handleResizeClick}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {model.flowImages.map((image) => {
+        const frame = flowImageFrames[image.imageId];
+        if (!frame) return null;
+        const framePreview = flowImageResizePreview[image.imageId] || frame;
+        const imagePrimary = selectedImageId === image.imageId;
+        const imageSelected = selectedImageIds.length > 0
+          ? selectedImageIds.includes(image.imageId)
+          : imagePrimary;
+        return (
+          <div
+            key={`flow-hit-${image.imageId}`}
+            className="document-span-layout__flow-image-hit-target"
+            data-layout-role="flow-image-hit-target"
+            data-image-id={image.imageId}
+            data-document-visible-image-id={image.imageId}
+            data-document-image-hit-target="true"
+            data-document-editor-only="true"
+            data-document-export-exclude="true"
+            data-document-image-position={image.imagePosition}
+            data-document-image-node-type={image.nodeType}
+            data-image-selected={imageSelected ? 'true' : 'false'}
+            style={{
+              left: `${framePreview.leftPx}px`,
+              top: `${framePreview.topPx}px`,
+              width: `${framePreview.widthPx}px`,
+              height: `${framePreview.heightPx}px`,
+              zIndex: 1,
+            }}
+            onPointerDown={(event) => handleFlowImagePointerDown(event, image)}
+            onClick={handleFlowImageClick}
+          >
+            <div
+              className={`document-span-layout__image-transform-chrome ${
+                imageSelected
+                  ? 'document-span-layout__image-transform-chrome--selected'
+                  : ''
+              }`}
+              data-document-editor-only="true"
+              data-document-export-exclude="true"
+              data-document-image-frame-chrome="true"
+              style={{
+                width: `${framePreview.widthPx}px`,
+                height: `${framePreview.heightPx}px`,
+              }}
+            >
+              {imagePrimary && image.nodeType === 'documentFlowImage' && (
+                <button
+                  type="button"
+                  className="document-image__resize-handle"
+                  aria-label="Resize image"
+                  data-document-editor-only="true"
+                  data-document-export-exclude="true"
+                  style={{
+                    width: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                    height: `${18 / Math.min(1, Math.max(0.05, viewScale))}px`,
+                  }}
+                  onPointerDown={(event) =>
+                    handleFlowResizePointerDown(event, image)}
+                  onPointerMove={handleFlowResizePointerMove}
+                  onPointerUp={handleFlowResizePointerUp}
+                  onPointerCancel={handleFlowResizePointerCancel}
                   onClick={handleResizeClick}
                 />
               )}
