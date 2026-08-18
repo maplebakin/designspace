@@ -1055,8 +1055,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         offsetXPx: 0,
         offsetYPx: 0,
         visible: true,
-          locked: true,
-        });
+        locked: false,
+      });
       const referencePageId = page?.id || getActiveDocumentPageId();
       if (referencePageId) {
         notifyCommittedDocumentReference(
@@ -2540,16 +2540,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, []);
 
   const handleReferenceAdjustModeChange = useCallback((enabled: boolean) => {
+    if (enabled && page?.reference?.locked) {
+      setToastMessage('Unlock the reference before adjusting it.');
+      return;
+    }
     if (enabled) {
-      if (page?.reference?.locked) {
-        setReference({ ...page.reference, locked: false });
-        const committedReference = useDocumentStore.getState().project?.pages.find(
-          (candidate) => candidate.id === page.id
-        )?.reference;
-        if (committedReference?.locked === false) {
-          notifyCommittedDocumentReference(onCommittedMutation, page.id);
-        }
-      }
       setSelectedFlowImage(null);
       setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
@@ -2557,12 +2552,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
     setReferenceAdjustMode(enabled);
   }, [
+    page?.reference?.locked,
     setReferenceAdjustMode,
-    page,
-    setReference,
     setSelectedFlowImageId,
     setSelectedOverlayId,
-    onCommittedMutation,
+    setToastMessage,
   ]);
 
   const pageWidthIn = page?.size.widthIn || 8.5;

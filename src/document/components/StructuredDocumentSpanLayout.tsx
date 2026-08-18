@@ -140,6 +140,8 @@ export type StructuredImageFrameGeometry = Readonly<{
   heightPx: number;
 }>;
 
+const STRUCTURED_IMAGE_DRAG_THRESHOLD_PX = 6;
+
 /**
  * The transformable photo frame excludes caption flow. The structured layout
  * model is the canonical page-space source for both the rendered frame and
@@ -2254,6 +2256,8 @@ export const StructuredDocumentSpanLayout = ({
     captureElement: HTMLElement;
     originalXOffsetPx: number;
     originalYPx: number;
+    pinOnDrag: boolean;
+    dragStarted: boolean;
     latestPreviewPosition: {
       xOffsetPx: number;
       yPx: number;
@@ -2585,7 +2589,6 @@ export const StructuredDocumentSpanLayout = ({
       image.imageId,
       event.shiftKey || event.metaKey || event.ctrlKey
     );
-    if (image.attributes.verticalAnchor !== 'page-position') return;
     const group = image.groupId
       ? model.imageGroups.find(
           (candidate) => candidate.groupId === image.groupId
@@ -2597,13 +2600,22 @@ export const StructuredDocumentSpanLayout = ({
         )
       : image;
     if (!anchorImage) return;
+    const frameRectangle = {
+      imageId: image.imageId,
+      leftPx: image.imageLeftPx,
+      topPx: image.imageTopPx,
+      widthPx: image.renderedImageWidthPx,
+      heightPx: image.renderedImageHeightPx,
+    };
+    const startRectangle = group?.bounds
+      || (image.attributes.verticalAnchor === 'page-position'
+        ? model.collisionRectangles.find(
+            (rectangle) => rectangle.imageId === image.imageId
+          ) || frameRectangle
+        : frameRectangle);
+    if (!startRectangle) return;
     const captureElement = layoutRef.current || event.currentTarget;
     captureElement.setPointerCapture?.(event.pointerId);
-    const startRectangle = group?.bounds
-      ?? model.collisionRectangles.find(
-        (rectangle) => rectangle.imageId === image.imageId
-      );
-    if (!startRectangle) return;
     const movingUnitId = group?.groupId ?? image.imageId;
     dragRef.current = {
       pointerId: event.pointerId,
@@ -2630,6 +2642,8 @@ export const StructuredDocumentSpanLayout = ({
       captureElement,
       originalXOffsetPx: anchorImage.attributes.xOffsetPx,
       originalYPx: startRectangle.topPx,
+      pinOnDrag: anchorImage.attributes.verticalAnchor !== 'page-position',
+      dragStarted: false,
       latestPreviewPosition: {
         xOffsetPx: anchorImage.attributes.xOffsetPx,
         yPx: startRectangle.topPx,
@@ -2947,6 +2961,14 @@ export const StructuredDocumentSpanLayout = ({
   ) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    const viewportDistance = Math.hypot(
+      event.clientX - drag.startClientX,
+      event.clientY - drag.startClientY
+    );
+    if (!drag.dragStarted && viewportDistance < STRUCTURED_IMAGE_DRAG_THRESHOLD_PX) {
+      return;
+    }
+    drag.dragStarted = true;
     event.preventDefault();
     event.stopPropagation();
     const pointerDelta = viewportDeltaToLayoutDelta(
@@ -3017,6 +3039,7 @@ export const StructuredDocumentSpanLayout = ({
       yPx: nextMovement.rectangle.topPx,
     };
     schedulePreview(drag.imageId, {
+      ...(drag.pinOnDrag ? { verticalAnchor: 'page-position' } : {}),
       horizontalPlacement: 'custom',
       xOffsetPx,
       yPx: nextMovement.rectangle.topPx,
@@ -3033,7 +3056,7 @@ export const StructuredDocumentSpanLayout = ({
       ?? drag.latestPreviewPosition;
     dragRef.current = null;
     previewPositionRef.current = null;
-    if (cancelled || !drag.moved) {
+    if (cancelled || !drag.dragStarted || !drag.moved) {
       clearPreview(drag.imageId);
       setSnapGuides([]);
       return;
@@ -3324,14 +3347,17 @@ export const StructuredDocumentSpanLayout = ({
             data-image-selected={imageSelected ? 'true' : 'false'}
             data-horizontal-placement={image.attributes.horizontalPlacement}
             data-vertical-anchor={image.attributes.verticalAnchor}
+            data-image-dragging={
+              dragRef.current?.imageId === image.imageId
+              && dragRef.current.dragStarted
+                ? 'true'
+                : 'false'
+            }
             style={{
               left: `${image.imageLeftPx}px`,
               top: `${image.imageTopPx}px`,
               width: `${image.renderedImageWidthPx}px`,
-              touchAction:
-                image.attributes.verticalAnchor === 'page-position'
-                  ? 'none'
-                  : undefined,
+              touchAction: 'none',
             }}
             onPointerDown={(event) => handleImagePointerDown(event, image)}
             onPointerMove={handleImagePointerMove}

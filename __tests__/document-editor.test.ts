@@ -607,7 +607,7 @@ describe('live document editor UI', () => {
     expect(exportRoot.getAttribute('data-paper-color')).toBe(
       DEFAULT_DOCUMENT_PAPER_COLOR
     );
-    expect(exportRoot.style.backgroundColor).toBe('rgb(250, 248, 245)');
+    expect(exportRoot.style.backgroundColor).toBe('transparent');
 
     fireEvent.pointerDown(paperInput);
     fireEvent.input(paperInput, {
@@ -626,7 +626,7 @@ describe('live document editor UI', () => {
     });
     expect(pageSheet.style.backgroundColor).toBe('rgb(231, 220, 200)');
     expect(exportRoot.getAttribute('data-paper-color')).toBe('#E7DCC8');
-    expect(exportRoot.style.backgroundColor).toBe('rgb(231, 220, 200)');
+    expect(exportRoot.style.backgroundColor).toBe('transparent');
 
     fireEvent.click(screen.getByText('Export', { exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'PNG', exact: true }));
@@ -1422,6 +1422,9 @@ describe('live document editor UI', () => {
     expect(within(contextToolbar).queryByLabelText('Bold')).toBeNull();
     expect(within(contextToolbar).queryByTestId('document-font-size')).toBeNull();
 
+    fireEvent.click(screen.getByTestId('document-reference-lock'));
+    expect(useDocumentStore.getState().project?.pages[0].reference?.locked)
+      .toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Adjust reference' }));
     expect(contextToolbar.getAttribute('data-context')).toBe('reference');
     expect(within(contextToolbar).queryByRole('button', {

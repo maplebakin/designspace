@@ -45,6 +45,7 @@ type DocumentPageViewProps = {
   documentLanguage: string;
   typographyStyles: DocumentNamedStyleRegistry;
   zoom: number;
+  isExportSurface?: boolean;
   titleEditor: React.ReactNode;
   bodyEditor: React.ReactNode;
   exportRootRef: React.RefObject<HTMLDivElement | null>;
@@ -68,6 +69,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   documentLanguage,
   typographyStyles,
   zoom,
+  isExportSurface = false,
   titleEditor,
   bodyEditor,
   exportRootRef,
@@ -159,7 +161,10 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               ...typographyStyle,
               width: widthPx,
               height: heightPx,
-              backgroundColor: paperColor,
+              backgroundColor: isExportSurface ? paperColor : 'transparent',
+              pointerEvents: referenceAdjustMode && !isExportSurface
+                ? 'none'
+                : 'auto',
             }}
           >
             <DocumentOverlayLayer

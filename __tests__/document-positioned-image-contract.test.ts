@@ -633,6 +633,134 @@ describe('positioned document image contract', () => {
     }
   );
 
+  it('keeps a flow span on article flow for a click and pins it on drag', async () => {
+    const onUpdate = vi.fn();
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Text before'),
+        positionedImage({
+          id: 'flow-span-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 80,
+          caption: 'Keep this caption',
+          verticalAnchor: 'flow',
+        }),
+        textParagraph('Text after'),
+      ],
+    };
+    const { container, editor } = await renderFlowEditor({ content, onUpdate });
+    const slot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="flow-span-photo"]'
+    )!;
+    const before = findImages(editor)[0].attrs;
+    onUpdate.mockClear();
+
+    dispatchPointer(slot, 'pointerdown', {
+      pointerId: 501,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchPointer(window, 'pointerup', {
+      pointerId: 501,
+      clientX: 100,
+      clientY: 100,
+    });
+    await waitFor(() => {
+      expect(findImages(editor)[0].attrs).toMatchObject({
+        verticalAnchor: 'flow',
+        wrap: 'span-columns',
+        spanCount: before.spanCount,
+        widthPx: before.widthPx,
+        heightPx: before.heightPx,
+        caption: 'Keep this caption',
+      });
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    dispatchPointer(slot, 'pointerdown', {
+      pointerId: 502,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchPointer(slot, 'pointermove', {
+      pointerId: 502,
+      clientX: 124,
+      clientY: 136,
+    });
+    await waitFor(() => {
+      expect(slot.dataset.verticalAnchor).toBe('page-position');
+      expect(findImages(editor)[0].attrs.verticalAnchor).toBe('flow');
+    });
+
+    dispatchPointer(window, 'pointerup', {
+      pointerId: 502,
+      clientX: 124,
+      clientY: 136,
+    });
+    await waitFor(() => {
+      expect(findImages(editor)[0].attrs).toMatchObject({
+        verticalAnchor: 'page-position',
+        horizontalPlacement: 'custom',
+        wrap: 'span-columns',
+        spanCount: before.spanCount,
+        widthPx: before.widthPx,
+        heightPx: before.heightPx,
+        caption: 'Keep this caption',
+      });
+    });
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a flow-to-page drag without persisting an anchor change', async () => {
+    const onUpdate = vi.fn();
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Text before'),
+        positionedImage({
+          id: 'cancelled-flow-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 18,
+          yPx: 70,
+          caption: '',
+          verticalAnchor: 'flow',
+        }),
+      ],
+    };
+    const { container, editor } = await renderFlowEditor({ content, onUpdate });
+    const slot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="cancelled-flow-photo"]'
+    )!;
+    onUpdate.mockClear();
+
+    dispatchPointer(slot, 'pointerdown', {
+      pointerId: 503,
+      clientX: 120,
+      clientY: 140,
+    });
+    dispatchPointer(slot, 'pointermove', {
+      pointerId: 503,
+      clientX: 160,
+      clientY: 180,
+    });
+    await waitFor(() => {
+      expect(slot.dataset.verticalAnchor).toBe('page-position');
+    });
+    dispatchPointer(window, 'pointercancel', {
+      pointerId: 503,
+      clientX: 160,
+      clientY: 180,
+    });
+
+    await waitFor(() => {
+      expect(findImages(editor)[0].attrs.verticalAnchor).toBe('flow');
+      expect(slot.dataset.verticalAnchor).toBe('flow');
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('reselects independent images and commits a stale position by stable ID', async () => {
     const onUpdate = vi.fn();
     const { container, editor } = await renderFlowEditor({ onUpdate });

@@ -82,6 +82,7 @@ const ExportPageSurface = ({
       documentLanguage={project.document.language}
       typographyStyles={project.document.styles}
       zoom={1}
+      isExportSurface
       exportRootRef={exportRootRef}
       referenceAdjustMode={false}
       selectedOverlayId={null}

@@ -1,0 +1,391 @@
+import { readFile } from 'node:fs/promises';
+import { expect, test, type Page } from '@playwright/test';
+
+const PHOTO_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAAABmJLR0QA/wD/AP+gvaeTAAABa0lEQVRogeWZS5LDIAxEJXyK3GauNadnNuPQzceQbN8KVeJuBNJTlZN8/fzWkhEla7T1LL6+0q2/v77UrZ69jp7NiMwa9/ps6rHqPA7x63XrPVQ3xlX85vn0vrvcMiNKiRolIu41IyKj/q8a13fcNKu4il/tPMY9ZrrVHrN8+vg0txLSAadVX9+s3/KuOvrZrur5QW5lkU8fv3VjOz+19nkL7hJYH2y+xz637mAb7FrhidxbBwC513wKknvzBXJvuCK5t3yA3E9mAI37YQawuJ/MABr36gvkXn2HDmBwr75A7hvCXQdwuG/dWZDcq47IvemQ3JsXkHu7ECT36kXk3jsAyf1yBjC4f5gBEO7XM4DB/cMMoHBvM4DHvRURyb34FST3mgOReysWknvX8bi330CR3FsM5H4yA3Dc9zOAxb2dk8m9+gK5t9yg3OsePO7b/6Dhr8Mc7u9OlxlA4t4uCsp90yC5Vy8i9+r1B7Q45ELbjS61AAAAAElFTkSuQmCC';
+
+const REFERENCE_PDF_BASE64 =
+  'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8ID4+IC9Db250ZW50cyA0IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvTGVuZ3RoIDM1ID4+CnN0cmVhbQowLjgyIDAuMDggMC4xNCByZwowIDAgNjEyIDc5MiByZQpmCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDUKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyMTkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA1IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgozMDMKJSVFT0YK';
+
+const bodyCopy = [
+  'The reconstructed article follows the old river road and the family homestead.',
+  'Photographs sit below the upper text columns with independent captions.',
+].join(' ').repeat(32);
+
+const openReconstruction = async (page: Page, name: string) => {
+  await page.goto('/');
+  await page.getByTestId('dashboard-new-document').click();
+  await page.getByTestId('document-project-name').fill(name);
+  await page.getByRole('button', { name: '3 columns' }).click();
+  await page.locator('.document-flow-prosemirror').fill(bodyCopy);
+};
+
+const addPhoto = async (page: Page, fileName: string, select = true) => {
+  await page.getByTestId('document-image-file-input').setInputFiles({
+    name: fileName,
+    mimeType: 'image/png',
+    buffer: Buffer.from(PHOTO_PNG_BASE64, 'base64'),
+  });
+  const image = page.locator('.document-image-node').last();
+  await expect(image).toBeAttached();
+  if (select) await expect(image).toBeVisible();
+  if (select) await image.click();
+  return image.getAttribute('data-image-id');
+};
+
+const configureSpanWithoutPinning = async (page: Page, span: 'span-2' | 'span-3') => {
+  await page.getByTestId('document-image-wrap').selectOption(span);
+  await expect(page.getByTestId('document-image-wrap')).toHaveValue(span);
+  await expect(page.getByTestId('document-image-vertical-anchor'))
+    .toHaveValue('flow');
+};
+
+const getSpanFrame = (page: Page, imageId: string) => page.locator(
+  `[data-layout-role="occupied-columns"][data-image-id="${imageId}"] .document-image__frame`
+);
+
+const readSpanGeometry = async (page: Page, imageId: string) => {
+  const slot = page.locator(
+    `[data-layout-role="occupied-columns"][data-image-id="${imageId}"]`
+  );
+  await expect(slot).toBeVisible();
+  const frameLocator = getSpanFrame(page, imageId);
+  await expect(frameLocator).toBeVisible();
+  const frame = await frameLocator.boundingBox();
+  return {
+    left: Number(await slot.getAttribute('data-image-left-px')),
+    top: Number(await slot.getAttribute('data-image-top-px')),
+    width: frame?.width ?? 0,
+  };
+};
+
+const dragSpanWithoutChangingTheDropdown = async (
+  page: Page,
+  imageId: string,
+  deltaX: number,
+  deltaY: number
+) => {
+  const frame = getSpanFrame(page, imageId);
+  const before = await frame.boundingBox();
+  expect(before).not.toBeNull();
+  const point = {
+    x: before!.x + before!.width / 2,
+    y: before!.y + before!.height / 2,
+  };
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  const afterDown = await frame.boundingBox();
+  expect(afterDown).not.toBeNull();
+  expect(afterDown!.x).toBeCloseTo(before!.x, 1);
+  expect(afterDown!.y).toBeCloseTo(before!.y, 1);
+  await page.mouse.move(point.x + deltaX, point.y + deltaY, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByTestId('document-image-vertical-anchor'))
+    .toHaveValue('page-position');
+  return { before, after: await frame.boundingBox() };
+};
+
+const inspectScreenshotPixel = async (page: Page, point: { x: number; y: number }) => {
+  const sheet = page.getByTestId('document-page');
+  const box = await sheet.boundingBox();
+  expect(box).not.toBeNull();
+  const screenshot = await page.screenshot({
+    clip: {
+      x: box!.x,
+      y: box!.y,
+      width: box!.width,
+      height: box!.height,
+    },
+  });
+  return page.evaluate(async ({ base64, x, y }) => {
+    const binary = atob(base64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not inspect the page screenshot.');
+    context.drawImage(bitmap, 0, 0);
+    const pixel = Array.from(context.getImageData(
+      Math.max(0, Math.min(bitmap.width - 1, Math.round(x))),
+      Math.max(0, Math.min(bitmap.height - 1, Math.round(y))),
+      1,
+      1
+    ).data);
+    bitmap.close();
+    return pixel;
+  }, {
+    base64: screenshot.toString('base64'),
+    x: point.x,
+    y: point.y,
+  });
+};
+
+test.describe('reconstruction page-space interactions', () => {
+  test.describe.configure({ timeout: 120_000 });
+  test.use({ viewport: { width: 1920, height: 1080 } });
+
+  test('pins a span flow photo only after a real drag', async ({ page }) => {
+    await openReconstruction(page, 'Flow Drag To Pin Regression');
+    const imageId = await addPhoto(page, 'flow-drag-photo.png');
+    expect(imageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+
+    const layout = page.locator('[data-document-span-layout]');
+    await expect(layout).toHaveAttribute('data-vertical-anchor', 'flow');
+    const frame = getSpanFrame(page, imageId!);
+    const before = await frame.boundingBox();
+    expect(before).not.toBeNull();
+
+    await page.mouse.click(
+      before!.x + before!.width / 2,
+      before!.y + before!.height / 2
+    );
+    await expect(page.getByTestId('document-image-vertical-anchor'))
+      .toHaveValue('flow');
+
+    const dragStart = {
+      x: before!.x + before!.width / 2,
+      y: before!.y + before!.height / 2,
+    };
+    await page.mouse.move(dragStart.x, dragStart.y);
+    await page.mouse.down();
+    await page.mouse.move(dragStart.x + 48, dragStart.y + 36, { steps: 6 });
+    await page.mouse.up();
+
+    await expect(page.getByTestId('document-image-vertical-anchor'))
+      .toHaveValue('page-position');
+    await expect(layout).toHaveAttribute('data-vertical-anchor', 'page-position');
+    const after = await frame.boundingBox();
+    expect(after).not.toBeNull();
+    expect(Math.abs(after!.x - before!.x) + Math.abs(after!.y - before!.y))
+      .toBeGreaterThan(8);
+  });
+
+  test('renders a first-page PDF reference above the transparent editor root', async ({ page }) => {
+    await openReconstruction(page, 'PDF Reference Layer Regression');
+    const pdf = Buffer.from(REFERENCE_PDF_BASE64, 'base64');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: pdf,
+    });
+    await expect(page.getByTestId('document-reference-controls')).toBeVisible();
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-source-type', 'pdf');
+    await page.getByLabel('Reference fit').selectOption('stretch');
+    await page.getByLabel('Reference opacity').fill('1');
+    await expect(page.getByTestId('document-reference-layer').locator('img'))
+      .toHaveAttribute('src', /^data:image\/png;base64,/);
+
+    const rootStyles = await page.getByTestId('document-export-root').evaluate((element) => {
+      const style = window.getComputedStyle(element);
+      return {
+        backgroundColor: style.backgroundColor,
+        zIndex: style.zIndex,
+      };
+    });
+    expect(rootStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+
+    const pixel = await inspectScreenshotPixel(page, { x: 10, y: 10 });
+    const paperDistance = Math.abs(pixel[0] - 250)
+      + Math.abs(pixel[1] - 248)
+      + Math.abs(pixel[2] - 245);
+    expect(paperDistance).toBeGreaterThan(12);
+  });
+
+  test('keeps reference visibility, adjustment, locking, opacity, fit, and zoom deterministic', async ({ page }) => {
+    await openReconstruction(page, 'Reference Interaction Controls Regression');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(REFERENCE_PDF_BASE64, 'base64'),
+    });
+    const layer = page.getByTestId('document-reference-layer');
+    await expect(layer).toBeVisible();
+    await expect(layer).toHaveCSS('pointer-events', 'none');
+
+    const visibility = page.getByTestId('document-reference-visibility');
+    await visibility.click();
+    await expect(layer).toHaveCount(0);
+    await visibility.click();
+    await expect(layer).toBeVisible();
+
+    await page.getByLabel('Reference opacity').fill('0.5');
+    await expect(layer).toHaveCSS('opacity', '0.5');
+    await page.getByLabel('Reference fit').selectOption('stretch');
+    await expect(page.getByLabel('Reference fit')).toHaveValue('stretch');
+    await page.getByLabel('Reference scale').fill('1.4');
+    await page.getByLabel('Reference X offset').fill('24');
+    await page.getByLabel('Reference X offset').press('Tab');
+    await page.getByTestId('document-reference-fit-page').click();
+    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
+    await expect(page.getByLabel('Reference scale')).toHaveValue('1');
+    await expect(page.getByLabel('Reference X offset')).toHaveValue('0');
+    await expect(page.getByLabel('Reference Y offset')).toHaveValue('0');
+
+    const lock = page.getByTestId('document-reference-lock');
+    await lock.click();
+    await expect(lock).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await expect(page.getByTestId('document-toast'))
+      .toHaveText('Unlock the reference before adjusting it.');
+    await expect(layer).toHaveCSS('pointer-events', 'none');
+
+    await lock.click();
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await expect(page.getByTestId('document-context-toolbar')).toBeVisible();
+    await expect(layer).toHaveCSS('pointer-events', 'auto');
+    await expect(page.getByTestId('document-export-root'))
+      .toHaveCSS('pointer-events', 'none');
+
+    const layerBox = await layer.boundingBox();
+    expect(layerBox).not.toBeNull();
+    const dragPoint = {
+      x: layerBox!.x + layerBox!.width / 2,
+      y: layerBox!.y + layerBox!.height / 2,
+    };
+    await page.mouse.move(dragPoint.x, dragPoint.y);
+    await page.mouse.down();
+    await page.mouse.move(dragPoint.x + 28, dragPoint.y + 16, { steps: 4 });
+    await page.mouse.up();
+    expect(Number(await page.getByLabel('Adjusting X position').inputValue()))
+      .toBeGreaterThan(0);
+    expect(Number(await page.getByLabel('Adjusting Y position').inputValue()))
+      .toBeGreaterThan(0);
+
+    await page.getByTestId('document-context-toolbar')
+      .getByRole('button', { name: 'Finish adjusting', exact: true })
+      .click();
+    await expect(layer).toHaveCSS('pointer-events', 'none');
+    await expect(page.getByTestId('document-export-root'))
+      .toHaveCSS('pointer-events', 'auto');
+
+    const pageBeforeZoom = await page.getByTestId('document-page').boundingBox();
+    const layerBeforeZoom = await layer.boundingBox();
+    expect(pageBeforeZoom).not.toBeNull();
+    expect(layerBeforeZoom).not.toBeNull();
+    await page.getByRole('button', { name: 'Zoom in' }).click();
+    await expect.poll(async () => {
+      const pageAfterZoom = await page.getByTestId('document-page').boundingBox();
+      return pageAfterZoom?.width || 0;
+    }).toBeGreaterThan(pageBeforeZoom!.width);
+    const pageAfterZoom = await page.getByTestId('document-page').boundingBox();
+    const layerAfterZoom = await layer.boundingBox();
+    expect(pageAfterZoom).not.toBeNull();
+    expect(layerAfterZoom).not.toBeNull();
+    expect(layerAfterZoom!.width / pageAfterZoom!.width)
+      .toBeCloseTo(layerBeforeZoom!.width / pageBeforeZoom!.width, 2);
+  });
+
+  test('reconstructs independent page-position photos by dragging from article flow', async ({ page }) => {
+    await openReconstruction(page, 'Page Space Drag Reconstruction');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(REFERENCE_PDF_BASE64, 'base64'),
+    });
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+
+    const firstImageId = await addPhoto(page, 'reconstruction-photo-a.png');
+    expect(firstImageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+    const firstBeforeDrag = await readSpanGeometry(page, firstImageId!);
+    await dragSpanWithoutChangingTheDropdown(page, firstImageId!, 42, 32);
+    await page.getByTestId('document-image-caption').fill('Photo A caption');
+    const firstAfterDrag = await readSpanGeometry(page, firstImageId!);
+
+    expect(firstAfterDrag.left).not.toBe(firstBeforeDrag.left);
+    expect(firstAfterDrag.top).not.toBe(firstBeforeDrag.top);
+    await expect(page.getByTestId('document-image-caption'))
+      .toHaveValue('Photo A caption');
+
+    const secondImageId = await addPhoto(
+      page,
+      'reconstruction-photo-b.png',
+      false
+    );
+    expect(secondImageId).toBeTruthy();
+    await expect(page.locator(
+      `.document-image-node[data-image-id="${secondImageId}"]`
+    )).toHaveAttribute('data-wrap', 'float-left');
+    await page.locator(
+      `[data-layout-role="flow-image-hit-target"][data-image-id="${secondImageId}"]`
+    ).click();
+    await expect(page.getByTestId('document-image-wrap')).toHaveValue('float-left');
+    await configureSpanWithoutPinning(page, 'span-3');
+    await expect(page.locator(
+      '[data-document-span-layout] [data-layout-role="occupied-columns"]'
+    )).toHaveCount(2);
+    await expect(page.locator(
+      '[data-document-span-layout] .document-image__frame'
+    )).toHaveCount(2);
+    const firstStableGeometry = await readSpanGeometry(page, firstImageId!);
+    await dragSpanWithoutChangingTheDropdown(page, secondImageId!, 56, 40);
+    await page.getByTestId('document-image-caption').fill('Photo B caption');
+    const firstAfterSecondDrag = await readSpanGeometry(page, firstImageId!);
+    expect(firstAfterSecondDrag).toEqual(firstStableGeometry);
+    const secondAfterDrag = await readSpanGeometry(page, secondImageId!);
+
+    await page.getByTestId('document-add-page').click();
+    await page.getByTestId('document-page-tab-0').click();
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByTestId('dashboard-project-card')
+      .filter({ hasText: 'Page Space Drag Reconstruction' })
+      .getByRole('button')
+      .first()
+      .click();
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-source-type', 'pdf');
+
+    const firstAfterReopen = await readSpanGeometry(page, firstImageId!);
+    const secondAfterReopen = await readSpanGeometry(page, secondImageId!);
+    expect(firstAfterReopen.left).toBeCloseTo(firstStableGeometry.left, 2);
+    expect(firstAfterReopen.top).toBeCloseTo(firstStableGeometry.top, 2);
+    expect(firstAfterReopen.width).toBeCloseTo(firstStableGeometry.width, 2);
+    expect(secondAfterReopen.left).toBeCloseTo(secondAfterDrag.left, 2);
+    expect(secondAfterReopen.top).toBeCloseTo(secondAfterDrag.top, 2);
+    expect(secondAfterReopen.width).toBeCloseTo(secondAfterDrag.width, 2);
+
+    await getSpanFrame(page, firstImageId!).click();
+    await expect(page.getByTestId('document-editor-shell'))
+      .toHaveAttribute('data-selected-flow-image-id', firstImageId!);
+    await getSpanFrame(page, secondImageId!).click();
+    await expect(page.getByTestId('document-editor-shell'))
+      .toHaveAttribute('data-selected-flow-image-id', secondImageId!);
+    await expect(page.getByTestId('document-image-caption'))
+      .toHaveValue('Photo B caption');
+
+    const pngDownloadPromise = page.waitForEvent('download');
+    const exportButton = page.getByRole('button', { name: 'PNG', exact: true });
+    if (!await exportButton.isVisible()) {
+      await page.getByText('Export', { exact: true }).click();
+    }
+    await exportButton.click();
+    const pngDownload = await pngDownloadPromise;
+    const pngPath = await pngDownload.path();
+    expect(pngPath).not.toBeNull();
+    const pngBytes = await readFile(pngPath!);
+    const exportedCorner = await page.evaluate(async (base64: string) => {
+      const binary = atob(base64);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(bitmap, 0, 0);
+      const pixel = Array.from(context.getImageData(2, 2, 1, 1).data);
+      bitmap.close();
+      return pixel;
+    }, pngBytes.toString('base64'));
+    expect(exportedCorner).toEqual([250, 248, 245, 255]);
+  });
+});

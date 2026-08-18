@@ -71,6 +71,7 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
       className={`document-scan-reference ${canAdjust ? 'is-adjusting' : ''}`}
       data-document-export-exclude="true"
       data-reference-layer="true"
+      data-reference-source-type={reference.sourceType}
       data-testid="document-reference-layer"
       aria-hidden="true"
       onPointerDown={handlePointerDown}
