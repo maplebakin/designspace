@@ -30,7 +30,10 @@ import {
   type DocumentAsset,
 } from '../services/documentAssetService';
 import { ingestImageFromClipboardEvent } from '../services/documentClipboardService';
-import { ingestDocumentReference } from '../services/documentReferenceService';
+import {
+  DocumentReferenceError,
+  ingestDocumentReference,
+} from '../services/documentReferenceService';
 import {
   documentExportService,
   type DocumentExportDiagnostics,
@@ -1037,7 +1040,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const handleReferenceImport = useCallback(async (file: File) => {
     try {
-      const asset = await ingestDocumentReference(file);
+      const isPdfReference = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+      const asset = await ingestDocumentReference(file, {
+        onDiagnostics: isPdfReference
+          ? (diagnostics) => {
+            if (import.meta.env.DEV) {
+              console.debug('[document-reference] PDF raster diagnostics', diagnostics);
+            }
+          }
+          : undefined,
+      });
       const assetId = addAsset(asset.id, asset.source, {
         mimeType: asset.mimeType,
         naturalWidth: asset.naturalWidth,
@@ -1068,6 +1080,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setReferenceAdjustMode(false);
       setToastMessage('Reference page added. It will never be included in exports.');
     } catch (error) {
+      if (
+        error instanceof DocumentReferenceError
+        && error.code === 'REFERENCE_PDF_RENDER_EMPTY'
+      ) {
+        setToastMessage('That PDF page could not be rendered as a visible reference.');
+        return;
+      }
       setToastMessage(error instanceof Error ? error.message : 'Could not import the reference.');
     }
   }, [

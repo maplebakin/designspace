@@ -148,23 +148,80 @@ describe('document image assets', () => {
       destroy,
     } as any);
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      .mockReturnValue({} as CanvasRenderingContext2D);
+      .mockReturnValue({
+        drawImage: vi.fn(),
+        getImageData: vi.fn(() => ({
+          data: new Uint8ClampedArray([40, 40, 40, 255]),
+        })),
+      } as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, 'toBlob')
       .mockImplementation((callback) => {
         callback(new Blob([PNG_BYTES], { type: 'image/png' }));
       });
 
-    const referenceAsset = await ingestDocumentReference(pdfFile);
+    const diagnostics = vi.fn();
+    const referenceAsset = await ingestDocumentReference(pdfFile, {
+      onDiagnostics: diagnostics,
+    });
 
     expect(pdfjsLib.getDocument).toHaveBeenCalledTimes(1);
+    expect(pdfjsLib.getDocument).toHaveBeenCalledWith(expect.objectContaining({
+      isImageDecoderSupported: false,
+      isOffscreenCanvasSupported: false,
+      canvasMaxAreaInBytes: 100_000_000,
+    }));
     expect(getPage).toHaveBeenCalledWith(1);
     expect(render).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      width: 1224,
+      height: 1584,
+      nonTransparentPixelCount: 1,
+      hasMeaningfulPaint: true,
+    }));
     expect(referenceAsset).toMatchObject({
       fileName: 'newsletter-page-1.png',
       mimeType: 'image/png',
       naturalWidth: 640,
       naturalHeight: 480,
+    });
+  });
+
+  it('does not accept a PDF render that produced an empty canvas', async () => {
+    const pdfBytes = new TextEncoder().encode('%PDF-1.7\nempty render fixture');
+    const pdfFile = new File([pdfBytes], 'empty-reference.pdf', {
+      type: 'application/pdf',
+    });
+    Object.defineProperty(pdfFile, 'arrayBuffer', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(pdfBytes.buffer),
+    });
+    vi.mocked(pdfjsLib.getDocument).mockReturnValue({
+      promise: Promise.resolve({
+        getPage: vi.fn().mockResolvedValue({
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 612 * scale,
+            height: 792 * scale,
+          }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+      destroy: vi.fn().mockResolvedValue(undefined),
+    } as any);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue({
+        drawImage: vi.fn(),
+        getImageData: vi.fn(() => ({
+          data: new Uint8ClampedArray(4),
+        })),
+      } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob')
+      .mockImplementation((callback) => {
+        callback(new Blob([PNG_BYTES], { type: 'image/png' }));
+      });
+
+    await expect(ingestDocumentReference(pdfFile)).rejects.toMatchObject({
+      code: 'REFERENCE_PDF_RENDER_EMPTY',
     });
   });
 

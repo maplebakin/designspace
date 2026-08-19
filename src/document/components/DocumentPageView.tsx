@@ -96,6 +96,13 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
     paddingLeft: `${physicalMargins.leftIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
   };
   const language = page.language || documentLanguage;
+  const referenceDiagnostic = !page.reference
+    ? 'REFERENCE_MISSING_STATE'
+    : !Object.prototype.hasOwnProperty.call(assetSources, page.reference.assetId)
+      ? 'REFERENCE_ASSET_MISSING'
+      : !assetSources[page.reference.assetId]
+        ? 'REFERENCE_SOURCE_MISSING'
+        : 'REFERENCE_SOURCE_PRESENT';
   const typographyStyle = getDocumentTypographyCssVariables(
     typographyStyles,
     page.dropCap
@@ -122,6 +129,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
         <div
           className="document-page-sheet"
           data-testid="document-page"
+          data-document-reference-diagnostic={referenceDiagnostic}
           lang={language}
           style={{
             ...typographyStyle,

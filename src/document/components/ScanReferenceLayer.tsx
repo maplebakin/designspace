@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import type { ScanReference } from '../types/documentProject';
 
 type ScanReferenceLayerProps = {
@@ -18,6 +18,8 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
   onChange,
   onCommit,
 }) => {
+  const [loadedSource, setLoadedSource] = useState<string | null>(null);
+  const [failedSource, setFailedSource] = useState<string | null>(null);
   const dragStart = useRef<{
     pointerX: number;
     pointerY: number;
@@ -27,6 +29,11 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
 
   if (!reference || !source || !reference.visible) return null;
   const canAdjust = adjustMode && !reference.locked;
+  const imageState = loadedSource === source
+    ? 'loaded'
+    : failedSource === source
+      ? 'error'
+      : 'loading';
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!canAdjust) return;
@@ -71,6 +78,12 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
       className={`document-scan-reference ${canAdjust ? 'is-adjusting' : ''}`}
       data-document-export-exclude="true"
       data-reference-layer="true"
+      data-reference-diagnostic={imageState === 'error'
+        ? 'REFERENCE_IMAGE_DECODE_FAILED'
+        : imageState === 'loaded'
+          ? 'REFERENCE_SOURCE_PRESENT'
+          : 'REFERENCE_SOURCE_LOADING'}
+      data-reference-image-state={imageState}
       data-reference-source-type={reference.sourceType}
       data-testid="document-reference-layer"
       aria-hidden="true"
@@ -87,6 +100,11 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
         src={source}
         alt=""
         draggable={false}
+        onError={() => setFailedSource(source)}
+        onLoad={() => {
+          setFailedSource(null);
+          setLoadedSource(source);
+        }}
         style={{
           objectFit: reference.fit === 'stretch' ? 'fill' : reference.fit,
           transform: `translate(${reference.offsetXPx}px, ${reference.offsetYPx}px) scale(${reference.scale})`,

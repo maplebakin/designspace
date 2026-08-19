@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
+import { createScannedReferenceFixture } from './fixtures/scanned-reference-page';
 
 const PHOTO_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAAABmJLR0QA/wD/AP+gvaeTAAABa0lEQVRogeWZS5LDIAxEJXyK3GauNadnNuPQzceQbN8KVeJuBNJTlZN8/fzWkhEla7T1LL6+0q2/v77UrZ69jp7NiMwa9/ps6rHqPA7x63XrPVQ3xlX85vn0vrvcMiNKiRolIu41IyKj/q8a13fcNKu4il/tPMY9ZrrVHrN8+vg0txLSAadVX9+s3/KuOvrZrur5QW5lkU8fv3VjOz+19nkL7hJYH2y+xz637mAb7FrhidxbBwC513wKknvzBXJvuCK5t3yA3E9mAI37YQawuJ/MABr36gvkXn2HDmBwr75A7hvCXQdwuG/dWZDcq47IvemQ3JsXkHu7ECT36kXk3jsAyf1yBjC4f5gBEO7XM4DB/cMMoHBvM4DHvRURyb34FST3mgOReysWknvX8bi330CR3FsM5H4yA3Dc9zOAxb2dk8m9+gK5t9yg3OsePO7b/6Dhr8Mc7u9OlxlA4t4uCsp90yC5Vy8i9+r1B7Q45ELbjS61AAAAAElFTkSuQmCC';
@@ -122,6 +123,60 @@ const inspectScreenshotPixel = async (page: Page, point: { x: number; y: number 
   });
 };
 
+const scanSampleRatios = [
+  { x: 0.18, y: 0.18 },
+  { x: 0.26, y: 0.48 },
+  { x: 0.76, y: 0.58 },
+];
+
+const inspectScanPixels = async (page: Page) => {
+  const sheet = await page.getByTestId('document-page').boundingBox();
+  expect(sheet).not.toBeNull();
+  return Promise.all(scanSampleRatios.map((ratio) => inspectScreenshotPixel(page, {
+    x: sheet!.width * ratio.x,
+    y: sheet!.height * ratio.y,
+  })));
+};
+
+const waitForDarkScanPixel = async (page: Page) => {
+  await expect.poll(async () => {
+    const sheet = await page.getByTestId('document-page').boundingBox();
+    expect(sheet).not.toBeNull();
+    const pixel = await inspectScreenshotPixel(page, {
+      x: sheet!.width * 0.26,
+      y: sheet!.height * 0.48,
+    });
+    return pixel[0] + pixel[1] + pixel[2];
+  }).toBeLessThan(620);
+};
+
+const inspectDownloadedPixel = async (
+  page: Page,
+  bytes: Buffer,
+  ratio: { x: number; y: number },
+) => page.evaluate(async ({ base64, ratio: sampleRatio }) => {
+  const binary = atob(base64);
+  const imageBytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([imageBytes], { type: 'image/png' }));
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not inspect the exported page.');
+  context.drawImage(bitmap, 0, 0);
+  const pixel = Array.from(context.getImageData(
+    Math.round(bitmap.width * sampleRatio.x),
+    Math.round(bitmap.height * sampleRatio.y),
+    1,
+    1,
+  ).data);
+  bitmap.close();
+  return pixel;
+}, {
+  base64: bytes.toString('base64'),
+  ratio,
+});
+
 test.describe('reconstruction page-space interactions', () => {
   test.describe.configure({ timeout: 120_000 });
   test.use({ viewport: { width: 1920, height: 1080 } });
@@ -161,6 +216,162 @@ test.describe('reconstruction page-space interactions', () => {
     expect(after).not.toBeNull();
     expect(Math.abs(after!.x - before!.x) + Math.abs(after!.y - before!.y))
       .toBeGreaterThan(8);
+  });
+
+  test('reproduces scanned PDF reference visibility at the imported defaults', async ({ page }) => {
+    await openReconstruction(page, 'Scanned PDF Reference Baseline');
+    const fixture = await createScannedReferenceFixture();
+    const rasterDiagnostics: Array<Record<string, unknown>> = [];
+    page.on('console', (message) => {
+      if (!message.text().startsWith('[document-reference] PDF raster diagnostics')) return;
+      const diagnosticArgument = message.args()[1];
+      if (!diagnosticArgument) return;
+      void diagnosticArgument.jsonValue().then((value) => {
+        if (value && typeof value === 'object') {
+          rasterDiagnostics.push(value as Record<string, unknown>);
+        }
+      });
+    });
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-scanned-page.pdf',
+      mimeType: 'application/pdf',
+      buffer: fixture.pdf,
+    });
+
+    await expect(page.getByTestId('document-reference-controls')).toBeVisible();
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-diagnostic', 'REFERENCE_SOURCE_PRESENT');
+    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
+    await expect(page.getByLabel('Reference opacity')).toHaveValue('0.35');
+    await expect(page.getByLabel('Reference scale')).toHaveValue('1');
+    await expect(page.getByLabel('Reference X offset')).toHaveValue('0');
+    await expect(page.getByLabel('Reference Y offset')).toHaveValue('0');
+    await expect(page.getByTestId('document-reference-layer').locator('img'))
+      .toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await expect.poll(() => rasterDiagnostics.length).toBe(1);
+    expect(rasterDiagnostics[0]).toMatchObject({
+      hasMeaningfulPaint: true,
+    });
+    expect(Number(rasterDiagnostics[0].width)).toBeGreaterThan(0);
+    expect(Number(rasterDiagnostics[0].height)).toBeGreaterThan(0);
+    expect(Number(rasterDiagnostics[0].nonTransparentPixelCount)).toBeGreaterThan(0);
+    expect(Number(rasterDiagnostics[0].luminanceVariance)).toBeGreaterThan(0);
+    console.log('scanned PDF raster diagnostics', rasterDiagnostics[0]);
+    const dimensions = await page.getByTestId('document-reference-layer').locator('img')
+      .evaluate((element) => ({
+        width: (element as HTMLImageElement).naturalWidth,
+        height: (element as HTMLImageElement).naturalHeight,
+      }));
+    expect(dimensions.width).toBeGreaterThan(0);
+    expect(dimensions.height).toBeGreaterThan(0);
+    await expect(page.getByTestId('document-reference-layer')).toHaveCSS('opacity', '0.35');
+    await expect(page.getByTestId('document-reference-layer').locator('img'))
+      .toHaveCSS('object-fit', 'contain');
+    await expect(page.getByTestId('document-export-root'))
+      .toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+
+    const visiblePixels = await inspectScanPixels(page);
+
+    await page.getByTestId('document-reference-visibility').click();
+    await expect(page.getByTestId('document-reference-layer')).toHaveCount(0);
+    const hiddenPixels = await inspectScanPixels(page);
+
+    const differences = visiblePixels.map((visible, index) => visible.reduce(
+      (total, channel, channelIndex) => total + Math.abs(channel - hiddenPixels[index][channelIndex]),
+      0,
+    ));
+    expect(Math.max(...differences)).toBeGreaterThan(8);
+  });
+
+  test('keeps a scanned page visually equivalent when imported as PNG or PDF', async ({ page }) => {
+    const fixture = await createScannedReferenceFixture();
+    await openReconstruction(page, 'Scanned PNG Reference Control');
+    await page.locator('.document-flow-prosemirror').fill('');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-scanned-page.png',
+      mimeType: 'image/png',
+      buffer: fixture.png,
+    });
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await waitForDarkScanPixel(page);
+    const pngPixels = await inspectScanPixels(page);
+
+    await openReconstruction(page, 'Scanned PDF Reference Control');
+    await page.locator('.document-flow-prosemirror').fill('');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-scanned-page.pdf',
+      mimeType: 'application/pdf',
+      buffer: fixture.pdf,
+    });
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await waitForDarkScanPixel(page);
+    const pdfPixels = await inspectScanPixels(page);
+    const differences = pngPixels.map((pngPixel, index) => pngPixel.reduce(
+      (total, channel, channelIndex) => total + Math.abs(channel - pdfPixels[index][channelIndex]),
+      0,
+    ));
+    expect(Math.max(...differences)).toBeLessThan(160);
+    expect(Math.min(...differences)).toBeLessThan(45);
+  });
+
+  test('persists a scanned PDF reference through page switching and reopen', async ({ page }) => {
+    const fixture = await createScannedReferenceFixture();
+    await openReconstruction(page, 'Scanned PDF Persistence Regression');
+    await page.locator('.document-flow-prosemirror').fill('');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'historical-scanned-page.pdf',
+      mimeType: 'application/pdf',
+      buffer: fixture.pdf,
+    });
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    const before = await inspectScanPixels(page);
+
+    await page.getByTestId('document-add-page').click();
+    await page.getByTestId('document-page-tab-0').click();
+    await expect(page.getByTestId('document-reference-layer')).toBeVisible();
+    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
+    await expect(page.getByLabel('Reference opacity')).toHaveValue('0.35');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByTestId('dashboard-project-card')
+      .filter({ hasText: 'Scanned PDF Persistence Regression' })
+      .getByRole('button')
+      .first()
+      .click();
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
+    await expect(page.getByLabel('Reference opacity')).toHaveValue('0.35');
+    const after = await inspectScanPixels(page);
+    const differences = before.map((pixel, index) => pixel.reduce(
+      (total, channel, channelIndex) => total + Math.abs(channel - after[index][channelIndex]),
+      0,
+    ));
+    expect(Math.max(...differences)).toBeLessThan(12);
+
+    const pngDownloadPromise = page.waitForEvent('download');
+    const exportButton = page.getByRole('button', { name: 'PNG', exact: true });
+    if (!await exportButton.isVisible()) {
+      await page.getByText('Export', { exact: true }).click();
+    }
+    await exportButton.click();
+    const pngDownload = await pngDownloadPromise;
+    const pngPath = await pngDownload.path();
+    expect(pngPath).not.toBeNull();
+    const exportedPixel = await inspectDownloadedPixel(
+      page,
+      await readFile(pngPath!),
+      { x: 0.26, y: 0.48 },
+    );
+    expect(exportedPixel).toEqual([250, 248, 245, 255]);
   });
 
   test('renders a first-page PDF reference above the transparent editor root', async ({ page }) => {

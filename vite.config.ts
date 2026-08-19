@@ -1,5 +1,6 @@
 
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
+import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -9,9 +10,53 @@ const PUBLIC_PRODUCT_FORGE_STUB = fileURLToPath(
   new URL('./src/editor/config/publicProductForgeUnavailable.ts', import.meta.url)
 )
 
+const PDFJS_WASM_FILES = [
+  'openjpeg.wasm',
+  'openjpeg_nowasm_fallback.js',
+  'qcms_bg.wasm',
+] as const
+const PDFJS_WASM_DIRECTORY = fileURLToPath(
+  new URL('./node_modules/pdfjs-dist/wasm/', import.meta.url)
+)
+const PDFJS_WASM_MIME_TYPES: Record<string, string> = {
+  '.js': 'text/javascript',
+  '.wasm': 'application/wasm',
+}
+
+const pdfjsWasmAssets = (): Plugin => ({
+  name: 'design-space-pdfjs-wasm-assets',
+  configureServer(server) {
+    server.middlewares.use('/pdfjs-wasm', (request, response, next) => {
+      const requestedFile = decodeURIComponent((request.url || '').split('?')[0])
+        .replace(/^\/+/, '')
+      if (!(PDFJS_WASM_FILES as readonly string[]).includes(requestedFile)) {
+        next()
+        return
+      }
+      const source = readFileSync(`${PDFJS_WASM_DIRECTORY}/${requestedFile}`)
+      response.statusCode = 200
+      response.setHeader(
+        'Content-Type',
+        PDFJS_WASM_MIME_TYPES[requestedFile.slice(requestedFile.lastIndexOf('.'))]
+          || 'application/octet-stream'
+      )
+      response.end(source)
+    })
+  },
+  generateBundle() {
+    PDFJS_WASM_FILES.forEach((fileName) => {
+      this.emitFile({
+        type: 'asset',
+        fileName: `pdfjs-wasm/${fileName}`,
+        source: readFileSync(`${PDFJS_WASM_DIRECTORY}/${fileName}`),
+      })
+    })
+  },
+})
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [pdfjsWasmAssets(), react()],
   define: {
     __DESIGN_SPACE_INTERNAL_PRODUCT_FORGE__: JSON.stringify(INTERNAL_PRODUCT_FORGE_ENABLED),
   },
