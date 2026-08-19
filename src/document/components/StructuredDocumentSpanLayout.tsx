@@ -143,6 +143,32 @@ export type StructuredImageFrameGeometry = Readonly<{
 const STRUCTURED_IMAGE_DRAG_THRESHOLD_PX = 6;
 
 /**
+ * Page-positioned image coordinates are authored from the page content
+ * origin, while the structured compositor is mounted at the current body
+ * origin. A real title moves that body origin; measure the authored-title
+ * offset so fixed frames remain anchored to the sheet instead of moving with
+ * flow.
+ */
+export const measureDocumentPagePositionOriginOffsetPx = (
+  bodyRoot: HTMLElement | null,
+  viewScale = 1
+) => {
+  if (!bodyRoot) return 0;
+  const contentRoot = bodyRoot.closest<HTMLElement>('.document-page-content');
+  if (!contentRoot) return 0;
+  const contentRect = contentRoot.getBoundingClientRect();
+  const bodyRect = bodyRoot.getBoundingClientRect();
+  const scale = Math.max(0.05, viewScale);
+  const paddingTop = Number.parseFloat(
+    window.getComputedStyle(contentRoot).paddingTop
+  ) || 0;
+  return Math.max(
+    0,
+    (bodyRect.top - contentRect.top) / scale - paddingTop
+  );
+};
+
+/**
  * The transformable photo frame excludes caption flow. The structured layout
  * model is the canonical page-space source for both the rendered frame and
  * its editor-only chrome.
@@ -1085,7 +1111,8 @@ export const buildMultiDocumentSpanLayoutModel = (
   availableHeightPx = 720,
   attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {},
   typographyOptions: StructuredDocumentTypographyOptions = {},
-  imageGroups: readonly DocumentImageGroup[] = []
+  imageGroups: readonly DocumentImageGroup[] = [],
+  pagePositionOriginOffsetPx = 0
 ): MultiDocumentSpanLayoutModel | null => {
   const positionedNodes: Array<{
     position: number;
@@ -1150,6 +1177,12 @@ export const buildMultiDocumentSpanLayoutModel = (
   );
   const safeWidth = Math.max(1, availableWidthPx);
   const safeHeight = Math.max(1, availableHeightPx);
+  const pagePositionOffset = Math.max(
+    0,
+    Number.isFinite(pagePositionOriginOffsetPx)
+      ? pagePositionOriginOffsetPx
+      : 0
+  );
   const bodyBounds = bodyRectangle(0, 0, safeWidth, safeHeight);
   const columnGeometry = getDocumentColumnRectangles({
     bodyWidthPx: safeWidth,
@@ -1227,15 +1260,21 @@ export const buildMultiDocumentSpanLayoutModel = (
         measurer.measure(semanticElements, columnWidthPx)
         - (startColumn - 1) * safeHeight
       );
-      const imageTopPx = clampStructuredImageTop({
-        value: attributes.verticalAnchor === 'page-position'
-          ? attributes.yPx
-          : flowTop,
-        availableHeightPx: safeHeight,
-        imageRegionHeightPx,
-        topPaddingPx: attributes.wrapPaddingTopPx,
-        bottomPaddingPx: attributes.wrapPaddingBottomPx,
-      });
+      const isPagePositioned = attributes.verticalAnchor === 'page-position';
+      const isPageSpacePositioned = isPagePositioned
+        && attributes.coordinateSpace === 'page';
+      const requestedImageTopPx = isPagePositioned
+        ? attributes.yPx - (isPageSpacePositioned ? pagePositionOffset : 0)
+        : flowTop;
+      const imageTopPx = isPageSpacePositioned
+        ? requestedImageTopPx
+        : clampStructuredImageTop({
+          value: requestedImageTopPx,
+          availableHeightPx: safeHeight,
+          imageRegionHeightPx,
+          topPaddingPx: attributes.wrapPaddingTopPx,
+          bottomPaddingPx: attributes.wrapPaddingBottomPx,
+        });
       const requestedRectangle = bodyRectangle(
         spanLeftPx + xOffsetPx,
         imageTopPx,
@@ -1785,6 +1824,7 @@ type StructuredDocumentSpanLayoutProps = {
   dropCap?: DocumentDropCapSettings | boolean;
   language?: string;
   imageGroups?: readonly DocumentImageGroup[];
+  pagePositionOriginOffsetPx?: number;
   selectedImageIds?: readonly string[];
   onSelectImage: (
     position: number,
@@ -2135,6 +2175,7 @@ export const StructuredDocumentSpanLayout = ({
   dropCap = false,
   language,
   imageGroups = [],
+  pagePositionOriginOffsetPx = 0,
   selectedImageIds = [],
   onSelectImage,
   onCommitImagePosition,
@@ -2166,7 +2207,8 @@ export const StructuredDocumentSpanLayout = ({
         dropCap,
         language,
       },
-      imageGroups
+      imageGroups,
+      pagePositionOriginOffsetPx
     ),
     [
       availableHeightPx,
@@ -2176,6 +2218,7 @@ export const StructuredDocumentSpanLayout = ({
       editor,
       dropCap,
       imageGroups,
+      pagePositionOriginOffsetPx,
       previewOverrides,
       revision,
       typographyStyle,
@@ -2257,6 +2300,7 @@ export const StructuredDocumentSpanLayout = ({
     originalXOffsetPx: number;
     originalYPx: number;
     pinOnDrag: boolean;
+    pageSpaceOnDrag: boolean;
     dragStarted: boolean;
     latestPreviewPosition: {
       xOffsetPx: number;
@@ -2617,6 +2661,7 @@ export const StructuredDocumentSpanLayout = ({
     const captureElement = layoutRef.current || event.currentTarget;
     captureElement.setPointerCapture?.(event.pointerId);
     const movingUnitId = group?.groupId ?? image.imageId;
+    const pinOnDrag = anchorImage.attributes.verticalAnchor !== 'page-position';
     dragRef.current = {
       pointerId: event.pointerId,
       imageId: anchorImage.imageId,
@@ -2642,7 +2687,9 @@ export const StructuredDocumentSpanLayout = ({
       captureElement,
       originalXOffsetPx: anchorImage.attributes.xOffsetPx,
       originalYPx: startRectangle.topPx,
-      pinOnDrag: anchorImage.attributes.verticalAnchor !== 'page-position',
+      pinOnDrag,
+      pageSpaceOnDrag: pinOnDrag
+        || anchorImage.attributes.coordinateSpace === 'page',
       dragStarted: false,
       latestPreviewPosition: {
         xOffsetPx: anchorImage.attributes.xOffsetPx,
@@ -2986,6 +3033,7 @@ export const StructuredDocumentSpanLayout = ({
       Math.max(
         0,
         model.availableHeightPx
+          + (drag.pageSpaceOnDrag ? pagePositionOriginOffsetPx : 0)
           - drag.topPaddingPx
           - drag.bottomPaddingPx
       )
@@ -3003,7 +3051,13 @@ export const StructuredDocumentSpanLayout = ({
     const snapped = snapDocumentRectangle({
       rectangle: toBodyRectangle(drag.startRectangle),
       desiredOrigin,
-      bounds: bodyRectangle(0, 0, model.availableWidthPx, model.availableHeightPx),
+      bounds: bodyRectangle(
+        0,
+        0,
+        model.availableWidthPx,
+        model.availableHeightPx
+          + (drag.pageSpaceOnDrag ? pagePositionOriginOffsetPx : 0)
+      ),
       columns: columnGeometry.columns,
       nearby: drag.obstacles.map(toBodyRectangle),
       thresholdPx: 8,
@@ -3040,9 +3094,11 @@ export const StructuredDocumentSpanLayout = ({
     };
     schedulePreview(drag.imageId, {
       ...(drag.pinOnDrag ? { verticalAnchor: 'page-position' } : {}),
+      ...(drag.pageSpaceOnDrag ? { coordinateSpace: 'page' } : {}),
       horizontalPlacement: 'custom',
       xOffsetPx,
-      yPx: nextMovement.rectangle.topPx,
+      yPx: nextMovement.rectangle.topPx
+        + (drag.pageSpaceOnDrag ? pagePositionOriginOffsetPx : 0),
     });
   };
 
@@ -3062,10 +3118,10 @@ export const StructuredDocumentSpanLayout = ({
       return;
     }
     const committed = onCommitImagePosition(
-        drag.position,
-        drag.imageId,
-        preview.xOffsetPx,
-        preview.yPx
+      drag.position,
+      drag.imageId,
+      preview.xOffsetPx,
+      preview.yPx + pagePositionOriginOffsetPx
     );
     if (!committed) {
       clearPreview(drag.imageId);
@@ -3217,6 +3273,7 @@ export const StructuredDocumentSpanLayout = ({
       data-layout-content-height-px={model.layoutContentHeightPx}
       data-layout-overflowing={model.overflowing ? 'true' : 'false'}
       data-layout-coordinate-space="body"
+      data-page-position-origin-offset-px={pagePositionOriginOffsetPx}
       data-layout-zoom={viewScale}
       data-selection-revision={selectionRevision}
       data-layout-available-width-px={model.availableWidthPx}

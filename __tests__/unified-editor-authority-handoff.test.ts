@@ -111,7 +111,7 @@ describe('Unified Editor shared authority handoff', () => {
     });
   });
 
-  it('coalesces a burst into one shared autosave and advances the watermark', async () => {
+  it('coalesces same-tick changes into one shared autosave and advances the watermark', async () => {
     vi.useFakeTimers();
     const autosave = vi.fn().mockResolvedValue(true);
     const { coordinator, authority } = createRuntime();
@@ -142,6 +142,98 @@ describe('Unified Editor shared authority handoff', () => {
       isDirty: false,
       saveStatus: 'saved',
     });
+  });
+
+  it('uses the latest authored change as the trailing-edge autosave deadline', async () => {
+    vi.useFakeTimers();
+    let savedRevision: number | null = null;
+    const runtime = createRuntime();
+    const { coordinator, authority } = runtime;
+    const autosave = vi.fn().mockImplementation(async () => {
+      savedRevision = authority.getSnapshot().authoredRevision;
+      return true;
+    });
+    const pendingStates: boolean[] = [];
+    const unsubscribe = authority.subscribe(() => {
+      pendingStates.push(authority.getSnapshot().pendingAutosave);
+    });
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'document-session-a',
+      adapter: createAdapter({ autosave }),
+    });
+
+    projectChange(coordinator);
+    await vi.advanceTimersByTimeAsync(60);
+    projectChange(coordinator);
+    await vi.advanceTimersByTimeAsync(60);
+    projectChange(coordinator);
+    const firstPendingState = pendingStates.indexOf(true);
+    expect(firstPendingState).toBeGreaterThanOrEqual(0);
+    expect(pendingStates.slice(firstPendingState)).not.toContain(false);
+
+    await vi.advanceTimersByTimeAsync(40);
+    expect(autosave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(59);
+    expect(autosave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(autosave).toHaveBeenCalledTimes(1);
+    expect(savedRevision).toBe(3);
+    unsubscribe();
+  });
+
+  it('postpones autosave throughout a prolonged typing-like change burst', async () => {
+    vi.useFakeTimers();
+    const autosave = vi.fn().mockResolvedValue(true);
+    const { coordinator, authority } = createRuntime();
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'document-session-a',
+      adapter: createAdapter({ autosave }),
+    });
+
+    for (let index = 0; index < 20; index += 1) {
+      await vi.advanceTimersByTimeAsync(50);
+      projectChange(coordinator);
+      expect(autosave).not.toHaveBeenCalled();
+    }
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(autosave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(autosave).toHaveBeenCalledTimes(1);
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 20,
+      persistedRevision: 20,
+      isDirty: false,
+    });
+  });
+
+  it('applies the same trailing-edge rule to the Canvas two-second cadence', async () => {
+    vi.useFakeTimers();
+    const autosave = vi.fn().mockResolvedValue(true);
+    const { coordinator, authority } = createRuntime();
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'canvas-session-a',
+      adapter: createAdapter({ autosave, autosaveDelayMs: 2000 }),
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      await vi.advanceTimersByTimeAsync(500);
+      projectChange(coordinator);
+    }
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(autosave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(autosave).toHaveBeenCalledTimes(1);
   });
 
   it('keeps newer edits dirty and schedules a follow-up after an older save completes', async () => {
@@ -185,7 +277,9 @@ describe('Unified Editor shared authority handoff', () => {
       pendingAutosave: true,
     });
 
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(autosave).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     expect(autosave).toHaveBeenCalledTimes(2);
     expect(authority.getSnapshot()).toMatchObject({
@@ -216,6 +310,48 @@ describe('Unified Editor shared authority handoff', () => {
       persistedRevision: 0,
       isDirty: true,
       saveStatus: 'error',
+    });
+  });
+
+  it('does not retry a failed autosave until a newer authored change arrives', async () => {
+    vi.useFakeTimers();
+    const autosave = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const { coordinator, authority } = createRuntime();
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'document-session-a',
+      adapter: createAdapter({ autosave }),
+    });
+
+    projectChange(coordinator);
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+    expect(autosave).toHaveBeenCalledTimes(1);
+    expect(authority.getSnapshot()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'error',
+      pendingAutosave: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(autosave).toHaveBeenCalledTimes(1);
+
+    projectChange(coordinator);
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 2,
+      pendingAutosave: true,
+      saveStatus: 'unsaved',
+    });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(autosave).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+    expect(autosave).toHaveBeenCalledTimes(2);
+    expect(authority.getSnapshot()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
     });
   });
 

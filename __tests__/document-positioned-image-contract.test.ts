@@ -60,6 +60,7 @@ const positionedImage = ({
   yPx,
   caption = `${id} caption`,
   verticalAnchor = 'page-position' as const,
+  coordinateSpace = 'body-span' as const,
 }: {
   id: string;
   spanStartColumn: 1 | 2;
@@ -67,6 +68,7 @@ const positionedImage = ({
   yPx: number;
   caption?: string;
   verticalAnchor?: 'flow' | 'page-position';
+  coordinateSpace?: 'body-span' | 'page';
 }): JSONContent => ({
   type: 'documentFlowImage',
   attrs: {
@@ -83,6 +85,7 @@ const positionedImage = ({
     wrapPaddingPx: 12,
     verticalSpacingPx: 10,
     verticalAnchor,
+    coordinateSpace,
     yPx,
     horizontalPlacement: 'custom',
     xOffsetPx,
@@ -802,6 +805,7 @@ describe('positioned document image contract', () => {
     expect(rightImage.attrs).toMatchObject({
       id: 'photo-right',
       horizontalPlacement: 'custom',
+      coordinateSpace: 'page',
       xOffsetPx: 74,
       yPx: 410,
     });
@@ -953,6 +957,46 @@ describe('positioned document image contract', () => {
       xOffsetPx: image.attrs?.xOffsetPx,
       yPx: image.attrs?.yPx,
     }))).toEqual(committedBeforeLayout);
+  });
+
+  it('keeps page-position coordinates anchored when the body origin gains a title offset', async () => {
+    const { editor } = await renderFlowEditor({
+      content: {
+        type: 'doc',
+        content: [positionedImage({
+          id: 'page-origin-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 240,
+          caption: '',
+          coordinateSpace: 'page',
+        })],
+      },
+    });
+    const withoutTitle = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640
+    )!;
+    const withTitle = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      640,
+      {},
+      {},
+      [],
+      58
+    )!;
+    const base = withoutTitle.images[0];
+    const shiftedBody = withTitle.images[0];
+
+    expect(shiftedBody.attributes.yPx).toBe(240);
+    expect(shiftedBody.imageTopPx).toBe(base.imageTopPx - 58);
+    expect(shiftedBody.imageTopPx + 58).toBe(base.imageTopPx);
   });
 
   it('reports overflow when an initial overlap cannot fit its span bounds', async () => {

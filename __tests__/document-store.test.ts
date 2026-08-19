@@ -1258,6 +1258,32 @@ describe('document project store', () => {
     });
   });
 
+  it('lets the shared lifecycle authority flush authored document changes explicitly', async () => {
+    const existing = createBlankDocumentProject('Shared Autosave Document');
+    useDocumentStore.getState().hydrateProject(existing, 'shared-autosave-id');
+    useDocumentStore.getState().setLifecycleAuthorityMode('shared');
+    useDocumentStore.getState().updatePage({ columnCount: 2 });
+
+    expect(await useDocumentStore.getState().flushAutosave()).toBe(false);
+    expect(dbMocks.updateProject).not.toHaveBeenCalled();
+
+    expect(await useDocumentStore.getState().flushAutosave({
+      allowSharedAuthority: true,
+    })).toBe(true);
+    expect(dbMocks.updateProject).toHaveBeenCalledWith(
+      'shared-autosave-id',
+      'Shared Autosave Document',
+      expect.any(String),
+      undefined,
+      'document'
+    );
+    expect(useDocumentStore.getState()).toMatchObject({
+      isDirty: false,
+      saveStatus: 'saved',
+      lifecycleAuthorityMode: 'shared',
+    });
+  });
+
   it('never overwrites edits made while an autosave write is in flight', async () => {
     let finishWrite: (() => void) | undefined;
     dbMocks.updateProject.mockReturnValueOnce(new Promise<void>((resolve) => {

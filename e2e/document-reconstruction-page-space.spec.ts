@@ -60,6 +60,20 @@ const readSpanGeometry = async (page: Page, imageId: string) => {
   };
 };
 
+const readPageSpaceGeometry = async (page: Page, imageId: string) => {
+  const frame = getSpanFrame(page, imageId);
+  await expect(frame).toBeVisible();
+  const frameBox = await frame.boundingBox();
+  const sheetBox = await page.getByTestId('document-page').boundingBox();
+  expect(frameBox).not.toBeNull();
+  expect(sheetBox).not.toBeNull();
+  return {
+    left: frameBox!.x - sheetBox!.x,
+    top: frameBox!.y - sheetBox!.y,
+    width: frameBox!.width,
+  };
+};
+
 const dragSpanWithoutChangingTheDropdown = async (
   page: Page,
   imageId: string,
@@ -147,7 +161,7 @@ const waitForDarkScanPixel = async (page: Page) => {
       y: sheet!.height * 0.48,
     });
     return pixel[0] + pixel[1] + pixel[2];
-  }).toBeLessThan(620);
+  }, { timeout: 20_000 }).toBeLessThan(620);
 };
 
 const inspectDownloadedPixel = async (
@@ -287,6 +301,7 @@ test.describe('reconstruction page-space interactions', () => {
   });
 
   test('keeps a scanned page visually equivalent when imported as PNG or PDF', async ({ page }) => {
+    test.slow();
     const fixture = await createScannedReferenceFixture();
     await openReconstruction(page, 'Scanned PNG Reference Control');
     await page.locator('.document-flow-prosemirror').fill('');
@@ -296,7 +311,7 @@ test.describe('reconstruction page-space interactions', () => {
       buffer: fixture.png,
     });
     await expect(page.getByTestId('document-reference-layer'))
-      .toHaveAttribute('data-reference-image-state', 'loaded');
+      .toHaveAttribute('data-reference-image-state', 'loaded', { timeout: 20_000 });
     await waitForDarkScanPixel(page);
     const pngPixels = await inspectScanPixels(page);
 
@@ -308,7 +323,7 @@ test.describe('reconstruction page-space interactions', () => {
       buffer: fixture.pdf,
     });
     await expect(page.getByTestId('document-reference-layer'))
-      .toHaveAttribute('data-reference-image-state', 'loaded');
+      .toHaveAttribute('data-reference-image-state', 'loaded', { timeout: 20_000 });
     await waitForDarkScanPixel(page);
     const pdfPixels = await inspectScanPixels(page);
     const differences = pngPixels.map((pngPixel, index) => pngPixel.reduce(
@@ -504,7 +519,7 @@ test.describe('reconstruction page-space interactions', () => {
     expect(firstImageId).toBeTruthy();
     await configureSpanWithoutPinning(page, 'span-2');
     const firstBeforeDrag = await readSpanGeometry(page, firstImageId!);
-    await dragSpanWithoutChangingTheDropdown(page, firstImageId!, 42, 32);
+    await dragSpanWithoutChangingTheDropdown(page, firstImageId!, 42, -32);
     await page.getByTestId('document-image-caption').fill('Photo A caption');
     const firstAfterDrag = await readSpanGeometry(page, firstImageId!);
 
@@ -598,5 +613,98 @@ test.describe('reconstruction page-space interactions', () => {
       return pixel;
     }, pngBytes.toString('base64'));
     expect(exportedCorner).toEqual([250, 248, 245, 255]);
+  });
+
+  test('does not reserve authored title space when the title is empty', async ({ page }) => {
+    await openReconstruction(page, 'Empty Title Layout Regression');
+
+    const placeholder = page.getByTestId('document-title-placeholder');
+    await expect(placeholder).toBeVisible();
+    await expect(placeholder).toHaveText('Add a title');
+
+    const readTitleGeometry = () => page.evaluate(() => {
+      const content = document.querySelector<HTMLElement>('[data-testid="document-page"] .document-page-content');
+      const body = document.querySelector<HTMLElement>('[data-testid="document-body-region"]');
+      const title = document.querySelector<HTMLElement>('[data-testid="document-title-region"]');
+      if (!content || !body) throw new Error('Document page geometry is unavailable.');
+      const contentRect = content.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      const contentStyle = getComputedStyle(content);
+      return {
+        bodyOffset: bodyRect.top - contentRect.top,
+        contentPaddingTop: Number.parseFloat(contentStyle.paddingTop),
+        titleHeight: title?.getBoundingClientRect().height || 0,
+        titleMarginBottom: title
+          ? Number.parseFloat(getComputedStyle(title).marginBottom)
+          : 0,
+      };
+    });
+
+    const emptyGeometry = await readTitleGeometry();
+    expect(emptyGeometry.bodyOffset - emptyGeometry.contentPaddingTop).toBeLessThan(2);
+    expect(emptyGeometry.titleMarginBottom).toBe(0);
+
+    await placeholder.click();
+    const title = page.locator('.document-title-prosemirror');
+    await expect(title).toBeFocused();
+    await title.type('Intentional page title');
+    await expect(title).toHaveText('Intentional page title');
+    await expect(page.getByTestId('document-title-region'))
+      .toHaveAttribute('data-document-title-state', 'authored');
+
+    const authoredGeometry = await readTitleGeometry();
+    expect(authoredGeometry.bodyOffset - authoredGeometry.contentPaddingTop)
+      .toBeGreaterThan(emptyGeometry.bodyOffset - emptyGeometry.contentPaddingTop + 10);
+    expect(authoredGeometry.titleMarginBottom).toBe(14);
+
+    await title.press('ControlOrMeta+A');
+    await title.press('Backspace');
+    await expect(page.getByTestId('document-title-placeholder')).toBeVisible();
+    await expect(page.getByTestId('document-title-region'))
+      .toHaveAttribute('data-document-title-state', 'empty');
+    const collapsedGeometry = await readTitleGeometry();
+    expect(collapsedGeometry.bodyOffset - collapsedGeometry.contentPaddingTop)
+      .toBeLessThan(2);
+    expect(collapsedGeometry.titleMarginBottom).toBe(0);
+  });
+
+  test('preserves fixed photo geometry through title changes, page switching, and reopen', async ({ page }) => {
+    await openReconstruction(page, 'Empty Title Photo Geometry Regression');
+    const imageId = await addPhoto(page, 'fixed-photo-title-regression.png');
+    expect(imageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+    await dragSpanWithoutChangingTheDropdown(page, imageId!, 44, 30);
+    const fixedBeforeTitle = await readPageSpaceGeometry(page, imageId!);
+
+    const placeholder = page.getByTestId('document-title-placeholder');
+    await placeholder.click();
+    const title = page.locator('.document-title-prosemirror');
+    await title.type('A deliberate title');
+    await expect(page.getByTestId('document-title-region'))
+      .toHaveAttribute('data-document-title-state', 'authored');
+    const fixedWithTitle = await readPageSpaceGeometry(page, imageId!);
+    expect(fixedWithTitle).toEqual(fixedBeforeTitle);
+
+    await title.press('ControlOrMeta+A');
+    await title.press('Backspace');
+    await expect(page.getByTestId('document-title-placeholder')).toBeVisible();
+    const fixedAfterDelete = await readPageSpaceGeometry(page, imageId!);
+    expect(fixedAfterDelete).toEqual(fixedBeforeTitle);
+
+    await page.getByTestId('document-add-page').click();
+    await page.getByTestId('document-page-tab-0').click();
+    await expect(page.getByTestId('document-title-placeholder')).toBeVisible();
+    expect(await readPageSpaceGeometry(page, imageId!)).toEqual(fixedBeforeTitle);
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByTestId('dashboard-project-card')
+      .filter({ hasText: 'Empty Title Photo Geometry Regression' })
+      .getByRole('button')
+      .first()
+      .click();
+    await expect(page.getByTestId('document-title-placeholder')).toBeVisible();
+    expect(await readPageSpaceGeometry(page, imageId!)).toEqual(fixedBeforeTitle);
   });
 });

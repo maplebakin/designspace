@@ -47,6 +47,7 @@ type DocumentPageViewProps = {
   zoom: number;
   isExportSurface?: boolean;
   titleEditor: React.ReactNode;
+  onFocusTitle?: () => void;
   bodyEditor: React.ReactNode;
   exportRootRef: React.RefObject<HTMLDivElement | null>;
   referenceAdjustMode: boolean;
@@ -71,6 +72,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   zoom,
   isExportSurface = false,
   titleEditor,
+  onFocusTitle,
   bodyEditor,
   exportRootRef,
   referenceAdjustMode,
@@ -108,7 +110,14 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
     page.dropCap
   );
   const hasTitle = hasMeaningfulDocumentContent(page.titleContent);
-  const renderTitleRegion = !page.suppressTitle || hasTitle;
+  const renderTitleRegion = hasTitle || (!isExportSurface && !page.suppressTitle);
+  const emptyTitleRegionStyle = !hasTitle
+    ? {
+      top: `${physicalMargins.topIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+      right: `${physicalMargins.rightIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+      left: `${physicalMargins.leftIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
+    }
+    : undefined;
 
   return (
     <div
@@ -187,22 +196,20 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
               onChange={onUpdateOverlay}
             />
 
-            <div className="document-page-content" style={marginStyle}>
+            <div
+              className="document-page-content"
+              data-document-title-state={hasTitle ? 'authored' : 'empty'}
+              style={marginStyle}
+            >
               {renderTitleRegion && (
                 <section
-                  className="document-title-region"
+                  className={`document-title-region ${
+                    hasTitle ? '' : 'document-title-region--empty'
+                  }`}
                   data-testid="document-title-region"
+                  data-document-title-state={hasTitle ? 'authored' : 'empty'}
+                  style={emptyTitleRegionStyle}
                 >
-                  {!hasTitle && (
-                    <span
-                      className="document-page-placeholder document-page-placeholder--title"
-                      data-document-export-exclude="true"
-                      data-testid="document-title-placeholder"
-                      aria-hidden="true"
-                    >
-                      Add a title
-                    </span>
-                  )}
                   {titleEditor}
                 </section>
               )}
@@ -229,6 +236,19 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
                   >
                     Start writing or paste translated text…
                   </span>
+                )}
+                {!hasTitle && !page.suppressTitle && !isExportSurface && (
+                  <button
+                    type="button"
+                    className="document-page-placeholder document-page-placeholder--title document-title-affordance"
+                    data-document-export-exclude="true"
+                    data-document-editor-only="true"
+                    data-testid="document-title-placeholder"
+                    aria-label="Add a title"
+                    onClick={() => onFocusTitle?.()}
+                  >
+                    Add a title
+                  </button>
                 )}
                 {bodyEditor}
               </section>

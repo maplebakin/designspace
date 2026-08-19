@@ -263,7 +263,9 @@ export const useLegacyProjectSessionBridge = (
           },
           autosaveDelayMs: 900,
           save: async (name) => useDocumentStore.getState().saveProject(name),
-          autosave: async () => useDocumentStore.getState().flushAutosave(),
+          autosave: async () => useDocumentStore.getState().flushAutosave({
+            allowSharedAuthority: true,
+          }),
         }
       : {
           canSave: () => Boolean(useEditorStore.getState().canvas),
@@ -368,6 +370,7 @@ export const useLegacyProjectSessionBridge = (
   return {
     mode,
     descriptor,
+    lifecycleSnapshot,
     snapshot,
     commands,
     zoom,

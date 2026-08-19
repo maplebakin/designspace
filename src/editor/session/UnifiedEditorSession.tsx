@@ -46,6 +46,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   const clearSession = useProjectSessionStore((state) => state.clearSession);
   const {
     mode,
+    lifecycleSnapshot,
     snapshot,
     commands,
     zoom,
@@ -159,6 +160,10 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
       session={snapshot}
       commands={sharedCommands}
       zoom={zoom}
+      lifecycleDiagnostics={{
+        authoredRevision: lifecycleSnapshot.authoredRevision,
+        autosaveInvocationCount: lifecycleSnapshot.autosaveInvocationCount,
+      }}
       onBackToDashboard={onBackToDashboard}
     >
       {({ canvasPageStrip }) => (

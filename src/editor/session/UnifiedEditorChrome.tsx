@@ -381,11 +381,17 @@ const UnifiedSaveStatus: React.FC<{
   </span>
 );
 
+export type UnifiedEditorLifecycleDiagnostics = Readonly<{
+  authoredRevision: number;
+  autosaveInvocationCount: number;
+}>;
+
 const UnifiedProjectHeader: React.FC<{
   session: ProjectSessionSnapshot | null;
   commands: ProjectSessionCommands | null;
   onBackToDashboard?: () => void;
-}> = ({ session, commands, onBackToDashboard }) => {
+  lifecycleDiagnostics?: UnifiedEditorLifecycleDiagnostics;
+}> = ({ session, commands, onBackToDashboard, lifecycleDiagnostics }) => {
   const documentStyle = session?.rendererKind === 'document';
   const projectName = session?.projectName
     || (documentStyle ? 'Untitled Document' : 'Untitled Project');
@@ -401,6 +407,8 @@ const UnifiedProjectHeader: React.FC<{
       className="unified-project-header"
       data-testid="unified-project-header"
       data-document-editor-ui={documentStyle ? 'true' : undefined}
+      data-authored-revision={lifecycleDiagnostics?.authoredRevision}
+      data-autosave-invocations={lifecycleDiagnostics?.autosaveInvocationCount}
     >
       <div className="unified-project-header__identity">
         <div className="unified-project-header__brand">
@@ -529,6 +537,7 @@ export type UnifiedEditorShellProps = {
   commands: ProjectSessionCommands | null;
   zoom: number;
   onBackToDashboard?: () => void;
+  lifecycleDiagnostics?: UnifiedEditorLifecycleDiagnostics;
   children: React.ReactNode | ((slots: UnifiedEditorShellContentSlots) => React.ReactNode);
 };
 
@@ -542,6 +551,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   commands,
   zoom,
   onBackToDashboard,
+  lifecycleDiagnostics,
   children,
 }) => {
   const [showCloseModal, setShowCloseModal] = useState(false);
@@ -679,6 +689,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
         session={session}
         commands={commands}
         onBackToDashboard={onBackToDashboard ? handleBackToDashboard : undefined}
+        lifecycleDiagnostics={lifecycleDiagnostics}
       />
       <div
         className="unified-narrow-recovery"

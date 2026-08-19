@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -54,6 +55,7 @@ import type {
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 import {
+  measureDocumentPagePositionOriginOffsetPx,
   StructuredDocumentSpanLayout,
 } from './StructuredDocumentSpanLayout';
 import {
@@ -120,6 +122,7 @@ export const commitStructuredDocumentImagePosition = (
 
   const nextAttributes = normalizeDocumentImageAttributes({
     ...(targetNode.attrs as Partial<DocumentImageAttributes>),
+    coordinateSpace: 'page',
     verticalAnchor: 'page-position',
     horizontalPlacement: 'custom',
     xOffsetPx,
@@ -501,6 +504,7 @@ export const FlowEditor = ({
   // they are not layout inputs and must not invalidate the page-space model.
   const [selectionRevision, setSelectionRevision] = useState(0);
   const [layoutHeightPx, setLayoutHeightPx] = useState(720);
+  const [pagePositionOriginOffsetPx, setPagePositionOriginOffsetPx] = useState(0);
   const [editingStructuredText, setEditingStructuredText] = useState(false);
   const callbacksRef = useRef({
     resolveAssetSource,
@@ -951,6 +955,25 @@ export const FlowEditor = ({
     };
   }, [editor, scheduleOverflowMeasure]);
 
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const syncOrigin = () => {
+      const next = measureDocumentPagePositionOriginOffsetPx(root, viewScale);
+      setPagePositionOriginOffsetPx((current) => (
+        Math.abs(current - next) > 0.5 ? next : current
+      ));
+    };
+    syncOrigin();
+    const contentRoot = root.closest<HTMLElement>('.document-page-content');
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(syncOrigin)
+      : null;
+    resizeObserver?.observe(root);
+    if (contentRoot) resizeObserver?.observe(contentRoot);
+    return () => resizeObserver?.disconnect();
+  }, [editor, viewScale]);
+
   useEffect(() => () => {
     if (frameRef.current === null || typeof window === 'undefined') return;
     if (typeof window.cancelAnimationFrame === 'function') {
@@ -1027,6 +1050,7 @@ export const FlowEditor = ({
           language={language}
           imageGroups={imageGroups}
           selectedImageIds={selectedStructuredImageIds}
+          pagePositionOriginOffsetPx={pagePositionOriginOffsetPx}
           onSelectImage={(
             _position,
             imageId,

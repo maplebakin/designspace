@@ -26,10 +26,12 @@ export type DocumentImageVerticalAnchor = 'flow' | 'page-position';
 /**
  * Persisted document-image coordinates always use unzoomed 96-CSS-pixel
  * layout units. `body-span` means Y is measured from the body-region top and
- * X is measured from the selected column-span's left edge. Flow-anchored
+ * X is measured from the selected column-span's left edge. `page` means the
+ * free-position frame is authored from the physical page content origin, so
+ * it remains anchored when authored flow above the body changes. Flow-anchored
  * images do not persist an active free-position coordinate.
  */
-export type DocumentImageCoordinateSpace = 'flow' | 'body-span';
+export type DocumentImageCoordinateSpace = 'flow' | 'body-span' | 'page';
 
 export type DocumentImageCropMode = 'fit' | 'fill';
 
@@ -196,9 +198,13 @@ export const normalizeDocumentImageGeometry = (
     wrap,
     verticalAnchor,
     coordinateSpace:
-      wrap === 'span-columns' && verticalAnchor === 'page-position'
-        ? 'body-span'
-        : 'flow',
+      value.coordinateSpace === 'page'
+        && wrap === 'span-columns'
+        && verticalAnchor === 'page-position'
+        ? 'page'
+        : wrap === 'span-columns' && verticalAnchor === 'page-position'
+          ? 'body-span'
+          : 'flow',
     wrapPaddingTopPx: normalizeDocumentImagePaddingValue(
       value.wrapPaddingTopPx,
       legacy.wrapPaddingTopPx

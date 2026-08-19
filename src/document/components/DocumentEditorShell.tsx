@@ -77,6 +77,7 @@ import {
 } from './FlowEditor';
 import {
   buildMultiDocumentSpanLayoutModel,
+  measureDocumentPagePositionOriginOffsetPx,
   moveRectangleWithoutCollisions,
 } from './StructuredDocumentSpanLayout';
 import {
@@ -819,6 +820,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         const editorRoot = editor.view.dom.closest<HTMLElement>(
           '.document-flow-editor'
         );
+        const pagePositionOriginOffsetPx =
+          measureDocumentPagePositionOriginOffsetPx(editorRoot, zoom);
         const bodyHeightPx = Math.max(
           1,
           editorRoot?.clientHeight
@@ -839,7 +842,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             typographyStyle,
             dropCap: page.dropCap,
             language: page.language || project?.document.language,
-          }
+          },
+          [],
+          pagePositionOriginOffsetPx
         );
         const image = model?.images.find(
           (candidate) =>
@@ -872,6 +877,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             heightPx: Math.max(
               0,
               model.availableHeightPx
+                + pagePositionOriginOffsetPx
                 - image.attributes.wrapPaddingTopPx
                 - image.attributes.wrapPaddingBottomPx
             ),
@@ -887,7 +893,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             image.spanWidthPx,
             image.renderedImageWidthPx
           ),
-          moved.topPx
+          moved.topPx + pagePositionOriginOffsetPx
         );
         if (committed) {
           notifyCommittedStructuredImageLayout(
@@ -920,6 +926,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     setSelectedStructuredImageIds,
     setReference,
     typographyStyle,
+    zoom,
   ]);
 
   const availableColumnWidth = useMemo(() => {
@@ -1313,6 +1320,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const editorRoot = editor.view.dom.closest<HTMLElement>(
       '.document-flow-editor'
     );
+    const pagePositionOriginOffsetPx =
+      measureDocumentPagePositionOriginOffsetPx(editorRoot, zoom);
     const bodyHeightPx = Math.max(
       1,
       editorRoot?.clientHeight
@@ -1334,9 +1343,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         dropCap: page.dropCap,
         language: page.language || project?.document.language,
       },
-      page.imageGroups
+      page.imageGroups,
+      pagePositionOriginOffsetPx
     );
-  }, [page, physicalMargins, project?.document.language, typographyStyle]);
+  }, [page, physicalMargins, project?.document.language, typographyStyle, zoom]);
 
   const arrangeSelectedImages = useCallback((
     kind: DocumentImageGroup['kind']
@@ -1786,6 +1796,21 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           ? { spanStartColumn: update.spanStartColumn }
           : {}),
       };
+      if (
+        update.verticalAnchor === 'page-position'
+        && beforeNode.attrs.coordinateSpace !== 'page'
+      ) {
+        const editorRoot = editor.view.dom.closest<HTMLElement>(
+          '.document-flow-editor'
+        );
+        const pagePositionOriginOffsetPx =
+          measureDocumentPagePositionOriginOffsetPx(editorRoot, zoom);
+        const currentY = Number(next.yPx ?? beforeNode.attrs.yPx);
+        next.coordinateSpace = 'page';
+        next.yPx = (
+          Number.isFinite(currentY) ? currentY : 0
+        ) + pagePositionOriginOffsetPx;
+      }
       if (typeof update.widthPx === 'number') {
         const maximumWidth =
           selectedFlowImage.attributes.wrap === 'span-columns' && page
@@ -1928,6 +1953,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     selectedFlowImage,
     selectedOverlay,
     updateOverlay,
+    zoom,
   ]);
 
   const handleSelectedImageCommit = useCallback((
@@ -3394,6 +3420,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onPasteDispatch={handlePasteDispatch}
                 />
               )}
+              onFocusTitle={() => {
+                const editor = titleEditorRef.current;
+                if (!editor || editor.isDestroyed) return;
+                editor.commands.focus('start');
+              }}
               bodyEditor={(
                 <FlowEditor
                   key={`body-${page.id}`}

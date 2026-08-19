@@ -23,6 +23,8 @@ export type ProjectLifecycleSnapshot = Readonly<{
   saveStatus: SessionSaveStatus;
   autosaveEligible: boolean;
   pendingAutosave: boolean;
+  /** Runtime evidence for browser coverage; reset for each active session. */
+  autosaveInvocationCount: number;
   saveInFlight: boolean;
   canSave: boolean;
   canClose: boolean;
@@ -70,6 +72,7 @@ const EMPTY_SNAPSHOT: ProjectLifecycleSnapshot = Object.freeze({
   saveStatus: 'saved',
   autosaveEligible: false,
   pendingAutosave: false,
+  autosaveInvocationCount: 0,
   saveInFlight: false,
   canSave: false,
   canClose: true,
@@ -154,7 +157,6 @@ export const createProjectLifecycleAuthority = (
       || !safeCapability(session.adapter.canAutosave)
       || snapshot.authoredRevision <= snapshot.persistedRevision
       || inFlightSave?.generation === generation
-      || autosaveTimer !== null
     ) {
       return;
     }
@@ -162,11 +164,16 @@ export const createProjectLifecycleAuthority = (
     const delay = Number.isFinite(session.adapter.autosaveDelayMs)
       ? Math.max(0, session.adapter.autosaveDelayMs)
       : 0;
-    setSnapshot({
-      ...snapshot,
-      autosaveEligible: true,
-      pendingAutosave: true,
-    });
+    if (autosaveTimer !== null) {
+      clearTimeout(autosaveTimer);
+    }
+    if (!snapshot.pendingAutosave) {
+      setSnapshot({
+        ...snapshot,
+        autosaveEligible: true,
+        pendingAutosave: true,
+      });
+    }
     autosaveTimer = setTimeout(() => {
       autosaveTimer = null;
       if (!isCurrentGeneration(generation)) return;
@@ -232,6 +239,9 @@ export const createProjectLifecycleAuthority = (
       saveStatus: 'saving',
       saveInFlightRevision: revision,
       pendingAutosave: false,
+      autosaveInvocationCount: kind === 'autosave'
+        ? snapshot.autosaveInvocationCount + 1
+        : snapshot.autosaveInvocationCount,
     });
 
     const promise = (async () => {
@@ -325,6 +335,7 @@ export const createProjectLifecycleAuthority = (
       saveStatus: 'saved',
       autosaveEligible: safeCapability(adapter.canAutosave),
       pendingAutosave: false,
+      autosaveInvocationCount: 0,
     });
   };
 

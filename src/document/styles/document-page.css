@@ -1259,6 +1259,20 @@
   margin: 0 0 14px;
 }
 
+/* An empty title remains mounted as an editor-only overlay so the user can
+   start title editing without making a blank paragraph part of page flow. */
+.document-title-region--empty {
+  position: absolute;
+  z-index: 5;
+  height: auto;
+  margin: 0;
+  pointer-events: none;
+}
+
+.document-title-region--empty .document-title-editor {
+  pointer-events: none;
+}
+
 .document-body-region {
   position: relative;
   z-index: 1;
@@ -1284,6 +1298,33 @@
   font-size: inherit;
   font-weight: 700;
   line-height: 1.08;
+}
+
+.document-title-affordance {
+  appearance: none;
+  top: -1.15em;
+  z-index: 7;
+  padding: 0;
+  border: 0;
+  color: #8792a2;
+  background: transparent;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: var(--document-title-font-size, 36px);
+  font-weight: 700;
+  line-height: 1.08;
+  text-align: left;
+  cursor: text;
+  pointer-events: auto;
+}
+
+.document-title-affordance:hover,
+.document-title-affordance:focus-visible {
+  color: #5f6b7a;
+}
+
+.document-title-affordance:focus-visible {
+  outline: 2px solid rgba(53, 89, 214, 0.45);
+  outline-offset: 3px;
 }
 
 .document-page-placeholder--body {
@@ -1440,7 +1481,10 @@
   width: 100%;
   height: 100%;
   min-height: 100%;
-  overflow: hidden;
+  /* Page-positioned frames can legitimately sit above the current body
+     origin when a title is authored later. The page sheet/export root still
+     clips at the physical page boundary. */
+  overflow: visible;
   color: #1f1c18;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 14px;

@@ -866,6 +866,37 @@ describe('live document editor UI', () => {
     }
   });
 
+  it('omits the empty title affordance and title flow region from export surfaces', async () => {
+    useDocumentStore.getState().updateBodyContent(
+      plainDocumentContent('Body starts at the page content origin.')
+    );
+    const committedProject = useDocumentStore.getState().project!;
+    let mounted: Awaited<ReturnType<
+      typeof mountCommittedDocumentExportPages
+    >> | undefined;
+
+    try {
+      let mountPromise!: ReturnType<typeof mountCommittedDocumentExportPages>;
+      act(() => {
+        mountPromise = mountCommittedDocumentExportPages(committedProject);
+      });
+      mounted = await mountPromise;
+      const root = mounted.sources[0].element;
+      expect(root.querySelector('[data-testid="document-title-region"]'))
+        .toBeNull();
+      expect(root.querySelector('[data-testid="document-title-placeholder"]'))
+        .toBeNull();
+      expect(root.textContent).not.toContain('Add a title');
+      expect(root.textContent).toContain('Body starts at the page content origin.');
+    } finally {
+      if (mounted) {
+        act(() => {
+          mounted?.cleanup();
+        });
+      }
+    }
+  });
+
   it('exposes compact add, duplicate, reorder, select, and remove page controls', async () => {
     const originalPageIds = seedHistoricalFourPageProject();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -980,6 +1011,68 @@ describe('live document editor UI', () => {
       ).toContain('A typed body paragraph');
       expect(screen.queryByTestId('document-body-placeholder')).toBeNull();
     });
+  });
+
+  it('keeps an empty title out of page flow while preserving the add-title interaction', async () => {
+    await renderShell();
+
+    const titleRegion = screen.getByTestId('document-title-region');
+    const placeholder = screen.getByTestId('document-title-placeholder');
+    expect(titleRegion.getAttribute('data-document-title-state')).toBe('empty');
+    expect(placeholder.tagName).toBe('BUTTON');
+    expect(placeholder.getAttribute('aria-label')).toBe('Add a title');
+    expect(placeholder.getAttribute('data-document-export-exclude')).toBe('true');
+
+    fireEvent.click(placeholder);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText('Document title'));
+    });
+
+    const title = screen.getByLabelText('Document title') as HTMLElement;
+    const titleParagraph = title.querySelector('p');
+    expect(titleParagraph).not.toBeNull();
+    await act(async () => {
+      titleParagraph!.textContent = 'A title';
+      titleParagraph!.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: 'A title',
+        inputType: 'insertText',
+      }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-title-region')
+        .getAttribute('data-document-title-state')).toBe('authored');
+      expect(screen.queryByTestId('document-title-placeholder')).toBeNull();
+    });
+
+    await act(async () => {
+      titleParagraph!.textContent = '';
+      titleParagraph!.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: null,
+        inputType: 'deleteContentBackward',
+      }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-title-region')
+        .getAttribute('data-document-title-state')).toBe('empty');
+      expect(screen.getByTestId('document-title-placeholder')).not.toBeNull();
+    });
+  });
+
+  it('omits the empty-title affordance when title display is suppressed', async () => {
+    useDocumentStore.getState().updatePage({ suppressTitle: true });
+    render(React.createElement(DocumentEditorShell));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-body-region')).not.toBeNull();
+    });
+    expect(screen.queryByTestId('document-title-region')).toBeNull();
+    expect(screen.queryByTestId('document-title-placeholder')).toBeNull();
   });
 
   it('applies body text size to a selection and to future typing', async () => {

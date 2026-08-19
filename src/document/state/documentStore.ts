@@ -146,7 +146,7 @@ type DocumentStoreState = {
   setSelectedFlowImageId: (id: string | null) => void;
   setOverflowing: (overflowing: boolean) => void;
   setToastMessage: (message: string | null) => void;
-  flushAutosave: () => Promise<boolean>;
+  flushAutosave: (options?: { allowSharedAuthority?: boolean }) => Promise<boolean>;
   setLifecycleAuthorityMode: (mode: DocumentLifecycleAuthorityMode) => void;
   reset: () => void;
 };
@@ -1230,7 +1230,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   setOverflowing: (isOverflowing) => set({ isOverflowing }),
   setToastMessage: (toastMessage) => set({ toastMessage }),
 
-  flushAutosave: async () => {
+  flushAutosave: async (options) => {
     cancelNavigationPersistence();
     const {
       currentLibraryProjectId,
@@ -1240,7 +1240,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       lifecycleAuthorityMode,
     } = get();
     if (
-      lifecycleAuthorityMode === 'shared'
+      (lifecycleAuthorityMode === 'shared' && !options?.allowSharedAuthority)
       || !currentLibraryProjectId
       || !isDirty
       || !project

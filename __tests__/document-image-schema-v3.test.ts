@@ -202,6 +202,19 @@ describe('document image schema v3', () => {
     });
   });
 
+  it('preserves explicit page coordinates for authored fixed spans', () => {
+    expect(normalizeDocumentImageGeometry({
+      wrap: 'span-columns',
+      verticalAnchor: 'page-position',
+      coordinateSpace: 'page',
+      yPx: 240,
+    })).toMatchObject({
+      wrap: 'span-columns',
+      verticalAnchor: 'page-position',
+      coordinateSpace: 'page',
+    });
+  });
+
   it('keeps canonical v3 sides authoritative and removes contradictory aliases', () => {
     const normalized = normalizeDesignSpaceProjectPayload(
       documentPayload(3, {

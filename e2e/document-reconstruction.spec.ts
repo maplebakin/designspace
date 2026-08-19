@@ -915,6 +915,10 @@ test.describe('document reconstruction MVP', () => {
       '[data-layout-role="physical-column"][data-column="2"]'
     ).boundingBox();
     expect(snapTargetColumnBox).not.toBeNull();
+    const imageFrameBox = await imageSlot.locator(
+      '[data-layout-role="spanning-image"]'
+    ).boundingBox();
+    expect(imageFrameBox).not.toBeNull();
     const imageYBeforeDrag = Number(
       await layout.getAttribute('data-image-top-px')
     );
@@ -925,15 +929,17 @@ test.describe('document reconstruction MVP', () => {
       await page.getByTestId('document-zoom-indicator').textContent() || '100',
       10
     );
+    const dragStartY = imageFrameBox!.y + imageFrameBox!.height / 2;
     await page.mouse.move(
-      slotBox!.x + slotBox!.width / 2,
-      slotBox!.y + Math.min(40, slotBox!.height / 2)
+      imageFrameBox!.x + imageFrameBox!.width / 2,
+      dragStartY
     );
     await page.mouse.down();
+    const dragDistancePx = 24;
     await page.mouse.move(
-      slotBox!.x + slotBox!.width / 2
+      imageFrameBox!.x + imageFrameBox!.width / 2
         + (snapTargetColumnBox!.x - slotBox!.x),
-      slotBox!.y + Math.min(40, slotBox!.height / 2) + 40
+      dragStartY + dragDistancePx
     );
     const snapXGuidePosition = await layout.locator(
       '[data-snap-axis="x"]'
@@ -967,7 +973,7 @@ test.describe('document reconstruction MVP', () => {
         .getAttribute('data-rendered-width-px')
     );
     expect(committedImageY - imageYBeforeDrag)
-      .toBeCloseTo(40 / (zoomPercent / 100), 0);
+      .toBeCloseTo(dragDistancePx / (zoomPercent / 100), 0);
     expect(Math.min(
       Math.abs(committedImageX - snapXGuidePosition),
       Math.abs(committedImageX + committedImageWidth / 2 - snapXGuidePosition),
