@@ -18,6 +18,7 @@ import {
   it,
   vi,
 } from 'vitest';
+import type { DocumentImageGroup } from '../src/document/types/documentProject';
 import {
   commitStructuredDocumentImageSize,
   commitStructuredDocumentImagePosition,
@@ -32,6 +33,7 @@ import {
 import {
   buildMultiDocumentSpanLayoutModel,
   clampResizeWidthWithoutCollisions,
+  getStructuredImageDragVisualDelta,
   getStructuredImageFrameGeometry,
   moveRectangleWithoutCollisions,
   rectanglesOverlap,
@@ -163,10 +165,12 @@ const renderFlowEditor = async ({
   content = multiImageContent(),
   viewScale = 1,
   onUpdate,
+  imageGroups = [],
 }: {
   content?: JSONContent;
   viewScale?: number;
   onUpdate?: (content: JSONContent, editor: Editor) => void;
+  imageGroups?: DocumentImageGroup[];
 } = {}) => {
   let editor: Editor | null = null;
   const rendered = render(React.createElement(FlowEditor, {
@@ -176,6 +180,7 @@ const renderFlowEditor = async ({
     dropCap: false,
     viewScale,
     maxSpanImageWidthPx: 720,
+    imageGroups,
     resolveAssetSource: () => 'data:image/png;base64,AA==',
     onUpdate,
     onEditorReady: (readyEditor: Editor | null) => {
@@ -571,6 +576,13 @@ describe('positioned document image contract', () => {
     )).toBe(false);
   });
 
+  it('calculates drag preview deltas in layout space', () => {
+    expect(getStructuredImageDragVisualDelta(
+      { leftPx: 120, topPx: 240 },
+      { leftPx: 156, topPx: 198 },
+    )).toEqual({ xPx: 36, yPx: -42 });
+  });
+
   it.each([0.5, 1, 2])(
     'commits identical snapped unzoomed coordinates after a drag at %d× view scale',
     async (viewScale) => {
@@ -616,9 +628,10 @@ describe('positioned document image contract', () => {
         yPx: 120,
       });
       await waitFor(() => {
-        expect(Number(slot.dataset.imageXOffsetPx)).toBeCloseTo(68, 5);
-        expect(Number(slot.dataset.imageTopPx)).toBeCloseTo(156, 5);
+        expect(slot.style.transform).toBe('translate3d(28px, 36px, 0)');
       });
+      expect(Number(slot.dataset.imageXOffsetPx)).toBeCloseTo(40, 5);
+      expect(Number(slot.dataset.imageTopPx)).toBeCloseTo(120, 5);
 
       dispatchPointer(window, 'pointerup', {
         pointerId,
@@ -693,7 +706,8 @@ describe('positioned document image contract', () => {
       clientY: 136,
     });
     await waitFor(() => {
-      expect(slot.dataset.verticalAnchor).toBe('page-position');
+      expect(slot.style.transform).not.toBe('');
+      expect(slot.dataset.verticalAnchor).toBe('flow');
       expect(findImages(editor)[0].attrs.verticalAnchor).toBe('flow');
     });
 
@@ -749,7 +763,8 @@ describe('positioned document image contract', () => {
       clientY: 180,
     });
     await waitFor(() => {
-      expect(slot.dataset.verticalAnchor).toBe('page-position');
+      expect(slot.style.transform).not.toBe('');
+      expect(slot.dataset.verticalAnchor).toBe('flow');
     });
     dispatchPointer(window, 'pointercancel', {
       pointerId: 503,
@@ -760,6 +775,119 @@ describe('positioned document image contract', () => {
     await waitFor(() => {
       expect(findImages(editor)[0].attrs.verticalAnchor).toBe('flow');
       expect(slot.dataset.verticalAnchor).toBe('flow');
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('translates every grouped slot with one visual drag transform', async () => {
+    const onUpdate = vi.fn();
+    const { container, editor } = await renderFlowEditor({
+      onUpdate,
+      content: {
+        type: 'doc',
+        content: [
+          textParagraph('Grouped photo text '.repeat(20)),
+          positionedImage({
+            id: 'group-left',
+            spanStartColumn: 1,
+            xOffsetPx: 20,
+            yPx: 90,
+          }),
+          positionedImage({
+            id: 'group-right',
+            spanStartColumn: 1,
+            xOffsetPx: 20,
+            yPx: 260,
+          }),
+        ],
+      },
+      imageGroups: [{
+        id: 'photo-group',
+        kind: 'row',
+        childImageIds: ['group-left', 'group-right'],
+        gapPx: 16,
+        sharedWidth: false,
+      }],
+    });
+    const firstSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="group-left"]'
+    )!;
+    const secondSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="group-right"]'
+    )!;
+    const before = findImages(editor).map((image) => ({
+      id: image.attrs.id,
+      xOffsetPx: image.attrs.xOffsetPx,
+      yPx: image.attrs.yPx,
+    }));
+    onUpdate.mockClear();
+
+    dispatchPointer(firstSlot, 'pointerdown', {
+      pointerId: 504,
+      clientX: 100,
+      clientY: 100,
+    });
+    dispatchPointer(firstSlot, 'pointermove', {
+      pointerId: 504,
+      clientX: 128,
+      clientY: 132,
+    });
+    await waitFor(() => {
+      expect(firstSlot.style.transform).not.toBe('');
+      expect(secondSlot.style.transform).toBe(firstSlot.style.transform);
+    });
+    expect(findImages(editor).map((image) => ({
+      id: image.attrs.id,
+      xOffsetPx: image.attrs.xOffsetPx,
+      yPx: image.attrs.yPx,
+    }))).toEqual(before);
+
+    dispatchPointer(window, 'pointerup', {
+      pointerId: 504,
+      clientX: 128,
+      clientY: 132,
+    });
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(firstSlot.style.transform).toBe('');
+      expect(secondSlot.style.transform).toBe('');
+    });
+  });
+
+  it('cancels the visual drag preview on Escape without a commit', async () => {
+    const onUpdate = vi.fn();
+    const { container, editor } = await renderFlowEditor({
+      onUpdate,
+      content: {
+        type: 'doc',
+        content: [positionedImage({
+          id: 'escape-photo',
+          spanStartColumn: 1,
+          xOffsetPx: 24,
+          yPx: 80,
+          verticalAnchor: 'flow',
+        })],
+      },
+    });
+    const slot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="escape-photo"]'
+    )!;
+    dispatchPointer(slot, 'pointerdown', {
+      pointerId: 505,
+      clientX: 100,
+      clientY: 100,
+    });
+    onUpdate.mockClear();
+    dispatchPointer(slot, 'pointermove', {
+      pointerId: 505,
+      clientX: 124,
+      clientY: 132,
+    });
+    await waitFor(() => expect(slot.style.transform).not.toBe(''));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(slot.style.transform).toBe('');
+      expect(editor.getJSON().content?.[0]?.attrs?.verticalAnchor).toBe('flow');
     });
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -887,8 +1015,9 @@ describe('positioned document image contract', () => {
       clientY: -200,
     });
     await waitFor(() => {
-      expect(Number(slot.dataset.imageTopPx)).toBe(10);
+      expect(slot.style.transform).toBe('translate3d(4px, -20px, 0)');
     });
+    expect(Number(slot.dataset.imageTopPx)).toBe(30);
     expect(findImages(editor)[0].attrs?.yPx).toBe(30);
 
     dispatchPointer(window, 'pointerup', {

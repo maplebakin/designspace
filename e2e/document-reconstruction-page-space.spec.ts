@@ -60,6 +60,17 @@ const readSpanGeometry = async (page: Page, imageId: string) => {
   };
 };
 
+const readDragDiagnostics = async (page: Page) => page.locator(
+  '[data-document-span-layout]'
+).evaluate((element) => ({
+  renderCount: Number(element.getAttribute('data-layout-render-count')),
+  modelBuildCount: Number(element.getAttribute('data-layout-model-build-count')),
+  revision: Number(element.getAttribute('data-layout-revision')),
+  pointerMoveCount: Number(element.getAttribute('data-drag-pointermove-count')),
+  previewFrameCount: Number(element.getAttribute('data-drag-preview-frame-count')),
+  commitCount: Number(element.getAttribute('data-drag-commit-count')),
+}));
+
 const readPageSpaceGeometry = async (page: Page, imageId: string) => {
   const frame = getSpanFrame(page, imageId);
   await expect(frame).toBeVisible();
@@ -230,6 +241,136 @@ test.describe('reconstruction page-space interactions', () => {
     expect(after).not.toBeNull();
     expect(Math.abs(after!.x - before!.x) + Math.abs(after!.y - before!.y))
       .toBeGreaterThan(8);
+  });
+
+  test('keeps a multi-photo drag preview on the compositor path until one commit', async ({ page }) => {
+    await openReconstruction(page, 'Fluid Photo Drag Preview Regression');
+    const firstImageId = await addPhoto(page, 'fluid-photo-a.png');
+    expect(firstImageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+    await dragSpanWithoutChangingTheDropdown(page, firstImageId!, 42, -28);
+    await page.getByTestId('document-image-caption').fill('Photo A');
+
+    const secondImageId = await addPhoto(page, 'fluid-photo-b.png', false);
+    expect(secondImageId).toBeTruthy();
+    await page.locator(
+      `[data-layout-role="flow-image-hit-target"][data-image-id="${secondImageId}"]`
+    ).click();
+    await configureSpanWithoutPinning(page, 'span-2');
+    const secondFrame = getSpanFrame(page, secondImageId!);
+    await expect(secondFrame).toBeVisible();
+    await secondFrame.click();
+
+    const layout = page.locator('[data-document-span-layout]');
+    await page.waitForTimeout(100);
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.waitForTimeout(500);
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-layout-zoom')
+    )).toBeGreaterThan(0.6);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-layout-zoom')
+    )).toBeLessThan(0.7);
+    const secondSlot = layout.locator(
+      `[data-layout-role="occupied-columns"][data-image-id="${secondImageId}"]`
+    );
+    const firstBefore = await readPageSpaceGeometry(page, firstImageId!);
+    const before = await secondFrame.boundingBox();
+    expect(before).not.toBeNull();
+    const point = {
+      x: before!.x + before!.width / 2,
+      y: before!.y + before!.height / 2,
+    };
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await expect(secondSlot).toHaveAttribute('data-image-selected', 'true');
+    await page.waitForTimeout(250);
+    const baseline = await readDragDiagnostics(page);
+    const afterDown = await secondFrame.boundingBox();
+    expect(afterDown).not.toBeNull();
+    expect(afterDown!.x).toBeCloseTo(before!.x, 1);
+    expect(afterDown!.y).toBeCloseTo(before!.y, 1);
+
+    const intermediate: Array<{ x: number; y: number }> = [];
+    for (let step = 1; step <= 24; step += 1) {
+      await page.mouse.move(point.x - step * 2, point.y - step * 2, { steps: 1 });
+      await page.waitForTimeout(12);
+      const box = await secondFrame.boundingBox();
+      expect(box).not.toBeNull();
+      intermediate.push({ x: box!.x, y: box!.y });
+    }
+    const lastBeforeUp = intermediate[intermediate.length - 1];
+    const during = await readDragDiagnostics(page);
+    expect(during.pointerMoveCount).toBeGreaterThan(10);
+    expect(during.previewFrameCount).toBeGreaterThan(0);
+    // Save/selection lifecycle updates may render the shell once or twice;
+    // the layout model itself must remain completely stable during movement.
+    expect(during.renderCount - baseline.renderCount).toBeLessThan(3);
+    expect(during.modelBuildCount).toBe(baseline.modelBuildCount);
+    expect(during.revision).toBe(baseline.revision);
+    for (let index = 1; index < intermediate.length; index += 1) {
+      expect(intermediate[index].y)
+        .toBeLessThanOrEqual(intermediate[index - 1].y + 1);
+    }
+    expect(
+      Math.abs(lastBeforeUp.x - before!.x) + Math.abs(lastBeforeUp.y - before!.y)
+    ).toBeGreaterThan(4);
+    await expect(secondSlot).toHaveAttribute('data-image-dragging', 'true');
+
+    const chrome = secondSlot.locator('[data-document-image-frame-chrome="true"]');
+    const frameDuring = await secondFrame.boundingBox();
+    const chromeDuring = await chrome.boundingBox();
+    expect(frameDuring).not.toBeNull();
+    expect(chromeDuring).not.toBeNull();
+    expect(Math.abs(frameDuring!.x - chromeDuring!.x)).toBeLessThan(1);
+    expect(Math.abs(frameDuring!.y - chromeDuring!.y)).toBeLessThan(1);
+
+    await page.mouse.up();
+    await expect(page.getByTestId('document-image-vertical-anchor'))
+      .toHaveValue('page-position');
+    await expect.poll(async () => (
+      await secondSlot.evaluate((element) => (element as HTMLElement).style.transform)
+    )).toBe('');
+    const after = await secondFrame.boundingBox();
+    expect(after).not.toBeNull();
+    expect(Math.abs(after!.x - lastBeforeUp.x)).toBeLessThan(1);
+    expect(Math.abs(after!.y - lastBeforeUp.y)).toBeLessThan(1);
+    await expect(secondSlot).toHaveAttribute('data-image-dragging', 'false');
+    const committed = await readDragDiagnostics(page);
+    expect(committed.commitCount).toBe(1);
+    expect(committed.revision).toBeGreaterThan(baseline.revision);
+
+    const firstAfter = await readPageSpaceGeometry(page, firstImageId!);
+    expect(firstAfter.left).toBeCloseTo(firstBefore.left, 1);
+    expect(firstAfter.top).toBeCloseTo(firstBefore.top, 1);
+
+    const secondBeforeFirstDrag = await readPageSpaceGeometry(page, secondImageId!);
+    const firstSlot = layout.locator(
+      `[data-layout-role="occupied-columns"][data-image-id="${firstImageId}"]`
+    );
+    const firstFrame = getSpanFrame(page, firstImageId!);
+    await expect(firstFrame).toBeVisible();
+    await firstFrame.click();
+    await expect(firstFrame).toBeVisible();
+    const firstPointBox = await firstFrame.boundingBox();
+    expect(firstPointBox).not.toBeNull();
+    await page.mouse.move(
+      firstPointBox!.x + firstPointBox!.width / 2,
+      firstPointBox!.y + firstPointBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      firstPointBox!.x + firstPointBox!.width / 2 + 18,
+      firstPointBox!.y + firstPointBox!.height / 2 + 10,
+      { steps: 6 },
+    );
+    await page.mouse.up();
+    await expect(firstSlot).toHaveAttribute('data-image-selected', 'true');
+    const secondAfterFirstDrag = await readPageSpaceGeometry(page, secondImageId!);
+    expect(secondAfterFirstDrag.left).toBeCloseTo(secondBeforeFirstDrag.left, 1);
+    expect(secondAfterFirstDrag.top).toBeCloseTo(secondBeforeFirstDrag.top, 1);
   });
 
   test('reproduces scanned PDF reference visibility at the imported defaults', async ({ page }) => {

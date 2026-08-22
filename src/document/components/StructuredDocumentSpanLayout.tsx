@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useLayoutEffect,
   useEffect,
   useMemo,
@@ -99,6 +100,14 @@ export type DocumentImageRectangle = {
   widthPx: number;
   heightPx: number;
 };
+
+export const getStructuredImageDragVisualDelta = (
+  startRectangle: Pick<DocumentImageRectangle, 'leftPx' | 'topPx'>,
+  previewRectangle: Pick<DocumentImageRectangle, 'leftPx' | 'topPx'>,
+) => ({
+  xPx: previewRectangle.leftPx - startRectangle.leftPx,
+  yPx: previewRectangle.topPx - startRectangle.topPx,
+});
 
 export type StructuredImageLayout = {
   imageId: string;
@@ -2185,7 +2194,6 @@ export const StructuredDocumentSpanLayout = ({
   const [previewOverrides, setPreviewOverrides] = useState<
     Record<string, Partial<DocumentImageAttributes>>
   >({});
-  const [snapGuides, setSnapGuides] = useState<readonly DocumentSnapGuide[]>([]);
   const [flowImageFrames, setFlowImageFrames] = useState<
     Record<string, StructuredImageFrameGeometry>
   >({});
@@ -2194,22 +2202,49 @@ export const StructuredDocumentSpanLayout = ({
   >({});
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const pointerSelectedImageIdRef = useRef<string | null>(null);
+  const imageSlotRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const snapGuideRefs = useRef<
+    Record<'x' | 'y', HTMLDivElement | null>
+  >({ x: null, y: null });
+  const dragVisualPendingRef = useRef<{
+    imageIds: readonly string[];
+    deltaXPx: number;
+    deltaYPx: number;
+    guides: readonly DocumentSnapGuide[];
+  } | null>(null);
+  const dragVisualFrameRef = useRef<number | null>(null);
+  const dragVisualFrameUsesAnimationFrameRef = useRef(false);
+  const pendingDragCommitCleanupRef = useRef<{
+    imageIds: readonly string[];
+    imageId: string;
+    xOffsetPx: number;
+    yPx: number;
+  } | null>(null);
+  const layoutRenderCountRef = useRef(0);
+  const modelBuildCountRef = useRef(0);
+  const dragPointerMoveCountRef = useRef(0);
+  const dragVisualFrameCountRef = useRef(0);
+  const dragCommitCountRef = useRef(0);
+  layoutRenderCountRef.current += 1;
   const model = useMemo(
-    () => buildMultiDocumentSpanLayoutModel(
-      editor,
-      columnCount,
-      columnGapPx,
-      availableWidthPx,
-      availableHeightPx,
-      previewOverrides,
-      {
-        typographyStyle,
-        dropCap,
-        language,
-      },
-      imageGroups,
-      pagePositionOriginOffsetPx
-    ),
+    () => {
+      modelBuildCountRef.current += 1;
+      return buildMultiDocumentSpanLayoutModel(
+        editor,
+        columnCount,
+        columnGapPx,
+        availableWidthPx,
+        availableHeightPx,
+        previewOverrides,
+        {
+          typographyStyle,
+          dropCap,
+          language,
+        },
+        imageGroups,
+        pagePositionOriginOffsetPx
+      );
+    },
     [
       availableHeightPx,
       availableWidthPx,
@@ -2297,6 +2332,7 @@ export const StructuredDocumentSpanLayout = ({
     startRectangle: DocumentImageRectangle;
     obstacles: DocumentImageRectangle[];
     captureElement: HTMLElement;
+    previewImageIds: readonly string[];
     originalXOffsetPx: number;
     originalYPx: number;
     pinOnDrag: boolean;
@@ -2378,20 +2414,167 @@ export const StructuredDocumentSpanLayout = ({
     cancelled: boolean
   ) => void>(() => undefined);
 
+  const updateDragDiagnostics = useCallback(() => {
+    const root = layoutRef.current;
+    if (!root) return;
+    root.dataset.layoutRenderCount = String(layoutRenderCountRef.current);
+    root.dataset.layoutModelBuildCount = String(modelBuildCountRef.current);
+    root.dataset.dragPointermoveCount = String(
+      dragPointerMoveCountRef.current
+    );
+    root.dataset.dragPreviewFrameCount = String(
+      dragVisualFrameCountRef.current
+    );
+    root.dataset.dragCommitCount = String(dragCommitCountRef.current);
+  }, []);
+
+  const setImageSlotRef = useCallback(
+    (imageId: string, element: HTMLDivElement | null) => {
+      if (element) {
+        imageSlotRefs.current.set(imageId, element);
+      } else {
+        imageSlotRefs.current.delete(imageId);
+      }
+    },
+    []
+  );
+
+  const setSnapGuideRef = useCallback(
+    (axis: 'x' | 'y', element: HTMLDivElement | null) => {
+      snapGuideRefs.current[axis] = element;
+    },
+    []
+  );
+
+  const setSnapGuideVisuals = useCallback(
+    (guides: readonly DocumentSnapGuide[]) => {
+      (['x', 'y'] as const).forEach((axis) => {
+        const element = snapGuideRefs.current[axis];
+        if (!element) return;
+        const guide = guides.find((candidate) => candidate.axis === axis);
+        if (!guide) {
+          element.style.display = 'none';
+          element.removeAttribute('data-snap-source');
+          return;
+        }
+        element.style.display = 'block';
+        if (axis === 'x') {
+          element.style.left = `${guide.positionPx}px`;
+        } else {
+          element.style.top = `${guide.positionPx}px`;
+        }
+        element.dataset.snapSource = guide.source;
+      });
+    },
+    []
+  );
+
+  const cancelDragVisualFrame = useCallback(() => {
+    const frame = dragVisualFrameRef.current;
+    if (frame === null) return;
+    if (
+      dragVisualFrameUsesAnimationFrameRef.current
+      && typeof window.cancelAnimationFrame === 'function'
+    ) {
+      window.cancelAnimationFrame(frame);
+    } else {
+      window.clearTimeout(frame);
+    }
+    dragVisualFrameRef.current = null;
+    dragVisualFrameUsesAnimationFrameRef.current = false;
+  }, []);
+
+  const clearDragVisualPreview = useCallback((
+    imageIds?: readonly string[]
+  ) => {
+    cancelDragVisualFrame();
+    dragVisualPendingRef.current = null;
+    const ids = imageIds || [...imageSlotRefs.current.keys()];
+    ids.forEach((imageId) => {
+      const element = imageSlotRefs.current.get(imageId);
+      if (!element) return;
+      element.style.transform = '';
+      element.style.willChange = '';
+      element.dataset.imageDragging = 'false';
+    });
+    setSnapGuideVisuals([]);
+  }, [cancelDragVisualFrame, setSnapGuideVisuals]);
+
+  const flushDragVisualPreview = useCallback(() => {
+    dragVisualFrameRef.current = null;
+    dragVisualFrameUsesAnimationFrameRef.current = false;
+    const pending = dragVisualPendingRef.current;
+    if (!pending) return;
+    dragVisualPendingRef.current = null;
+    pending.imageIds.forEach((imageId) => {
+      const element = imageSlotRefs.current.get(imageId);
+      if (!element) return;
+      element.style.transform = (
+        `translate3d(${pending.deltaXPx}px, ${pending.deltaYPx}px, 0)`
+      );
+      element.style.willChange = 'transform';
+      element.dataset.imageDragging = 'true';
+    });
+    setSnapGuideVisuals(pending.guides);
+    dragVisualFrameCountRef.current += 1;
+    updateDragDiagnostics();
+  }, [setSnapGuideVisuals, updateDragDiagnostics]);
+
+  const scheduleDragVisualPreview = useCallback((pending: {
+    imageIds: readonly string[];
+    deltaXPx: number;
+    deltaYPx: number;
+    guides: readonly DocumentSnapGuide[];
+  }) => {
+    dragVisualPendingRef.current = pending;
+    if (dragVisualFrameRef.current !== null) return;
+    if (typeof window.requestAnimationFrame === 'function') {
+      dragVisualFrameUsesAnimationFrameRef.current = true;
+      dragVisualFrameRef.current = window.requestAnimationFrame(
+        flushDragVisualPreview
+      );
+    } else {
+      dragVisualFrameUsesAnimationFrameRef.current = false;
+      dragVisualFrameRef.current = window.setTimeout(
+        flushDragVisualPreview,
+        0
+      );
+    }
+  }, [flushDragVisualPreview]);
+
   useEffect(() => {
     if (dragRef.current || resizeRef.current || flowResizeRef.current) return;
     setPreviewOverrides({});
     setFlowImageResizePreview({});
   }, [revision]);
 
+  useLayoutEffect(() => {
+    const pending = pendingDragCommitCleanupRef.current;
+    if (!pending || !model) return;
+    const image = model.images.find(
+      (candidate) => candidate.imageId === pending.imageId
+    );
+    if (!image) return;
+    if (
+      Math.abs(image.attributes.xOffsetPx - pending.xOffsetPx) > 0.5
+      || Math.abs(image.attributes.yPx - pending.yPx) > 0.5
+    ) {
+      return;
+    }
+    pendingDragCommitCleanupRef.current = null;
+    clearDragVisualPreview(pending.imageIds);
+  }, [clearDragVisualPreview, model, revision]);
+
   useEffect(() => () => {
+    clearDragVisualPreview();
+    pendingDragCommitCleanupRef.current = null;
     if (previewFrameRef.current === null) return;
     if (typeof window.cancelAnimationFrame === 'function') {
       window.cancelAnimationFrame(previewFrameRef.current);
     } else {
       window.clearTimeout(previewFrameRef.current);
     }
-  }, []);
+  }, [clearDragVisualPreview]);
 
   useEffect(() => {
     const handlePointerUp = (event: globalThis.PointerEvent) => {
@@ -2426,15 +2609,24 @@ export const StructuredDocumentSpanLayout = ({
       const textSelection = textSelectionDragRef.current;
       if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const drag = dragRef.current;
+      if (!drag) return;
+      event.preventDefault();
+      finishDragRef.current(drag.pointerId, true);
+    };
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerCancel);
     window.addEventListener('mouseup', handleMouseUp);
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
 
@@ -2658,6 +2850,7 @@ export const StructuredDocumentSpanLayout = ({
           ) || frameRectangle
         : frameRectangle);
     if (!startRectangle) return;
+    const previewImageIds = group?.childImageIds || [image.imageId];
     const captureElement = layoutRef.current || event.currentTarget;
     captureElement.setPointerCapture?.(event.pointerId);
     const movingUnitId = group?.groupId ?? image.imageId;
@@ -2685,6 +2878,7 @@ export const StructuredDocumentSpanLayout = ({
         (rectangle) => rectangle.imageId !== movingUnitId
       ),
       captureElement,
+      previewImageIds,
       originalXOffsetPx: anchorImage.attributes.xOffsetPx,
       originalYPx: startRectangle.topPx,
       pinOnDrag,
@@ -2701,7 +2895,11 @@ export const StructuredDocumentSpanLayout = ({
       xOffsetPx: anchorImage.attributes.xOffsetPx,
       yPx: startRectangle.topPx,
     };
-    setSnapGuides([]);
+    dragPointerMoveCountRef.current = 0;
+    dragVisualFrameCountRef.current = 0;
+    dragCommitCountRef.current = 0;
+    setSnapGuideVisuals([]);
+    updateDragDiagnostics();
   };
 
   const handleResizePointerDown = (
@@ -3008,6 +3206,8 @@ export const StructuredDocumentSpanLayout = ({
   ) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    dragPointerMoveCountRef.current += 1;
+    updateDragDiagnostics();
     const viewportDistance = Math.hypot(
       event.clientX - drag.startClientX,
       event.clientY - drag.startClientY
@@ -3062,7 +3262,6 @@ export const StructuredDocumentSpanLayout = ({
       nearby: drag.obstacles.map(toBodyRectangle),
       thresholdPx: 8,
     });
-    setSnapGuides(snapped.guides);
     const nextMovement = moveKernelRectangleWithoutCollisions({
       start: toBodyRectangle(drag.startRectangle),
       desiredOrigin: bodyPoint(
@@ -3092,13 +3291,15 @@ export const StructuredDocumentSpanLayout = ({
       xOffsetPx,
       yPx: nextMovement.rectangle.topPx,
     };
-    schedulePreview(drag.imageId, {
-      ...(drag.pinOnDrag ? { verticalAnchor: 'page-position' } : {}),
-      ...(drag.pageSpaceOnDrag ? { coordinateSpace: 'page' } : {}),
-      horizontalPlacement: 'custom',
-      xOffsetPx,
-      yPx: nextMovement.rectangle.topPx
-        + (drag.pageSpaceOnDrag ? pagePositionOriginOffsetPx : 0),
+    const visualDelta = getStructuredImageDragVisualDelta(
+      drag.startRectangle,
+      nextMovement.rectangle
+    );
+    scheduleDragVisualPreview({
+      imageIds: drag.previewImageIds,
+      deltaXPx: visualDelta.xPx,
+      deltaYPx: visualDelta.yPx,
+      guides: snapped.guides,
     });
   };
 
@@ -3110,23 +3311,35 @@ export const StructuredDocumentSpanLayout = ({
     }
     const preview = previewPositionRef.current
       ?? drag.latestPreviewPosition;
+    cancelDragVisualFrame();
+    flushDragVisualPreview();
     dragRef.current = null;
     previewPositionRef.current = null;
     if (cancelled || !drag.dragStarted || !drag.moved) {
-      clearPreview(drag.imageId);
-      setSnapGuides([]);
+      clearDragVisualPreview(drag.previewImageIds);
       return;
     }
+    const committedYPx = preview.yPx + pagePositionOriginOffsetPx;
+    pendingDragCommitCleanupRef.current = {
+      imageIds: drag.previewImageIds,
+      imageId: drag.imageId,
+      xOffsetPx: preview.xOffsetPx,
+      yPx: committedYPx,
+    };
     const committed = onCommitImagePosition(
       drag.position,
       drag.imageId,
       preview.xOffsetPx,
-      preview.yPx + pagePositionOriginOffsetPx
+      committedYPx
     );
     if (!committed) {
-      clearPreview(drag.imageId);
+      pendingDragCommitCleanupRef.current = null;
+      clearDragVisualPreview(drag.previewImageIds);
+    } else {
+      dragCommitCountRef.current += 1;
+      updateDragDiagnostics();
     }
-    setSnapGuides([]);
+    setSnapGuideVisuals([]);
   };
   finishDragRef.current = finishDrag;
 
@@ -3271,6 +3484,7 @@ export const StructuredDocumentSpanLayout = ({
       }
       data-image-region-height-px={representativeImage?.imageRegionHeightPx}
       data-layout-content-height-px={model.layoutContentHeightPx}
+      data-layout-revision={revision}
       data-layout-overflowing={model.overflowing ? 'true' : 'false'}
       data-layout-coordinate-space="body"
       data-page-position-origin-offset-px={pagePositionOriginOffsetPx}
@@ -3278,6 +3492,11 @@ export const StructuredDocumentSpanLayout = ({
       data-selection-revision={selectionRevision}
       data-layout-available-width-px={model.availableWidthPx}
       data-layout-available-height-px={model.availableHeightPx}
+      data-layout-render-count={layoutRenderCountRef.current}
+      data-layout-model-build-count={modelBuildCountRef.current}
+      data-drag-pointermove-count={dragPointerMoveCountRef.current}
+      data-drag-preview-frame-count={dragVisualFrameCountRef.current}
+      data-drag-commit-count={dragCommitCountRef.current}
       data-layout-exclusions={JSON.stringify(model.exclusions)}
       data-layout-text-bands={JSON.stringify(model.textBands.map((band) => ({
         id: band.id,
@@ -3301,16 +3520,15 @@ export const StructuredDocumentSpanLayout = ({
       onPointerMove={handleImagePointerMove}
       onClick={handleClick}
     >
-      {snapGuides.map((guide, index) => (
+      {(['x', 'y'] as const).map((axis) => (
         <div
-          key={`${guide.axis}-${guide.positionPx}-${index}`}
-          className={`document-span-layout__snap-guide document-span-layout__snap-guide--${guide.axis}`}
+          key={`snap-guide-${axis}`}
+          ref={(element) => setSnapGuideRef(axis, element)}
+          className={`document-span-layout__snap-guide document-span-layout__snap-guide--${axis}`}
           data-document-export-exclude="true"
-          data-snap-axis={guide.axis}
-          data-snap-source={guide.source}
-          style={guide.axis === 'x'
-            ? { left: `${guide.positionPx}px` }
-            : { top: `${guide.positionPx}px` }}
+          data-snap-axis={axis}
+          aria-hidden="true"
+          style={{ display: 'none' }}
         />
       ))}
       <div className="document-span-layout__column-stacks">
@@ -3380,6 +3598,7 @@ export const StructuredDocumentSpanLayout = ({
         return (
           <div
             key={image.imageId}
+            ref={(element) => setImageSlotRef(image.imageId, element)}
             className="document-span-layout__image-slot"
             data-layout-role="occupied-columns"
             data-image-id={image.imageId}

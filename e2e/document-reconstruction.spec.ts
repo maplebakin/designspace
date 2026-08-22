@@ -941,18 +941,24 @@ test.describe('document reconstruction MVP', () => {
         + (snapTargetColumnBox!.x - slotBox!.x),
       dragStartY + dragDistancePx
     );
-    const snapXGuidePosition = await layout.locator(
-      '[data-snap-axis="x"]'
-    ).evaluate((guide) => Number.parseFloat(
+    const snapXGuide = layout.locator('[data-snap-axis="x"]');
+    await expect.poll(async () => snapXGuide.evaluate((guide) => (
       (guide as HTMLElement).style.left
-    ));
-    const previewImageWidth = Number(
-      await imageSlot.locator('[data-layout-role="spanning-image"]')
-        .getAttribute('data-rendered-width-px')
+    ))).not.toBe('');
+    const snapXGuidePosition = await snapXGuide.evaluate((guide) =>
+      Number.parseFloat((guide as HTMLElement).style.left)
     );
-    const previewImageLeft = Number(
-      await layout.getAttribute('data-image-left-px')
-    );
+    const previewFrame = await imageSlot.locator(
+      '[data-layout-role="spanning-image"]'
+    ).boundingBox();
+    const layoutBox = await layout.boundingBox();
+    const layoutZoom = Number(await layout.getAttribute('data-layout-zoom'));
+    expect(previewFrame).not.toBeNull();
+    expect(layoutBox).not.toBeNull();
+    const previewImageWidth = previewFrame!.width / layoutZoom;
+    const previewImageLeft = (
+      previewFrame!.x - layoutBox!.x
+    ) / layoutZoom;
     expect(Math.min(
       Math.abs(previewImageLeft - snapXGuidePosition),
       Math.abs(previewImageLeft + previewImageWidth / 2 - snapXGuidePosition),

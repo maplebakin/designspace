@@ -218,6 +218,14 @@ const dispatchTestPointer = (
   fireEvent(target, event);
 };
 
+const readTranslate3d = (value: string) => {
+  const match = value.match(
+    /^translate3d\((-?[\d.]+)px, (-?[\d.]+)px, 0(?:px)?\)$/
+  );
+  if (!match) return null;
+  return { x: Number(match[1]), y: Number(match[2]) };
+};
+
 const spanningBodyContent = (
   spanCount: 2 | 3,
   spanStartColumn: 1 | 2 = 1
@@ -2946,8 +2954,11 @@ describe('live document editor UI', () => {
     dispatchPointer('pointermove', 150);
     expect(findDocumentImageNode(editor!.getJSON())?.attrs?.yPx).toBe(120);
     await waitFor(() => {
-      expect(Number(layout.dataset.imageTopPx)).toBe(220);
+      const preview = readTranslate3d(slot.style.transform);
+      expect(preview).not.toBeNull();
+      expect(preview!.y).toBeCloseTo(100, 4);
     });
+    expect(Number(layout.dataset.imageTopPx)).toBe(120);
     dispatchPointer('pointerup', 150);
     await waitFor(() => {
       expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
@@ -3478,6 +3489,7 @@ describe('live document editor UI', () => {
         '[data-layout-role="occupied-columns"]'
       )!;
       const startLeft = Number(imageSlot.dataset.imageLeftPx);
+      const startTop = Number(imageSlot.dataset.imageTopPx);
       const deltaX = 30;
       const deltaY = 24;
       // At 0.5× the requested edge lands within the snap threshold of the
@@ -3505,11 +3517,19 @@ describe('live document editor UI', () => {
         const preview = container.querySelector<HTMLElement>(
           '[data-layout-role="occupied-columns"]'
         )!;
-        expect(Number(preview.dataset.imageLeftPx)).toBeCloseTo(
-          startLeft + deltaX / viewScale + snapAdjustment,
-          4
+        const visualDelta = readTranslate3d(preview.style.transform);
+        expect(visualDelta).not.toBeNull();
+        expect(visualDelta!.x).toBeCloseTo(
+          deltaX / viewScale + snapAdjustment,
+          1
+        );
+        expect(visualDelta!.y).toBeCloseTo(
+          deltaY / viewScale + verticalSnapAdjustment,
+          1
         );
       });
+      expect(Number(imageSlot.dataset.imageLeftPx)).toBeCloseTo(startLeft, 4);
+      expect(Number(imageSlot.dataset.imageTopPx)).toBeCloseTo(startTop, 4);
 
       dispatchTestPointer(window, 'pointerup', {
         pointerId: 71,
@@ -3654,9 +3674,7 @@ describe('live document editor UI', () => {
         clientY: 140,
       });
       await waitFor(() => {
-        expect(Number(container.querySelector<HTMLElement>(
-          '[data-layout-role="occupied-columns"]'
-        )!.dataset.imageXOffsetPx)).toBe(70);
+        expect(readTranslate3d(imageSlot.style.transform)).not.toBeNull();
       });
 
       if (finishEvent === 'pointercancel') {
@@ -3669,9 +3687,8 @@ describe('live document editor UI', () => {
         fireEvent(window, new Event('blur'));
       }
       await waitFor(() => {
-        expect(Number(container.querySelector<HTMLElement>(
-          '[data-layout-role="occupied-columns"]'
-        )!.dataset.imageXOffsetPx)).toBe(20);
+        expect(imageSlot.style.transform).toBe('');
+        expect(Number(imageSlot.dataset.imageXOffsetPx)).toBe(20);
       });
       expect(findDocumentImageNode(editor!.getJSON())?.attrs).toMatchObject({
         xOffsetPx: 20,
