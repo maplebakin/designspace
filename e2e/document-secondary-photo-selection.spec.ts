@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createScannedReferenceFixture } from './fixtures/scanned-reference-page';
 
 const PHOTO_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAAABmJLR0QA/wD/AP+gvaeTAAABa0lEQVRogeWZS5LDIAxEJXyK3GauNadnNuPQzceQbN8KVeJuBNJTlZN8/fzWkhEla7T1LL6+0q2/v77UrZ69jp7NiMwa9/ps6rHqPA7x63XrPVQ3xlX85vn0vrvcMiNKiRolIu41IyKj/q8a13fcNKu4il/tPMY9ZrrVHrN8+vg0txLSAadVX9+s3/KuOvrZrur5QW5lkU8fv3VjOz+19nkL7hJYH2y+xz637mAb7FrhidxbBwC513wKknvzBXJvuCK5t3yA3E9mAI37YQawuJ/MABr36gvkXn2HDmBwr75A7hvCXQdwuG/dWZDcq47IvemQ3JsXkHu7ECT36kXk3jsAyf1yBjC4f5gBEO7XM4DB/cMMoHBvM4DHvRURyb34FST3mgOReysWknvX8bi330CR3FsM5H4yA3Dc9zOAxb2dk8m9+gK5t9yg3OsePO7b/6Dhr8Mc7u9OlxlA4t4uCsp90yC5Vy8i9+r1B7Q45ELbjS61AAAAAElFTkSuQmCC';
@@ -12,13 +13,17 @@ type FrameGeometry = {
   height: number;
 };
 
-const openDocumentWithFirstPhoto = async (page: Page, name: string) => {
+const openDocumentWithFirstPhoto = async (
+  page: Page,
+  name: string,
+  textRepeat = 30
+) => {
   await page.goto('/');
   await page.getByTestId('dashboard-new-document').click();
   await page.getByTestId('document-project-name').fill(name);
   await page.getByRole('button', { name: '3 columns' }).click();
   await page.locator('.document-flow-prosemirror').fill(
-    'Text before, between, and after the photographs. '.repeat(30)
+    'Text before, between, and after the photographs. '.repeat(textRepeat)
   );
   await page.getByTestId('document-image-file-input').setInputFiles({
     name: 'photo-a.png',
@@ -43,9 +48,10 @@ const configureSelectedSpan = async (
     width?: number;
     caption?: string;
     cropMode?: 'fit' | 'fill';
-  }
+  },
+  span: 'span-2' | 'span-3' = 'span-3'
 ) => {
-  await page.getByTestId('document-image-wrap').selectOption('span-3');
+  await page.getByTestId('document-image-wrap').selectOption(span);
   await page.getByTestId('document-image-vertical-anchor')
     .selectOption('page-position');
   await page.getByTestId('document-image-horizontal-placement')
@@ -263,6 +269,61 @@ const readVisiblePhotoFrameIds = async (page: Page) => page.evaluate(() => (
     .filter((imageId): imageId is string => Boolean(imageId))
 ));
 
+const getVisibleTextStart = async (page: Page, column: number) => page.locator(
+  `[data-document-span-layout] [data-document-region-id][data-column="${column}"]`
+).evaluateAll((regions) => {
+  for (const region of regions) {
+    const walker = document.createTreeWalker(region, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const text = node.textContent || '';
+      if (text.trim()) {
+        const sourceElement = (node.parentElement || region).closest<HTMLElement>(
+          '[data-document-from][data-document-to]'
+        );
+        if (!sourceElement) {
+          node = walker.nextNode();
+          continue;
+        }
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.collapse(true);
+        const rect = range.getClientRects()[0] || range.getBoundingClientRect();
+        if (rect.width || rect.height) {
+          return {
+            x: rect.left + 2,
+            y: rect.top + rect.height / 2,
+            expectedPosition: Number(sourceElement.dataset.documentFrom),
+          };
+        }
+      }
+      node = walker.nextNode();
+    }
+  }
+  throw new Error('No visible text in requested column');
+});
+
+const assertTextHandoff = async (page: Page, expectedPosition?: number) => {
+  const layout = page.locator('[data-document-span-layout]');
+  const shell = page.getByTestId('document-editor-shell');
+  await expect(layout).toHaveAttribute('data-document-selection-kind', 'text');
+  await expect(layout).toHaveAttribute('data-text-editing', 'true');
+  if (expectedPosition !== undefined) {
+    await expect(layout).toHaveAttribute(
+      'data-document-selection-from',
+      String(expectedPosition)
+    );
+  }
+  await expect(shell).toHaveAttribute('data-active-text-region', 'body');
+  await expect(shell).toHaveAttribute('data-focused-text-region', 'body');
+  expect(await shell.getAttribute('data-selected-flow-image-id')).toBeNull();
+  expect(await shell.getAttribute('data-selected-flow-image-store-id')).toBeNull();
+  expect(await shell.getAttribute('data-selected-structured-image-ids')).toBe('');
+  expect(await shell.getAttribute('data-selected-image-group-id')).toBeNull();
+  expect(await shell.getAttribute('data-selected-overlay-id')).toBeNull();
+  await expect(page.getByTestId('document-image-inspector')).toHaveCount(0);
+};
+
 const setupAAsSpanAndAddDefaultB = async (
   page: Page,
   name: string,
@@ -272,9 +333,10 @@ const setupAAsSpanAndAddDefaultB = async (
     width?: number;
     caption?: string;
     cropMode?: 'fit' | 'fill';
-  } = { xOffset: 32, y: 160, caption: 'Caption A' }
+  } = { xOffset: 32, y: 160, caption: 'Caption A' },
+  textRepeat = 30
 ) => {
-  await openDocumentWithFirstPhoto(page, name);
+  await openDocumentWithFirstPhoto(page, name, textRepeat);
   const firstImageId = await page.locator('.document-image-node')
     .getAttribute('data-image-id');
   expect(firstImageId).not.toBeNull();
@@ -377,6 +439,106 @@ test.describe('secondary structured photo selection', () => {
     expect(textModeB.center).not.toBeNull();
     await page.mouse.click(textModeB.center!.x, textModeB.center!.y);
     await assertSelected(page, secondImageId);
+  });
+
+  test('hands photo selection to far-away text and back with one click', async ({ page }) => {
+    const { firstImageId, secondImageId } = await setupAAsSpanAndAddDefaultB(
+      page,
+      'Photo Text Interaction Handoff',
+      { xOffset: 32, y: 160, caption: 'Caption A' },
+      120
+    );
+    const reference = await createScannedReferenceFixture();
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'handoff-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: reference.pdf,
+    });
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+
+    // First prove the ordinary newly-added photo is selectable before changing
+    // its layout mode, then convert it for the repeated independent switching.
+    await clickFrame(page, secondImageId);
+    await assertSelected(page, secondImageId);
+    await expect(page.getByTestId('document-image-wrap')).toHaveValue('float-left');
+    await clickFrame(page, secondImageId);
+    await configureSelectedSpan(page, {
+      xOffset: 300,
+      y: 380,
+      width: 180,
+      caption: 'Caption B',
+    }, 'span-2');
+    await clickFrame(page, firstImageId);
+    await assertSelected(page, firstImageId);
+
+    const layout = page.locator('[data-document-span-layout]');
+    const beforeA = await readFrameGeometry(page, firstImageId);
+    const beforeB = await readFrameGeometry(page, secondImageId);
+    const selectionOnlyRevision = await layout.getAttribute('data-layout-revision');
+    const textPoint = await getVisibleTextStart(page, 1);
+    const frameOwner = await page.evaluate((point) => (
+      document.elementFromPoint(point.x, point.y)
+        ?.closest<HTMLElement>('[data-image-id]')
+        ?.dataset.imageId || null
+    ), {
+      x: beforeA.left + 2,
+      y: beforeA.top + 2,
+    });
+    expect(frameOwner).toBe(firstImageId);
+    const textOwner = await page.evaluate((point) => (
+      document.elementFromPoint(point.x, point.y)
+        ?.closest<HTMLElement>('[data-layout-role="explicit-text-column"]')
+        ?.dataset.documentRegionId || null
+    ), textPoint);
+    expect(textOwner).not.toBeNull();
+
+    await page.mouse.click(textPoint.x, textPoint.y);
+    await assertTextHandoff(page, textPoint.expectedPosition);
+    expect(await layout.getAttribute('data-layout-revision'))
+      .toBe(selectionOnlyRevision);
+    expect(await readFrameGeometry(page, firstImageId)).toEqual(beforeA);
+    expect(await readFrameGeometry(page, secondImageId)).toEqual(beforeB);
+
+    await page.keyboard.type('XYZ');
+    await expect(page.locator('.document-flow-prosemirror'))
+      .toContainText('XYZ');
+    await assertTextHandoff(page);
+    expect(await readFrameGeometry(page, firstImageId)).toEqual(beforeA);
+    expect(await readFrameGeometry(page, secondImageId)).toEqual(beforeB);
+
+    const transitions: Array<
+      | { kind: 'image'; imageId: string }
+      | { kind: 'text'; column: number }
+    > = [
+      { kind: 'image', imageId: secondImageId },
+      { kind: 'text', column: 3 },
+      { kind: 'image', imageId: firstImageId },
+      { kind: 'text', column: 2 },
+      { kind: 'image', imageId: secondImageId },
+      { kind: 'text', column: 3 },
+      { kind: 'image', imageId: firstImageId },
+      { kind: 'text', column: 1 },
+    ];
+    for (const transition of transitions) {
+      const revisionBefore = await layout.getAttribute('data-layout-revision');
+      if (transition.kind === 'image') {
+        await clickFrame(page, transition.imageId);
+        await assertSelected(page, transition.imageId);
+      } else {
+        const point = await getVisibleTextStart(page, transition.column);
+        const textOwner = await page.evaluate((target) => (
+          document.elementFromPoint(target.x, target.y)
+            ?.closest<HTMLElement>('[data-layout-role="explicit-text-column"]')
+            ?.dataset.documentRegionId || null
+        ), point);
+        expect(textOwner).not.toBeNull();
+        await page.mouse.click(point.x, point.y);
+        await assertTextHandoff(page, point.expectedPosition);
+      }
+      expect(await layout.getAttribute('data-layout-revision'))
+        .toBe(revisionBefore);
+    }
   });
 
   test('selects B, resizes and moves only B, and switches A/B through text mode', async ({ page }) => {

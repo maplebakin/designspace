@@ -3,7 +3,7 @@ import type {
   Editor,
   JSONContent,
 } from '@tiptap/core';
-import { NodeSelection } from '@tiptap/pm/state';
+import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import {
   act,
   cleanup,
@@ -166,11 +166,13 @@ const renderFlowEditor = async ({
   viewScale = 1,
   onUpdate,
   imageGroups = [],
+  onSelectionChange,
 }: {
   content?: JSONContent;
   viewScale?: number;
   onUpdate?: (content: JSONContent, editor: Editor) => void;
   imageGroups?: DocumentImageGroup[];
+  onSelectionChange?: (editor: Editor) => void;
 } = {}) => {
   let editor: Editor | null = null;
   const rendered = render(React.createElement(FlowEditor, {
@@ -183,6 +185,7 @@ const renderFlowEditor = async ({
     imageGroups,
     resolveAssetSource: () => 'data:image/png;base64,AA==',
     onUpdate,
+    onSelectionChange,
     onEditorReady: (readyEditor: Editor | null) => {
       editor = readyEditor;
     },
@@ -218,6 +221,7 @@ const dispatchPointer = (
   });
   Object.defineProperties(event, {
     pointerId: { value: pointerId },
+    button: { value: 0 },
     clientX: { value: clientX },
     clientY: { value: clientY },
   });
@@ -433,6 +437,108 @@ describe('positioned document image contract', () => {
     );
     expect(currentPosition).not.toBe(originalPosition);
     expect(editor.state.selection.from).toBe(currentPosition);
+  });
+
+  it('hands a pointer from an image to the clicked text position in one selection update', async () => {
+    const selectionUpdates = vi.fn();
+    const authoredUpdates = vi.fn();
+    const { container, editor } = await renderFlowEditor({
+      onSelectionChange: selectionUpdates,
+      onUpdate: authoredUpdates,
+      content: {
+        type: 'doc',
+        content: [
+          textParagraph('Text near the selected image before the far paragraph.'),
+          positionedImage({
+            id: 'handoff-photo',
+            spanStartColumn: 1,
+            xOffsetPx: 20,
+            yPx: 420,
+          }),
+          textParagraph('The clicked text destination is independent of the photo.'),
+        ],
+      },
+    });
+    const imageSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="handoff-photo"]'
+    )!;
+    const textBand = container.querySelector<HTMLElement>(
+      '[data-layout-role="explicit-text-column"]'
+    )!;
+    fireEvent.click(imageSlot);
+    await waitFor(() => {
+      expect(editor.state.selection).toBeInstanceOf(NodeSelection);
+    });
+    selectionUpdates.mockClear();
+    authoredUpdates.mockClear();
+    const expectedPosition = Number(textBand.dataset.documentFrom);
+
+    dispatchPointer(textBand, 'pointerdown', {
+      pointerId: 901,
+      clientX: 0,
+      clientY: 0,
+    });
+    await waitFor(() => {
+      expect(editor.state.selection).toBeInstanceOf(TextSelection);
+      expect(editor.state.selection.from).toBe(expectedPosition);
+    });
+    expect(selectionUpdates).toHaveBeenCalledTimes(1);
+    expect(authoredUpdates).not.toHaveBeenCalled();
+
+    // A click reclassified onto the old image during the same gesture cannot
+    // take ownership back from the text pointerdown.
+    fireEvent.click(imageSlot);
+    expect(editor.state.selection).toBeInstanceOf(TextSelection);
+    expect(selectionUpdates).toHaveBeenCalledTimes(1);
+    expect(authoredUpdates).not.toHaveBeenCalled();
+  });
+
+  it('uses the structured layout pointer coordinates for broad text entry', async () => {
+    const selectionUpdates = vi.fn();
+    const { container, editor } = await renderFlowEditor({
+      onSelectionChange: selectionUpdates,
+      content: {
+        type: 'doc',
+        content: [
+          textParagraph('Broad layout text must not fall back to the image.'),
+          positionedImage({
+            id: 'broad-layout-photo',
+            spanStartColumn: 1,
+            xOffsetPx: 20,
+            yPx: 420,
+          }),
+        ],
+      },
+    });
+    const layout = container.querySelector<HTMLElement>(
+      '[data-document-span-layout]'
+    )!;
+    const imageSlot = container.querySelector<HTMLElement>(
+      '[data-layout-role="occupied-columns"][data-image-id="broad-layout-photo"]'
+    )!;
+    const textBand = container.querySelector<HTMLElement>(
+      '[data-layout-role="explicit-text-column"]'
+    )!;
+    fireEvent.click(imageSlot);
+    await waitFor(() => {
+      expect(editor.state.selection).toBeInstanceOf(NodeSelection);
+    });
+    selectionUpdates.mockClear();
+
+    dispatchPointer(layout, 'pointerdown', {
+      pointerId: 902,
+      clientX: 0,
+      clientY: 0,
+    });
+    await waitFor(() => {
+      expect(editor.state.selection).toBeInstanceOf(TextSelection);
+      expect(editor.state.selection.from).toBe(
+        Number(textBand.dataset.documentFrom)
+      );
+    });
+    expect(selectionUpdates).toHaveBeenCalledTimes(1);
+    fireEvent.click(imageSlot);
+    expect(editor.state.selection).toBeInstanceOf(TextSelection);
   });
 
   it('fails closed when an image ID is missing or duplicated', async () => {

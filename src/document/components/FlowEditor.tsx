@@ -103,6 +103,26 @@ export const getSelectedDocumentImage = (
   };
 };
 
+/**
+ * Builds the text selection requested by a pointer gesture.  An omitted
+ * position is an intentionally document-relative fallback for keyboard or
+ * blank-document entry; it must never be derived from a previously selected
+ * image node.
+ */
+export const createDocumentTextSelection = (
+  editor: Editor,
+  position?: number
+) => {
+  const doc = editor.state.doc;
+  if (position === undefined) return TextSelection.atStart(doc);
+  const maximum = Math.max(1, doc.content.size);
+  const safePosition = Math.max(
+    1,
+    Math.min(maximum, Math.round(position))
+  );
+  return TextSelection.create(doc, safePosition, safePosition);
+};
+
 export const commitStructuredDocumentImagePosition = (
   editor: Editor,
   _expectedPosition: number,
@@ -1121,17 +1141,21 @@ export const FlowEditor = ({
             }
             return committed;
           }}
-          onEditText={() => {
+          onEditText={(position) => {
             enteringStructuredTextRef.current = true;
             setEditingStructuredText(true);
-            const { selection, doc } = editor.state;
-            if (selection instanceof NodeSelection) {
-              const near = TextSelection.near(
-                doc.resolve(selection.from),
-                -1
-              );
+            const requestedSelection = createDocumentTextSelection(
+              editor,
+              position
+            );
+            const currentSelection = editor.state.selection;
+            if (
+              !(currentSelection instanceof TextSelection)
+              || currentSelection.anchor !== requestedSelection.anchor
+              || currentSelection.head !== requestedSelection.head
+            ) {
               editor.view.dispatch(
-                editor.state.tr.setSelection(near)
+                editor.state.tr.setSelection(requestedSelection)
               );
             }
             editor.commands.focus(undefined, { scrollIntoView: false });

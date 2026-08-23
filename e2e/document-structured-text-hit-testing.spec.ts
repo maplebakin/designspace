@@ -330,6 +330,7 @@ test.describe('structured text hit testing', () => {
       const textAfterImageClick = await getVisibleTextPoint(page, 3, 'start');
       await page.mouse.click(textAfterImageClick.x, textAfterImageClick.y);
       await expect(layout).toHaveAttribute('data-text-editing', 'true');
+      await expect(layout).toHaveAttribute('data-document-selection-kind', 'text');
       expect(Number(await layout.getAttribute('data-document-selection-from')))
         .toBe(textAfterImageClick.expectedPosition);
       expect(await readStructuredLayoutContract(page)).toEqual(idleLayout);

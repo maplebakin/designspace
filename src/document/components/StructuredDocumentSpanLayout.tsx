@@ -1857,6 +1857,13 @@ type StructuredDocumentSpanLayoutProps = {
   onEditText: (position?: number) => void;
 };
 
+type StructuredInteractionIntent = {
+  pointerId: number;
+  owner: 'text' | 'image' | 'resize';
+  imageId?: string;
+  textPosition?: number | null;
+};
+
 const rectangleCollides = (
   rectangle: DocumentImageRectangle,
   obstacles: DocumentImageRectangle[]
@@ -2201,7 +2208,7 @@ export const StructuredDocumentSpanLayout = ({
     Record<string, StructuredImageFrameGeometry>
   >({});
   const layoutRef = useRef<HTMLDivElement | null>(null);
-  const pointerSelectedImageIdRef = useRef<string | null>(null);
+  const interactionIntentRef = useRef<StructuredInteractionIntent | null>(null);
   const imageSlotRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const snapGuideRefs = useRef<
     Record<'x' | 'y', HTMLDivElement | null>
@@ -2567,6 +2574,7 @@ export const StructuredDocumentSpanLayout = ({
 
   useEffect(() => () => {
     clearDragVisualPreview();
+    interactionIntentRef.current = null;
     pendingDragCommitCleanupRef.current = null;
     if (previewFrameRef.current === null) return;
     if (typeof window.cancelAnimationFrame === 'function') {
@@ -2588,6 +2596,7 @@ export const StructuredDocumentSpanLayout = ({
       finishResizeRef.current(event.pointerId, true);
       finishFlowResizeRef.current(event.pointerId, true);
       finishTextSelectionRef.current(event.pointerId);
+      interactionIntentRef.current = null;
     };
     const handleMouseUp = () => {
       const drag = dragRef.current;
@@ -2608,6 +2617,7 @@ export const StructuredDocumentSpanLayout = ({
       if (flowResize) finishFlowResizeRef.current(flowResize.pointerId, true);
       const textSelection = textSelectionDragRef.current;
       if (textSelection) finishTextSelectionRef.current(textSelection.pointerId);
+      interactionIntentRef.current = null;
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -2615,6 +2625,7 @@ export const StructuredDocumentSpanLayout = ({
       if (!drag) return;
       event.preventDefault();
       finishDragRef.current(drag.pointerId, true);
+      interactionIntentRef.current = null;
     };
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerCancel);
@@ -2761,14 +2772,15 @@ export const StructuredDocumentSpanLayout = ({
       clientX: event.clientX,
       clientY: event.clientY,
     });
-    if (position === null) {
-      onEditText();
-      return;
-    }
     event.preventDefault();
     event.stopPropagation();
-    onEditText();
-    setStructuredTextSelection(position);
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'text',
+      textPosition: position,
+    };
+    onEditText(position ?? undefined);
+    if (position === null) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     textSelectionDragRef.current = {
       pointerId: event.pointerId,
@@ -2819,7 +2831,11 @@ export const StructuredDocumentSpanLayout = ({
     if (resizeRef.current) return;
     event.preventDefault();
     event.stopPropagation();
-    pointerSelectedImageIdRef.current = image.imageId;
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'image',
+      imageId: image.imageId,
+    };
     onSelectImage(
       image.imagePosition,
       image.imageId,
@@ -2909,6 +2925,11 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     if (dragRef.current || resizeRef.current) return;
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'resize',
+      imageId: image.imageId,
+    };
     onSelectImage(image.imagePosition, image.imageId, false);
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const startWidth = image.renderedImageWidthPx;
@@ -3084,6 +3105,11 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     if (dragRef.current || resizeRef.current || flowResizeRef.current) return;
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'resize',
+      imageId: image.imageId,
+    };
     onSelectImage(image.imagePosition, image.imageId, false, image.nodeType);
     const minimumWidth = Math.max(32, minimumImageWidthPx);
     const maximumWidth = Math.max(
@@ -3356,6 +3382,13 @@ export const StructuredDocumentSpanLayout = ({
   };
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
+    const intent = interactionIntentRef.current;
+    if (intent) {
+      event.preventDefault();
+      event.stopPropagation();
+      interactionIntentRef.current = null;
+      return;
+    }
     const target = event.target as HTMLElement;
     const imageSlot = target.closest<HTMLElement>(
       '[data-layout-role="occupied-columns"]'
@@ -3377,23 +3410,51 @@ export const StructuredDocumentSpanLayout = ({
     }
     event.preventDefault();
     event.stopPropagation();
-    onEditText();
+    const root = layoutRef.current;
+    const position = root
+      ? resolveStructuredDocumentPositionAtPoint({
+          root,
+          editor,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        })
+      : null;
+    onEditText(position ?? undefined);
   };
 
   const handleLayoutPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
     const target = event.target as HTMLElement;
-    if (target.closest('[data-layout-role="occupied-columns"]')) return;
+    if (
+      target.closest('[data-layout-role="occupied-columns"]')
+      || target.closest('[data-layout-role="flow-image-hit-target"]')
+    ) return;
     event.preventDefault();
     event.stopPropagation();
-    onEditText();
+    const root = layoutRef.current;
+    const position = root
+      ? resolveStructuredDocumentPositionAtPoint({
+          root,
+          editor,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        })
+      : null;
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'text',
+      textPosition: position,
+    };
+    onEditText(position ?? undefined);
   };
 
   const handleImageClick = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
     const imageId = event.currentTarget.dataset.imageId || '';
-    if (pointerSelectedImageIdRef.current === imageId) {
-      pointerSelectedImageIdRef.current = null;
+    const intent = interactionIntentRef.current;
+    if (intent) {
+      interactionIntentRef.current = null;
       return;
     }
     const image = model.images.find(
@@ -3414,7 +3475,11 @@ export const StructuredDocumentSpanLayout = ({
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    pointerSelectedImageIdRef.current = image.imageId;
+    interactionIntentRef.current = {
+      pointerId: event.pointerId,
+      owner: 'image',
+      imageId: image.imageId,
+    };
     onSelectImage(
       image.imagePosition,
       image.imageId,
@@ -3427,8 +3492,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     const imageId = event.currentTarget.dataset.imageId || '';
-    if (pointerSelectedImageIdRef.current === imageId) {
-      pointerSelectedImageIdRef.current = null;
+    const intent = interactionIntentRef.current;
+    if (intent) {
+      interactionIntentRef.current = null;
       return;
     }
     const image = model.flowImages.find(
@@ -3466,6 +3532,13 @@ export const StructuredDocumentSpanLayout = ({
       data-image-group-count={model.imageGroups.length}
       data-document-selection-from={editor.state.selection.from}
       data-document-selection-to={editor.state.selection.to}
+      data-document-selection-kind={
+        editor.state.selection instanceof NodeSelection
+          ? 'node'
+          : editor.state.selection instanceof TextSelection
+            ? 'text'
+            : 'other'
+      }
       data-document-selection-text={editor.state.doc.textBetween(
         editor.state.selection.from,
         editor.state.selection.to,

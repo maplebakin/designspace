@@ -469,6 +469,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const zoom = useDocumentStore((state) => state.zoom);
   const isReferenceAdjustMode = useDocumentStore((state) => state.isReferenceAdjustMode);
   const selectedOverlayId = useDocumentStore((state) => state.selectedOverlayId);
+  const selectedFlowImageStoreId = useDocumentStore(
+    (state) => state.selectedFlowImageId
+  );
   const isOverflowing = useDocumentStore((state) => state.isOverflowing);
   const toastMessage = useDocumentStore((state) => state.toastMessage);
   const updatePage = useDocumentStore((state) => state.updatePage);
@@ -2810,8 +2813,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       data-testid="document-editor-shell"
       data-editor-mode="document"
       data-selected-flow-image-id={selectedFlowImage?.attributes.id || undefined}
+      data-selected-flow-image-store-id={selectedFlowImageStoreId || undefined}
       data-selected-structured-image-ids={selectedStructuredImageIds.join(',')}
       data-selected-image-group-id={selectedImageGroupId || undefined}
+      data-selected-overlay-id={selectedOverlayId || undefined}
+      data-focused-text-region={focusedTextRegion || undefined}
+      data-active-text-region={activeTextRegion}
     >
       <DocumentTopBar
         projectName={project.projectName}
@@ -3479,8 +3486,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                           ? current
                           : [selection.attributes.id]
                       ));
-                    } else if (editor.isFocused) {
+                    } else {
                       setSelectedStructuredImageIds([]);
+                      setSelectedImageGroupId(null);
                     }
                     if (selection || editor.isFocused) setSelectedOverlayId(null);
                   }}
