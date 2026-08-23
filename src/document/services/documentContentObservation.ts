@@ -1,4 +1,5 @@
 import { DOCUMENT_IMAGE_NODE_NAMES } from '../extensions/DocumentImageExtension';
+import { measureDocumentLiveTextMetric } from './documentLiveTextDiagnostics';
 
 const IMAGE_NODE_NAMES = new Set<string>(DOCUMENT_IMAGE_NODE_NAMES);
 const IMPLICIT_BLOCK_ATTRIBUTE_DEFAULTS = new Set([
@@ -63,11 +64,17 @@ const toComparableDocumentValue = (value: unknown) => {
 };
 
 export const documentAuthoredContentProjection = (value: unknown) => (
-  JSON.stringify(toComparableDocumentValue(value))
+  measureDocumentLiveTextMetric(
+    'documentAuthoredContentProjection',
+    () => JSON.stringify(toComparableDocumentValue(value))
+  )
 );
 
 export const documentAuthoredContentDiffers = (
   before: unknown,
   after: unknown
-) => documentAuthoredContentProjection(before)
-  !== documentAuthoredContentProjection(after);
+) => measureDocumentLiveTextMetric(
+  'documentAuthoredContentDiffers',
+  () => documentAuthoredContentProjection(before)
+    !== documentAuthoredContentProjection(after)
+);

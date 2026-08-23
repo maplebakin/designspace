@@ -13,6 +13,7 @@ import {
   createProjectChangeDiagnosticObserver,
   type ProjectChangeDiagnosticObserver,
 } from './projectChangeDiagnostic';
+import { flushDocumentLiveDrafts } from '../../document/services/documentLiveDraft';
 
 export type UnifiedEditorSessionProps = {
   onBackToDashboard?: () => void;
@@ -77,6 +78,10 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     return {
       ...commands,
       close: async () => {
+        // Closing the shared session can unmount the document editor before
+        // any idle draft timer fires. Flush the mounted ProseMirror draft
+        // before ending the lifecycle session or clearing its route state.
+        flushDocumentLiveDrafts();
         diagnosticObserver?.checkpoint('before-close');
         diagnosticObserver?.checkpoint('session-closed');
         lifecycleAuthority.endSession();

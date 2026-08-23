@@ -18,6 +18,7 @@ import { FlowEditor } from '../src/document/components/FlowEditor';
 import {
   documentAuthoredContentDiffers,
 } from '../src/document/services/documentContentObservation';
+import { flushDocumentLiveDrafts } from '../src/document/services/documentLiveDraft';
 import { useDocumentStore } from '../src/document/state/documentStore';
 import {
   createProjectChangeCoordinator,
@@ -535,6 +536,9 @@ describe('Unified Editor high-volume authored content and style coverage', () =>
       });
     });
     expect(committed).toHaveBeenCalledTimes(1);
+    act(() => {
+      flushDocumentLiveDrafts();
+    });
     expect(JSON.stringify(useDocumentStore.getState().project!.pages[0].bodyContent))
       .toContain('Several authored words');
   });

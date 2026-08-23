@@ -8,7 +8,6 @@ import React, {
 } from 'react';
 import type { Editor, JSONContent } from '@tiptap/core';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
-import { isHistoryTransaction } from '@tiptap/pm/history';
 import { v4 as uuidv4 } from 'uuid';
 import { useDocumentStore } from '../state/documentStore';
 import type {
@@ -47,6 +46,7 @@ import { isTauriRecoveryAvailable } from '../../editor/recovery/recoveryClient';
 import {
   canMoveSelectedStructuredImage,
   clampDocumentImageXOffset,
+  DOCUMENT_IMAGE_NODE_NAMES,
   findDocumentImagePositionById,
   findDocumentImagePositions,
   getDocumentImageSpanDimensions,
@@ -70,6 +70,8 @@ import {
   commitStructuredDocumentImagePosition,
   commitStructuredDocumentImageBatch,
   DOCUMENT_IMAGE_GROUPS_TRANSACTION_META,
+  DOCUMENT_IMAGE_GEOMETRY_TRANSACTION_META,
+  DOCUMENT_IMAGE_CONTENT_TRANSACTION_META,
   FlowEditor,
   getSelectedDocumentImage,
   type DocumentDropContext,
@@ -116,11 +118,18 @@ import type {
   DocumentNamedStyleRegistry,
 } from '../typography/documentTypography';
 import {
-  documentAuthoredContentDiffers,
-  documentAuthoredContentProjection,
-} from '../services/documentContentObservation';
+  getDocumentLiveTextDiagnostics,
+  measureDocumentLiveTextMetric,
+  recordDocumentDraftFlush,
+  recordDocumentProjectChangeNotification,
+  recordDocumentProjectSubscriberUpdate,
+  recordDocumentShellRender,
+} from '../services/documentLiveTextDiagnostics';
 import type { SelectionEvent } from '../../editor/session/projectSession';
 import type { PageAssetEffect } from '../../editor/session/projectMutation';
+import {
+  registerDocumentLiveDraftFlushHandler,
+} from '../services/documentLiveDraft';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -197,6 +206,7 @@ const notifyCommittedMutation = (
   callback: DocumentEditorShellProps['onCommittedMutation'],
   mutation: DocumentCommittedMutation
 ) => {
+  recordDocumentProjectChangeNotification();
   try {
     callback?.(mutation);
   } catch {
@@ -253,6 +263,10 @@ const notifyCommittedStructuredContent = (
 ) => {
   notifyCommittedMutation(callback, { action, pageId });
 };
+
+const isDocumentImageNodeName = (name: string) => (
+  DOCUMENT_IMAGE_NODE_NAMES.some((candidate) => candidate === name)
+);
 
 const notifyCommittedDocumentStyleMetadata = (
   callback: DocumentEditorShellProps['onCommittedMutation'],
@@ -388,6 +402,21 @@ const DEFAULT_TEXT_FORMAT_STATE: DocumentTextFormatState = {
   keepLinesTogether: false,
 };
 
+const textFormatStatesAreEqual = (
+  left: DocumentTextFormatState,
+  right: DocumentTextFormatState
+) => (
+  left.bold === right.bold
+  && left.italic === right.italic
+  && left.underline === right.underline
+  && left.alignment === right.alignment
+  && left.fontSizePt === right.fontSizePt
+  && left.blockStyleId === right.blockStyleId
+  && left.columnBreakBefore === right.columnBreakBefore
+  && left.keepWithNext === right.keepWithNext
+  && left.keepLinesTogether === right.keepLinesTogether
+);
+
 const readSelectionFontSize = (
   editor: Editor,
   defaultFontSizePx: number
@@ -464,6 +493,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onRegisterFitPage,
   onCommittedMutation,
 }) => {
+  recordDocumentShellRender();
   const project = useDocumentStore((state) => state.project);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
   const zoom = useDocumentStore((state) => state.zoom);
@@ -496,8 +526,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const duplicatePage = useDocumentStore((state) => state.duplicatePage);
   const removePage = useDocumentStore((state) => state.removePage);
   const reorderPages = useDocumentStore((state) => state.reorderPages);
-  const updateTitleContent = useDocumentStore((state) => state.updateTitleContent);
-  const updateBodyContent = useDocumentStore((state) => state.updateBodyContent);
+  const commitTitleContentSnapshot = useDocumentStore(
+    (state) => state.commitTitleContentSnapshot
+  );
+  const commitBodyContentSnapshot = useDocumentStore(
+    (state) => state.commitBodyContentSnapshot
+  );
   const commitPageImageState = useDocumentStore(
     (state) => state.commitPageImageState
   );
@@ -527,6 +561,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const workspaceRef = useRef<HTMLElement | null>(null);
   const nodeReplaceInputRef = useRef<HTMLInputElement | null>(null);
   const pendingNodeReplaceRef = useRef<DocumentImageReplaceRequest | null>(null);
+  const pendingTextDraftsRef = useRef(new Map<
+    string,
+    {
+      pageId: string;
+      region: DocumentEditorRegion;
+      content: JSONContent;
+    }
+  >());
+  const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeTextRegion, setActiveTextRegion] =
     useState<DocumentEditorRegion>('body');
   const [selectedFlowImage, setSelectedFlowImage] =
@@ -581,6 +624,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     ),
     [page, project]
   );
+
+  useEffect(() => {
+    recordDocumentProjectSubscriberUpdate();
+  }, [project]);
+
+  const liveTextDiagnostics = getDocumentLiveTextDiagnostics();
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -1111,15 +1160,21 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const updateActiveTextFormatState = useCallback((
     editor: Editor,
     region: DocumentEditorRegion
-  ) => {
-    setActiveTextRegion(region);
-    if (!project) return;
-    setTextFormatState(readTextFormatState(
-      editor,
-      project.document.styles,
-      region === 'title' ? 'article-title' : 'body'
-    ));
-  }, [project]);
+  ) => measureDocumentLiveTextMetric(
+    'updateActiveTextFormatState',
+    () => {
+      setActiveTextRegion(region);
+      if (!project) return;
+      const nextState = readTextFormatState(
+        editor,
+        project.document.styles,
+        region === 'title' ? 'article-title' : 'body'
+      );
+      setTextFormatState((current) => (
+        textFormatStatesAreEqual(current, nextState) ? current : nextState
+      ));
+    }
+  ), [project]);
 
   const handleFormat = useCallback((
     command:
@@ -1201,53 +1256,100 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (project) updateActiveTextFormatState(editor, 'body');
   }, [project, updateActiveTextFormatState]);
 
+  const flushPendingTextDrafts = useCallback(() => {
+    if (draftFlushTimerRef.current !== null) {
+      clearTimeout(draftFlushTimerRef.current);
+      draftFlushTimerRef.current = null;
+    }
+    const drafts = [...pendingTextDraftsRef.current.values()];
+    pendingTextDraftsRef.current.clear();
+    drafts.forEach((draft) => {
+      if (draft.region === 'title') {
+        commitTitleContentSnapshot(draft.pageId, draft.content);
+      } else {
+        commitBodyContentSnapshot(draft.pageId, draft.content);
+      }
+    });
+    if (drafts.length > 0) recordDocumentDraftFlush(drafts.length);
+    return drafts.length;
+  }, [commitBodyContentSnapshot, commitTitleContentSnapshot]);
+
+  const schedulePendingTextDraftFlush = useCallback(() => {
+    if (draftFlushTimerRef.current !== null) {
+      clearTimeout(draftFlushTimerRef.current);
+    }
+    draftFlushTimerRef.current = setTimeout(() => {
+      draftFlushTimerRef.current = null;
+      flushPendingTextDrafts();
+    }, 350);
+  }, [flushPendingTextDrafts]);
+
+  const queuePendingTextDraft = useCallback((
+    pageId: string,
+    region: DocumentEditorRegion,
+    content: JSONContent
+  ) => {
+    pendingTextDraftsRef.current.set(pageId + ':' + region, {
+      pageId,
+      region,
+      content,
+    });
+    schedulePendingTextDraftFlush();
+  }, [schedulePendingTextDraftFlush]);
+
+  useEffect(() => {
+    const unregister = registerDocumentLiveDraftFlushHandler(
+      flushPendingTextDrafts
+    );
+    return () => {
+      flushPendingTextDrafts();
+      unregister();
+    };
+  }, [flushPendingTextDrafts]);
+
   const handleStructuredEditorUpdate = useCallback((
     region: DocumentEditorRegion,
     pageId: string,
     content: JSONContent,
     transaction: import('@tiptap/pm/state').Transaction,
-  ) => {
-    const imageGroupsMeta = region === 'body'
-      ? transaction.getMeta(DOCUMENT_IMAGE_GROUPS_TRANSACTION_META)
-      : undefined;
-    if (region === 'body' && imageGroupsMeta !== undefined) {
+  ) => measureDocumentLiveTextMetric(
+    'documentEditorShellUpdate',
+    () => {
+      if (!transaction.docChanged) return;
+      const imageGroupsMeta = region === 'body'
+        ? transaction.getMeta(DOCUMENT_IMAGE_GROUPS_TRANSACTION_META)
+        : undefined;
+      const selectedImageNode = transaction.selection instanceof NodeSelection
+        && isDocumentImageNodeName(transaction.selection.node.type.name);
+      const imageStateTransaction = region === 'body'
+        && (
+          imageGroupsMeta !== undefined
+          || transaction.getMeta(DOCUMENT_IMAGE_GEOMETRY_TRANSACTION_META) !== undefined
+          || transaction.getMeta(DOCUMENT_IMAGE_CONTENT_TRANSACTION_META) !== undefined
+          || selectedImageNode
+        );
+
+      if (!imageStateTransaction) {
+        queuePendingTextDraft(pageId, region, content);
+        notifyCommittedStructuredContent(
+          onCommittedMutation,
+          region === 'title'
+            ? 'modify-structured-title-content'
+            : 'modify-structured-body-content',
+          pageId,
+        );
+        return;
+      }
+
+      flushPendingTextDrafts();
       commitPageImageState(pageId, content, imageGroupsMeta);
-    } else if (region === 'title') {
-      updateTitleContent(content, pageId);
-    } else {
-      updateBodyContent(content, pageId);
+      return;
     }
-
-    if (
-      !transaction.docChanged
-      || isHistoryTransaction(transaction)
-      || !documentAuthoredContentDiffers(transaction.before, transaction.doc)
-    ) return;
-
-    const committedPage = useDocumentStore.getState().project?.pages.find(
-      (candidate) => candidate.id === pageId
-    );
-    const committedContent = region === 'title'
-      ? committedPage?.titleContent
-      : committedPage?.bodyContent;
-    if (
-      !committedPage
-      || documentAuthoredContentProjection(committedContent)
-        !== documentAuthoredContentProjection(content)
-    ) return;
-
-    notifyCommittedStructuredContent(
-      onCommittedMutation,
-      region === 'title'
-        ? 'modify-structured-title-content'
-        : 'modify-structured-body-content',
-      pageId,
-    );
-  }, [
+  ), [
     commitPageImageState,
+    flushPendingTextDrafts,
     onCommittedMutation,
-    updateBodyContent,
-    updateTitleContent,
+    queuePendingTextDraft,
   ]);
 
   const selectedOverlay = page?.overlayObjects.find(
@@ -1267,6 +1369,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     imageId: string,
     additive: boolean
   ): string | null => {
+    flushPendingTextDrafts();
     if (!page) return imageId;
     const editor = bodyEditorRef.current;
     if (
@@ -1307,7 +1410,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     const next = [...current, imageId];
     setSelectedStructuredImageIds(next);
     return imageId;
-  }, [page, selectedImageGroupId, selectedStructuredImageIds]);
+  }, [
+    flushPendingTextDrafts,
+    page,
+    selectedImageGroupId,
+    selectedStructuredImageIds,
+  ]);
 
   const getStructuredLayoutModel = useCallback(() => {
     const editor = bodyEditorRef.current;
@@ -2692,11 +2800,25 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     scope: 'current' | 'all' = 'current'
   ) => {
     if (!page || !project || isExporting) return;
+    flushPendingTextDrafts();
+    const currentProject = useDocumentStore.getState().project;
+    if (!currentProject) return;
+    const currentActivePageIndex = Math.max(
+      0,
+      Math.min(
+        currentProject.pages.length - 1,
+        Math.trunc(currentProject.activePageIndex ?? 0)
+      )
+    );
+    const currentFolioNumber = getDocumentFolioNumber(
+      currentProject.document.folios.startingNumber,
+      currentActivePageIndex
+    );
     setIsExporting(true);
     setToastMessage(`Preparing ${format.toUpperCase()} export…`);
     let cleanupExportPages: (() => void) | undefined;
     try {
-      const mounted = await mountCommittedDocumentExportPages(project);
+      const mounted = await mountCommittedDocumentExportPages(currentProject);
       cleanupExportPages = mounted.cleanup;
       const exportSources = mounted.sources.map((source) => ({
         ...source,
@@ -2717,22 +2839,22 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         if (scope === 'all') {
           const result = await documentExportService.downloadPngPages(
             exportSources,
-            project.projectName
+            currentProject.projectName
           );
           delivery = result.delivery;
         } else {
-          const source = exportSources[activePageIndex];
+          const source = exportSources[currentActivePageIndex];
           if (!source) throw new Error('The selected page is unavailable for export.');
           const result = await documentExportService.downloadPng(source.element, {
             ...source.options,
-            fileName: `${project.projectName}-${folioNumber}`,
+            fileName: currentProject.projectName + '-' + currentFolioNumber,
           });
           delivery = result.delivery;
         }
       } else {
         const result = await documentExportService.downloadPdfPages(
           exportSources,
-          project.projectName
+          currentProject.projectName
         );
         delivery = result.delivery;
       }
@@ -2753,6 +2875,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [
     activePageIndex,
     folioNumber,
+    flushPendingTextDrafts,
     isExporting,
     page,
     project,
@@ -2819,13 +2942,90 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       data-selected-overlay-id={selectedOverlayId || undefined}
       data-focused-text-region={focusedTextRegion || undefined}
       data-active-text-region={activeTextRegion}
-    >
+      data-state-churn-shell-renders={liveTextDiagnostics.shellRenders}
+      data-state-churn-project-subscriber-updates={liveTextDiagnostics.projectSubscriberUpdates}
+      data-state-churn-project-replacements={liveTextDiagnostics.projectReplacements}
+      data-state-churn-project-change-notifications={
+        liveTextDiagnostics.projectChangeNotifications
+      }
+      data-state-churn-update-page-count={
+        liveTextDiagnostics.metrics.updatePage?.count || 0
+      }
+      data-state-churn-update-body-count={
+        liveTextDiagnostics.metrics.updateBodyContent?.count || 0
+      }
+      data-state-churn-update-title-count={
+        liveTextDiagnostics.metrics.updateTitleContent?.count || 0
+      }
+      data-state-churn-normalize-count={
+        liveTextDiagnostics.metrics.normalizeDocumentContentStyles?.count || 0
+      }
+      data-state-churn-equivalence-count={
+        liveTextDiagnostics.metrics.documentPagesAreEquivalent?.count || 0
+      }
+      data-state-churn-omit-count={
+        liveTextDiagnostics.metrics.omitEmptyDocumentJsonMetadata?.count || 0
+      }
+      data-state-churn-group-collect-count={
+        liveTextDiagnostics.metrics.collectGroupableDocumentImageIds?.count || 0
+      }
+      data-state-churn-group-repair-count={
+        liveTextDiagnostics.metrics.repairDocumentImageGroups?.count || 0
+      }
+      data-state-churn-diff-count={
+        liveTextDiagnostics.metrics.documentAuthoredContentDiffers?.count || 0
+      }
+      data-state-churn-projection-count={
+        liveTextDiagnostics.metrics.documentAuthoredContentProjection?.count || 0
+      }
+      data-state-churn-toolbar-count={
+        liveTextDiagnostics.metrics.updateActiveTextFormatState?.count || 0
+      }
+      data-state-churn-draft-flushes={liveTextDiagnostics.draftFlushes}
+      data-state-churn-fast-text-commits={liveTextDiagnostics.fastTextCommits}
+      data-state-churn-prosemirror-ms={
+        liveTextDiagnostics.metrics.proseMirrorUpdate?.totalMs || 0
+      }
+      data-state-churn-shell-update-ms={
+        liveTextDiagnostics.metrics.documentEditorShellUpdate?.totalMs || 0
+      }
+      data-state-churn-update-page-ms={
+        liveTextDiagnostics.metrics.updatePage?.totalMs || 0
+      }
+      data-state-churn-normalize-ms={
+        liveTextDiagnostics.metrics.normalizeDocumentContentStyles?.totalMs || 0
+      }
+      data-state-churn-equivalence-ms={
+        liveTextDiagnostics.metrics.documentPagesAreEquivalent?.totalMs || 0
+      }
+      data-state-churn-omit-ms={
+        liveTextDiagnostics.metrics.omitEmptyDocumentJsonMetadata?.totalMs || 0
+      }
+      data-state-churn-group-repair-ms={
+        liveTextDiagnostics.metrics.repairDocumentImageGroups?.totalMs || 0
+      }
+      data-state-churn-projection-ms={
+        liveTextDiagnostics.metrics.documentAuthoredContentProjection?.totalMs || 0
+      }
+      data-state-churn-toolbar-ms={
+        liveTextDiagnostics.metrics.updateActiveTextFormatState?.totalMs || 0
+      }
+      data-state-churn-overflow-ms={
+        liveTextDiagnostics.metrics.overflowMeasure?.totalMs || 0
+      }
+      data-state-churn-overflow-count={
+        liveTextDiagnostics.metrics.overflowMeasure?.count || 0
+      }
+      >
       <DocumentTopBar
         projectName={project.projectName}
         pageCount={project.pages.length}
         saveStatus={isExporting ? 'exporting' : saveStatus}
         exportBusy={isExporting}
-        onBack={() => onBackToDashboard?.()}
+        onBack={() => {
+          flushPendingTextDrafts();
+          onBackToDashboard?.();
+        }}
         onRename={renameProject}
         onRenameCommit={(name, initialName) => {
           const currentName = useDocumentStore.getState().project?.projectName;
@@ -2842,7 +3042,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         onDownloadProject={() => void downloadProjectFile()}
         onExport={(format, scope) => void exportDocument(format, scope)}
         onPrint={() => {
-          void mountCommittedDocumentExportPages(project).then((mounted) => (
+          flushPendingTextDrafts();
+          const currentProject = useDocumentStore.getState().project;
+          if (!currentProject) return;
+          void mountCommittedDocumentExportPages(currentProject).then((mounted) => (
             documentExportService.printPages(mounted.sources).finally(
               mounted.cleanup
             )
@@ -3405,7 +3608,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   }}
                   onFocusChange={(focused, editor) => {
                     setFocusedTextRegion(focused ? 'title' : null);
-                    if (!focused) return;
+                    if (!focused) {
+                      flushPendingTextDrafts();
+                      return;
+                    }
                     updateActiveTextFormatState(editor, 'title');
                     setSelectedFlowImage(null);
                     setSelectedStructuredImageIds([]);
@@ -3415,14 +3621,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onSelectionChange={(editor) => {
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
-                  onUpdate={(content, editor, transaction) => {
+                  onUpdate={(content, _editor, transaction) => {
                     handleStructuredEditorUpdate(
                       'title',
                       page.id,
                       content,
                       transaction,
                     );
-                    if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
                   onPasteDispatch={handlePasteDispatch}
                 />
@@ -3459,20 +3664,22 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     setFocusedTextRegion(
                       focused && !selectedImage ? 'body' : null
                     );
-                    if (!focused) return;
+                    if (!focused) {
+                      flushPendingTextDrafts();
+                      return;
+                    }
                     updateActiveTextFormatState(editor, 'body');
                   }}
                   onSelectionChange={(editor) => {
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
-                  onUpdate={(content, editor, transaction) => {
+                  onUpdate={(content, _editor, transaction) => {
                     handleStructuredEditorUpdate(
                       'body',
                       page.id,
                       content,
                       transaction,
                     );
-                    if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onImageSelectionChange={(selection, editor) => {
                     setFocusedTextRegion(
@@ -3487,7 +3694,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                           : [selection.attributes.id]
                       ));
                     } else {
-                      setSelectedStructuredImageIds([]);
+                      setSelectedStructuredImageIds((current) => (
+                        current.length === 0 ? current : []
+                      ));
                       setSelectedImageGroupId(null);
                     }
                     if (selection || editor.isFocused) setSelectedOverlayId(null);

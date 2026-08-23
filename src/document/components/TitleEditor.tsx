@@ -23,6 +23,7 @@ import {
   SanitizedPasteExtension,
   sanitizeDocumentPastedText,
 } from '../extensions/SanitizedPasteExtension';
+import { measureDocumentLiveTextMetric } from '../services/documentLiveTextDiagnostics';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
@@ -138,11 +139,13 @@ export const TitleEditor = ({
         editorInstanceRef.current = createdEditor;
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
-        callbacksRef.current.onUpdate?.(
-          updatedEditor.getJSON(),
-          updatedEditor,
-          transaction
-        );
+        measureDocumentLiveTextMetric('proseMirrorUpdate', () => {
+          callbacksRef.current.onUpdate?.(
+            updatedEditor.getJSON(),
+            updatedEditor,
+            transaction
+          );
+        });
       },
       onFocus: ({ editor: focusedEditor }) => {
         callbacksRef.current.onFocusChange?.(true, focusedEditor);

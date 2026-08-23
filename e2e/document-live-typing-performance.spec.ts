@@ -104,6 +104,42 @@ const readTypingDiagnostics = async (page: Page) => page.locator(
   ),
 }));
 
+const readStateChurnDiagnostics = async (page: Page) => page.getByTestId(
+  'document-editor-shell'
+).evaluate((element) => {
+  const number = (name: string) => Number(element.getAttribute(name) || 0);
+  return {
+    shellRenders: number('data-state-churn-shell-renders'),
+    projectSubscriberUpdates: number('data-state-churn-project-subscriber-updates'),
+    projectReplacements: number('data-state-churn-project-replacements'),
+    projectChangeNotifications: number('data-state-churn-project-change-notifications'),
+    updatePage: number('data-state-churn-update-page-count'),
+    updateBodyContent: number('data-state-churn-update-body-count'),
+    updateTitleContent: number('data-state-churn-update-title-count'),
+    normalize: number('data-state-churn-normalize-count'),
+    equivalence: number('data-state-churn-equivalence-count'),
+    omitMetadata: number('data-state-churn-omit-count'),
+    groupCollect: number('data-state-churn-group-collect-count'),
+    groupRepair: number('data-state-churn-group-repair-count'),
+    authoredDiff: number('data-state-churn-diff-count'),
+    authoredProjection: number('data-state-churn-projection-count'),
+    toolbar: number('data-state-churn-toolbar-count'),
+    draftFlushes: number('data-state-churn-draft-flushes'),
+    fastTextCommits: number('data-state-churn-fast-text-commits'),
+    overflowMeasures: number('data-state-churn-overflow-count'),
+    overflowMeasureMs: number('data-state-churn-overflow-ms'),
+    proseMirrorMs: number('data-state-churn-prosemirror-ms'),
+    shellUpdateMs: number('data-state-churn-shell-update-ms'),
+    updatePageMs: number('data-state-churn-update-page-ms'),
+    normalizeMs: number('data-state-churn-normalize-ms'),
+    equivalenceMs: number('data-state-churn-equivalence-ms'),
+    omitMetadataMs: number('data-state-churn-omit-ms'),
+    groupRepairMs: number('data-state-churn-group-repair-ms'),
+    authoredProjectionMs: number('data-state-churn-projection-ms'),
+    toolbarMs: number('data-state-churn-toolbar-ms'),
+  };
+});
+
 test.describe('structured live typing performance', () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
@@ -120,15 +156,19 @@ test.describe('structured live typing performance', () => {
     await enterStructuredTextEditing(page);
 
     const before = await readTypingDiagnostics(page);
+    const beforeStateChurn = await readStateChurnDiagnostics(page);
     const sentence = ' Immediate structured typing feedback must stay responsive.';
     await page.locator('.document-flow-prosemirror').type(sentence, { delay: 45 });
     await expect.poll(async () => (await readTypingDiagnostics(page)).inputCount)
       .toBeGreaterThanOrEqual(sentence.length);
     await page.waitForTimeout(250);
     const after = await readTypingDiagnostics(page);
+    const afterStateChurn = await readStateChurnDiagnostics(page);
     console.log('structured typing diagnostics', {
       before,
       after,
+      beforeStateChurn,
+      afterStateChurn,
       inputToVisibleMs: after.lastInputToVisibleMs,
       modelBuildsDuringBurst: after.modelBuildCount - before.modelBuildCount,
     });
@@ -137,6 +177,12 @@ test.describe('structured live typing performance', () => {
     expect(after.modelBuildCount - before.modelBuildCount)
       .toBeLessThan(sentence.length / 2);
     expect(after.visibleUpdateCount).toBeGreaterThan(before.visibleUpdateCount);
+    expect(afterStateChurn.projectReplacements - beforeStateChurn.projectReplacements)
+      .toBeLessThanOrEqual(1);
+    expect(afterStateChurn.updatePage - beforeStateChurn.updatePage).toBe(0);
+    expect(afterStateChurn.normalize - beforeStateChurn.normalize).toBeLessThanOrEqual(1);
+    expect(afterStateChurn.equivalence - beforeStateChurn.equivalence).toBe(0);
+    expect(afterStateChurn.groupRepair - beforeStateChurn.groupRepair).toBe(0);
 
     await page.waitForTimeout(650);
     const reconciled = await readTypingDiagnostics(page);
@@ -159,6 +205,7 @@ test.describe('structured live typing performance', () => {
     await enterStructuredTextEditing(page);
 
     const layout = await readTypingDiagnostics(page);
+    const beforeStateChurn = await readStateChurnDiagnostics(page);
     const baselineAutosaves = Number(
       await page.getByTestId('unified-project-header')
         .getAttribute('data-autosave-invocations')
@@ -166,8 +213,19 @@ test.describe('structured live typing performance', () => {
     const burst = 'The editor must keep every character visible while the historical page remains composed. ';
     await page.locator('.document-flow-prosemirror').type(burst, { delay: 55 });
     const duringBurst = await readTypingDiagnostics(page);
+    const duringBurstStateChurn = await readStateChurnDiagnostics(page);
     expect(duringBurst.inputCount - layout.inputCount).toBe(burst.length);
     expect(duringBurst.modelBuildCount).toBe(layout.modelBuildCount);
+    expect(duringBurstStateChurn.projectReplacements)
+      .toBe(beforeStateChurn.projectReplacements);
+    expect(duringBurstStateChurn.updatePage)
+      .toBe(beforeStateChurn.updatePage);
+    expect(duringBurstStateChurn.normalize)
+      .toBe(beforeStateChurn.normalize);
+    expect(duringBurstStateChurn.equivalence)
+      .toBe(beforeStateChurn.equivalence);
+    expect(duringBurstStateChurn.groupRepair)
+      .toBe(beforeStateChurn.groupRepair);
     expect(Number(
       await page.getByTestId('unified-project-header')
         .getAttribute('data-autosave-invocations')
@@ -176,6 +234,8 @@ test.describe('structured live typing performance', () => {
       .toContainText(burst);
     console.log('structured five-second typing diagnostics', {
       duringBurst,
+      beforeStateChurn,
+      duringBurstStateChurn,
       baselineAutosaves,
       typedCharacters: burst.length,
     });

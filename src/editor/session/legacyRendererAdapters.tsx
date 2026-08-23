@@ -925,6 +925,10 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   );
 };
 
+const MemoizedDocumentLegacyRendererAdapter = React.memo(
+  DocumentLegacyRendererAdapter
+);
+
 export const legacyRendererAdapters: Readonly<Record<LegacyRendererKind, LegacyRendererAdapter>> = {
   canvas: {
     kind: 'canvas',
@@ -932,6 +936,6 @@ export const legacyRendererAdapters: Readonly<Record<LegacyRendererKind, LegacyR
   },
   document: {
     kind: 'document',
-    render: DocumentLegacyRendererAdapter,
+    render: MemoizedDocumentLegacyRendererAdapter,
   },
 };

@@ -13,6 +13,19 @@ const readLifecycleDiagnostics = async (page: Page): Promise<LifecycleDiagnostic
   };
 };
 
+const readTextStateChurn = async (page: Page) => page.getByTestId(
+  'document-editor-shell'
+).evaluate((element) => {
+  const number = (name: string) => Number(element.getAttribute(name) || 0);
+  return {
+    projectReplacements: number('data-state-churn-project-replacements'),
+    updatePage: number('data-state-churn-update-page-count'),
+    normalize: number('data-state-churn-normalize-count'),
+    equivalence: number('data-state-churn-equivalence-count'),
+    groupRepair: number('data-state-churn-group-repair-count'),
+  };
+});
+
 const createSavedDocument = async (page: Page, name: string) => {
   await page.goto('/');
   await page.getByTestId('dashboard-new-document').click();
@@ -90,6 +103,7 @@ test.describe('unified autosave typing debounce', () => {
     test.slow();
     await createSavedDocument(page, 'Body typing debounce regression');
     const baseline = await readLifecycleDiagnostics(page);
+    const baselineStateChurn = await readTextStateChurn(page);
     await startSaveStatusObservation(page);
 
     const sentence = 'Continuous typing must remain unsaved until the pause.';
@@ -100,9 +114,11 @@ test.describe('unified autosave typing debounce', () => {
 
     await expect(body).toHaveText(sentence);
     const duringTyping = await readLifecycleDiagnostics(page);
+    const duringTypingStateChurn = await readTextStateChurn(page);
     expect(duringTyping.authoredRevision - baseline.authoredRevision)
       .toBeGreaterThanOrEqual(sentence.length);
     expect(duringTyping.autosaveInvocations).toBe(baseline.autosaveInvocations);
+    expect(duringTypingStateChurn).toEqual(baselineStateChurn);
     const lastTypingEventAt = await readLastTypingEventAt(page);
     const typingStatusStates = await page.evaluate(() => (
       (window as Window & {
@@ -133,6 +149,7 @@ test.describe('unified autosave typing debounce', () => {
     test.slow();
     await createSavedDocument(page, 'Title typing debounce regression');
     const baseline = await readLifecycleDiagnostics(page);
+    const baselineStateChurn = await readTextStateChurn(page);
     await startSaveStatusObservation(page);
 
     const titleText = 'A title typed at a human pace';
@@ -149,6 +166,7 @@ test.describe('unified autosave typing debounce', () => {
     await expect(title).toHaveText(titleText);
     expect((await readLifecycleDiagnostics(page)).autosaveInvocations)
       .toBe(baseline.autosaveInvocations);
+    expect(await readTextStateChurn(page)).toEqual(baselineStateChurn);
     const lastTypingEventAt = await readLastTypingEventAt(page);
     const typingStatusStates = await page.evaluate(() => (
       (window as Window & {
@@ -168,5 +186,48 @@ test.describe('unified autosave typing debounce', () => {
     const statusStates = await readSaveStatusObservation(page);
     expect(statusStates).toContain('saving');
     expect(statusStates.filter((state) => state === 'saving')).toHaveLength(1);
+  });
+
+  test('flushes the live body draft before an immediate manual Save', async ({ page }) => {
+    test.slow();
+    const projectName = 'Immediate live draft save regression';
+    await createSavedDocument(page, projectName);
+    const bodyText = 'The latest body draft must reach the immediate manual save.';
+    const body = page.locator('.document-flow-prosemirror');
+    await body.click();
+    await body.type(bodyText, { delay: 8 });
+    await expect(body).toHaveText(bodyText);
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    const savedCard = page.getByTestId('dashboard-project-card').filter({
+      hasText: projectName,
+    });
+    await expect(savedCard).toBeVisible();
+    await savedCard.getByRole('button').first().click();
+    await expect(page.locator('.document-flow-prosemirror')).toContainText(bodyText);
+  });
+
+  test('flushes the live body draft before an immediate page switch', async ({ page }) => {
+    test.slow();
+    await createSavedDocument(page, 'Immediate live draft page switch regression');
+    const bodyText = 'This page switch must not discard the newest body draft.';
+    const body = page.locator('.document-flow-prosemirror');
+    await body.click();
+    await body.type(bodyText, { delay: 8 });
+    await expect(body).toHaveText(bodyText);
+
+    await page.getByTestId('document-add-page').click();
+    await expect(page.getByTestId('document-page-tab-1')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    await page.getByTestId('document-page-tab-0').click();
+    await expect(page.getByTestId('document-page-tab-0')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    await expect(page.locator('.document-flow-prosemirror')).toContainText(bodyText);
   });
 });

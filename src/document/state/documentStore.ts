@@ -50,6 +50,12 @@ import {
   deliverFile,
   type FileDeliveryResult,
 } from '../../editor/services/fileDeliveryService';
+import {
+  measureDocumentLiveTextMetric,
+  recordDocumentProjectReplacement,
+  recordDocumentFastTextCommit,
+} from '../services/documentLiveTextDiagnostics';
+import { flushDocumentLiveDrafts } from '../services/documentLiveDraft';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 export type DocumentLifecycleAuthorityMode = 'legacy' | 'shared';
@@ -99,6 +105,18 @@ type DocumentStoreState = {
   ) => void;
   updateTitleContent: (content: DocumentContentJson, pageId?: string) => void;
   updateBodyContent: (content: DocumentContentJson, pageId?: string) => void;
+  commitTitleContentSnapshot: (
+    pageId: string,
+    content: DocumentContentJson
+  ) => void;
+  commitBodyContentSnapshot: (
+    pageId: string,
+    content: DocumentContentJson,
+    options?: {
+      imageGroups?: unknown;
+      repairImageGroups?: boolean;
+    }
+  ) => void;
   commitPageImageState: (
     pageId: string,
     bodyContent: DocumentContentJson,
@@ -329,14 +347,14 @@ const withDerivedDocumentPageSize = (
   };
 };
 
-const omitEmptyDocumentJsonMetadata = (value: unknown): unknown => {
+const omitEmptyDocumentJsonMetadataRecursive = (value: unknown): unknown => {
   if (Array.isArray(value)) {
-    return value.map(omitEmptyDocumentJsonMetadata);
+    return value.map(omitEmptyDocumentJsonMetadataRecursive);
   }
   if (!value || typeof value !== 'object') return value;
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, entry]) => entry !== null && entry !== undefined)
-    .map(([key, entry]) => [key, omitEmptyDocumentJsonMetadata(entry)] as const)
+    .map(([key, entry]) => [key, omitEmptyDocumentJsonMetadataRecursive(entry)] as const)
     .filter(([key, entry]) => (
       key !== 'attrs'
       || typeof entry !== 'object'
@@ -347,11 +365,44 @@ const omitEmptyDocumentJsonMetadata = (value: unknown): unknown => {
   return Object.fromEntries(entries);
 };
 
+const omitEmptyDocumentJsonMetadata = (value: unknown): unknown => (
+  measureDocumentLiveTextMetric(
+    'omitEmptyDocumentJsonMetadata',
+    () => omitEmptyDocumentJsonMetadataRecursive(value)
+  )
+);
+
 const documentPagesAreEquivalent = (
   left: DocumentPage,
   right: DocumentPage
-) => JSON.stringify(omitEmptyDocumentJsonMetadata(left))
-  === JSON.stringify(omitEmptyDocumentJsonMetadata(right));
+) => measureDocumentLiveTextMetric(
+  'documentPagesAreEquivalent',
+  () => JSON.stringify(omitEmptyDocumentJsonMetadata(left))
+    === JSON.stringify(omitEmptyDocumentJsonMetadata(right))
+);
+
+const normalizeDocumentContentStylesMeasured = (
+  content: DocumentContentJson,
+  region: 'article-title' | 'body'
+) => measureDocumentLiveTextMetric(
+  'normalizeDocumentContentStyles',
+  () => normalizeDocumentContentStyles(content, region)
+);
+
+const collectGroupableDocumentImageIdsMeasured = (
+  content: readonly DocumentContentJson[]
+) => measureDocumentLiveTextMetric(
+  'collectGroupableDocumentImageIds',
+  () => collectGroupableDocumentImageIds(content)
+);
+
+const repairDocumentImageGroupsMeasured = (
+  imageGroups: DocumentPage['imageGroups'],
+  imageIds: ReturnType<typeof collectGroupableDocumentImageIds>
+) => measureDocumentLiveTextMetric(
+  'repairDocumentImageGroups',
+  () => repairDocumentImageGroups(imageGroups, imageIds)
+);
 
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let navigationPersistenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -473,6 +524,70 @@ const markDirty = (
   if (current.lifecycleAuthorityMode === 'legacy') queueAutosave();
 };
 
+type DocumentTextSnapshotRegion = 'title' | 'body';
+
+const commitDocumentTextSnapshot = (
+  set: (
+    partial:
+      | Partial<DocumentStoreState>
+      | ((state: DocumentStoreState) => Partial<DocumentStoreState>)
+  ) => void,
+  get: () => DocumentStoreState,
+  pageId: string,
+  region: DocumentTextSnapshotRegion,
+  content: DocumentContentJson,
+  options: {
+    imageGroups?: unknown;
+    repairImageGroups?: boolean;
+  } = {}
+) => {
+  const project = get().project;
+  if (!project) return false;
+  const page = project.pages.find((candidate) => candidate.id === pageId);
+  if (!page) return false;
+  const currentContent = region === 'title'
+    ? page.titleContent
+    : page.bodyContent;
+  if (currentContent === content && !options.repairImageGroups) return false;
+
+  const nextContent = normalizeDocumentContentStylesMeasured(
+    content,
+    region === 'title' ? 'article-title' : 'body'
+  );
+  const nextPage: DocumentPage = {
+    ...page,
+    ...(region === 'title'
+      ? { titleContent: nextContent }
+      : { bodyContent: nextContent }),
+  };
+
+  if (region === 'body' && options.repairImageGroups) {
+    const nextGroups = options.imageGroups === undefined
+      ? page.imageGroups
+      : options.imageGroups as DocumentPage['imageGroups'];
+    nextPage.imageGroups = repairDocumentImageGroupsMeasured(
+      nextGroups,
+      collectGroupableDocumentImageIdsMeasured([
+        nextPage.titleContent,
+        nextPage.bodyContent,
+      ])
+    );
+  }
+
+  set({
+    project: {
+      ...project,
+      pages: project.pages.map((candidate) => (
+        candidate.id === pageId ? nextPage : candidate
+      )),
+    },
+  });
+  recordDocumentProjectReplacement();
+  recordDocumentFastTextCommit();
+  markDirty(set);
+  return true;
+};
+
 const updateProjectTimestamp = (
   project: DocumentProjectPayload,
   name = project.projectName
@@ -525,6 +640,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   ...initialState,
 
   createBlankProject: (name) => {
+    flushDocumentLiveDrafts();
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
@@ -540,6 +656,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   hydrateProject: (payload, libraryProjectId = null) => {
+    flushDocumentLiveDrafts();
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
@@ -556,6 +673,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   loadLibraryProject: async (projectId) => {
+    flushDocumentLiveDrafts();
     const { db } = await import('../../editor/db');
     const result = await db.loadProject(projectId);
     if (!result) throw new Error('Project not found.');
@@ -573,6 +691,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   loadProjectFile: async (file) => {
+    flushDocumentLiveDrafts();
     if (file.size > 100 * 1024 * 1024) {
       throw new Error('Project file exceeds the 100 MB import limit.');
     }
@@ -596,6 +715,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   saveProject: async (name) => {
+    flushDocumentLiveDrafts();
     cancelAutosave();
     cancelNavigationPersistence();
     const project = get().project;
@@ -644,6 +764,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   downloadProjectFile: async () => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return null;
     const payload = updateProjectTimestamp(
@@ -684,6 +805,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   renameProject: (name) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     const safeName = name.trim() || 'Untitled Document';
     if (!project || project.projectName === safeName) return;
@@ -692,6 +814,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   updateDocumentBackground: (value) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const normalized = parseDocumentColor(value);
@@ -718,6 +841,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   updateDocumentLanguage: (language) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const normalized = normalizeDocumentLanguage(
@@ -738,6 +862,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   updateDocumentStyle: (styleId, update) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const current = project.document.styles[styleId];
@@ -762,6 +887,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   updateFolioSettings: (update) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const current = project.document.folios;
@@ -794,6 +920,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   selectPage: (index) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const nextIndex = normalizeRequestedPageIndex(index, project.pages.length);
@@ -816,6 +943,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   addPage: () => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const activeIndex = getActivePageIndex(project);
@@ -842,6 +970,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   duplicatePage: (requestedIndex) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const activeIndex = getActivePageIndex(project);
@@ -873,6 +1002,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   removePage: (requestedIndex) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     if (project.pages.length <= 1) {
@@ -907,6 +1037,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   reorderPages: (fromIndex, toIndex) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const from = normalizeRequestedPageIndex(fromIndex, project.pages.length);
@@ -932,7 +1063,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     markDirty(set);
   },
 
-  updatePage: (update, pageId) => {
+  updatePage: (update, pageId) => measureDocumentLiveTextMetric(
+    'updatePage',
+    () => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return;
     const activePage = project.pages[getActivePageIndex(project)];
@@ -946,13 +1080,13 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       ...requestedPage,
       titleContent: requestedPage.titleContent === page.titleContent
         ? requestedPage.titleContent
-        : normalizeDocumentContentStyles(
+        : normalizeDocumentContentStylesMeasured(
             requestedPage.titleContent,
             'article-title'
           ),
       bodyContent: requestedPage.bodyContent === page.bodyContent
         ? requestedPage.bodyContent
-        : normalizeDocumentContentStyles(
+        : normalizeDocumentContentStylesMeasured(
             requestedPage.bodyContent,
             'body'
           ),
@@ -960,9 +1094,9 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     // Page-level groups are valid only when every member is a unique,
     // page-positioned span image in the resulting stories. Normalize on each
     // write so content edits and metadata edits cannot diverge.
-    nextPage.imageGroups = repairDocumentImageGroups(
+    nextPage.imageGroups = repairDocumentImageGroupsMeasured(
       nextPage.imageGroups,
-      collectGroupableDocumentImageIds([
+      collectGroupableDocumentImageIdsMeasured([
         nextPage.titleContent,
         nextPage.bodyContent,
       ])
@@ -976,32 +1110,57 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         ),
       }),
     });
+    recordDocumentProjectReplacement();
     markDirty(set);
-  },
+    }
+  ),
 
-  updateTitleContent: (titleContent, pageId) =>
-    get().updatePage({
-      titleContent: normalizeDocumentContentStyles(
-        titleContent,
-        'article-title'
-      ),
-    }, pageId),
-  updateBodyContent: (bodyContent, pageId) =>
-    get().updatePage({
-      bodyContent: normalizeDocumentContentStyles(bodyContent, 'body'),
-    }, pageId),
+  updateTitleContent: (titleContent, pageId) => measureDocumentLiveTextMetric(
+    'updateTitleContent',
+    () => {
+      const project = get().project;
+      if (!project) return;
+      const activePage = project.pages[getActivePageIndex(project)];
+      const targetPageId = pageId || activePage?.id;
+      if (!targetPageId) return;
+      commitDocumentTextSnapshot(
+        set,
+        get,
+        targetPageId,
+        'title',
+        titleContent
+      );
+    }
+  ),
+  updateBodyContent: (bodyContent, pageId) => measureDocumentLiveTextMetric(
+    'updateBodyContent',
+    () => {
+      const project = get().project;
+      if (!project) return;
+      const activePage = project.pages[getActivePageIndex(project)];
+      const targetPageId = pageId || activePage?.id;
+      if (!targetPageId) return;
+      commitDocumentTextSnapshot(
+        set,
+        get,
+        targetPageId,
+        'body',
+        bodyContent,
+        { repairImageGroups: true }
+      );
+    }
+  ),
+  commitTitleContentSnapshot: (pageId, titleContent) => {
+    commitDocumentTextSnapshot(set, get, pageId, 'title', titleContent);
+  },
+  commitBodyContentSnapshot: (pageId, bodyContent, options) => {
+    commitDocumentTextSnapshot(set, get, pageId, 'body', bodyContent, options);
+  },
   commitPageImageState: (pageId, bodyContent, imageGroups) => {
-    const project = get().project;
-    if (!project) return;
-    const page = project.pages.find((candidate) => candidate.id === pageId);
-    if (!page) return;
-    const normalizedBody = normalizeDocumentContentStyles(bodyContent, 'body');
-    get().updatePage({
-      bodyContent: normalizedBody,
-      imageGroups: imageGroups === undefined
-        ? page.imageGroups
-        : imageGroups as DocumentPage['imageGroups'],
-    }, pageId);
+    commitDocumentTextSnapshot(set, get, pageId, 'body', bodyContent, {
+      imageGroups,
+      repairImageGroups: true,
+    });
   },
   updateImageGroups: (pageId, imageGroups) => {
     const project = get().project;
@@ -1035,6 +1194,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   addAsset: (assetId, source, metadata = {}) => {
+    flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return assetId;
     const contentHash = fingerprintDocumentAssetSource(source);
@@ -1231,6 +1391,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   setToastMessage: (toastMessage) => set({ toastMessage }),
 
   flushAutosave: async (options) => {
+    flushDocumentLiveDrafts();
     cancelNavigationPersistence();
     const {
       currentLibraryProjectId,
@@ -1287,6 +1448,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   },
 
   reset: () => {
+    flushDocumentLiveDrafts();
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;

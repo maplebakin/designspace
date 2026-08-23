@@ -16,6 +16,7 @@ import {
   TextSelection,
   type Transaction,
 } from '@tiptap/pm/state';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -66,6 +67,7 @@ import {
   normalizeDocumentImageContentGeometry,
   type DocumentImageGroup,
 } from '../types/documentProject';
+import { measureDocumentLiveTextMetric } from '../services/documentLiveTextDiagnostics';
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: 'doc',
@@ -87,6 +89,17 @@ const documentHasStructuredSpan = (editor: Editor) => {
     return !hasSpan;
   });
   return hasSpan;
+};
+
+const documentImageIdentitySignature = (doc: ProseMirrorNode) => {
+  const ids: string[] = [];
+  doc.descendants((node) => {
+    if (DOCUMENT_IMAGE_NODE_NAMES.includes(node.type.name as never)) {
+      ids.push(node.type.name + ':' + String(node.attrs.id || ''));
+    }
+    return true;
+  });
+  return ids.sort().join('|');
 };
 
 export type DocumentColumnCount = 1 | 2 | 3;
@@ -228,6 +241,12 @@ export const commitStructuredDocumentImageSize = (
 
 export const DOCUMENT_IMAGE_GROUPS_TRANSACTION_META =
   'designSpaceDocumentImageGroups';
+
+export const DOCUMENT_IMAGE_GEOMETRY_TRANSACTION_META =
+  'designSpaceDocumentImageGeometry';
+
+export const DOCUMENT_IMAGE_CONTENT_TRANSACTION_META =
+  'designSpaceDocumentImageContent';
 
 export type StructuredDocumentImageBatch = {
   updatesByImageId?: Readonly<
@@ -548,7 +567,9 @@ export const FlowEditor = ({
   const typingLastInputToVisibleMsRef = useRef(0);
   const typingVisibilityFramesRef = useRef<number[]>([]);
   const hasStructuredSpanRef = useRef(false);
+  const imageIdentitySignatureRef = useRef('');
   const editingStructuredTextRef = useRef(false);
+  const overflowMeasurePendingRef = useRef(false);
   const structuredLayoutDirtyRef = useRef(false);
   const structuredLayoutIdleTimerRef = useRef<number | null>(null);
   const reconcileStructuredLayoutRef = useRef<() => void>(() => undefined);
@@ -668,39 +689,51 @@ export const FlowEditor = ({
     maxSpanImageWidthPx,
   };
 
-  const measureOverflow = useCallback(() => {
-    // Structured spans are the canonical layout/overflow surface in every
-    // editor state.  The live ProseMirror document is an interaction layer
-    // while text is being edited and its browser CSS-column measurement must
-    // never replace the page-space layout kernel's result.
-    const proseMirror =
-      rootRef.current?.querySelector<HTMLElement>(
-        '[data-document-span-layout]'
-      )
-      || rootRef.current?.querySelector<HTMLElement>('.ProseMirror');
-    if (!proseMirror) return;
-    const structuredHeight = Number(
-      proseMirror.dataset.layoutContentHeightPx
-    );
-    const structuredOverflowing =
-      proseMirror.dataset.layoutOverflowing === 'true'
-        ? true
-        : proseMirror.dataset.layoutOverflowing === 'false'
-          ? false
-          : undefined;
-    const overflowing = isDocumentFlowOverflowing({
-      clientHeight: proseMirror.clientHeight,
-      clientWidth: proseMirror.clientWidth,
-      scrollHeight: proseMirror.scrollHeight,
-      scrollWidth: proseMirror.scrollWidth,
-      structuredContentHeightPx: structuredHeight,
-      structuredOverflowing,
-    });
-    callbacksRef.current.onOverflowChange?.(overflowing);
-  }, []);
+  const measureOverflow = useCallback(() => measureDocumentLiveTextMetric(
+    'overflowMeasure',
+    () => {
+      // Structured spans are the canonical layout/overflow surface in every
+      // editor state.  The live ProseMirror document is an interaction layer
+      // while text is being edited and its browser CSS-column measurement must
+      // never replace the page-space layout kernel's result.
+      const proseMirror =
+        rootRef.current?.querySelector<HTMLElement>(
+          '[data-document-span-layout]'
+        )
+        || rootRef.current?.querySelector<HTMLElement>('.ProseMirror');
+      if (!proseMirror) return;
+      const structuredHeight = Number(
+        proseMirror.dataset.layoutContentHeightPx
+      );
+      const structuredOverflowing =
+        proseMirror.dataset.layoutOverflowing === 'true'
+          ? true
+          : proseMirror.dataset.layoutOverflowing === 'false'
+            ? false
+            : undefined;
+      const overflowing = isDocumentFlowOverflowing({
+        clientHeight: proseMirror.clientHeight,
+        clientWidth: proseMirror.clientWidth,
+        scrollHeight: proseMirror.scrollHeight,
+        scrollWidth: proseMirror.scrollWidth,
+        structuredContentHeightPx: structuredHeight,
+        structuredOverflowing,
+      });
+      callbacksRef.current.onOverflowChange?.(overflowing);
+    }
+  ), []);
 
   const scheduleOverflowMeasure = useCallback(() => {
     if (typeof window === 'undefined') return;
+    // While the live ProseMirror surface owns text feedback, the canonical
+    // structured layout and its overflow status are intentionally frozen.
+    // Mutation/resize callbacks can be noisy during typing; remember that a
+    // measurement is needed and perform one when text editing ends.
+    if (editingStructuredTextRef.current) {
+      overflowMeasurePendingRef.current = true;
+      return;
+    }
+    overflowMeasurePendingRef.current = false;
     if (frameRef.current !== null) {
       if (typeof window.cancelAnimationFrame === 'function') {
         window.cancelAnimationFrame(frameRef.current);
@@ -719,6 +752,11 @@ export const FlowEditor = ({
             measureOverflow();
           }, 0);
   }, [measureOverflow]);
+
+  useEffect(() => {
+    if (editingStructuredText || !overflowMeasurePendingRef.current) return;
+    scheduleOverflowMeasure();
+  }, [editingStructuredText, scheduleOverflowMeasure]);
 
   const imageExtensionOptions = useRef({
     resolveAssetSource: (assetId: string) =>
@@ -854,39 +892,60 @@ export const FlowEditor = ({
       },
       onCreate: ({ editor: createdEditor }) => {
         editorInstanceRef.current = createdEditor;
+        imageIdentitySignatureRef.current = documentImageIdentitySignature(
+          createdEditor.state.doc
+        );
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
-        if (transaction.docChanged) recordTypingInput();
-        const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
-        const structuredImageStructureChanged = (
-          nextHasStructuredSpan !== hasStructuredSpanRef.current
-          || getSelectedDocumentImage(updatedEditor) !== null
-        );
-        hasStructuredSpanRef.current = nextHasStructuredSpan;
-        if (
-          transaction.docChanged
-          && (
-            structuredImageStructureChanged
-            || !editingStructuredTextRef.current
-          )
-        ) {
-          structuredLayoutDirtyRef.current = nextHasStructuredSpan;
-          if (nextHasStructuredSpan) {
-            reconcileStructuredLayoutRef.current();
+        measureDocumentLiveTextMetric('proseMirrorUpdate', () => {
+          let callbackTransaction = transaction;
+          if (
+            transaction.docChanged
+            && transaction.getMeta('uiEvent') !== 'input'
+          ) {
+            const nextImageIdentitySignature = documentImageIdentitySignature(
+              updatedEditor.state.doc
+            );
+            if (nextImageIdentitySignature !== imageIdentitySignatureRef.current) {
+              callbackTransaction = transaction.setMeta(
+                DOCUMENT_IMAGE_CONTENT_TRANSACTION_META,
+                true
+              );
+            }
+            imageIdentitySignatureRef.current = nextImageIdentitySignature;
           }
-        } else if (transaction.docChanged) {
-          scheduleStructuredLayoutReconcile();
-        }
-        callbacksRef.current.onUpdate?.(
-          updatedEditor.getJSON(),
-          updatedEditor,
-          transaction
-        );
-        callbacksRef.current.onImageSelectionChange?.(
-          getSelectedDocumentImage(updatedEditor),
-          updatedEditor
-        );
-        scheduleOverflowMeasure();
+          if (transaction.docChanged) recordTypingInput();
+          const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
+          const structuredImageStructureChanged = (
+            nextHasStructuredSpan !== hasStructuredSpanRef.current
+            || getSelectedDocumentImage(updatedEditor) !== null
+          );
+          hasStructuredSpanRef.current = nextHasStructuredSpan;
+          if (
+            transaction.docChanged
+            && (
+              structuredImageStructureChanged
+              || !editingStructuredTextRef.current
+            )
+          ) {
+            structuredLayoutDirtyRef.current = nextHasStructuredSpan;
+            if (nextHasStructuredSpan) {
+              reconcileStructuredLayoutRef.current();
+            }
+          } else if (transaction.docChanged) {
+            scheduleStructuredLayoutReconcile();
+          }
+          callbacksRef.current.onUpdate?.(
+            updatedEditor.getJSON(),
+            updatedEditor,
+            callbackTransaction
+          );
+          callbacksRef.current.onImageSelectionChange?.(
+            getSelectedDocumentImage(updatedEditor),
+            updatedEditor
+          );
+          scheduleOverflowMeasure();
+        });
       },
       onFocus: ({ editor: focusedEditor }) => {
         const selectedImage = getSelectedDocumentImage(focusedEditor);
@@ -922,6 +981,7 @@ export const FlowEditor = ({
       },
       onDestroy: () => {
         editorInstanceRef.current = null;
+        imageIdentitySignatureRef.current = '';
       },
     },
     []
@@ -1031,7 +1091,12 @@ export const FlowEditor = ({
       transaction.setNodeMarkup(position, undefined, normalized);
       changed = true;
     });
-    if (changed) editor.view.dispatch(transaction);
+    if (changed) {
+      editor.view.dispatch(transaction.setMeta(
+        DOCUMENT_IMAGE_GEOMETRY_TRANSACTION_META,
+        true
+      ));
+    }
   }, [
     columnCount,
     columnGapPx,
