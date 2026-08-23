@@ -1423,26 +1423,23 @@
 
 .document-flow-editor__content--structured-text-editing
   .document-flow-prosemirror {
-  color: transparent !important;
+  /* The real ProseMirror surface is the immediate typing owner while
+     structured composition is frozen. Keep its browser caret and text
+     painting visible instead of waiting for the mirror to rebuild. */
+  color: #1f1c18;
   caret-color: #3f51b5;
-  /* The source remains selectable, but its browser reflow is never visible. */
   text-shadow: none;
 }
 
 .document-flow-editor__content--structured-text-editing
-  .document-flow-prosemirror * {
-  color: transparent !important;
-}
-
-.document-flow-editor__content--structured-text-editing
   .document-flow-prosemirror::selection {
-  color: transparent;
+  color: inherit;
   background: rgba(82, 103, 216, 0.28);
 }
 
 .document-flow-editor__content--structured-text-editing
   .document-flow-prosemirror *::selection {
-  color: transparent;
+  color: inherit;
   background: rgba(82, 103, 216, 0.28);
 }
 
@@ -1507,10 +1504,52 @@
 
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__column-stacks {
-  /* The structured bands remain the visible layout while the source editor
-     underneath supplies caret/selection/input interaction. */
+  /* The source editor underneath is the visible typing surface. Keep the
+     structured bands as transparent coordinate hit regions so the existing
+     text-position resolver and drag-selection path remain authoritative. */
   visibility: visible;
   pointer-events: none;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column {
+  position: relative;
+  color: transparent !important;
+  pointer-events: auto;
+  user-select: text;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column > * {
+  color: transparent !important;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column > *:not(.document-image-node) * {
+  color: transparent !important;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column .document-image-node,
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column .document-image-node * {
+  color: #1f1c18;
+}
+
+.document-spanning-layout[data-resolving-text-hit="true"]
+  .document-span-layout__text-column,
+.document-spanning-layout[data-resolving-text-hit="true"]
+  .document-span-layout__text-column > *,
+.document-spanning-layout[data-resolving-text-hit="true"]
+  .document-span-layout__text-column > * * {
+  color: #1f1c18 !important;
+  opacity: 1 !important;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-structured-selection-highlight {
+  color: transparent;
+  background: transparent;
 }
 
 .document-spanning-layout[data-text-editing="true"]

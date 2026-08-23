@@ -248,6 +248,8 @@ export type MultiDocumentSpanLayoutModel = {
   layoutContentHeightPx: number;
   overflowing: boolean;
   unresolvedCollisionIds: readonly string[];
+  structuredMeasurementCount: number;
+  structuredMeasurementDurationMs: number;
 };
 
 const toBodyRectangle = (
@@ -508,15 +510,33 @@ const estimateElementHeight = (element: Element, widthPx: number) => {
   return lineCount * fontSize * 1.42 + fontSize * 0.72;
 };
 
+type StructuredMeasurementDiagnostics = {
+  count: number;
+  durationMs: number;
+};
+
 const createStructuredContentMeasurer = (
-  options: StructuredDocumentTypographyOptions = {}
+  options: StructuredDocumentTypographyOptions = {},
+  diagnostics?: StructuredMeasurementDiagnostics
 ): StructuredContentMeasurer => {
   if (typeof document === 'undefined' || !document.body) {
     return {
-      measure: (elements, widthPx) => elements.reduce(
-        (height, element) => height + estimateElementHeight(element, widthPx),
-        0
-      ),
+      measure: (elements, widthPx) => {
+        const startedAt = typeof performance === 'undefined'
+          ? 0
+          : performance.now();
+        const measured = elements.reduce(
+          (height, element) => height + estimateElementHeight(element, widthPx),
+          0
+        );
+        if (diagnostics) {
+          diagnostics.count += 1;
+          diagnostics.durationMs += typeof performance === 'undefined'
+            ? 0
+            : performance.now() - startedAt;
+        }
+        return measured;
+      },
       dispose: () => undefined,
     };
   }
@@ -548,19 +568,29 @@ const createStructuredContentMeasurer = (
   return {
     measure: (elements, widthPx) => {
       if (elements.length === 0) return 0;
+      const startedAt = typeof performance === 'undefined'
+        ? 0
+        : performance.now();
       host.style.width = `${Math.max(1, widthPx)}px`;
       host.innerHTML = serializeElements(elements);
       const measuredHeight = Math.max(
         host.scrollHeight,
         host.getBoundingClientRect().height
       );
-      return measuredHeight > 0
+      const result = measuredHeight > 0
         ? measuredHeight
         : elements.reduce(
             (height, element) =>
               height + estimateElementHeight(element, widthPx),
             0
           );
+      if (diagnostics) {
+        diagnostics.count += 1;
+        diagnostics.durationMs += typeof performance === 'undefined'
+          ? 0
+          : performance.now() - startedAt;
+      }
+      return result;
     },
     dispose: () => host.remove(),
   };
@@ -1202,10 +1232,17 @@ export const buildMultiDocumentSpanLayoutModel = (
   const safeGap = columnGeometry.columnGapPx;
   const columnWidthPx = columnGeometry.columnWidthPx;
   const columnRectangles = columnGeometry.columns;
-  const measurer = createStructuredContentMeasurer({
-    ...typographyOptions,
-    dropCap,
-  });
+  const measurementDiagnostics: StructuredMeasurementDiagnostics = {
+    count: 0,
+    durationMs: 0,
+  };
+  const measurer = createStructuredContentMeasurer(
+    {
+      ...typographyOptions,
+      dropCap,
+    },
+    measurementDiagnostics
+  );
   try {
     const unresolvedCollisionIds = new Set<string>();
     const resolvedObstacles: CollisionObstacle<'body'>[] = [];
@@ -1810,6 +1847,8 @@ export const buildMultiDocumentSpanLayoutModel = (
       layoutContentHeightPx: safeHeight + overflowHeightPx,
       overflowing,
       unresolvedCollisionIds: [...unresolvedCollisionIds].sort(),
+      structuredMeasurementCount: measurementDiagnostics.count,
+      structuredMeasurementDurationMs: measurementDiagnostics.durationMs,
     };
   } finally {
     measurer.dispose();
@@ -1943,6 +1982,98 @@ const getCaretRangeAtPoint = (
   return converted;
 };
 
+const getStructuredCaretRangeAtPoint = (
+  root: HTMLElement,
+  clientX: number,
+  clientY: number
+) => {
+  const editorRoot = root.closest<HTMLElement>('.document-flow-editor');
+  const liveSurface = editorRoot?.querySelector<HTMLElement>(
+    '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
+  );
+  if (!liveSurface) {
+    return getCaretRangeAtPoint(root.ownerDocument, clientX, clientY);
+  }
+
+  // The live source is intentionally painted above the frozen layout's
+  // transparent text hit regions. Temporarily taking it out of hit testing
+  // lets the browser resolve the same coordinate against the canonical band
+  // line boxes, without changing the persistent editor selection or leaving
+  // a visible frame between pointer events.
+  const previousDisplay = liveSurface.style.display;
+  root.dataset.resolvingTextHit = 'true';
+  liveSurface.style.display = 'none';
+  try {
+    return getCaretRangeAtPoint(root.ownerDocument, clientX, clientY);
+  } finally {
+    liveSurface.style.display = previousDisplay;
+    delete root.dataset.resolvingTextHit;
+  }
+};
+
+const resolveStructuredBandPositionAtPoint = (
+  root: HTMLElement,
+  editor: Editor,
+  clientX: number,
+  clientY: number
+) => {
+  const rangeSelector = (
+    `[${DOCUMENT_REGION_ATTRIBUTE}]`
+    + `[${DOCUMENT_TEXT_FROM_ATTRIBUTE}]`
+    + `[${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+  );
+  const hit = root.ownerDocument.elementFromPoint(clientX, clientY);
+  const hitBand = hit instanceof Element
+    ? hit.closest<HTMLElement>(rangeSelector)
+    : null;
+  const candidates = hitBand
+    ? [hitBand]
+    : Array.from(root.querySelectorAll<HTMLElement>(rangeSelector));
+  let nearestPosition: number | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  candidates.forEach((band) => {
+    const sourceRange = readDocumentTextRange(band);
+    if (!sourceRange || !band.textContent?.length) return;
+    const walker = band.ownerDocument.createTreeWalker(band, 4);
+    let current = walker.nextNode();
+    let textOffset = 0;
+    while (current) {
+      const text = current.textContent || '';
+      for (let index = 0; index < text.length; index += 1) {
+        const characterRange = band.ownerDocument.createRange();
+        characterRange.setStart(current, index);
+        characterRange.setEnd(current, index + 1);
+        const rectangles = Array.from(characterRange.getClientRects());
+        rectangles.forEach((rectangle) => {
+          const verticalDistance = clientY < rectangle.top
+            ? rectangle.top - clientY
+            : clientY > rectangle.bottom ? clientY - rectangle.bottom : 0;
+          const horizontalDistance = clientX < rectangle.left
+            ? rectangle.left - clientX
+            : clientX > rectangle.right ? clientX - rectangle.right : 0;
+          const distance = verticalDistance * verticalDistance
+            + horizontalDistance * horizontalDistance;
+          if (distance >= nearestDistance) return;
+          const offset = clientX > rectangle.right
+            ? index + 1
+            : clientX > rectangle.left + rectangle.width / 2
+              ? index + 1
+              : index;
+          nearestDistance = distance;
+          nearestPosition = sourceRange.from + textOffset + offset;
+        });
+      }
+      textOffset += text.length;
+      current = walker.nextNode();
+    }
+  });
+
+  return nearestPosition === null
+    ? null
+    : clampStructuredDocumentPosition(editor, nearestPosition)
+};
+
 /**
  * Resolves browser viewport coordinates against the visible structured text
  * DOM. The browser supplies the caret offset from real line boxes; no fixed
@@ -1959,7 +2090,20 @@ export const resolveStructuredDocumentPositionAtPoint = ({
   clientX: number;
   clientY: number;
 }): number | null => {
-  const range = getCaretRangeAtPoint(root.ownerDocument, clientX, clientY);
+  const editorRoot = root.closest<HTMLElement>('.document-flow-editor');
+  const liveSurface = editorRoot?.querySelector<HTMLElement>(
+    '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
+  );
+  if (liveSurface) {
+    const structuredPosition = resolveStructuredBandPositionAtPoint(
+      root,
+      editor,
+      clientX,
+      clientY
+    );
+    if (structuredPosition !== null) return structuredPosition;
+  }
+  const range = getStructuredCaretRangeAtPoint(root, clientX, clientY);
   if (range) {
     const sourceElement = findDocumentTextRangeElement(range.startContainer);
     const sourceRange = sourceElement
@@ -2229,14 +2373,47 @@ export const StructuredDocumentSpanLayout = ({
   } | null>(null);
   const layoutRenderCountRef = useRef(0);
   const modelBuildCountRef = useRef(0);
+  const modelBuildDurationMsRef = useRef(0);
+  const modelBuildTotalDurationMsRef = useRef(0);
+  const structuredMeasurementCountRef = useRef(0);
+  const structuredMeasurementDurationMsRef = useRef(0);
+  const structuredMeasurementTotalCountRef = useRef(0);
+  const structuredMeasurementTotalDurationMsRef = useRef(0);
   const dragPointerMoveCountRef = useRef(0);
   const dragVisualFrameCountRef = useRef(0);
   const dragCommitCountRef = useRef(0);
+  const imageGroupsSignature = useMemo(
+    () => JSON.stringify(imageGroups),
+    [imageGroups]
+  );
+  const stableImageGroups = useMemo(
+    () => imageGroups,
+    [imageGroupsSignature]
+  );
+  const typographyStyleSignature = useMemo(
+    () => JSON.stringify(typographyStyle || {}),
+    [typographyStyle]
+  );
+  const stableTypographyStyle = useMemo(
+    () => typographyStyle,
+    [typographyStyleSignature]
+  );
+  const dropCapSignature = useMemo(
+    () => JSON.stringify(dropCap),
+    [dropCap]
+  );
+  const stableDropCap = useMemo(
+    () => dropCap,
+    [dropCapSignature]
+  );
   layoutRenderCountRef.current += 1;
   const model = useMemo(
     () => {
+      const startedAt = typeof performance === 'undefined'
+        ? 0
+        : performance.now();
       modelBuildCountRef.current += 1;
-      return buildMultiDocumentSpanLayoutModel(
+      const nextModel = buildMultiDocumentSpanLayoutModel(
         editor,
         columnCount,
         columnGapPx,
@@ -2244,13 +2421,28 @@ export const StructuredDocumentSpanLayout = ({
         availableHeightPx,
         previewOverrides,
         {
-          typographyStyle,
-          dropCap,
+          typographyStyle: stableTypographyStyle,
+          dropCap: stableDropCap,
           language,
         },
-        imageGroups,
+        stableImageGroups,
         pagePositionOriginOffsetPx
       );
+      const buildDurationMs = typeof performance === 'undefined'
+        ? 0
+        : performance.now() - startedAt;
+      modelBuildDurationMsRef.current = buildDurationMs;
+      modelBuildTotalDurationMsRef.current += buildDurationMs;
+      structuredMeasurementCountRef.current = nextModel?.structuredMeasurementCount || 0;
+      structuredMeasurementDurationMsRef.current =
+        nextModel?.structuredMeasurementDurationMs || 0;
+      structuredMeasurementTotalCountRef.current += (
+        nextModel?.structuredMeasurementCount || 0
+      );
+      structuredMeasurementTotalDurationMsRef.current += (
+        nextModel?.structuredMeasurementDurationMs || 0
+      );
+      return nextModel;
     },
     [
       availableHeightPx,
@@ -2258,12 +2450,12 @@ export const StructuredDocumentSpanLayout = ({
       columnCount,
       columnGapPx,
       editor,
-      dropCap,
-      imageGroups,
+      stableDropCap,
+      stableImageGroups,
       pagePositionOriginOffsetPx,
       previewOverrides,
       revision,
-      typographyStyle,
+      stableTypographyStyle,
       language,
     ]
   );
@@ -3567,6 +3759,22 @@ export const StructuredDocumentSpanLayout = ({
       data-layout-available-height-px={model.availableHeightPx}
       data-layout-render-count={layoutRenderCountRef.current}
       data-layout-model-build-count={modelBuildCountRef.current}
+      data-last-layout-build-duration-ms={modelBuildDurationMsRef.current}
+      data-total-layout-build-duration-ms={
+        modelBuildTotalDurationMsRef.current
+      }
+      data-structured-measurement-count={
+        structuredMeasurementCountRef.current
+      }
+      data-structured-measurement-duration-ms={
+        structuredMeasurementDurationMsRef.current
+      }
+      data-total-structured-measurement-count={
+        structuredMeasurementTotalCountRef.current
+      }
+      data-total-structured-measurement-duration-ms={
+        structuredMeasurementTotalDurationMsRef.current
+      }
       data-drag-pointermove-count={dragPointerMoveCountRef.current}
       data-drag-preview-frame-count={dragVisualFrameCountRef.current}
       data-drag-commit-count={dragCommitCountRef.current}

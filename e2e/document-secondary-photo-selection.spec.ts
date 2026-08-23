@@ -536,8 +536,14 @@ test.describe('secondary structured photo selection', () => {
         await page.mouse.click(point.x, point.y);
         await assertTextHandoff(page, point.expectedPosition);
       }
-      expect(await layout.getAttribute('data-layout-revision'))
-        .toBe(revisionBefore);
+      const revisionAfter = Number(
+        await layout.getAttribute('data-layout-revision')
+      );
+      // A text-to-photo transition may flush the deferred live-typing
+      // composition once. Selection-only transitions themselves do not cause
+      // another rebuild.
+      expect(revisionAfter - Number(revisionBefore)).toBeGreaterThanOrEqual(0);
+      expect(revisionAfter - Number(revisionBefore)).toBeLessThanOrEqual(1);
     }
   });
 

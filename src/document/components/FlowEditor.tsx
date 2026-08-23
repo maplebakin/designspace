@@ -72,6 +72,23 @@ const EMPTY_DOCUMENT: JSONContent = {
   content: [{ type: 'paragraph' }],
 };
 
+const STRUCTURED_LAYOUT_IDLE_RECONCILE_MS = 500;
+
+const documentHasStructuredSpan = (editor: Editor) => {
+  let hasSpan = false;
+  editor.state.doc.descendants((node) => {
+    if (
+      node.type.name === 'documentFlowImage'
+      && node.attrs.wrap === 'span-columns'
+    ) {
+      hasSpan = true;
+      return false;
+    }
+    return !hasSpan;
+  });
+  return hasSpan;
+};
+
 export type DocumentColumnCount = 1 | 2 | 3;
 
 export interface SelectedDocumentImage {
@@ -526,6 +543,90 @@ export const FlowEditor = ({
   const [layoutHeightPx, setLayoutHeightPx] = useState(720);
   const [pagePositionOriginOffsetPx, setPagePositionOriginOffsetPx] = useState(0);
   const [editingStructuredText, setEditingStructuredText] = useState(false);
+  const typingInputCountRef = useRef(0);
+  const typingVisibleUpdateCountRef = useRef(0);
+  const typingLastInputToVisibleMsRef = useRef(0);
+  const typingVisibilityFramesRef = useRef<number[]>([]);
+  const hasStructuredSpanRef = useRef(false);
+  const editingStructuredTextRef = useRef(false);
+  const structuredLayoutDirtyRef = useRef(false);
+  const structuredLayoutIdleTimerRef = useRef<number | null>(null);
+  const reconcileStructuredLayoutRef = useRef<() => void>(() => undefined);
+
+  const clearStructuredLayoutIdleTimer = useCallback(() => {
+    if (
+      structuredLayoutIdleTimerRef.current === null
+      || typeof window === 'undefined'
+    ) return;
+    window.clearTimeout(structuredLayoutIdleTimerRef.current);
+    structuredLayoutIdleTimerRef.current = null;
+  }, []);
+
+  const reconcileStructuredLayout = useCallback(() => {
+    clearStructuredLayoutIdleTimer();
+    if (!structuredLayoutDirtyRef.current) return;
+    structuredLayoutDirtyRef.current = false;
+    setLayoutRevision((revision) => revision + 1);
+  }, [clearStructuredLayoutIdleTimer]);
+  reconcileStructuredLayoutRef.current = reconcileStructuredLayout;
+
+  const scheduleStructuredLayoutReconcile = useCallback(() => {
+    if (!hasStructuredSpanRef.current) return;
+    structuredLayoutDirtyRef.current = true;
+    clearStructuredLayoutIdleTimer();
+    if (typeof window === 'undefined') return;
+    structuredLayoutIdleTimerRef.current = window.setTimeout(() => {
+      structuredLayoutIdleTimerRef.current = null;
+      reconcileStructuredLayout();
+    }, STRUCTURED_LAYOUT_IDLE_RECONCILE_MS);
+  }, [clearStructuredLayoutIdleTimer, reconcileStructuredLayout]);
+
+  const updateTypingDiagnostics = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    root.dataset.typingInputCount = String(typingInputCountRef.current);
+    root.dataset.typingVisibleUpdateCount = String(
+      typingVisibleUpdateCountRef.current
+    );
+    root.dataset.typingLastInputToVisibleMs = String(
+      typingLastInputToVisibleMsRef.current
+    );
+  }, []);
+
+  const recordTypingInput = useCallback(() => {
+    typingInputCountRef.current += 1;
+    const startedAt = typeof performance === 'undefined'
+      ? 0
+      : performance.now();
+    let secondFrame: number | null = null;
+    const recordVisibleUpdate = () => {
+      if (secondFrame !== null) {
+        typingVisibilityFramesRef.current = typingVisibilityFramesRef.current
+          .filter((frame) => frame !== secondFrame);
+      }
+      typingVisibleUpdateCountRef.current += 1;
+      typingLastInputToVisibleMsRef.current = typeof performance === 'undefined'
+        ? 0
+        : performance.now() - startedAt;
+      updateTypingDiagnostics();
+    };
+    if (
+      typeof window !== 'undefined'
+      && typeof window.requestAnimationFrame === 'function'
+    ) {
+      const firstFrame = window.requestAnimationFrame(() => {
+        typingVisibilityFramesRef.current = typingVisibilityFramesRef.current
+          .filter((frame) => frame !== firstFrame);
+        secondFrame = window.requestAnimationFrame(recordVisibleUpdate);
+        typingVisibilityFramesRef.current.push(secondFrame);
+      });
+      typingVisibilityFramesRef.current.push(firstFrame);
+    } else if (typeof window !== 'undefined') {
+      const timeout = window.setTimeout(recordVisibleUpdate, 0);
+      typingVisibilityFramesRef.current.push(timeout);
+    }
+    updateTypingDiagnostics();
+  }, [updateTypingDiagnostics]);
   const callbacksRef = useRef({
     resolveAssetSource,
     onUpdate,
@@ -755,6 +856,27 @@ export const FlowEditor = ({
         editorInstanceRef.current = createdEditor;
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
+        if (transaction.docChanged) recordTypingInput();
+        const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
+        const structuredImageStructureChanged = (
+          nextHasStructuredSpan !== hasStructuredSpanRef.current
+          || getSelectedDocumentImage(updatedEditor) !== null
+        );
+        hasStructuredSpanRef.current = nextHasStructuredSpan;
+        if (
+          transaction.docChanged
+          && (
+            structuredImageStructureChanged
+            || !editingStructuredTextRef.current
+          )
+        ) {
+          structuredLayoutDirtyRef.current = nextHasStructuredSpan;
+          if (nextHasStructuredSpan) {
+            reconcileStructuredLayoutRef.current();
+          }
+        } else if (transaction.docChanged) {
+          scheduleStructuredLayoutReconcile();
+        }
         callbacksRef.current.onUpdate?.(
           updatedEditor.getJSON(),
           updatedEditor,
@@ -765,21 +887,27 @@ export const FlowEditor = ({
           updatedEditor
         );
         scheduleOverflowMeasure();
-        setLayoutRevision((revision) => revision + 1);
       },
       onFocus: ({ editor: focusedEditor }) => {
         const selectedImage = getSelectedDocumentImage(focusedEditor);
+        editingStructuredTextRef.current = !selectedImage;
         setEditingStructuredText(!selectedImage);
         callbacksRef.current.onFocusChange?.(true, focusedEditor);
       },
       onBlur: ({ editor: blurredEditor }) => {
         if (!enteringStructuredTextRef.current) {
+          editingStructuredTextRef.current = false;
           setEditingStructuredText(false);
+          reconcileStructuredLayoutRef.current();
         }
         callbacksRef.current.onFocusChange?.(false, blurredEditor);
       },
       onSelectionUpdate: ({ editor: updatedEditor }) => {
         const selectedImage = getSelectedDocumentImage(updatedEditor);
+        editingStructuredTextRef.current = (
+          enteringStructuredTextRef.current
+          || (updatedEditor.isFocused && !selectedImage)
+        );
         setEditingStructuredText(
           enteringStructuredTextRef.current
           || (updatedEditor.isFocused && !selectedImage)
@@ -790,6 +918,7 @@ export const FlowEditor = ({
           updatedEditor
         );
         setSelectionRevision((revision) => revision + 1);
+        if (selectedImage) reconcileStructuredLayoutRef.current();
       },
       onDestroy: () => {
         editorInstanceRef.current = null;
@@ -1003,22 +1132,27 @@ export const FlowEditor = ({
     }
   }, []);
 
+  useEffect(() => () => {
+    if (typeof window === 'undefined') return;
+    clearStructuredLayoutIdleTimer();
+    typingVisibilityFramesRef.current.forEach((frame) => {
+      if (typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(frame);
+      }
+      window.clearTimeout(frame);
+    });
+    typingVisibilityFramesRef.current = [];
+  }, [clearStructuredLayoutIdleTimer]);
+
   const style = {
     ...typographyStyle,
     '--document-column-count': columnCount,
     '--document-column-gap': `${Math.max(0, columnGapPx)}px`,
   } as CSSProperties;
-  let hasStructuredSpan = false;
-  editor?.state.doc.descendants((node) => {
-    if (
-      node.type.name === 'documentFlowImage'
-      && node.attrs.wrap === 'span-columns'
-    ) {
-      hasStructuredSpan = true;
-      return false;
-    }
-    return !hasStructuredSpan;
-  });
+  const hasStructuredSpan = editor
+    ? documentHasStructuredSpan(editor)
+    : false;
+  hasStructuredSpanRef.current = hasStructuredSpan;
 
   return (
     <section
@@ -1033,6 +1167,11 @@ export const FlowEditor = ({
       data-column-count={columnCount}
       data-drop-cap={normalizedDropCap.enabled ? 'true' : 'false'}
       data-drop-cap-line-span={normalizedDropCap.lineSpan}
+      data-typing-input-count={typingInputCountRef.current}
+      data-typing-visible-update-count={typingVisibleUpdateCountRef.current}
+      data-typing-last-input-to-visible-ms={
+        typingLastInputToVisibleMsRef.current
+      }
       lang={language}
       style={style}
     >
@@ -1078,6 +1217,8 @@ export const FlowEditor = ({
             nodeType = 'documentFlowImage'
           ) => {
             enteringStructuredTextRef.current = false;
+            editingStructuredTextRef.current = false;
+            reconcileStructuredLayoutRef.current();
             setEditingStructuredText(false);
             const clickedPosition = findDocumentImagePositionById(
               editor,
@@ -1143,6 +1284,7 @@ export const FlowEditor = ({
           }}
           onEditText={(position) => {
             enteringStructuredTextRef.current = true;
+            editingStructuredTextRef.current = true;
             setEditingStructuredText(true);
             const requestedSelection = createDocumentTextSelection(
               editor,

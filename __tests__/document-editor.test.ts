@@ -3335,6 +3335,58 @@ describe('live document editor UI', () => {
     }
   );
 
+  it('keeps the live structured typing surface visible without rebuilding per transaction', async () => {
+    let editor: Editor | null = null;
+    const { container } = render(React.createElement(FlowEditor, {
+      content: spanningBodyContent(2, 1),
+      columnCount: 3,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onEditorReady: (readyEditor: Editor | null) => {
+        editor = readyEditor;
+      },
+    }));
+    await waitFor(() => {
+      expect(editor).not.toBeNull();
+      expect(container.querySelector('[data-document-span-layout]'))
+        .not.toBeNull();
+    });
+
+    act(() => {
+      editor!.commands.focus();
+      editor!.commands.setTextSelection(1);
+    });
+    await waitFor(() => {
+      expect(container.querySelector<HTMLElement>(
+        '[data-document-span-layout]'
+      )?.dataset.textEditing).toBe('true');
+    });
+    const layout = container.querySelector<HTMLElement>(
+      '[data-document-span-layout]'
+    )!;
+    const source = container.querySelector<HTMLElement>('.document-flow-prosemirror')!;
+    const initialBuildCount = Number(layout.dataset.layoutModelBuildCount);
+
+    act(() => {
+      editor!.commands.insertContent('live typing');
+      editor!.commands.insertContent(' stays immediate');
+      editor!.commands.insertContent(' across transactions');
+    });
+    await waitFor(() => {
+      expect(Number(container.querySelector<HTMLElement>(
+        '[data-testid="document-flow-editor"]'
+      )?.dataset.typingInputCount)).toBeGreaterThanOrEqual(3);
+      expect(source.textContent).toContain('live typing stays immediate across transactions');
+    });
+    expect(Number(layout.dataset.layoutModelBuildCount)).toBe(initialBuildCount);
+
+    await waitFor(() => {
+      expect(Number(layout.dataset.layoutModelBuildCount))
+        .toBeGreaterThan(initialBuildCount);
+    }, { timeout: 2_000 });
+  });
+
   it.each([0.66, 1, 1.5])(
     'keeps wrapped lower-right flow geometry stable through text selection at %d scale',
     async (viewScale) => {
