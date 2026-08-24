@@ -68,13 +68,17 @@ import {
   type DocumentImageGroup,
 } from '../types/documentProject';
 import { measureDocumentLiveTextMetric } from '../services/documentLiveTextDiagnostics';
+import {
+  isDocumentTypingLatencyBenchmarkEnabled,
+  measureDocumentTypingLatency,
+  recordDocumentTypingTransaction,
+  startDocumentTypingLatencyCapture,
+} from '../services/documentTypingLatencyDiagnostics';
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: 'doc',
   content: [{ type: 'paragraph' }],
 };
-
-const STRUCTURED_LAYOUT_IDLE_RECONCILE_MS = 500;
 
 const documentHasStructuredSpan = (editor: Editor) => {
   let hasSpan = false;
@@ -571,36 +575,28 @@ export const FlowEditor = ({
   const editingStructuredTextRef = useRef(false);
   const overflowMeasurePendingRef = useRef(false);
   const structuredLayoutDirtyRef = useRef(false);
-  const structuredLayoutIdleTimerRef = useRef<number | null>(null);
   const reconcileStructuredLayoutRef = useRef<() => void>(() => undefined);
 
-  const clearStructuredLayoutIdleTimer = useCallback(() => {
-    if (
-      structuredLayoutIdleTimerRef.current === null
-      || typeof window === 'undefined'
-    ) return;
-    window.clearTimeout(structuredLayoutIdleTimerRef.current);
-    structuredLayoutIdleTimerRef.current = null;
-  }, []);
-
   const reconcileStructuredLayout = useCallback(() => {
-    clearStructuredLayoutIdleTimer();
     if (!structuredLayoutDirtyRef.current) return;
     structuredLayoutDirtyRef.current = false;
     setLayoutRevision((revision) => revision + 1);
-  }, [clearStructuredLayoutIdleTimer]);
+  }, []);
   reconcileStructuredLayoutRef.current = reconcileStructuredLayout;
 
   const scheduleStructuredLayoutReconcile = useCallback(() => {
     if (!hasStructuredSpanRef.current) return;
     structuredLayoutDirtyRef.current = true;
-    clearStructuredLayoutIdleTimer();
-    if (typeof window === 'undefined') return;
-    structuredLayoutIdleTimerRef.current = window.setTimeout(() => {
-      structuredLayoutIdleTimerRef.current = null;
-      reconcileStructuredLayout();
-    }, STRUCTURED_LAYOUT_IDLE_RECONCILE_MS);
-  }, [clearStructuredLayoutIdleTimer, reconcileStructuredLayout]);
+    // The active ProseMirror surface is the live typing owner. A timeout here
+    // looks harmless in Chromium, but WebKit can spend long enough processing
+    // one multicolumn edit that the timeout fires between keystrokes. That
+    // rebuilds the canonical compositor in the middle of the burst and makes
+    // subsequent native input events queue behind it. Keep the dirty marker;
+    // reconcile when text editing ends or an operation explicitly needs the
+    // canonical page layout.
+    if (editingStructuredTextRef.current) return;
+    reconcileStructuredLayout();
+  }, [reconcileStructuredLayout]);
 
   const updateTypingDiagnostics = useCallback(() => {
     const root = rootRef.current;
@@ -897,55 +893,79 @@ export const FlowEditor = ({
         );
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
-        measureDocumentLiveTextMetric('proseMirrorUpdate', () => {
-          let callbackTransaction = transaction;
-          if (
-            transaction.docChanged
-            && transaction.getMeta('uiEvent') !== 'input'
-          ) {
-            const nextImageIdentitySignature = documentImageIdentitySignature(
-              updatedEditor.state.doc
-            );
-            if (nextImageIdentitySignature !== imageIdentitySignatureRef.current) {
-              callbackTransaction = transaction.setMeta(
-                DOCUMENT_IMAGE_CONTENT_TRANSACTION_META,
-                true
+        const transactionStartedAt = typeof performance === 'undefined'
+          ? Date.now()
+          : performance.now();
+        measureDocumentTypingLatency('proseMirrorTransaction', () =>
+          measureDocumentLiveTextMetric('proseMirrorUpdate', () => {
+            let callbackTransaction = transaction;
+            if (
+              transaction.docChanged
+              && transaction.getMeta('uiEvent') !== 'input'
+            ) {
+              const nextImageIdentitySignature = documentImageIdentitySignature(
+                updatedEditor.state.doc
               );
+              if (nextImageIdentitySignature !== imageIdentitySignatureRef.current) {
+                callbackTransaction = transaction.setMeta(
+                  DOCUMENT_IMAGE_CONTENT_TRANSACTION_META,
+                  true
+                );
+              }
+              imageIdentitySignatureRef.current = nextImageIdentitySignature;
             }
-            imageIdentitySignatureRef.current = nextImageIdentitySignature;
-          }
-          if (transaction.docChanged) recordTypingInput();
-          const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
-          const structuredImageStructureChanged = (
-            nextHasStructuredSpan !== hasStructuredSpanRef.current
-            || getSelectedDocumentImage(updatedEditor) !== null
-          );
-          hasStructuredSpanRef.current = nextHasStructuredSpan;
-          if (
-            transaction.docChanged
-            && (
-              structuredImageStructureChanged
-              || !editingStructuredTextRef.current
-            )
-          ) {
-            structuredLayoutDirtyRef.current = nextHasStructuredSpan;
-            if (nextHasStructuredSpan) {
-              reconcileStructuredLayoutRef.current();
+            if (transaction.docChanged) recordTypingInput();
+            const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
+            const selectedDocumentImage = getSelectedDocumentImage(updatedEditor);
+            const hasLiveTextSelection = (
+              updatedEditor.state.selection instanceof TextSelection
+              && selectedDocumentImage === null
+            );
+            // A WebKit text transaction can arrive before the focus callback's
+            // React state has committed. The transaction itself is authoritative
+            // evidence that the user is editing text; do not let that first
+            // character fall through to synchronous structured recomposition.
+            if (hasLiveTextSelection && !editingStructuredTextRef.current) {
+              editingStructuredTextRef.current = true;
+              setEditingStructuredText(true);
             }
-          } else if (transaction.docChanged) {
-            scheduleStructuredLayoutReconcile();
-          }
-          callbacksRef.current.onUpdate?.(
-            updatedEditor.getJSON(),
-            updatedEditor,
-            callbackTransaction
+            const structuredImageStructureChanged = (
+              nextHasStructuredSpan !== hasStructuredSpanRef.current
+              || selectedDocumentImage !== null
+            );
+            hasStructuredSpanRef.current = nextHasStructuredSpan;
+            if (
+              transaction.docChanged
+              && (
+                structuredImageStructureChanged
+                || !editingStructuredTextRef.current
+              )
+            ) {
+              structuredLayoutDirtyRef.current = nextHasStructuredSpan;
+              if (nextHasStructuredSpan) {
+                reconcileStructuredLayoutRef.current();
+              }
+            } else if (transaction.docChanged) {
+              scheduleStructuredLayoutReconcile();
+            }
+            callbacksRef.current.onUpdate?.(
+              updatedEditor.getJSON(),
+              updatedEditor,
+              callbackTransaction
+            );
+            callbacksRef.current.onImageSelectionChange?.(
+              getSelectedDocumentImage(updatedEditor),
+              updatedEditor
+            );
+            scheduleOverflowMeasure();
+          })
+        );
+        if (transaction.docChanged) {
+          recordDocumentTypingTransaction(
+            transactionStartedAt,
+            typeof performance === 'undefined' ? Date.now() : performance.now()
           );
-          callbacksRef.current.onImageSelectionChange?.(
-            getSelectedDocumentImage(updatedEditor),
-            updatedEditor
-          );
-          scheduleOverflowMeasure();
-        });
+        }
       },
       onFocus: ({ editor: focusedEditor }) => {
         const selectedImage = getSelectedDocumentImage(focusedEditor);
@@ -996,6 +1016,16 @@ export const FlowEditor = ({
       onEditorReady?.(null);
     };
   }, [editor, onEditorReady, scheduleOverflowMeasure]);
+
+  useEffect(() => {
+    if (!isDocumentTypingLatencyBenchmarkEnabled()) return undefined;
+    const root = rootRef.current;
+    const typingSurface = root?.querySelector<HTMLElement>(
+      '.document-flow-prosemirror'
+    );
+    if (!typingSurface) return undefined;
+    return startDocumentTypingLatencyCapture(typingSurface);
+  }, [editor]);
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -1199,7 +1229,6 @@ export const FlowEditor = ({
 
   useEffect(() => () => {
     if (typeof window === 'undefined') return;
-    clearStructuredLayoutIdleTimer();
     typingVisibilityFramesRef.current.forEach((frame) => {
       if (typeof window.cancelAnimationFrame === 'function') {
         window.cancelAnimationFrame(frame);
@@ -1207,7 +1236,7 @@ export const FlowEditor = ({
       window.clearTimeout(frame);
     });
     typingVisibilityFramesRef.current = [];
-  }, [clearStructuredLayoutIdleTimer]);
+  }, []);
 
   const style = {
     ...typographyStyle,
@@ -1252,6 +1281,9 @@ export const FlowEditor = ({
             : '',
           hasStructuredSpan && editingStructuredText
             ? 'document-flow-editor__content--structured-text-editing'
+            : '',
+          hasStructuredSpan && editingStructuredText
+            ? 'document-flow-editor__content--structured-live-single-column'
             : '',
         ].filter(Boolean).join(' ')}
       />

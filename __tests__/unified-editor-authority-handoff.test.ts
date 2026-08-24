@@ -144,6 +144,35 @@ describe('Unified Editor shared authority handoff', () => {
     });
   });
 
+  it('keeps exact revisions per transaction while coalescing presentation notifications', () => {
+    vi.useFakeTimers();
+    const { coordinator, authority } = createRuntime();
+    const exactNotifications = vi.fn();
+    const presentationNotifications = vi.fn();
+    authority.subscribe(exactNotifications);
+    authority.subscribePresentation(presentationNotifications);
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'document-session-a',
+      adapter: createAdapter(),
+    });
+    const exactAtStart = exactNotifications.mock.calls.length;
+    const presentationAtStart = presentationNotifications.mock.calls.length;
+
+    for (let index = 0; index < 80; index += 1) {
+      projectChange(coordinator);
+    }
+
+    expect(exactNotifications).toHaveBeenCalledTimes(exactAtStart + 80);
+    expect(presentationNotifications).toHaveBeenCalledTimes(presentationAtStart + 1);
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 80,
+      isDirty: true,
+      pendingAutosave: true,
+    });
+    expect(authority.getPresentationSnapshot()).not.toHaveProperty('authoredRevision');
+  });
+
   it('uses the latest authored change as the trailing-edge autosave deadline', async () => {
     vi.useFakeTimers();
     let savedRevision: number | null = null;

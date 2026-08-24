@@ -14,6 +14,7 @@ import {
   type ProjectChangeDiagnosticObserver,
 } from './projectChangeDiagnostic';
 import { flushDocumentLiveDrafts } from '../../document/services/documentLiveDraft';
+import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
 
 export type UnifiedEditorSessionProps = {
   onBackToDashboard?: () => void;
@@ -30,6 +31,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   onBackToDashboard,
   enableChangeDiagnostics = false,
 }) => {
+  recordDocumentTypingLatencyCounter('unifiedSessionRenders');
   const changeCoordinator = useMemo(() => createProjectChangeCoordinator(), []);
   const lifecycleAuthority = useMemo(
     () => createProjectLifecycleAuthority({ coordinator: changeCoordinator }),
@@ -160,13 +162,30 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     setSessionSnapshot(snapshot, sharedCommands);
   }, [setSessionSnapshot, sharedCommands, snapshot]);
 
+  // The exact authored watermark is a diagnostic/command value, not a
+  // presentation value. Keep the existing header data attribute current
+  // without subscribing React chrome to every authored transaction.
+  useEffect(() => {
+    const updateAuthoredRevisionAttribute = () => {
+      const header = document.querySelector<HTMLElement>(
+        '[data-testid="unified-project-header"]'
+      );
+      if (!header) return;
+      header.dataset.authoredRevision = String(
+        lifecycleAuthority.getSnapshot().authoredRevision
+      );
+    };
+    updateAuthoredRevisionAttribute();
+    return lifecycleAuthority.subscribe(updateAuthoredRevisionAttribute);
+  }, [lifecycleAuthority]);
+
   return (
     <UnifiedEditorShell
       session={snapshot}
       commands={sharedCommands}
       zoom={zoom}
       lifecycleDiagnostics={{
-        authoredRevision: lifecycleSnapshot.authoredRevision,
+        authoredRevision: lifecycleAuthority.getSnapshot().authoredRevision,
         autosaveInvocationCount: lifecycleSnapshot.autosaveInvocationCount,
       }}
       onBackToDashboard={onBackToDashboard}

@@ -72,6 +72,18 @@ const enterStructuredTextEditing = async (page: Page) => {
   );
   expect(presentation.color).not.toMatch(/transparent|rgba\(0, 0, 0, 0\)/);
   expect(presentation.caretColor).not.toMatch(/transparent|rgba\(0, 0, 0, 0\)/);
+  expect(presentation.text).toContain('The reconstructed page');
+  expect(await page.locator('.document-flow-prosemirror').evaluate(
+    (element) => getComputedStyle(element).columnCount
+  )).toBe('1');
+};
+
+const leaveStructuredTextEditing = async (page: Page) => {
+  await page.locator(
+    '.document-span-layout__image-slot .document-image__frame'
+  ).first().click({ force: true });
+  await expect(page.locator('[data-document-span-layout]'))
+    .toHaveAttribute('data-text-editing', 'false');
 };
 
 const readTypingDiagnostics = async (page: Page) => page.locator(
@@ -140,6 +152,34 @@ const readStateChurnDiagnostics = async (page: Page) => page.getByTestId(
   };
 });
 
+const startLatencyDiagnostics = async (page: Page) => {
+  await page.evaluate(() => {
+    const diagnostics = (window as Window & {
+      __designSpaceTypingLatencyDiagnostics?: {
+        start: (root: HTMLElement) => void;
+      };
+    }).__designSpaceTypingLatencyDiagnostics;
+    const root = document.querySelector<HTMLElement>('.document-flow-prosemirror');
+    if (!diagnostics || !root) throw new Error('Typing latency diagnostics unavailable');
+    diagnostics.start(root);
+  });
+};
+
+const readLatencyDiagnostics = async (page: Page) => page.evaluate(() => {
+  const diagnostics = (window as Window & {
+    __designSpaceTypingLatencyDiagnostics?: { get: () => unknown };
+  }).__designSpaceTypingLatencyDiagnostics;
+  if (!diagnostics) throw new Error('Typing latency diagnostics unavailable');
+  return diagnostics.get() as {
+    counters: {
+      lifecycleUiNotifications: number;
+      lifecycleSubscriberInvocations: number;
+      unifiedBridgeRenders: number;
+      unifiedSessionRenders: number;
+    };
+  };
+});
+
 test.describe('structured live typing performance', () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
@@ -154,9 +194,11 @@ test.describe('structured live typing performance', () => {
     await page.getByTestId('document-image-caption').fill('Photo B');
 
     await enterStructuredTextEditing(page);
+    await startLatencyDiagnostics(page);
 
     const before = await readTypingDiagnostics(page);
     const beforeStateChurn = await readStateChurnDiagnostics(page);
+    const beforeLatency = await readLatencyDiagnostics(page);
     const sentence = ' Immediate structured typing feedback must stay responsive.';
     await page.locator('.document-flow-prosemirror').type(sentence, { delay: 45 });
     await expect.poll(async () => (await readTypingDiagnostics(page)).inputCount)
@@ -164,6 +206,7 @@ test.describe('structured live typing performance', () => {
     await page.waitForTimeout(250);
     const after = await readTypingDiagnostics(page);
     const afterStateChurn = await readStateChurnDiagnostics(page);
+    const afterLatency = await readLatencyDiagnostics(page);
     console.log('structured typing diagnostics', {
       before,
       after,
@@ -171,6 +214,12 @@ test.describe('structured live typing performance', () => {
       afterStateChurn,
       inputToVisibleMs: after.lastInputToVisibleMs,
       modelBuildsDuringBurst: after.modelBuildCount - before.modelBuildCount,
+      lifecycleNotificationsDuringBurst:
+        afterLatency.counters.lifecycleUiNotifications
+        - beforeLatency.counters.lifecycleUiNotifications,
+      bridgeRendersDuringBurst:
+        afterLatency.counters.unifiedBridgeRenders
+        - beforeLatency.counters.unifiedBridgeRenders,
     });
 
     expect(after.inputCount - before.inputCount).toBe(sentence.length);
@@ -183,10 +232,17 @@ test.describe('structured live typing performance', () => {
     expect(afterStateChurn.normalize - beforeStateChurn.normalize).toBeLessThanOrEqual(1);
     expect(afterStateChurn.equivalence - beforeStateChurn.equivalence).toBe(0);
     expect(afterStateChurn.groupRepair - beforeStateChurn.groupRepair).toBe(0);
+    expect(afterLatency.counters.lifecycleUiNotifications
+      - beforeLatency.counters.lifecycleUiNotifications).toBeLessThanOrEqual(2);
+    expect(afterLatency.counters.lifecycleSubscriberInvocations
+      - beforeLatency.counters.lifecycleSubscriberInvocations).toBeLessThanOrEqual(2);
 
-    await page.waitForTimeout(650);
-    const reconciled = await readTypingDiagnostics(page);
-    expect(reconciled.modelBuildCount).toBeGreaterThan(after.modelBuildCount);
+    // Canonical composition is deliberately reconciled when the live text
+    // owner is left. An idle timer would be unsafe in WebKit: a long layout
+    // turn can make it fire between two physical keystrokes.
+    await leaveStructuredTextEditing(page);
+    await expect.poll(async () => (await readTypingDiagnostics(page)).modelBuildCount)
+      .toBeGreaterThan(after.modelBuildCount);
     await expect(page.locator('.document-flow-prosemirror'))
       .toContainText(sentence);
   });
@@ -240,6 +296,7 @@ test.describe('structured live typing performance', () => {
       typedCharacters: burst.length,
     });
 
+    await leaveStructuredTextEditing(page);
     await expect.poll(async () => (await readTypingDiagnostics(page)).modelBuildCount)
       .toBeGreaterThan(duringBurst.modelBuildCount);
     await expect.poll(async () => Number(

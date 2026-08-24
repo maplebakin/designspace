@@ -34,6 +34,7 @@ import {
 } from './legacyPageMutationAdapters';
 import { useEditorStore } from '../state/editorStore';
 import { useProjectSessionStore } from '../state/projectSessionStore';
+import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
 
 export type LegacyRendererAdapterProps = {
   onBackToDashboard?: () => void;
@@ -189,6 +190,7 @@ export const useLegacyProjectSessionBridge = (
   changeCoordinator: ProjectChangeCoordinator,
   lifecycleAuthority: ProjectLifecycleAuthority
 ) => {
+  recordDocumentTypingLatencyCounter('unifiedBridgeRenders');
   const mode = useProjectSessionStore((state) => state.editorMode);
   const source = useProjectSessionStore((state) => state.session?.source);
   const canvasState = useEditorStore((state) => ({
@@ -245,9 +247,9 @@ export const useLegacyProjectSessionBridge = (
     [canvasState, documentState, mode, sessionSource]
   );
   const lifecycleSnapshot = useSyncExternalStore(
-    lifecycleAuthority.subscribe,
-    lifecycleAuthority.getSnapshot,
-    lifecycleAuthority.getSnapshot
+    lifecycleAuthority.subscribePresentation,
+    lifecycleAuthority.getPresentationSnapshot,
+    lifecycleAuthority.getPresentationSnapshot
   );
   const sessionIdentity = mode === 'document'
     ? documentState.sessionIdentity

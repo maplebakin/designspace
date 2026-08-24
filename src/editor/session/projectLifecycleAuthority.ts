@@ -3,6 +3,7 @@ import type {
   ProjectChangeTransaction,
 } from './projectChangeCoordinator';
 import type { SessionSaveStatus } from './projectSession';
+import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
 
 export type ProjectLifecycleSaveAdapter = Readonly<{
   canSave: () => boolean;
@@ -30,9 +31,30 @@ export type ProjectLifecycleSnapshot = Readonly<{
   canClose: boolean;
 }>;
 
+/**
+ * The lifecycle fields that affect shared editor chrome. Authored and
+ * persisted watermarks remain available from getSnapshot(), but changing a
+ * watermark alone does not require every React subscriber to render again.
+ */
+export type ProjectLifecyclePresentationSnapshot = Readonly<{
+  projectId: string | null;
+  sessionIdentity: string | null;
+  generation: number;
+  isDirty: boolean;
+  saveStatus: SessionSaveStatus;
+  autosaveEligible: boolean;
+  pendingAutosave: boolean;
+  autosaveInvocationCount: number;
+  saveInFlight: boolean;
+  canSave: boolean;
+  canClose: boolean;
+}>;
+
 export type ProjectLifecycleAuthority = Readonly<{
   getSnapshot: () => ProjectLifecycleSnapshot;
   subscribe: (listener: () => void) => () => void;
+  getPresentationSnapshot: () => ProjectLifecyclePresentationSnapshot;
+  subscribePresentation: (listener: () => void) => () => void;
   startSession: (options: {
     projectId: string;
     sessionIdentity: string;
@@ -78,6 +100,20 @@ const EMPTY_SNAPSHOT: ProjectLifecycleSnapshot = Object.freeze({
   canClose: true,
 });
 
+const EMPTY_PRESENTATION_SNAPSHOT: ProjectLifecyclePresentationSnapshot = Object.freeze({
+  projectId: null,
+  sessionIdentity: null,
+  generation: 0,
+  isDirty: false,
+  saveStatus: 'saved',
+  autosaveEligible: false,
+  pendingAutosave: false,
+  autosaveInvocationCount: 0,
+  saveInFlight: false,
+  canSave: false,
+  canClose: true,
+});
+
 const safeCapability = (read: () => boolean) => {
   try {
     return read();
@@ -97,20 +133,66 @@ export const createProjectLifecycleAuthority = (
   options: ProjectLifecycleAuthorityOptions
 ): ProjectLifecycleAuthority => {
   const listeners = new Set<() => void>();
+  const presentationListeners = new Set<() => void>();
   let snapshot = EMPTY_SNAPSHOT;
+  let presentationSnapshot = EMPTY_PRESENTATION_SNAPSHOT;
   let activeSession: ActiveSession | null = null;
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlightSave: InFlightSave | null = null;
   let disposed = false;
 
-  const notify = () => {
+  const notifyExact = () => {
     listeners.forEach((listener) => {
       try {
         listener();
       } catch {
-        // Lifecycle subscribers are observational and cannot affect editing.
+        // Exact lifecycle subscribers are observational and cannot affect
+        // editing.
       }
     });
+  };
+
+  const notifyPresentation = () => {
+    recordDocumentTypingLatencyCounter('lifecycleUiNotifications');
+    presentationListeners.forEach((listener) => {
+      try {
+        recordDocumentTypingLatencyCounter('lifecycleSubscriberInvocations');
+        listener();
+      } catch {
+        // Presentation subscribers are observational and cannot affect
+        // editing.
+      }
+    });
+  };
+
+  const updatePresentationSnapshot = (next: ProjectLifecycleSnapshot) => {
+    const changed = (
+      presentationSnapshot.projectId !== next.projectId
+      || presentationSnapshot.sessionIdentity !== next.sessionIdentity
+      || presentationSnapshot.generation !== next.generation
+      || presentationSnapshot.isDirty !== next.isDirty
+      || presentationSnapshot.saveStatus !== next.saveStatus
+      || presentationSnapshot.autosaveEligible !== next.autosaveEligible
+      || presentationSnapshot.pendingAutosave !== next.pendingAutosave
+      || presentationSnapshot.autosaveInvocationCount !== next.autosaveInvocationCount
+      || presentationSnapshot.saveInFlight !== next.saveInFlight
+      || presentationSnapshot.canSave !== next.canSave
+      || presentationSnapshot.canClose !== next.canClose
+    );
+    presentationSnapshot = Object.freeze({
+      projectId: next.projectId,
+      sessionIdentity: next.sessionIdentity,
+      generation: next.generation,
+      isDirty: next.isDirty,
+      saveStatus: next.saveStatus,
+      autosaveEligible: next.autosaveEligible,
+      pendingAutosave: next.pendingAutosave,
+      autosaveInvocationCount: next.autosaveInvocationCount,
+      saveInFlight: next.saveInFlight,
+      canSave: next.canSave,
+      canClose: next.canClose,
+    });
+    if (changed) notifyPresentation();
   };
 
   const setSnapshot = (
@@ -128,7 +210,8 @@ export const createProjectLifecycleAuthority = (
       canSave,
       canClose: true,
     });
-    notify();
+    updatePresentationSnapshot(snapshot);
+    notifyExact();
   };
 
   const isCurrentGeneration = (generation: number) => (
@@ -288,7 +371,12 @@ export const createProjectLifecycleAuthority = (
       saveInFlightRevision: snapshot.saveInFlightRevision,
       saveStatus: 'unsaved',
       autosaveEligible: safeCapability(activeSession.adapter.canAutosave),
-      pendingAutosave: snapshot.pendingAutosave,
+      pendingAutosave: (
+        safeCapability(activeSession.adapter.canAutosave)
+        && inFlightSave?.generation !== activeSession.generation
+      )
+        ? true
+        : snapshot.pendingAutosave,
     });
     scheduleAutosave(activeSession.generation);
   };
@@ -397,6 +485,11 @@ export const createProjectLifecycleAuthority = (
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    getPresentationSnapshot: () => presentationSnapshot,
+    subscribePresentation: (listener) => {
+      presentationListeners.add(listener);
+      return () => presentationListeners.delete(listener);
+    },
     startSession,
     endSession,
     save,
@@ -409,6 +502,7 @@ export const createProjectLifecycleAuthority = (
       activeSession = null;
       inFlightSave = null;
       listeners.clear();
+      presentationListeners.clear();
     },
   };
 };

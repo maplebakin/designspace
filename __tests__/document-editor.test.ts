@@ -3381,6 +3381,14 @@ describe('live document editor UI', () => {
     });
     expect(Number(layout.dataset.layoutModelBuildCount)).toBe(initialBuildCount);
 
+    let imagePosition = -1;
+    editor!.state.doc.descendants((node, position) => {
+      if (node.type.name === 'documentFlowImage') imagePosition = position;
+    });
+    expect(imagePosition).toBeGreaterThan(0);
+    act(() => {
+      editor!.commands.setNodeSelection(imagePosition);
+    });
     await waitFor(() => {
       expect(Number(layout.dataset.layoutModelBuildCount))
         .toBeGreaterThan(initialBuildCount);

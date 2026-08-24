@@ -125,6 +125,10 @@ import {
   recordDocumentProjectSubscriberUpdate,
   recordDocumentShellRender,
 } from '../services/documentLiveTextDiagnostics';
+import {
+  measureDocumentTypingLatency,
+  recordDocumentTypingLatencyCounter,
+} from '../services/documentTypingLatencyDiagnostics';
 import type { SelectionEvent } from '../../editor/session/projectSession';
 import type { PageAssetEffect } from '../../editor/session/projectMutation';
 import {
@@ -494,6 +498,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onCommittedMutation,
 }) => {
   recordDocumentShellRender();
+  recordDocumentTypingLatencyCounter('documentShellRenders');
   const project = useDocumentStore((state) => state.project);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
   const zoom = useDocumentStore((state) => state.zoom);
@@ -585,6 +590,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const [fitMode, setFitMode] = useState(true);
   const [textFormatState, setTextFormatState] =
     useState<DocumentTextFormatState>(DEFAULT_TEXT_FORMAT_STATE);
+  const toolbarTextRegion = focusedTextRegion || activeTextRegion;
 
   const activePageIndex = project
     ? Math.max(
@@ -1160,21 +1166,26 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const updateActiveTextFormatState = useCallback((
     editor: Editor,
     region: DocumentEditorRegion
-  ) => measureDocumentLiveTextMetric(
-    'updateActiveTextFormatState',
-    () => {
-      setActiveTextRegion(region);
-      if (!project) return;
-      const nextState = readTextFormatState(
-        editor,
-        project.document.styles,
-        region === 'title' ? 'article-title' : 'body'
-      );
-      setTextFormatState((current) => (
-        textFormatStatesAreEqual(current, nextState) ? current : nextState
-      ));
-    }
-  ), [project]);
+  ) => {
+    return measureDocumentTypingLatency(
+      'toolbarFormatRead',
+      () => measureDocumentLiveTextMetric(
+      'updateActiveTextFormatState',
+      () => {
+        setActiveTextRegion(region);
+        if (!project) return;
+        const nextState = readTextFormatState(
+          editor,
+          project.document.styles,
+          region === 'title' ? 'article-title' : 'body'
+        );
+        setTextFormatState((current) => (
+          textFormatStatesAreEqual(current, nextState) ? current : nextState
+        ));
+      }
+      )
+    );
+  }, [project]);
 
   const handleFormat = useCallback((
     command:
@@ -3369,7 +3380,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         <section className="document-editor-stage" data-testid="document-editor-stage">
           <DocumentToolbar
             page={page}
-            activeTextRegion={activeTextRegion}
+            activeTextRegion={toolbarTextRegion}
             selectedImage={selectedInspector}
             selectedImageIds={selectedStructuredImageIds}
             selectedImageGroup={selectedImageGroup
@@ -3622,11 +3633,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'title');
                   }}
                   onUpdate={(content, _editor, transaction) => {
-                    handleStructuredEditorUpdate(
-                      'title',
-                      page.id,
-                      content,
-                      transaction,
+                    measureDocumentTypingLatency(
+                      'documentEditorShellUpdate',
+                      () => handleStructuredEditorUpdate(
+                        'title',
+                        page.id,
+                        content,
+                        transaction,
+                      )
                     );
                   }}
                   onPasteDispatch={handlePasteDispatch}
@@ -3660,6 +3674,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     bodyEditorRef.current = editor;
                   }}
                   onFocusChange={(focused, editor) => {
+                    if (focused && titleEditorRef.current?.isFocused) return;
                     const selectedImage = getSelectedDocumentImage(editor);
                     setFocusedTextRegion(
                       focused && !selectedImage ? 'body' : null
@@ -3674,11 +3689,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     if (editor.isFocused) updateActiveTextFormatState(editor, 'body');
                   }}
                   onUpdate={(content, _editor, transaction) => {
-                    handleStructuredEditorUpdate(
-                      'body',
-                      page.id,
-                      content,
-                      transaction,
+                    measureDocumentTypingLatency(
+                      'documentEditorShellUpdate',
+                      () => handleStructuredEditorUpdate(
+                        'body',
+                        page.id,
+                        content,
+                        transaction,
+                      )
                     );
                   }}
                   onImageSelectionChange={(selection, editor) => {

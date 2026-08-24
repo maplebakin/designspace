@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
 const DEV_PORT = Number(process.env.DESIGN_SPACE_DEV_PORT ?? 5174)
+const DEV_HOST = process.env.DESIGN_SPACE_DEV_HOST ?? 'localhost'
 const INTERNAL_PRODUCT_FORGE_ENABLED = process.env.DESIGN_SPACE_INTERNAL_PRODUCT_FORGE === 'true'
 const PUBLIC_PRODUCT_FORGE_STUB = fileURLToPath(
   new URL('./src/editor/config/publicProductForgeUnavailable.ts', import.meta.url)
@@ -77,11 +78,11 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   server: {
-    host: 'localhost',
+    host: DEV_HOST,
     port: DEV_PORT,
     strictPort: true,
     hmr: {
-      host: 'localhost',
+      host: DEV_HOST,
       port: DEV_PORT,
       clientPort: DEV_PORT,
     },

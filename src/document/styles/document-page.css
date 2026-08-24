@@ -1431,6 +1431,19 @@
   text-shadow: none;
 }
 
+/*
+ * WebKit lays out a contenteditable multicolumn tree synchronously on each
+ * text mutation. Keep the canonical structured compositor frozen as the page
+ * context, while the live ProseMirror editing surface uses one inexpensive
+ * flow. The canonical columns are restored as soon as text editing ends.
+ */
+.document-flow-editor__content--structured-live-single-column
+  .document-flow-prosemirror {
+  column-count: 1 !important;
+  column-gap: 0;
+  column-fill: auto;
+}
+
 .document-flow-editor__content--structured-text-editing
   .document-flow-prosemirror::selection {
   color: inherit;

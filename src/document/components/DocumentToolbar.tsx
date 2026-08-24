@@ -40,6 +40,7 @@ import type {
   DocumentFlowControl,
 } from '../extensions/DocumentFlowControlExtension';
 import { CommittedInput, ControlSlider } from '../../editor/components/Tooltip';
+import { recordDocumentTypingLatencyCounter } from '../services/documentTypingLatencyDiagnostics';
 
 export type DocumentImageInspectorValue = {
   id: string;
@@ -375,6 +376,7 @@ const DocumentImageGroupControls = ({
 };
 
 export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
+  recordDocumentTypingLatencyCounter('toolbarRenders');
   const imageInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const reference = props.page.reference;

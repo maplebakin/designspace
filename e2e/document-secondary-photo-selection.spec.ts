@@ -731,14 +731,13 @@ test.describe('secondary structured photo selection', () => {
     await expect(page.locator('[data-document-span-layout]'))
       .toHaveAttribute('data-text-editing', 'true');
     await page.keyboard.type('Inserted text before default B. ');
-    await expect.poll(async () => Number(
-      await flowTarget.getAttribute('data-document-image-position')
-    )).not.toBe(originalPosition);
-
     const evidence = await auditVisibleImageOwner(page, secondImageId);
     expect(evidence.elementFromPointHitTargetId).toBe(secondImageId);
     await page.mouse.click(evidence.center!.x, evidence.center!.y);
     await assertSelected(page, secondImageId);
+    await expect.poll(async () => Number(
+      await flowTarget.getAttribute('data-document-image-position')
+    )).not.toBe(originalPosition);
   });
 
   test('resolves B by ID after text insertion changes its document position', async ({ page }) => {
@@ -769,12 +768,13 @@ test.describe('secondary structured photo selection', () => {
     await page.mouse.click(textBox!.x + 5, textBox!.y + 5);
     await expect(layout).toHaveAttribute('data-text-editing', 'true');
     await page.keyboard.type('Inserted text before the second photo. ');
+    const evidence = await auditVisibleImageOwner(page, secondImageId);
+    expect(evidence.elementFromPointHitTargetId).toBe(secondImageId);
+    await page.mouse.click(evidence.center!.x, evidence.center!.y);
+    await assertSelected(page, secondImageId);
     await expect.poll(async () => Number(
       await secondSlot.getAttribute('data-document-image-position')
     )).not.toBe(originalPosition);
-
-    await clickFrame(page, secondImageId);
-    await assertSelected(page, secondImageId);
   });
 
   test('keeps B selectable after page switching and save/reopen', async ({ page }) => {
