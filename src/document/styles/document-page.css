@@ -1423,9 +1423,9 @@
 
 .document-flow-editor__content--structured-text-editing
   .document-flow-prosemirror {
-  /* The real ProseMirror surface is the immediate typing owner while
-     structured composition is frozen. Keep its browser caret and text
-     painting visible instead of waiting for the mirror to rebuild. */
+  /* The real ProseMirror surface remains the immediate typing owner while
+     structured composition is frozen. Local block rules below expose only
+     the active DOM block over its canonical page-space counterpart. */
   color: #1f1c18;
   caret-color: #3f51b5;
   text-shadow: none;
@@ -1442,6 +1442,15 @@
   column-count: 1 !important;
   column-gap: 0;
   column-fill: auto;
+}
+
+.document-flow-editor__content--structured-local-block-editing {
+  z-index: 3;
+}
+
+.document-flow-editor__content--structured-local-block-editing
+  .document-flow-prosemirror > * {
+  visibility: hidden;
 }
 
 .document-flow-editor__content--structured-text-editing
@@ -1510,16 +1519,16 @@
 
 .document-spanning-layout[data-text-editing="true"] {
   position: absolute;
-  z-index: 2;
+  z-index: 4;
   inset: 0;
   pointer-events: none;
 }
 
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__column-stacks {
-  /* The source editor underneath is the visible typing surface. Keep the
-     structured bands as transparent coordinate hit regions so the existing
-     text-position resolver and drag-selection path remain authoritative. */
+  /* Keep the canonical page-space text and geometry visible. The active
+     block alone is masked below; the live ProseMirror block is positioned over
+     the same rectangle without changing the other columns. */
   visibility: visible;
   pointer-events: none;
 }
@@ -1527,26 +1536,23 @@
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column {
   position: relative;
-  color: transparent !important;
+  color: #1f1c18 !important;
   pointer-events: auto;
   user-select: text;
 }
 
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column > * {
-  color: transparent !important;
+  color: #1f1c18 !important;
 }
 
 .document-spanning-layout[data-text-editing="true"]
-  .document-span-layout__text-column > *:not(.document-image-node) * {
+  .document-span-layout__text-column
+  [data-document-active-edit-block="true"],
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column
+  [data-document-active-edit-block="true"] * {
   color: transparent !important;
-}
-
-.document-spanning-layout[data-text-editing="true"]
-  .document-span-layout__text-column .document-image-node,
-.document-spanning-layout[data-text-editing="true"]
-  .document-span-layout__text-column .document-image-node * {
-  color: #1f1c18;
 }
 
 .document-spanning-layout[data-resolving-text-hit="true"]

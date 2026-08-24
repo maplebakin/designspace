@@ -233,6 +233,67 @@ export type StructuredTextBand = {
   lineTo: number | null;
 };
 
+/**
+ * Transient identity for the block(s) currently owned by the live editor.
+ * Block indexes are stable across ordinary text transactions, while the
+ * document range is refreshed when selection crosses a block boundary.
+ */
+export type StructuredTextEditTarget = Readonly<{
+  blockFrom: number;
+  blockTo: number;
+  blockIndexes: readonly number[];
+}>;
+
+export const getStructuredTextEditTarget = (
+  editor: Editor
+): StructuredTextEditTarget | null => {
+  const selection = editor.state.selection;
+  if (selection instanceof NodeSelection) return null;
+
+  const blocks: Array<{
+    index: number;
+    from: number;
+    to: number;
+  }> = [];
+  editor.state.doc.forEach((node, offset) => {
+    blocks.push({
+      index: blocks.length,
+      from: offset + 1,
+      to: offset + node.nodeSize - 1,
+    });
+  });
+  if (blocks.length === 0) return null;
+
+  const selectionFrom = Math.min(selection.from, selection.to);
+  const selectionTo = Math.max(selection.from, selection.to);
+  const selected = blocks.filter((block) => (
+    selection.empty
+      ? selectionFrom >= block.from && selectionFrom <= block.to
+      : selectionTo > block.from && selectionFrom < block.to
+  ));
+  const targetBlocks = selected.length > 0
+    ? selected
+    : [blocks.reduce((nearest, block) => {
+        const distance = selectionFrom < block.from
+          ? block.from - selectionFrom
+          : selectionFrom > block.to
+            ? selectionFrom - block.to
+            : 0;
+        const nearestDistance = selectionFrom < nearest.from
+          ? nearest.from - selectionFrom
+          : selectionFrom > nearest.to
+            ? selectionFrom - nearest.to
+            : 0;
+        return distance < nearestDistance ? block : nearest;
+      }, blocks[0])];
+
+  return {
+    blockFrom: Math.min(...targetBlocks.map((block) => block.from)),
+    blockTo: Math.max(...targetBlocks.map((block) => block.to)),
+    blockIndexes: targetBlocks.map((block) => block.index),
+  };
+};
+
 export type MultiDocumentSpanLayoutModel = {
   images: StructuredImageLayout[];
   flowImages: StructuredFlowImageLayout[];
@@ -484,6 +545,7 @@ const annotateSourceElementRanges = (
   children.forEach((element, index) => {
     const position = entries[index];
     if (position === undefined) return;
+    element.setAttribute('data-document-block-index', String(index));
     const textLength = element.textContent?.length || 0;
     const from = position + 1;
     setDocumentTextRange(element, {
@@ -2152,11 +2214,13 @@ const decorateStructuredTextHtml = ({
   selectionFrom,
   selectionTo,
   caretPosition,
+  activeEditBlockIndexes,
 }: {
   html: string;
   selectionFrom: number | null;
   selectionTo: number | null;
   caretPosition: number | null;
+  activeEditBlockIndexes: readonly number[];
 }) => {
   if (
     typeof document === 'undefined'
@@ -2164,10 +2228,19 @@ const decorateStructuredTextHtml = ({
       selectionFrom === null
       && selectionTo === null
       && caretPosition === null
+      && activeEditBlockIndexes.length === 0
     )
   ) return html;
   const host = document.createElement('div');
   host.innerHTML = html;
+  const activeBlockIndexes = new Set(activeEditBlockIndexes);
+  if (activeBlockIndexes.size > 0) {
+    Array.from(host.children).forEach((element) => {
+      const blockIndex = Number(element.getAttribute('data-document-block-index'));
+      if (!activeBlockIndexes.has(blockIndex)) return;
+      element.setAttribute('data-document-active-edit-block', 'true');
+    });
+  }
   const textNodes: Text[] = [];
   const walker = document.createTreeWalker(host, 4 /* SHOW_TEXT */);
   let current = walker.nextNode();
@@ -2763,6 +2836,173 @@ export const StructuredDocumentSpanLayout = ({
     pendingDragCommitCleanupRef.current = null;
     clearDragVisualPreview(pending.imageIds);
   }, [clearDragVisualPreview, model, revision]);
+
+  const activeTextEditTarget = textEditing
+    ? getStructuredTextEditTarget(editor)
+    : null;
+  const activeEditBlockIndexes = activeTextEditTarget?.blockIndexes || [];
+  const activeEditBlockSignature = activeEditBlockIndexes.join(',');
+
+  useLayoutEffect(() => {
+    const root = layoutRef.current;
+    const editorRoot = root?.closest<HTMLElement>('.document-flow-editor');
+    if (!root || !editorRoot) return;
+
+    const activeIndexes = new Set(
+      activeEditBlockSignature
+        .split(',')
+        .filter((value) => value.length > 0)
+        .map(Number)
+    );
+
+    // Do not decorate the managed ProseMirror block DOM directly. ProseMirror
+    // observes attributes/styles on those nodes as possible editor mutations,
+    // which can force a DOM reconciliation during every keystroke. The
+    // stylesheet is owned by the surrounding editor shell and addresses the
+    // real PM nodes by their current child index instead.
+    const liveEditStyle = editorRoot.ownerDocument.createElement('style');
+    liveEditStyle.setAttribute('data-document-live-edit-style', 'true');
+    editorRoot.ownerDocument.head.appendChild(liveEditStyle);
+    let styledSurface: HTMLElement | null = null;
+    let styledChildCount = -1;
+    let styledSignature = '';
+
+    const clearLiveEditStyle = () => {
+      liveEditStyle.textContent = '';
+      editorRoot.removeAttribute('data-document-local-editing-style');
+      styledSurface = null;
+      styledChildCount = -1;
+      styledSignature = '';
+    };
+
+    const syncLiveEditBlocks = (forceGeometry: boolean) => {
+      const liveSurface = editorRoot.querySelector<HTMLElement>(
+        '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
+      );
+      if (!liveSurface || !textEditing || activeIndexes.size === 0) {
+        clearLiveEditStyle();
+        return;
+      }
+
+      const needsGeometry = forceGeometry
+        || styledSurface !== liveSurface
+        || styledChildCount !== liveSurface.children.length
+        || styledSignature !== activeEditBlockSignature;
+      if (!needsGeometry) return;
+
+      let sourceRect: DOMRect | null = null;
+      let scaleX = 1;
+      let scaleY = 1;
+      let fallback: DOMRect | null = null;
+      const canonicalByBlockIndex = new Map<number, HTMLElement>();
+      root.querySelectorAll<HTMLElement>(
+        '[data-document-active-edit-block="true"][data-document-block-index]'
+      ).forEach((element) => {
+        const blockIndex = Number(element.dataset.documentBlockIndex);
+        if (Number.isFinite(blockIndex)) {
+          canonicalByBlockIndex.set(blockIndex, element);
+        }
+      });
+      sourceRect = liveSurface.getBoundingClientRect();
+      scaleX = sourceRect.width / Math.max(1, liveSurface.offsetWidth);
+      scaleY = sourceRect.height / Math.max(1, liveSurface.offsetHeight);
+      fallback = root.querySelector<HTMLElement>(
+        '[data-layout-role="explicit-text-column"]'
+      )?.getBoundingClientRect() || root.getBoundingClientRect();
+
+      const rules: string[] = [
+        '[data-document-local-editing-style="true"]'
+          + ' .document-flow-editor__content--structured-local-block-editing'
+          + ' .document-flow-prosemirror { position: relative !important; }',
+      ];
+      const firstActive: {
+        rect: DOMRect | null;
+        element: HTMLElement | null;
+      } = { rect: null, element: null };
+      Array.from(activeIndexes).forEach((index) => {
+        const canonicalElement = canonicalByBlockIndex.get(index);
+        const canonicalRect = canonicalElement?.getBoundingClientRect() || fallback;
+        if (!sourceRect || !canonicalRect) return;
+        const leftPx = (canonicalRect.left - sourceRect.left)
+          / Math.max(0.05, scaleX);
+        const topPx = (canonicalRect.top - sourceRect.top)
+          / Math.max(0.05, scaleY);
+        const widthPx = canonicalRect.width / Math.max(0.05, scaleX);
+        const selector = '[data-document-local-editing-style="true"]'
+          + ' .document-flow-editor__content--structured-local-block-editing'
+          + ` .document-flow-prosemirror > :nth-child(${index + 1})`;
+        rules.push(`${selector} {
+          visibility: visible !important;
+          position: absolute !important;
+          left: ${leftPx}px !important;
+          top: ${topPx}px !important;
+          width: ${Math.max(1, widthPx)}px !important;
+          z-index: 1 !important;
+          pointer-events: none !important;
+        }`);
+        if (!firstActive.rect) {
+          firstActive.rect = canonicalRect;
+          firstActive.element = canonicalElement || null;
+        }
+      });
+      editorRoot.setAttribute('data-document-local-editing-style', 'true');
+      liveEditStyle.textContent = rules.join('\n');
+      styledSurface = liveSurface;
+      styledChildCount = liveSurface.children.length;
+      styledSignature = activeEditBlockSignature;
+      const activeEditRect = firstActive.rect ? {
+        left: firstActive.rect.left,
+        top: firstActive.rect.top,
+        width: firstActive.rect.width,
+        height: firstActive.rect.height,
+      } : null;
+      const activeTextColumn = firstActive.element?.closest<HTMLElement>(
+        '[data-layout-role="explicit-text-column"]'
+      );
+      root.dataset.activeEditColumn = firstActive.element?.dataset.column
+        || activeTextColumn?.dataset.column
+        || '';
+      root.dataset.activeEditRegionId = firstActive.element?.dataset.regionId
+        || activeTextColumn?.dataset.regionId
+        || '';
+      root.dataset.activeEditRect = JSON.stringify(activeEditRect);
+    };
+
+    syncLiveEditBlocks(true);
+    let syncFrame: number | null = null;
+    const scheduleSync = () => {
+      if (syncFrame !== null || typeof window === 'undefined') return;
+      syncFrame = typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame(() => {
+            syncFrame = null;
+            syncLiveEditBlocks(false);
+          })
+        : window.setTimeout(() => {
+            syncFrame = null;
+            syncLiveEditBlocks(false);
+          }, 0);
+    };
+    const handleTransaction = () => scheduleSync();
+    editor.on('transaction', handleTransaction);
+    scheduleSync();
+    return () => {
+      editor.off('transaction', handleTransaction);
+      if (syncFrame !== null && typeof window !== 'undefined') {
+        if (typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(syncFrame);
+        } else {
+          window.clearTimeout(syncFrame);
+        }
+      }
+      clearLiveEditStyle();
+      liveEditStyle.remove();
+    };
+  }, [
+    activeEditBlockSignature,
+    model,
+    textEditing,
+    viewScale,
+  ]);
 
   useEffect(() => () => {
     clearDragVisualPreview();
@@ -3795,6 +4035,11 @@ export const StructuredDocumentSpanLayout = ({
       data-image-selected={selectedImage || selectedFlowImage ? 'true' : 'false'}
       data-image-resizing={resizeRef.current ? 'true' : 'false'}
       data-text-editing={textEditing ? 'true' : 'false'}
+      data-active-edit-block-from={activeTextEditTarget?.blockFrom}
+      data-active-edit-block-to={activeTextEditTarget?.blockTo}
+      data-active-edit-block-indexes={
+        activeTextEditTarget?.blockIndexes.join(',')
+      }
       data-hidden-for-editing="false"
       style={style}
       onPointerDown={handleLayoutPointerDown}
@@ -3863,6 +4108,7 @@ export const StructuredDocumentSpanLayout = ({
                     selectionFrom,
                     selectionTo,
                     caretPosition,
+                    activeEditBlockIndexes,
                   }),
                 }}
               />

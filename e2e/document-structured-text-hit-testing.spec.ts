@@ -232,6 +232,68 @@ const readStructuredLayoutContract = async (page: Page) => page.locator(
   )).map((region) => region.textContent || ''),
 }));
 
+const readLocalEditingPresentation = async (page: Page) => page.locator(
+  '[data-document-span-layout]'
+).evaluate((layout) => {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  const layoutRect = layout.getBoundingClientRect();
+  const rect = (element: Element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: round(bounds.left - layoutRect.left),
+      top: round(bounds.top - layoutRect.top),
+      width: round(bounds.width),
+      height: round(bounds.height),
+    };
+  };
+  const source = layout.closest<HTMLElement>('[data-testid="document-flow-editor"]')
+    ?.querySelector<HTMLElement>('.document-flow-prosemirror');
+  const activeIndexes = (layout.getAttribute('data-active-edit-block-indexes') || '')
+    .split(',')
+    .filter(Boolean)
+    .map(Number);
+  const sourceChildren = source
+    ? Array.from(source.children).map((child, index) => ({
+        index,
+        visibility: getComputedStyle(child).visibility,
+        position: getComputedStyle(child).position,
+        rect: rect(child),
+      }))
+    : [];
+  const activeCanonical = Array.from(layout.querySelectorAll<HTMLElement>(
+    '[data-document-active-edit-block="true"]'
+  ));
+  const canonicalBlocks = Array.from(layout.querySelectorAll<HTMLElement>(
+    '[data-document-block-index]'
+  ));
+  return {
+    columnCount: layout.getAttribute('data-column-count'),
+    columns: Array.from(layout.querySelectorAll<HTMLElement>(
+      '[data-layout-role="physical-column"]'
+    )).map(rect),
+    photos: Array.from(layout.querySelectorAll<HTMLElement>(
+      '[data-document-visible-image-id] .document-image__frame'
+    )).map(rect),
+    activeIndexes,
+    activeCanonicalCount: activeCanonical.length,
+    visibleNonActiveCanonicalCount: canonicalBlocks.filter((block) => (
+      !block.matches('[data-document-active-edit-block="true"]')
+      && getComputedStyle(block).visibility === 'visible'
+    )).length,
+    activeCanonicalRect: activeCanonical.length > 0
+      ? rect(activeCanonical[activeCanonical.length - 1])
+      : null,
+    sourceColumnCount: source ? getComputedStyle(source).columnCount : null,
+    sourceVisibleChildren: sourceChildren.filter(
+      (child) => child.visibility === 'visible'
+    ),
+    sourceHiddenChildren: sourceChildren.filter(
+      (child) => child.visibility === 'hidden'
+    ),
+    sourceChildren,
+  };
+});
+
 test.describe('structured text hit testing', () => {
   test.describe.configure({ timeout: 120_000 });
   test.use({ viewport: { width: 1920, height: 1080 } });
@@ -251,6 +313,77 @@ test.describe('structured text hit testing', () => {
         await layout.getAttribute('data-document-selection-from')
       )).toBe(point.expectedPosition);
     }
+  });
+
+  test('keeps canonical columns visible while a local ProseMirror block is edited', async ({ page }) => {
+    test.slow();
+    await loadHistoricalFixture(page);
+    const layout = page.locator('[data-document-span-layout]');
+    const body = page.locator('.document-flow-prosemirror');
+    const before = await readLocalEditingPresentation(page);
+    expect(before.columnCount).toBe('3');
+    expect(before.columns).toHaveLength(3);
+
+    const firstColumnPoint = await getVisibleTextPoint(page, 1);
+    await page.mouse.click(firstColumnPoint.x, firstColumnPoint.y);
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    const editing = await readLocalEditingPresentation(page);
+    expect(editing.sourceColumnCount).toBe('1');
+    expect(editing.activeIndexes.length).toBeGreaterThan(0);
+    expect(editing.activeCanonicalCount).toBeGreaterThan(0);
+    expect(editing.visibleNonActiveCanonicalCount).toBeGreaterThan(0);
+    expect(editing.sourceVisibleChildren).toHaveLength(editing.activeIndexes.length);
+    expect(editing.sourceHiddenChildren.length).toBeGreaterThan(0);
+    expect(editing.sourceVisibleChildren.every(
+      (child) => child.position === 'absolute'
+    )).toBe(true);
+    expect(editing.activeCanonicalRect).not.toBeNull();
+    const activeSourceRect = editing.sourceVisibleChildren[0]?.rect;
+    expect(activeSourceRect).not.toBeUndefined();
+    expect(Math.abs(
+      (activeSourceRect?.left || 0) - (editing.activeCanonicalRect?.left || 0)
+    )).toBeLessThan(3);
+    expect(Math.abs(
+      (activeSourceRect?.top || 0) - (editing.activeCanonicalRect?.top || 0)
+    )).toBeLessThan(3);
+    expect(Math.abs(
+      (activeSourceRect?.width || 0) - (editing.activeCanonicalRect?.width || 0)
+    )).toBeLessThan(3);
+
+    await body.type(' local editing remains responsive', { delay: 10 });
+    await expect(body).toContainText('local editing remains responsive');
+    const duringTyping = await readLocalEditingPresentation(page);
+    expect(duringTyping.columnCount).toBe('3');
+    expect(duringTyping.sourceColumnCount).toBe('1');
+    expect(duringTyping.columns).toEqual(before.columns);
+    expect(duringTyping.photos).toEqual(before.photos);
+    expect(duringTyping.sourceVisibleChildren).toHaveLength(
+      duringTyping.activeIndexes.length
+    );
+    expect(duringTyping.sourceVisibleChildren.every(
+      (child) => child.position === 'absolute'
+    )).toBe(true);
+
+    const thirdColumnPoint = await getVisibleTextPoint(page, 3);
+    await page.mouse.click(thirdColumnPoint.x, thirdColumnPoint.y);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).toBe(thirdColumnPoint.expectedPosition);
+    const switched = await readLocalEditingPresentation(page);
+    expect(switched.activeIndexes.length).toBeGreaterThan(0);
+    expect(switched.sourceVisibleChildren).toHaveLength(switched.activeIndexes.length);
+    expect(switched.columns).toEqual(before.columns);
+    expect(switched.photos).toEqual(before.photos);
+
+    await body.press('End');
+    await body.press('Enter');
+    await body.type('new local paragraph', { delay: 10 });
+    await expect(body).toContainText('new local paragraph');
+    const afterEnter = await readLocalEditingPresentation(page);
+    expect(afterEnter.sourceColumnCount).toBe('1');
+    expect(afterEnter.columns).toEqual(before.columns);
+    expect(afterEnter.photos).toEqual(before.photos);
+    expect(afterEnter.sourceVisibleChildren.length).toBeGreaterThan(0);
   });
 
   test('maps drags, copy, caret, and highlights across wrapped columns at zoom levels', async ({ page }) => {

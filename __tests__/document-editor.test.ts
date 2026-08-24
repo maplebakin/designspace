@@ -3367,6 +3367,14 @@ describe('live document editor UI', () => {
     )!;
     const source = container.querySelector<HTMLElement>('.document-flow-prosemirror')!;
     const initialBuildCount = Number(layout.dataset.layoutModelBuildCount);
+    expect(layout.dataset.activeEditBlockIndexes).toBe('0');
+    expect(document.head.querySelector<HTMLStyleElement>(
+      'style[data-document-live-edit-style]'
+    )?.textContent).toContain(':nth-child(1)');
+    expect(source.children[0]?.getAttribute('data-document-live-edit-block'))
+      .toBeNull();
+    expect((source.children[0] as HTMLElement | undefined)?.style.position || '')
+      .toBe('');
 
     act(() => {
       editor!.commands.insertContent('live typing');

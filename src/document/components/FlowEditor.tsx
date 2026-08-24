@@ -1285,6 +1285,9 @@ export const FlowEditor = ({
           hasStructuredSpan && editingStructuredText
             ? 'document-flow-editor__content--structured-live-single-column'
             : '',
+          hasStructuredSpan && editingStructuredText
+            ? 'document-flow-editor__content--structured-local-block-editing'
+            : '',
         ].filter(Boolean).join(' ')}
       />
       {editor && hasStructuredSpan && (
