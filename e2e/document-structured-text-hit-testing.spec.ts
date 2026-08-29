@@ -45,6 +45,7 @@ type VisibleTextPoint = {
   y: number;
   expectedPosition: number;
   text: string;
+  fragmentId: string;
 };
 
 type VisibleTextSpan = {
@@ -75,6 +76,11 @@ const getVisibleTextPoint = async (
           continue;
         }
         const sourceFrom = Number(sourceElement.dataset.documentFrom);
+        const fragmentId = sourceElement.dataset.documentFragmentId;
+        if (!fragmentId) {
+          node = walker.nextNode();
+          continue;
+        }
         const sourceOffsetRange = document.createRange();
         sourceOffsetRange.selectNodeContents(sourceElement);
         sourceOffsetRange.setEnd(node, 0);
@@ -100,6 +106,7 @@ const getVisibleTextPoint = async (
             y: rect.top + rect.height / 2,
             expectedPosition: sourceFrom + sourceTextOffset + offset,
             text,
+            fragmentId,
           };
         }
       }
@@ -129,6 +136,8 @@ const getVisibleTextSpan = async (
     '[data-document-from][data-document-to]'
   );
   if (!sourceElement) throw new Error('Text node has no source range');
+  const fragmentId = sourceElement.dataset.documentFragmentId;
+  if (!fragmentId) throw new Error('Text node has no fragment identity');
   const sourceFrom = Number(sourceElement.dataset.documentFrom);
   const sourceOffsetRange = document.createRange();
   sourceOffsetRange.selectNodeContents(sourceElement);
@@ -164,12 +173,14 @@ const getVisibleTextSpan = async (
       y: startRect.top + startRect.height / 2,
       expectedPosition: sourceFrom + sourceTextOffset,
       text,
+      fragmentId,
     },
     end: {
       x: endRect.right + 1,
       y: endRect.top + endRect.height / 2,
       expectedPosition: sourceFrom + sourceTextOffset + length,
       text,
+      fragmentId,
     },
     expectedText: text.slice(0, length),
     regionCount: usable.length,
@@ -261,10 +272,10 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
       }))
     : [];
   const activeCanonical = Array.from(layout.querySelectorAll<HTMLElement>(
-    '[data-document-active-edit-block="true"]'
+    '[data-document-active-edit-fragment="true"]'
   ));
-  const canonicalBlocks = Array.from(layout.querySelectorAll<HTMLElement>(
-    '[data-document-block-index]'
+  const canonicalFragments = Array.from(layout.querySelectorAll<HTMLElement>(
+    '[data-document-fragment-id]'
   ));
   return {
     columnCount: layout.getAttribute('data-column-count'),
@@ -276,9 +287,9 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
     )).map(rect),
     activeIndexes,
     activeCanonicalCount: activeCanonical.length,
-    visibleNonActiveCanonicalCount: canonicalBlocks.filter((block) => (
-      !block.matches('[data-document-active-edit-block="true"]')
-      && getComputedStyle(block).visibility === 'visible'
+    visibleNonActiveCanonicalCount: canonicalFragments.filter((fragment) => (
+      !fragment.matches('[data-document-active-edit-fragment="true"]')
+      && getComputedStyle(fragment).visibility === 'visible'
     )).length,
     activeCanonicalRect: activeCanonical.length > 0
       ? rect(activeCanonical[activeCanonical.length - 1])
@@ -312,10 +323,14 @@ test.describe('structured text hit testing', () => {
       await expect.poll(async () => Number(
         await layout.getAttribute('data-document-selection-from')
       )).toBe(point.expectedPosition);
+      await expect(layout).toHaveAttribute(
+        'data-active-edit-fragment-id',
+        point.fragmentId
+      );
     }
   });
 
-  test('keeps canonical columns visible while a local ProseMirror block is edited', async ({ page }) => {
+  test('keeps canonical columns visible while a fragment-level ProseMirror edit surface is active', async ({ page }) => {
     test.slow();
     await loadHistoricalFixture(page);
     const layout = page.locator('[data-document-span-layout]');
@@ -419,12 +434,10 @@ test.describe('structured text hit testing', () => {
       expect(Number(await layout.getAttribute('data-document-selection-to')))
         .toBe(columnThreeSpan.end.expectedPosition);
       expect(await readStructuredLayoutContract(page)).toEqual(idleLayout);
-      await expect(layout.locator('.document-structured-selection-highlight'))
-        .not.toHaveCount(0);
-      const highlightedText = await layout.locator(
-        '.document-structured-selection-highlight'
-      ).allTextContents();
-      expect(highlightedText.join('')).toContain(
+      const nativeSelectionText = await page.evaluate(
+        () => window.getSelection()?.toString() || ''
+      );
+      expect(nativeSelectionText).toContain(
         columnThreeSpan.expectedText.slice(0, 12)
       );
 
@@ -443,7 +456,15 @@ test.describe('structured text hit testing', () => {
 
       const caretPoint = await getVisibleTextPoint(page, 3, 'start');
       await page.mouse.click(caretPoint.x, caretPoint.y);
-      await expect(layout.locator('.document-structured-caret')).not.toHaveCount(0);
+      const nativeCaret = await page.evaluate(() => {
+        const selection = window.getSelection();
+        return {
+          collapsed: Boolean(selection?.isCollapsed),
+          text: selection?.toString() || '',
+        };
+      });
+      expect(nativeCaret.collapsed).toBe(true);
+      expect(nativeCaret.text).toBe('');
       expect(Number(await layout.getAttribute('data-document-selection-from')))
         .toBe(caretPoint.expectedPosition);
 

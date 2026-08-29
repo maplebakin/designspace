@@ -50,6 +50,7 @@ import {
   findDocumentImagePositionById,
   findDocumentImagePositions,
   getDocumentImageSpanDimensions,
+  normalizeDocumentImageAttributes,
   type DocumentImageAttributes,
   type DocumentImageMoveDirection,
   type DocumentImageReplaceRequest,
@@ -73,6 +74,7 @@ import {
   DOCUMENT_IMAGE_GEOMETRY_TRANSACTION_META,
   DOCUMENT_IMAGE_CONTENT_TRANSACTION_META,
   FlowEditor,
+  getDocumentImageById,
   getSelectedDocumentImage,
   type DocumentDropContext,
   type SelectedDocumentImage,
@@ -132,7 +134,16 @@ import {
 import type { SelectionEvent } from '../../editor/session/projectSession';
 import type { PageAssetEffect } from '../../editor/session/projectMutation';
 import {
-  registerDocumentLiveDraftFlushHandler,
+  EMPTY_DOCUMENT_SELECTION_PROJECTION,
+  documentSelectionProjectionsAreEqual,
+  projectDocumentImageSelection,
+  projectDocumentOverlaySelection,
+  projectDocumentTextSelection,
+  type DocumentSelectionProjection,
+} from '../state/documentSelectionProjection';
+import {
+  createDocumentLiveDraftScope,
+  type DocumentLiveDraftScope,
 } from '../services/documentLiveDraft';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
@@ -503,7 +514,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const saveStatus = useDocumentStore((state) => state.saveStatus);
   const zoom = useDocumentStore((state) => state.zoom);
   const isReferenceAdjustMode = useDocumentStore((state) => state.isReferenceAdjustMode);
-  const selectedOverlayId = useDocumentStore((state) => state.selectedOverlayId);
+  // Store selection fields remain compatibility state for older adapters. The
+  // render tree below consumes the editor selection projection instead.
+  const selectedOverlayStoreId = useDocumentStore(
+    (state) => state.selectedOverlayId
+  );
   const selectedFlowImageStoreId = useDocumentStore(
     (state) => state.selectedFlowImageId
   );
@@ -552,7 +567,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const setReference = useDocumentStore((state) => state.setReference);
   const setZoom = useDocumentStore((state) => state.setZoom);
   const setReferenceAdjustMode = useDocumentStore((state) => state.setReferenceAdjustMode);
-  const setSelectedOverlayId = useDocumentStore((state) => state.setSelectedOverlayId);
+  const setSelectedOverlayStoreId = useDocumentStore(
+    (state) => state.setSelectedOverlayId
+  );
   const setSelectedFlowImageId = useDocumentStore((state) => state.setSelectedFlowImageId);
   const setOverflowing = useDocumentStore((state) => state.setOverflowing);
   const setToastMessage = useDocumentStore((state) => state.setToastMessage);
@@ -566,6 +583,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const workspaceRef = useRef<HTMLElement | null>(null);
   const nodeReplaceInputRef = useRef<HTMLInputElement | null>(null);
   const pendingNodeReplaceRef = useRef<DocumentImageReplaceRequest | null>(null);
+  const liveDraftScopeRef = useRef<DocumentLiveDraftScope | null>(null);
   const pendingTextDraftsRef = useRef(new Map<
     string,
     {
@@ -575,16 +593,31 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
   >());
   const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  if (!liveDraftScopeRef.current) {
+    liveDraftScopeRef.current = createDocumentLiveDraftScope();
+  }
   const [activeTextRegion, setActiveTextRegion] =
     useState<DocumentEditorRegion>('body');
-  const [selectedFlowImage, setSelectedFlowImage] =
-    useState<SelectedDocumentImage | null>(null);
-  const [selectedStructuredImageIds, setSelectedStructuredImageIds] =
-    useState<string[]>([]);
-  const [selectedImageGroupId, setSelectedImageGroupId] =
-    useState<string | null>(null);
-  const [focusedTextRegion, setFocusedTextRegion] =
-    useState<DocumentEditorRegion | null>(null);
+  const [selectionProjection, setSelectionProjection] =
+    useState<DocumentSelectionProjection>(EMPTY_DOCUMENT_SELECTION_PROJECTION);
+  const setSelectionProjectionIfChanged = useCallback((
+    update:
+      | DocumentSelectionProjection
+      | ((current: DocumentSelectionProjection) => DocumentSelectionProjection)
+  ) => {
+    setSelectionProjection((current) => {
+      const next = typeof update === 'function'
+        ? update(current)
+        : update;
+      return documentSelectionProjectionsAreEqual(current, next)
+        ? current
+        : next;
+    });
+  }, []);
+  const selectedStructuredImageIds = selectionProjection.imageIds;
+  const selectedImageGroupId = selectionProjection.groupId;
+  const focusedTextRegion = selectionProjection.textRegion;
+  const selectedOverlayId = selectionProjection.overlayId;
   const [isExporting, setIsExporting] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fitMode, setFitMode] = useState(true);
@@ -631,9 +664,285 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     [page, project]
   );
 
+  // Selection is projected once for the shell and all document chrome. The
+  // image object below is deliberately re-read from the current PM document
+  // by stable ID on every render; its position is never a targeting authority.
+  const selectedFlowImage = selectionProjection.primaryImageId
+    && bodyEditorRef.current
+    ? getDocumentImageById(
+        bodyEditorRef.current,
+        selectionProjection.primaryImageId
+      )
+    : null;
+
+  const setSelectedStructuredImageIds = useCallback((
+    update: readonly string[]
+      | ((current: readonly string[]) => readonly string[])
+  ) => {
+    setSelectionProjectionIfChanged((current) => {
+      const requested = typeof update === 'function'
+        ? update(current.imageIds)
+        : update;
+      const nextImageIds = [...new Set(requested)];
+      const primaryImageId = current.primaryImageId
+        && nextImageIds.includes(current.primaryImageId)
+        ? current.primaryImageId
+        : nextImageIds[0] || null;
+      const groupId = nextImageIds.length > 1 ? current.groupId : null;
+      const mode = groupId
+        ? 'image-group'
+        : nextImageIds.length > 0
+          ? 'image'
+          : current.textRegion
+            ? 'text'
+            : current.overlayId
+              ? 'overlay'
+              : 'none';
+      return {
+        ...current,
+        pageId: page?.id || current.pageId,
+        imageIds: nextImageIds,
+        primaryImageId,
+        groupId,
+        mode,
+      };
+    });
+  }, [page?.id, setSelectionProjectionIfChanged]);
+
+  const setSelectedImageGroupId = useCallback((groupId: string | null) => {
+    setSelectionProjectionIfChanged((current) => ({
+      ...current,
+      pageId: page?.id || current.pageId,
+      groupId,
+      mode: groupId
+        ? 'image-group'
+        : current.imageIds.length > 0
+          ? 'image'
+          : current.textRegion
+            ? 'text'
+            : current.overlayId
+              ? 'overlay'
+              : 'none',
+    }));
+  }, [page?.id, setSelectionProjectionIfChanged]);
+
+  const setImageSelectionProjection = useCallback((
+    imageIds: readonly string[],
+    primaryImageId: string,
+    groupId: string | null = null
+  ) => {
+    setSelectionProjectionIfChanged(
+      projectDocumentImageSelection({
+        pageId: page?.id || '',
+        imageIds,
+        primaryImageId,
+        groupId,
+      })
+    );
+  }, [page?.id, setSelectionProjectionIfChanged]);
+
+  const setSelectedFlowImage = useCallback((
+    selection: SelectedDocumentImage | null
+  ) => {
+    setSelectionProjectionIfChanged((current) => {
+      if (!selection) {
+        return {
+          ...current,
+          mode: current.textRegion
+            ? 'text'
+            : current.overlayId ? 'overlay' : 'none',
+          imageIds: [],
+          primaryImageId: null,
+          groupId: null,
+        };
+      }
+      const imageId = selection.attributes.id;
+      const imageIds = current.imageIds.length > 1
+        && current.imageIds.includes(imageId)
+        ? current.imageIds
+        : [imageId];
+      const groupId = imageIds.length > 1 ? current.groupId : null;
+      return {
+        ...current,
+        mode: groupId ? 'image-group' : 'image',
+        pageId: page?.id || current.pageId,
+        textRegion: null,
+        imageIds,
+        primaryImageId: imageId,
+        groupId,
+        overlayId: null,
+      };
+    });
+  }, [page?.id, setSelectionProjectionIfChanged]);
+
+  const setTextSelectionRegion = useCallback((
+    region: DocumentEditorRegion | null
+  ) => {
+    setSelectionProjectionIfChanged((current) => ({
+      ...current,
+      mode: region ? 'text' : 'none',
+      pageId: page?.id || current.pageId,
+      textRegion: region,
+      imageIds: [],
+      primaryImageId: null,
+      groupId: null,
+      overlayId: null,
+    }));
+  }, [page?.id, setSelectionProjectionIfChanged]);
+
+  const setSelectedOverlayId = useCallback((overlayId: string | null) => {
+    setSelectedOverlayStoreId(overlayId);
+    setSelectionProjectionIfChanged((current) => ({
+      ...current,
+      mode: overlayId
+        ? 'overlay'
+        : current.groupId && current.imageIds.length > 1
+          ? 'image-group'
+          : current.imageIds.length > 0
+            ? 'image'
+            : current.textRegion ? 'text' : 'none',
+      pageId: page?.id || current.pageId,
+      textRegion: overlayId ? null : current.textRegion,
+      imageIds: overlayId ? [] : current.imageIds,
+      primaryImageId: overlayId ? null : current.primaryImageId,
+      groupId: overlayId ? null : current.groupId,
+      overlayId,
+    }));
+  }, [page?.id, setSelectedOverlayStoreId, setSelectionProjectionIfChanged]);
+
   useEffect(() => {
     recordDocumentProjectSubscriberUpdate();
   }, [project]);
+
+  /**
+   * Reconcile compatibility selection mirrors with the authoritative editor
+   * selection. Older store callers can still seed an overlay selection, while
+   * a ProseMirror NodeSelection remains the only source allowed to identify a
+   * document image. Normal pointer paths update the projection directly; this
+   * bridge only handles programmatic/legacy setters and mount ordering.
+   */
+  useEffect(() => {
+    if (!page) return;
+    const editor = bodyEditorRef.current;
+    const selectedImage = editor && !editor.isDestroyed
+      ? getSelectedDocumentImage(editor)
+      : null;
+    if (selectedImage) {
+      const imageId = selectedImage.attributes.id;
+      const currentImageSelection = selectionProjection.imageIds.length > 1
+        && selectionProjection.imageIds.includes(imageId)
+        ? selectionProjection.imageIds
+        : null;
+      const imageIds = currentImageSelection
+        ? currentImageSelection
+        : [imageId];
+      const currentGroup = currentImageSelection
+        ? selectionProjection.groupId
+        : null;
+      const nextMode = imageIds.length > 1 && currentGroup
+        ? 'image-group'
+        : 'image';
+      setSelectionProjectionIfChanged((current) => {
+        if (
+          current.mode === nextMode
+          && current.pageId === page.id
+          && current.textRegion === null
+          && current.primaryImageId === imageId
+          && current.groupId === currentGroup
+          && current.overlayId === null
+          && current.imageIds.length === imageIds.length
+          && current.imageIds.every((id, index) => id === imageIds[index])
+        ) {
+          return current;
+        }
+        return projectDocumentImageSelection({
+          pageId: page.id,
+          imageIds,
+          primaryImageId: imageId,
+          groupId: currentGroup,
+        });
+      });
+      if (selectedFlowImageStoreId !== imageId) {
+        setSelectedFlowImageId(imageId);
+      }
+      if (selectedOverlayStoreId !== null) {
+        setSelectedOverlayStoreId(null);
+      }
+      return;
+    }
+
+    const selectedOverlay = selectedOverlayStoreId
+      ? page.overlayObjects.find((candidate) => candidate.id === selectedOverlayStoreId)
+      : null;
+    if (selectedOverlay) {
+      setSelectionProjectionIfChanged((current) => {
+        if (
+          current.mode === 'overlay'
+          && current.pageId === page.id
+          && current.overlayId === selectedOverlay.id
+          && current.textRegion === null
+          && current.imageIds.length === 0
+          && current.primaryImageId === null
+          && current.groupId === null
+        ) {
+          return current;
+        }
+        return projectDocumentOverlaySelection(page.id, selectedOverlay.id);
+      });
+      return;
+    }
+
+    if (
+      selectionProjection.overlayId !== null
+      && selectionProjection.overlayId !== selectedOverlayStoreId
+    ) {
+      setSelectionProjectionIfChanged(
+        editor?.isFocused
+        && editor.state.selection instanceof TextSelection
+          ? projectDocumentTextSelection(page.id, 'body')
+          : {
+              ...EMPTY_DOCUMENT_SELECTION_PROJECTION,
+              pageId: page.id,
+            }
+      );
+      return;
+    }
+
+    if (
+      editor
+      && !editor.isDestroyed
+      && editor.isFocused
+      && editor.state.selection instanceof TextSelection
+      && (
+        selectionProjection.mode === 'image'
+        || selectionProjection.mode === 'image-group'
+        || selectionProjection.mode === 'overlay'
+        || selectionProjection.primaryImageId !== null
+        || selectionProjection.overlayId !== null
+      )
+    ) {
+      setSelectionProjectionIfChanged((current) => ({
+        ...current,
+        mode: 'text',
+        pageId: page.id,
+        textRegion: 'body',
+        imageIds: [],
+        primaryImageId: null,
+        groupId: null,
+        overlayId: null,
+      }));
+      if (selectedFlowImageStoreId !== null) setSelectedFlowImageId(null);
+      if (selectedOverlayStoreId !== null) setSelectedOverlayStoreId(null);
+    }
+  }, [
+    page,
+    selectedFlowImageStoreId,
+    selectedOverlayStoreId,
+    selectionProjection,
+    setSelectedFlowImageId,
+    setSelectedOverlayStoreId,
+    setSelectionProjectionIfChanged,
+  ]);
 
   const liveTextDiagnostics = getDocumentLiveTextDiagnostics();
 
@@ -648,19 +957,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     previousPageIdRef.current = page?.id;
     titleEditorRef.current = null;
     bodyEditorRef.current = null;
-    setSelectedFlowImage(null);
-    setSelectedStructuredImageIds([]);
-    setSelectedImageGroupId(null);
+    setSelectionProjectionIfChanged({
+      ...EMPTY_DOCUMENT_SELECTION_PROJECTION,
+      pageId: page?.id || null,
+    });
     setSelectedFlowImageId(null);
     setSelectedOverlayId(null);
     setReferenceAdjustMode(false);
-    setFocusedTextRegion(null);
     setTextFormatState(DEFAULT_TEXT_FORMAT_STATE);
   }, [
     page?.id,
+    setSelectedOverlayId,
     setReferenceAdjustMode,
     setSelectedFlowImageId,
-    setSelectedOverlayId,
+    setSelectionProjectionIfChanged,
   ]);
 
   useEffect(() => {
@@ -902,7 +1212,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             language: page.language || project?.document.language,
           },
           [],
-          pagePositionOriginOffsetPx
+          pagePositionOriginOffsetPx,
+          page.id
         );
         const image = model?.images.find(
           (candidate) =>
@@ -1104,6 +1415,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [importImages]);
 
   const handleReferenceImport = useCallback(async (file: File) => {
+    const referencePageId = page?.id || getActiveDocumentPageId();
+    const sessionIdentityAtStart = useDocumentStore.getState().sessionIdentity;
+    if (!referencePageId) {
+      setToastMessage('Could not determine the document page for this reference.');
+      return;
+    }
     try {
       const isPdfReference = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
       const asset = await ingestDocumentReference(file, {
@@ -1115,6 +1432,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           }
           : undefined,
       });
+      const currentState = useDocumentStore.getState();
+      const targetPage = currentState.project?.pages.find(
+        (candidate) => candidate.id === referencePageId
+      );
+      if (
+        currentState.sessionIdentity !== sessionIdentityAtStart
+        || !targetPage
+      ) {
+        setToastMessage('Reference import was cancelled because the document changed.');
+        return;
+      }
       const assetId = addAsset(asset.id, asset.source, {
         mimeType: asset.mimeType,
         naturalWidth: asset.naturalWidth,
@@ -1133,15 +1461,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         offsetYPx: 0,
         visible: true,
         locked: false,
-      });
-      const referencePageId = page?.id || getActiveDocumentPageId();
-      if (referencePageId) {
-        notifyCommittedDocumentReference(
-          onCommittedMutation,
-          referencePageId,
-          'retained-reference'
-        );
-      }
+      }, referencePageId);
+      notifyCommittedDocumentReference(
+        onCommittedMutation,
+        referencePageId,
+        'retained-reference'
+      );
       setReferenceAdjustMode(false);
       setToastMessage('Reference page added. It will never be included in exports.');
     } catch (error) {
@@ -1309,14 +1634,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [schedulePendingTextDraftFlush]);
 
   useEffect(() => {
-    const unregister = registerDocumentLiveDraftFlushHandler(
-      flushPendingTextDrafts
-    );
+    const scope = liveDraftScopeRef.current;
+    const unregister = scope?.register(flushPendingTextDrafts);
     return () => {
       flushPendingTextDrafts();
-      unregister();
+      unregister?.();
     };
   }, [flushPendingTextDrafts]);
+
+  useEffect(() => () => {
+    liveDraftScopeRef.current?.dispose();
+  }, []);
 
   const handleStructuredEditorUpdate = useCallback((
     region: DocumentEditorRegion,
@@ -1394,20 +1722,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           === null
       )) return null;
       if (selectedImageGroupId === group.id) {
-        setSelectedImageGroupId(null);
-        setSelectedStructuredImageIds([imageId]);
+        setImageSelectionProjection([imageId], imageId);
         return imageId;
       }
-      setSelectedImageGroupId(group.id);
-      setSelectedStructuredImageIds([...group.childImageIds]);
+      setImageSelectionProjection(
+        group.childImageIds,
+        imageId,
+        group.id
+      );
       return imageId;
     }
     if (!additive) {
-      setSelectedImageGroupId(null);
-      setSelectedStructuredImageIds([imageId]);
+      setImageSelectionProjection([imageId], imageId);
       return imageId;
     }
-    setSelectedImageGroupId(null);
     const current = selectedStructuredImageIds;
     if (current.includes(imageId)) {
       const remaining = current.filter((candidate) => candidate !== imageId);
@@ -1415,17 +1743,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       if (findDocumentImagePositionById(editor, nextPrimary) === null) {
         return null;
       }
-      setSelectedStructuredImageIds(remaining);
+      setImageSelectionProjection(remaining, nextPrimary);
       return nextPrimary;
     }
     const next = [...current, imageId];
-    setSelectedStructuredImageIds(next);
+    setImageSelectionProjection(next, imageId);
     return imageId;
   }, [
     flushPendingTextDrafts,
     page,
     selectedImageGroupId,
     selectedStructuredImageIds,
+    setImageSelectionProjection,
   ]);
 
   const getStructuredLayoutModel = useCallback(() => {
@@ -1466,7 +1795,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         language: page.language || project?.document.language,
       },
       page.imageGroups,
-      pagePositionOriginOffsetPx
+      pagePositionOriginOffsetPx,
+      page.id
     );
   }, [page, physicalMargins, project?.document.language, typographyStyle, zoom]);
 
@@ -1850,6 +2180,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       const imagePosition = imagePositions[0];
       const beforeNode = editor.state.doc.nodeAt(imagePosition);
       if (!beforeNode) return false;
+      const currentAttributes = normalizeDocumentImageAttributes(
+        beforeNode.attrs as Partial<DocumentImageAttributes>,
+        beforeNode.type.name === 'documentInlineImage' ? 'inline' : 'float-left'
+      );
       const next: Partial<DocumentImageAttributes> = {
         ...(typeof update.caption === 'string' ? { caption: update.caption } : {}),
         ...(update.captionAlignment === 'inherit'
@@ -1935,40 +2269,40 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       }
       if (typeof update.widthPx === 'number') {
         const maximumWidth =
-          selectedFlowImage.attributes.wrap === 'span-columns' && page
+          currentAttributes.wrap === 'span-columns' && page
             ? (
-                availableColumnWidth * selectedFlowImage.attributes.spanCount
+                availableColumnWidth * currentAttributes.spanCount
                 + page.columnGapPx
-                  * (selectedFlowImage.attributes.spanCount - 1)
+                  * (currentAttributes.spanCount - 1)
               )
             : Number.POSITIVE_INFINITY;
         const widthPx = Math.min(update.widthPx, maximumWidth);
         const ratio =
-          selectedFlowImage.attributes.naturalHeight
-          / Math.max(1, selectedFlowImage.attributes.naturalWidth);
+          currentAttributes.naturalHeight
+          / Math.max(1, currentAttributes.naturalWidth);
         next.widthPx = widthPx;
         const cropMode = update.cropMode === 'fill'
           || (update.cropMode === undefined
-            && selectedFlowImage.attributes.cropMode === 'fill')
+            && currentAttributes.cropMode === 'fill')
           ? 'fill'
           : 'fit';
         if (cropMode === 'fit') next.heightPx = widthPx * ratio;
       } else if (typeof update.heightPx === 'number') {
         const aspectRatio =
-          selectedFlowImage.attributes.naturalWidth
-          / Math.max(1, selectedFlowImage.attributes.naturalHeight);
+          currentAttributes.naturalWidth
+          / Math.max(1, currentAttributes.naturalHeight);
         const desiredWidthPx = update.heightPx * aspectRatio;
         const maximumWidth =
-          selectedFlowImage.attributes.wrap === 'span-columns' && page
+          currentAttributes.wrap === 'span-columns' && page
             ? (
-                availableColumnWidth * selectedFlowImage.attributes.spanCount
+                availableColumnWidth * currentAttributes.spanCount
                 + page.columnGapPx
-                  * (selectedFlowImage.attributes.spanCount - 1)
+                  * (currentAttributes.spanCount - 1)
               )
             : Number.POSITIVE_INFINITY;
         const cropMode = update.cropMode === 'fill'
           || (update.cropMode === undefined
-            && selectedFlowImage.attributes.cropMode === 'fill')
+            && currentAttributes.cropMode === 'fill')
           ? 'fill'
           : 'fit';
         if (cropMode === 'fill') {
@@ -2267,12 +2601,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         return;
       }
       const editor = bodyEditorRef.current;
-      if (isSpan && editor && page) {
-        const beforeAttributes = selectedFlowImage.attributes;
+      const currentImage = editor
+        ? getDocumentImageById(
+            editor,
+            selectedFlowImage.attributes.id,
+            selectedFlowImage.nodeType
+          )
+        : null;
+      if (isSpan && editor && page && currentImage) {
+        const beforeAttributes = currentImage.attributes;
         const spanStartColumn =
           spanCount === 2
           && page.columnCount === 3
-          && selectedFlowImage.attributes.spanStartColumn === 2
+          && currentImage.attributes.spanStartColumn === 2
             ? 2
             : 1;
         const spanWidthPx = (
@@ -2290,7 +2631,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         );
         const committed = editor.chain()
           .focus()
-          .setNodeSelection(selectedFlowImage.position)
+          .setNodeSelection(currentImage.position)
           .updateSelectedDocumentImage({
             wrap: 'span-columns',
             spanCount,
@@ -2298,7 +2639,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             ...spanDimensions,
             xOffsetPx,
             verticalAnchor:
-              selectedFlowImage.attributes.verticalAnchor || 'flow',
+              currentImage.attributes.verticalAnchor || 'flow',
           })
           .run();
         const afterImage = getSelectedDocumentImage(editor);
@@ -2308,14 +2649,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           && JSON.stringify(beforeAttributes)
             !== JSON.stringify(afterImage.attributes)
         ) {
-          notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, selectedFlowImage.attributes.id);
+          notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, currentImage.attributes.id);
         }
         return;
       }
-      const beforeAttributes = selectedFlowImage.attributes;
+      if (!editor || !currentImage) return;
+      const beforeAttributes = currentImage.attributes;
       const committed = editor?.chain()
         .focus()
-        .setNodeSelection(selectedFlowImage.position)
+        .setNodeSelection(currentImage.position)
         .setDocumentImageWrap(wrap as DocumentFlowImageWrap)
         .run();
       const afterImage = editor ? getSelectedDocumentImage(editor) : null;
@@ -2329,7 +2671,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         notifyCommittedStructuredImageLayout(
           onCommittedMutation,
           page.id,
-          selectedFlowImage.attributes.id
+          currentImage.attributes.id
         );
       }
       return;
@@ -2428,10 +2770,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const handleSpanStartChange = useCallback((spanStartColumn: 1 | 2) => {
     const editor = bodyEditorRef.current;
     if (!selectedFlowImage || !editor) return;
-    const beforeAttributes = selectedFlowImage.attributes;
+    const currentImage = getDocumentImageById(
+      editor,
+      selectedFlowImage.attributes.id,
+      selectedFlowImage.nodeType
+    );
+    if (!currentImage) return;
+    const beforeAttributes = currentImage.attributes;
     const committed = editor.chain()
       .focus()
-      .setNodeSelection(selectedFlowImage.position)
+      .setNodeSelection(currentImage.position)
       .updateSelectedDocumentImage({ spanStartColumn })
       .run();
     const afterImage = getSelectedDocumentImage(editor);
@@ -2461,10 +2809,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     ) {
       return;
     }
-    const beforePosition = selectedFlowImage.position;
+    const currentImage = getDocumentImageById(
+      editor,
+      selectedFlowImage.attributes.id,
+      selectedFlowImage.nodeType
+    );
+    if (!currentImage) return;
+    const beforePosition = currentImage.position;
     const committed = editor.chain()
       .focus()
-      .setNodeSelection(selectedFlowImage.position)
+      .setNodeSelection(currentImage.position)
       .moveSelectedDocumentImage(direction)
       .run();
     const afterPosition = findDocumentImagePositions(
@@ -2495,11 +2849,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         fileName: asset.fileName,
       });
       if (selectedFlowImage) {
-        const widthPx = selectedFlowImage.attributes.widthPx;
         const editor = bodyEditorRef.current;
+        const currentImage = editor
+          ? getDocumentImageById(
+              editor,
+              selectedFlowImage.attributes.id,
+              selectedFlowImage.nodeType
+            )
+          : null;
+        if (!currentImage) return;
+        const widthPx = currentImage.attributes.widthPx;
         const committed = editor?.chain()
           .focus()
-          .setNodeSelection(selectedFlowImage.position)
+          .setNodeSelection(currentImage.position)
           .updateSelectedDocumentImage({
             assetId,
             naturalWidth: asset.naturalWidth,
@@ -2651,6 +3013,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           selectedOverlay.id,
           'cleanup-delegated'
         );
+        setSelectedOverlayId(null);
       }
     }
   }, [
@@ -2660,6 +3023,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     selectedFlowImage,
     selectedOverlay,
     setSelectedFlowImageId,
+    setSelectedOverlayId,
   ]);
 
   const resetSelectedImageSize = useCallback(() => {
@@ -2716,6 +3080,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setSelectedStructuredImageIds([]);
       setSelectedFlowImageId(null);
       setSelectedOverlayId(null);
+      const editor = bodyEditorRef.current;
+      if (
+        editor
+        && !editor.isDestroyed
+        && editor.state.selection instanceof NodeSelection
+      ) {
+        editor.view.dispatch(
+          editor.state.tr.setSelection(
+            TextSelection.atStart(editor.state.doc)
+          )
+        );
+      }
     }
     setReferenceAdjustMode(enabled);
   }, [
@@ -2946,11 +3322,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       className={shellClassName}
       data-testid="document-editor-shell"
       data-editor-mode="document"
+      data-document-selection-mode={selectionProjection.mode}
+      data-document-selection-page-id={selectionProjection.pageId || undefined}
+      data-document-selection-primary-image-id={
+        selectionProjection.primaryImageId || undefined
+      }
       data-selected-flow-image-id={selectedFlowImage?.attributes.id || undefined}
       data-selected-flow-image-store-id={selectedFlowImageStoreId || undefined}
       data-selected-structured-image-ids={selectedStructuredImageIds.join(',')}
       data-selected-image-group-id={selectedImageGroupId || undefined}
       data-selected-overlay-id={selectedOverlayId || undefined}
+      data-selected-overlay-store-id={selectedOverlayStoreId || undefined}
       data-focused-text-region={focusedTextRegion || undefined}
       data-active-text-region={activeTextRegion}
       data-state-churn-shell-renders={liveTextDiagnostics.shellRenders}
@@ -3618,7 +4000,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     titleEditorRef.current = editor;
                   }}
                   onFocusChange={(focused, editor) => {
-                    setFocusedTextRegion(focused ? 'title' : null);
+                    const selectedImage = getSelectedDocumentImage(editor);
+                    const isTextSelection = editor.state.selection
+                      instanceof TextSelection;
+                    if (focused && isTextSelection && !selectedImage) {
+                      setTextSelectionRegion('title');
+                    } else if (!focused && !selectedImage) {
+                      setTextSelectionRegion(null);
+                    }
                     if (!focused) {
                       flushPendingTextDrafts();
                       return;
@@ -3676,9 +4065,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   onFocusChange={(focused, editor) => {
                     if (focused && titleEditorRef.current?.isFocused) return;
                     const selectedImage = getSelectedDocumentImage(editor);
-                    setFocusedTextRegion(
-                      focused && !selectedImage ? 'body' : null
-                    );
+                    const isTextSelection = editor.state.selection
+                      instanceof TextSelection;
+                    if (focused && isTextSelection && !selectedImage) {
+                      setTextSelectionRegion('body');
+                    } else if (!focused && !selectedImage) {
+                      setTextSelectionRegion(null);
+                    }
                     if (!focused) {
                       flushPendingTextDrafts();
                       return;
@@ -3700,24 +4093,33 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     );
                   }}
                   onImageSelectionChange={(selection, editor) => {
-                    setFocusedTextRegion(
-                      selection ? null : editor.isFocused ? 'body' : null
-                    );
-                    setSelectedFlowImage(selection);
+                    setSelectionProjectionIfChanged((current) => {
+                      if (selection) {
+                        const imageIds = current.imageIds.length > 1
+                          && current.imageIds.includes(selection.attributes.id)
+                          ? current.imageIds
+                          : [selection.attributes.id];
+                        const groupId = imageIds.length > 1
+                          ? current.groupId
+                          : null;
+                        return projectDocumentImageSelection({
+                          pageId: page.id,
+                          imageIds,
+                          primaryImageId: selection.attributes.id,
+                          groupId,
+                        });
+                      }
+                      return editor.isFocused
+                        ? projectDocumentTextSelection(page.id, 'body')
+                        : {
+                            ...EMPTY_DOCUMENT_SELECTION_PROJECTION,
+                            pageId: page.id,
+                          };
+                    });
                     setSelectedFlowImageId(selection?.attributes.id || null);
-                    if (selection) {
-                      setSelectedStructuredImageIds((current) => (
-                        current.length > 1 && current.includes(selection.attributes.id)
-                          ? current
-                          : [selection.attributes.id]
-                      ));
-                    } else {
-                      setSelectedStructuredImageIds((current) => (
-                        current.length === 0 ? current : []
-                      ));
-                      setSelectedImageGroupId(null);
+                    if (selection || editor.isFocused) {
+                      setSelectedOverlayStoreId(null);
                     }
-                    if (selection || editor.isFocused) setSelectedOverlayId(null);
                   }}
                   onStructuredImageSelectionRequest={
                     handleStructuredImageSelectionRequest
@@ -3769,13 +4171,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           const file = event.target.files?.[0];
           const request = pendingNodeReplaceRef.current;
           if (file && request) {
-            request.editor.commands.setNodeSelection(request.position || 0);
-            setSelectedFlowImage({
-              position: request.position || 0,
-              nodeType: request.nodeType,
-              attributes: request.attributes,
-            });
-            void replaceSelectedImage(file);
+            const currentImage = getDocumentImageById(
+              request.editor,
+              request.attributes.id,
+              request.nodeType
+            );
+            if (currentImage) {
+              request.editor.commands.setNodeSelection(currentImage.position);
+              setSelectedFlowImage(currentImage);
+              void replaceSelectedImage(file);
+            }
           }
           pendingNodeReplaceRef.current = null;
           event.target.value = '';

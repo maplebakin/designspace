@@ -530,6 +530,29 @@ test.describe('reconstruction page-space interactions', () => {
     expect(exportedPixel).toEqual([250, 248, 245, 255]);
   });
 
+  test('keeps an asynchronous reference import bound to its starting page', async ({ page }) => {
+    const fixture = await createScannedReferenceFixture();
+    await openReconstruction(page, 'Page-Scoped Reference Import');
+    await page.getByTestId('document-add-page').click();
+    await expect(page.getByTestId('document-page-tab-1')).toBeVisible();
+    await page.getByTestId('document-page-tab-1').click();
+
+    const importPromise = page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'page-scoped-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: fixture.pdf,
+    });
+    await page.getByTestId('document-page-tab-0').click();
+    await importPromise;
+
+    await expect(page.getByTestId('document-reference-layer')).toHaveCount(0);
+    await page.getByTestId('document-page-tab-1').click();
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
+    await expect(page.getByLabel('Reference opacity')).toHaveValue('0.35');
+  });
+
   test('renders a first-page PDF reference above the transparent editor root', async ({ page }) => {
     await openReconstruction(page, 'PDF Reference Layer Regression');
     const pdf = Buffer.from(REFERENCE_PDF_BASE64, 'base64');

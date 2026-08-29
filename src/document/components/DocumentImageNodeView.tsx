@@ -48,6 +48,10 @@ export const DocumentImageNodeView = ({
   const source = options.resolveAssetSource(attributes.assetId);
   const multiSelected = options.isImageSelected?.(attributes.id) === true;
   const resizeSessionRef = useRef<ResizeSession | null>(null);
+  const pointerSelectionPendingRef = useRef<{
+    pointerId: number;
+    phase: 'pressed' | 'released';
+  } | null>(null);
   const previewWidthRef = useRef<number | null>(null);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
   const [sourceFailed, setSourceFailed] = useState(false);
@@ -198,6 +202,66 @@ export const DocumentImageNodeView = ({
     setPreviewWidth(null);
   };
 
+  const selectImageForPointer = (
+    event: Pick<ReactPointerEvent<HTMLElement>,
+      'shiftKey' | 'metaKey' | 'ctrlKey'>
+  ) => {
+    const requestedImageId = options.onSelectImage?.({
+      editor,
+      position: undefined,
+      imageId: attributes.id,
+      additive: event.shiftKey || event.metaKey || event.ctrlKey,
+    });
+    const selectionImageId = requestedImageId === undefined
+      ? attributes.id
+      : requestedImageId;
+    if (
+      selectionImageId
+      && selectDocumentImageById(editor, selectionImageId, nodeType)
+        !== null
+    ) {
+      editor.commands.focus();
+    }
+  };
+
+  const handleImagePointerDown = (
+    event: ReactPointerEvent<HTMLElement>
+  ) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    pointerSelectionPendingRef.current = {
+      pointerId: event.pointerId,
+      phase: 'pressed',
+    };
+    selectImageForPointer(event);
+  };
+
+  const handleImagePointerUp = (
+    event: ReactPointerEvent<HTMLElement>
+  ) => {
+    const pending = pointerSelectionPendingRef.current;
+    if (pending?.pointerId === event.pointerId) {
+      pending.phase = 'released';
+    }
+  };
+
+  const handleImagePointerCancel = (
+    event: ReactPointerEvent<HTMLElement>
+  ) => {
+    if (pointerSelectionPendingRef.current?.pointerId === event.pointerId) {
+      pointerSelectionPendingRef.current = null;
+    }
+  };
+
+  const handleImageLostPointerCapture = (
+    event: ReactPointerEvent<HTMLElement>
+  ) => {
+    if (pointerSelectionPendingRef.current?.pointerId === event.pointerId) {
+      pointerSelectionPendingRef.current = null;
+    }
+  };
+
   const media = source && !sourceFailed ? (
     <img
       className="document-image__media"
@@ -300,25 +364,18 @@ export const DocumentImageNodeView = ({
         multiSelected ? 'document-image--multi-selected' : '',
       ].filter(Boolean).join(' ')}
       contentEditable={false}
+      onPointerDown={handleImagePointerDown}
+      onPointerUp={handleImagePointerUp}
+      onPointerCancel={handleImagePointerCancel}
+      onLostPointerCapture={handleImageLostPointerCapture}
       onClick={(event: ReactMouseEvent<HTMLElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        const requestedImageId = options.onSelectImage?.({
-          editor,
-          position: undefined,
-          imageId: attributes.id,
-          additive: event.shiftKey || event.metaKey || event.ctrlKey,
-        });
-        const selectionImageId = requestedImageId === undefined
-          ? attributes.id
-          : requestedImageId;
-        if (
-          selectionImageId
-          && selectDocumentImageById(editor, selectionImageId, nodeType)
-            !== null
-        ) {
-          editor.commands.focus();
+        if (pointerSelectionPendingRef.current?.phase === 'released') {
+          pointerSelectionPendingRef.current = null;
+          return;
         }
+        selectImageForPointer(event);
       }}
       data-document-image="true"
       data-image-id={attributes.id}

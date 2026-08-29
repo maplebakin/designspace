@@ -10,6 +10,7 @@ import {
   type PointerEvent,
 } from 'react';
 import type { Editor } from '@tiptap/core';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import {
   AllSelection,
   NodeSelection,
@@ -220,6 +221,12 @@ export type StructuredTextBand = {
   widthPx: number;
   heightPx: number;
   html: string;
+  /**
+   * Runtime visual identities produced by the structured allocator. A band
+   * can contain several fragments and one PM block can occur in several
+   * bands, so this is deliberately richer than `documentFrom/documentTo`.
+   */
+  fragments: StructuredTextFragmentIdentity[];
   /** The exact ProseMirror text range represented by this visible region. */
   documentFrom: number | null;
   documentTo: number | null;
@@ -233,6 +240,28 @@ export type StructuredTextBand = {
   lineTo: number | null;
 };
 
+export type StructuredTextFragmentIdentity = Readonly<{
+  /** Runtime-only identity; never persisted in document JSON. */
+  id: string;
+  pageId: string | null;
+  blockIndex: number;
+  blockFrom: number;
+  blockTo: number;
+  fragmentFrom: number;
+  fragmentTo: number;
+  /** Ordinal among fragments derived from the same PM block. */
+  fragmentIndex: number;
+  columnIndex: number;
+  /** A stable-in-this-layout segment identity for diagnostics and hit tests. */
+  segmentId: string;
+  geometry: Readonly<{
+    leftPx: number;
+    topPx: number;
+    widthPx: number;
+    heightPx: number;
+  }>;
+}>;
+
 /**
  * Transient identity for the block(s) currently owned by the live editor.
  * Block indexes are stable across ordinary text transactions, while the
@@ -242,10 +271,14 @@ export type StructuredTextEditTarget = Readonly<{
   blockFrom: number;
   blockTo: number;
   blockIndexes: readonly number[];
+  fragmentIds: readonly string[];
+  primaryFragmentId: string | null;
 }>;
 
 export const getStructuredTextEditTarget = (
-  editor: Editor
+  editor: Editor,
+  fragments: readonly StructuredTextFragmentIdentity[] = [],
+  preferredFragmentId?: string | null
 ): StructuredTextEditTarget | null => {
   const selection = editor.state.selection;
   if (selection instanceof NodeSelection) return null;
@@ -287,10 +320,53 @@ export const getStructuredTextEditTarget = (
         return distance < nearestDistance ? block : nearest;
       }, blocks[0])];
 
+  const targetBlockIndexes = new Set(
+    targetBlocks.map((block) => block.index)
+  );
+  const preferredFragment = preferredFragmentId
+    ? fragments.find((fragment) => (
+        fragment.id === preferredFragmentId
+        && targetBlockIndexes.has(fragment.blockIndex)
+      ))
+    : undefined;
+  const selectedFragments = fragments.filter((fragment) => {
+    if (!targetBlockIndexes.has(fragment.blockIndex)) return false;
+    if (
+      selection.empty
+      && preferredFragment
+      && fragment.id === preferredFragment.id
+    ) return true;
+    if (selection.empty) {
+      return selectionFrom >= fragment.fragmentFrom
+        && selectionFrom <= fragment.fragmentTo;
+    }
+    return (
+      fragment.fragmentTo > selectionFrom
+      && fragment.fragmentFrom < selectionTo
+    );
+  });
+  const preferredOwnsSelection = preferredFragment && (
+    selection.empty
+      ? selectionFrom >= preferredFragment.fragmentFrom
+        && selectionFrom <= preferredFragment.fragmentTo
+      : preferredFragment.fragmentTo > selectionFrom
+        && preferredFragment.fragmentFrom < selectionTo
+  );
+  const targetFragments = preferredOwnsSelection
+    ? [
+        preferredFragment!,
+        ...selectedFragments.filter(
+          (fragment) => fragment.id !== preferredFragment.id
+        ),
+      ]
+    : selectedFragments;
+
   return {
     blockFrom: Math.min(...targetBlocks.map((block) => block.from)),
     blockTo: Math.max(...targetBlocks.map((block) => block.to)),
     blockIndexes: targetBlocks.map((block) => block.index),
+    fragmentIds: targetFragments.map((fragment) => fragment.id),
+    primaryFragmentId: targetFragments[0]?.id || null,
   };
 };
 
@@ -302,6 +378,7 @@ export type MultiDocumentSpanLayoutModel = {
   collisionRectangles: DocumentImageRectangle[];
   collisionUnits: DocumentImageRectangle[];
   textBands: StructuredTextBand[];
+  textFragments: StructuredTextFragmentIdentity[];
   columnWidthPx: number;
   columnGapPx: number;
   availableWidthPx: number;
@@ -488,6 +565,14 @@ const markStructuredFlowImageElements = (
 const DOCUMENT_TEXT_FROM_ATTRIBUTE = 'data-document-from';
 const DOCUMENT_TEXT_TO_ATTRIBUTE = 'data-document-to';
 const DOCUMENT_REGION_ATTRIBUTE = 'data-document-region-id';
+const DOCUMENT_BLOCK_FROM_ATTRIBUTE = 'data-document-block-from';
+const DOCUMENT_BLOCK_TO_ATTRIBUTE = 'data-document-block-to';
+const DOCUMENT_FRAGMENT_ID_ATTRIBUTE = 'data-document-fragment-id';
+const DOCUMENT_FRAGMENT_FROM_ATTRIBUTE = 'data-document-fragment-from';
+const DOCUMENT_FRAGMENT_TO_ATTRIBUTE = 'data-document-fragment-to';
+const DOCUMENT_FRAGMENT_INDEX_ATTRIBUTE = 'data-document-fragment-index';
+const DOCUMENT_FRAGMENT_SEGMENT_ATTRIBUTE = 'data-document-segment-id';
+const DOCUMENT_UNSPLITTABLE_ATTRIBUTE = 'data-document-unsplittable';
 
 type DocumentTextRange = {
   from: number;
@@ -511,6 +596,29 @@ const setDocumentTextRange = (
   element.setAttribute(DOCUMENT_TEXT_TO_ATTRIBUTE, String(range.to));
 };
 
+const readDocumentAttributeRange = (
+  element: Element,
+  fromAttribute: string,
+  toAttribute: string
+): DocumentTextRange | null => {
+  const from = Number(element.getAttribute(fromAttribute));
+  const to = Number(element.getAttribute(toAttribute));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
+    return null;
+  }
+  return { from, to };
+};
+
+const setDocumentAttributeRange = (
+  element: Element,
+  fromAttribute: string,
+  toAttribute: string,
+  range: DocumentTextRange
+) => {
+  element.setAttribute(fromAttribute, String(range.from));
+  element.setAttribute(toAttribute, String(range.to));
+};
+
 const getElementDocumentTextRange = (
   element: Element
 ): DocumentTextRange | null => readDocumentTextRange(element);
@@ -529,6 +637,19 @@ const getElementsDocumentTextRange = (
   };
 };
 
+const hasNonTextInlineContent = (node: ProseMirrorNode) => {
+  let hasNonTextInline = node.isLeaf && !node.isText;
+  if (hasNonTextInline) return true;
+  node.descendants((child) => {
+    if (child.isLeaf && !child.isText) {
+      hasNonTextInline = true;
+      return false;
+    }
+    return !hasNonTextInline;
+  });
+  return hasNonTextInline;
+};
+
 /**
  * Annotates parsed top-level HTML blocks with their ProseMirror text range.
  * The structured renderer only consumes these attributes; they are never
@@ -539,19 +660,29 @@ const annotateSourceElementRanges = (
   editor: Editor,
   children: Element[]
 ) => {
-  const entries: number[] = [];
-  editor.state.doc.forEach((_node, position) => entries.push(position));
+  const entries: Array<{ node: ProseMirrorNode; position: number }> = [];
+  editor.state.doc.forEach((node, position) => entries.push({ node, position }));
 
   children.forEach((element, index) => {
-    const position = entries[index];
-    if (position === undefined) return;
+    const entry = entries[index];
+    if (!entry) return;
+    const { node, position } = entry;
     element.setAttribute('data-document-block-index', String(index));
-    const textLength = element.textContent?.length || 0;
-    const from = position + 1;
-    setDocumentTextRange(element, {
-      from,
-      to: from + textLength,
-    });
+    const contentFrom = node.isLeaf ? position : position + 1;
+    const contentTo = node.isLeaf
+      ? position + 1
+      : position + node.nodeSize - 1;
+    const range = { from: contentFrom, to: Math.max(contentFrom, contentTo) };
+    setDocumentTextRange(element, range);
+    setDocumentAttributeRange(
+      element,
+      DOCUMENT_BLOCK_FROM_ATTRIBUTE,
+      DOCUMENT_BLOCK_TO_ATTRIBUTE,
+      range
+    );
+    if (hasNonTextInlineContent(node)) {
+      element.setAttribute(DOCUMENT_UNSPLITTABLE_ATTRIBUTE, 'true');
+    }
   });
 };
 
@@ -722,6 +853,19 @@ const cloneElementRange = (
       to: sourceRange.from + to,
     });
   }
+  const sourceBlockRange = readDocumentAttributeRange(
+    element,
+    DOCUMENT_BLOCK_FROM_ATTRIBUTE,
+    DOCUMENT_BLOCK_TO_ATTRIBUTE
+  );
+  if (sourceBlockRange) {
+    setDocumentAttributeRange(
+      cloneElement,
+      DOCUMENT_BLOCK_FROM_ATTRIBUTE,
+      DOCUMENT_BLOCK_TO_ATTRIBUTE,
+      sourceBlockRange
+    );
+  }
   if (from > 0) removeDocumentDropCapTargets(cloneElement);
   return cloneElement;
 };
@@ -733,6 +877,7 @@ const splitElementToFit = (
   maximumHeightPx: number,
   measure: StructuredContentMeasurer['measure']
 ): { before: Element; after: Element } | null => {
+  if (element.hasAttribute(DOCUMENT_UNSPLITTABLE_ATTRIBUTE)) return null;
   const text = element.textContent || '';
   const boundaries: number[] = [];
   for (let index = 1; index < text.length; index += 1) {
@@ -764,6 +909,76 @@ const splitElementToFit = (
   const after = cloneElementRange(element, bestOffset, text.length);
   return before && after ? { before, after } : null;
 };
+
+const createStructuredTextFragments = (
+  elements: Element[],
+  band: Omit<StructuredTextBand, 'html' | 'fragments' | 'documentFrom' | 'documentTo' | 'lineFrom' | 'lineTo'>,
+  pageId: string | undefined,
+  fragmentIndexes: Map<number, number>,
+  measure: StructuredContentMeasurer['measure']
+): StructuredTextFragmentIdentity[] => elements.flatMap((element) => {
+  // A top-level ordinary-flow image is allocated with the text stream so its
+  // passive layout remains correct, but it is not a text fragment. Its
+  // explicit editor-only flow-image hit target owns image interaction.
+  if (element.getAttribute('data-document-structured-flow-image') === 'true') {
+    return [];
+  }
+  const range = getElementDocumentTextRange(element);
+  const blockIndex = Number(element.getAttribute('data-document-block-index'));
+  const blockRange = readDocumentAttributeRange(
+    element,
+    DOCUMENT_BLOCK_FROM_ATTRIBUTE,
+    DOCUMENT_BLOCK_TO_ATTRIBUTE
+  );
+  if (
+    !range
+    || !Number.isFinite(blockIndex)
+    || range.to < range.from
+  ) return [];
+  const fragmentIndex = fragmentIndexes.get(blockIndex) || 0;
+  fragmentIndexes.set(blockIndex, fragmentIndex + 1);
+  const pageKey = pageId || 'document';
+  const id = `${pageKey}:block-${blockIndex}:fragment-${fragmentIndex}`
+    + `:${range.from}-${range.to}:${band.id}`;
+  const segmentId = `${pageKey}:${band.id}:segment-${fragmentIndex}`;
+  setDocumentAttributeRange(
+    element,
+    DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+    DOCUMENT_FRAGMENT_TO_ATTRIBUTE,
+    range
+  );
+  element.setAttribute(DOCUMENT_FRAGMENT_ID_ATTRIBUTE, id);
+  element.setAttribute(DOCUMENT_FRAGMENT_INDEX_ATTRIBUTE, String(fragmentIndex));
+  element.setAttribute(DOCUMENT_FRAGMENT_SEGMENT_ATTRIBUTE, segmentId);
+  element.setAttribute('data-document-fragment-column', String(band.column));
+  const elementIndex = elements.indexOf(element);
+  const preceding = elementIndex > 0 ? elements.slice(0, elementIndex) : [];
+  const topOffsetPx = preceding.length > 0
+    ? measure(preceding, band.widthPx)
+    : 0;
+  const heightPx = Math.max(1, measure([element], band.widthPx));
+  return [{
+    id,
+    pageId: pageId || null,
+    blockIndex,
+    blockFrom: blockRange?.from ?? range.from,
+    blockTo: blockRange?.to ?? range.to,
+    fragmentFrom: range.from,
+    fragmentTo: range.to,
+    fragmentIndex,
+    columnIndex: band.column,
+    segmentId,
+    geometry: {
+      leftPx: band.leftPx,
+      topPx: band.topPx + topOffsetPx,
+      widthPx: band.widthPx,
+      heightPx: Math.min(
+        heightPx,
+        Math.max(1, band.heightPx - topOffsetPx)
+      ),
+    },
+  }];
+});
 
 export const allocateElementsToHeight = (
   elements: Element[],
@@ -1213,7 +1428,8 @@ export const buildMultiDocumentSpanLayoutModel = (
   attributeOverrides: Record<string, Partial<DocumentImageAttributes>> = {},
   typographyOptions: StructuredDocumentTypographyOptions = {},
   imageGroups: readonly DocumentImageGroup[] = [],
-  pagePositionOriginOffsetPx = 0
+  pagePositionOriginOffsetPx = 0,
+  pageId?: string
 ): MultiDocumentSpanLayoutModel | null => {
   const positionedNodes: Array<{
     position: number;
@@ -1785,7 +2001,7 @@ export const buildMultiDocumentSpanLayoutModel = (
     });
     const candidateBands: Array<Omit<
       StructuredTextBand,
-      'html' | 'documentFrom' | 'documentTo' | 'lineFrom' | 'lineTo'
+      'html' | 'fragments' | 'documentFrom' | 'documentTo' | 'lineFrom' | 'lineTo'
     >> = [];
     for (let column = 1; column <= columnCount; column += 1) {
       const columnRectangle = columnRectangles[column - 1];
@@ -1832,6 +2048,7 @@ export const buildMultiDocumentSpanLayoutModel = (
       }
     }
     let remaining = [...textElements];
+    const fragmentIndexes = new Map<number, number>();
     let skipColumn: number | null = null;
     let consumeBreakBeforeNextColumn = false;
     const textBands = candidateBands.map((band) => {
@@ -1839,6 +2056,7 @@ export const buildMultiDocumentSpanLayoutModel = (
         return {
           ...band,
           html: '',
+          fragments: [],
           documentFrom: null,
           documentTo: null,
           lineFrom: null,
@@ -1863,9 +2081,17 @@ export const buildMultiDocumentSpanLayoutModel = (
       const documentRange = getElementsDocumentTextRange(
         allocation.allocated
       );
+      const fragments = createStructuredTextFragments(
+        allocation.allocated,
+        band,
+        pageId,
+        fragmentIndexes,
+        measurer.measure
+      );
       return {
         ...band,
         html: serializeElements(allocation.allocated),
+        fragments,
         documentFrom: documentRange?.from ?? null,
         documentTo: documentRange?.to ?? null,
         lineFrom: documentRange?.from ?? null,
@@ -1881,6 +2107,13 @@ export const buildMultiDocumentSpanLayoutModel = (
       const overflowRange = getElementsDocumentTextRange(remaining);
       if (overflowRange) {
         const finalBand = textBands[textBands.length - 1];
+        finalBand.fragments.push(...createStructuredTextFragments(
+          remaining,
+          finalBand,
+          pageId,
+          fragmentIndexes,
+          measurer.measure
+        ));
         finalBand.documentFrom = finalBand.documentFrom === null
           ? overflowRange.from
           : Math.min(finalBand.documentFrom, overflowRange.from);
@@ -1902,6 +2135,7 @@ export const buildMultiDocumentSpanLayoutModel = (
       collisionRectangles,
       collisionUnits,
       textBands,
+      textFragments: textBands.flatMap((band) => band.fragments),
       columnWidthPx,
       columnGapPx: safeGap,
       availableWidthPx: safeWidth,
@@ -1927,6 +2161,7 @@ type StructuredDocumentSpanLayoutProps = {
   revision: number;
   selectionRevision: number;
   textEditing: boolean;
+  activeTextFragmentId?: string | null;
   viewScale: number;
   minimumImageWidthPx: number;
   maximumFlowImageWidthPx: number;
@@ -1955,13 +2190,15 @@ type StructuredDocumentSpanLayoutProps = {
     heightPx: number,
     xOffsetPx: number
   ) => boolean;
-  onEditText: (position?: number) => void;
+  onEditText: (position?: number, fragmentId?: string | null) => void;
 };
 
 type StructuredInteractionIntent = {
   pointerId: number;
   owner: 'text' | 'image' | 'resize';
+  phase: 'pressed' | 'dragging' | 'released';
   imageId?: string;
+  fragmentId?: string | null;
   textPosition?: number | null;
 };
 
@@ -1984,34 +2221,61 @@ const findDocumentTextRangeElement = (
   ) || null;
 };
 
-const getTextOffsetWithinElement = (
+/**
+ * Converts a DOM text point into a ProseMirror content offset.  Text nodes
+ * have the same UTF-16 length as ProseMirror text, but inline atom nodes have
+ * a document size even though they contribute no textContent.  Counting those
+ * atoms here keeps hit testing correct for marked text surrounding an inline
+ * image without using visual character counts as document ranges.
+ */
+const getDocumentTextOffsetWithinElement = (
   element: HTMLElement,
   node: Node,
   offset: number
 ) => {
-  if (node.nodeType !== 3) {
-    const range = element.ownerDocument.createRange();
-    range.selectNodeContents(element);
-    range.setEnd(node, Math.min(offset, node.childNodes.length));
-    return range.toString().length;
-  }
-  const walker = element.ownerDocument.createTreeWalker(
-    element,
-    4 /* NodeFilter.SHOW_TEXT */
-  );
-  let current = walker.nextNode();
   let textOffset = 0;
-  while (current) {
+  let found = false;
+  const visit = (current: Node) => {
+    if (found) return;
     if (current === node) {
-      return textOffset + Math.min(
-        Math.max(0, offset),
-        current.textContent?.length || 0
-      );
+      if (current.nodeType === 3) {
+        textOffset += Math.min(
+          Math.max(0, offset),
+          current.textContent?.length || 0
+        );
+      }
+      found = true;
+      return;
     }
-    textOffset += current.textContent?.length || 0;
-    current = walker.nextNode();
-  }
+    if (
+      current.nodeType === 1
+      && current !== element
+      && (current as Element).hasAttribute('data-document-image')
+    ) {
+      // Document images are ProseMirror atom nodes. Their caption/alt markup
+      // is presentation and must not be counted as text content.
+      textOffset += 1;
+      return;
+    }
+    if (current.nodeType === 3) {
+      textOffset += current.textContent?.length || 0;
+      return;
+    }
+    current.childNodes.forEach(visit);
+  };
+  visit(element);
   return textOffset;
+};
+
+const findDocumentFragmentElement = (
+  node: Node | null
+): HTMLElement | null => {
+  const element = node instanceof HTMLElement
+    ? node
+    : node?.parentElement;
+  return element?.closest<HTMLElement>(
+    `[${DOCUMENT_FRAGMENT_ID_ATTRIBUTE}][${DOCUMENT_FRAGMENT_FROM_ATTRIBUTE}][${DOCUMENT_FRAGMENT_TO_ATTRIBUTE}]`
+  ) || null;
 };
 
 const clampStructuredDocumentPosition = (
@@ -2073,40 +2337,62 @@ const getStructuredCaretRangeAtPoint = (
   }
 };
 
+export type StructuredDocumentTextHit = Readonly<{
+  position: number;
+  fragmentId: string | null;
+}>;
+
 const resolveStructuredBandPositionAtPoint = (
   root: HTMLElement,
   editor: Editor,
   clientX: number,
   clientY: number
-) => {
+) : StructuredDocumentTextHit | null => {
+  const fragmentSelector = (
+    `[${DOCUMENT_FRAGMENT_ID_ATTRIBUTE}]`
+    + `[${DOCUMENT_FRAGMENT_FROM_ATTRIBUTE}]`
+    + `[${DOCUMENT_FRAGMENT_TO_ATTRIBUTE}]`
+  );
   const rangeSelector = (
     `[${DOCUMENT_REGION_ATTRIBUTE}]`
     + `[${DOCUMENT_TEXT_FROM_ATTRIBUTE}]`
     + `[${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
   );
-  const hit = root.ownerDocument.elementFromPoint(clientX, clientY);
-  const hitBand = hit instanceof Element
-    ? hit.closest<HTMLElement>(rangeSelector)
+  const hit = typeof root.ownerDocument.elementFromPoint === 'function'
+    ? root.ownerDocument.elementFromPoint(clientX, clientY)
     : null;
-  const candidates = hitBand
-    ? [hitBand]
+  const hitFragment = hit instanceof Element
+    ? hit.closest<HTMLElement>(fragmentSelector)
+    : null;
+  const candidates = hitFragment
+    ? [hitFragment]
+    : Array.from(root.querySelectorAll<HTMLElement>(fragmentSelector));
+  const fallbackCandidates = candidates.length > 0
+    ? candidates
     : Array.from(root.querySelectorAll<HTMLElement>(rangeSelector));
-  let nearestPosition: number | null = null;
+  let nearestHit: StructuredDocumentTextHit | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
-  candidates.forEach((band) => {
-    const sourceRange = readDocumentTextRange(band);
+  fallbackCandidates.forEach((band) => {
+    const fragmentRange = readDocumentAttributeRange(
+      band,
+      DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+      DOCUMENT_FRAGMENT_TO_ATTRIBUTE
+    );
+    const sourceRange = fragmentRange || readDocumentTextRange(band);
     if (!sourceRange || !band.textContent?.length) return;
     const walker = band.ownerDocument.createTreeWalker(band, 4);
     let current = walker.nextNode();
-    let textOffset = 0;
     while (current) {
-      const text = current.textContent || '';
+      const textNode = current;
+      const text = textNode.textContent || '';
       for (let index = 0; index < text.length; index += 1) {
         const characterRange = band.ownerDocument.createRange();
-        characterRange.setStart(current, index);
-        characterRange.setEnd(current, index + 1);
-        const rectangles = Array.from(characterRange.getClientRects());
+        characterRange.setStart(textNode, index);
+        characterRange.setEnd(textNode, index + 1);
+        const rectangles = typeof characterRange.getClientRects === 'function'
+          ? Array.from(characterRange.getClientRects())
+          : [];
         rectangles.forEach((rectangle) => {
           const verticalDistance = clientY < rectangle.top
             ? rectangle.top - clientY
@@ -2123,17 +2409,25 @@ const resolveStructuredBandPositionAtPoint = (
               ? index + 1
               : index;
           nearestDistance = distance;
-          nearestPosition = sourceRange.from + textOffset + offset;
+          const documentOffset = getDocumentTextOffsetWithinElement(
+            band,
+            textNode,
+            offset
+          );
+          nearestHit = {
+            position: clampStructuredDocumentPosition(
+              editor,
+              sourceRange.from + documentOffset
+            ),
+            fragmentId: band.getAttribute(DOCUMENT_FRAGMENT_ID_ATTRIBUTE),
+          };
         });
       }
-      textOffset += text.length;
       current = walker.nextNode();
     }
   });
 
-  return nearestPosition === null
-    ? null
-    : clampStructuredDocumentPosition(editor, nearestPosition)
+  return nearestHit;
 };
 
 /**
@@ -2152,43 +2446,78 @@ export const resolveStructuredDocumentPositionAtPoint = ({
   clientX: number;
   clientY: number;
 }): number | null => {
-  const editorRoot = root.closest<HTMLElement>('.document-flow-editor');
-  const liveSurface = editorRoot?.querySelector<HTMLElement>(
-    '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
+  const hit = resolveStructuredDocumentTextAtPoint({
+    root,
+    editor,
+    clientX,
+    clientY,
+  });
+  return hit?.position ?? null;
+};
+
+/**
+ * Resolves both the document position and the exact structured fragment that
+ * owns the clicked line box.  The fragment identity is carried through the
+ * text-entry transition; callers do not have to rediscover geometry after the
+ * live editor has changed the DOM.
+ */
+export const resolveStructuredDocumentTextAtPoint = ({
+  root,
+  editor,
+  clientX,
+  clientY,
+}: {
+  root: HTMLElement;
+  editor: Editor;
+  clientX: number;
+  clientY: number;
+}): StructuredDocumentTextHit | null => {
+  const structuredHit = resolveStructuredBandPositionAtPoint(
+    root,
+    editor,
+    clientX,
+    clientY
   );
-  if (liveSurface) {
-    const structuredPosition = resolveStructuredBandPositionAtPoint(
-      root,
-      editor,
-      clientX,
-      clientY
-    );
-    if (structuredPosition !== null) return structuredPosition;
-  }
+  if (structuredHit !== null) return structuredHit;
   const range = getStructuredCaretRangeAtPoint(root, clientX, clientY);
   if (range) {
-    const sourceElement = findDocumentTextRangeElement(range.startContainer);
-    const sourceRange = sourceElement
-      ? readDocumentTextRange(sourceElement)
-      : null;
+    const fragmentElement = findDocumentFragmentElement(range.startContainer);
+    const sourceElement = fragmentElement
+      || findDocumentTextRangeElement(range.startContainer);
+    const sourceRange = fragmentElement
+      ? readDocumentAttributeRange(
+          fragmentElement,
+          DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+          DOCUMENT_FRAGMENT_TO_ATTRIBUTE
+        )
+      : sourceElement
+        ? readDocumentTextRange(sourceElement)
+        : null;
     if (sourceElement && sourceRange) {
-      const offset = getTextOffsetWithinElement(
+      const offset = getDocumentTextOffsetWithinElement(
         sourceElement,
         range.startContainer,
         range.startOffset
       );
-      return clampStructuredDocumentPosition(
-        editor,
-        sourceRange.from + offset
-      );
+      return {
+        position: clampStructuredDocumentPosition(editor, sourceRange.from + offset),
+        fragmentId: fragmentElement?.getAttribute(
+          DOCUMENT_FRAGMENT_ID_ATTRIBUTE
+        ) || null,
+      };
     }
   }
 
   const candidates = Array.from(root.querySelectorAll<HTMLElement>(
-    `[${DOCUMENT_REGION_ATTRIBUTE}][${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+    `[${DOCUMENT_REGION_ATTRIBUTE}][${DOCUMENT_FRAGMENT_FROM_ATTRIBUTE}][${DOCUMENT_FRAGMENT_TO_ATTRIBUTE}]`
   )).filter((element) => (element.textContent || '').length > 0);
-  if (candidates.length === 0) return null;
-  const nearest = candidates
+  const fallbackCandidates = candidates.length > 0
+    ? candidates
+    : Array.from(root.querySelectorAll<HTMLElement>(
+        `[${DOCUMENT_REGION_ATTRIBUTE}][${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+      )).filter((element) => (element.textContent || '').length > 0);
+  if (fallbackCandidates.length === 0) return null;
+  const nearest = fallbackCandidates
     .map((element) => {
       const rect = element.getBoundingClientRect();
       const dx = clientX < rect.left
@@ -2200,13 +2529,21 @@ export const resolveStructuredDocumentPositionAtPoint = ({
       return { element, rect, distance: dx * dx + dy * dy };
     })
     .sort((left, right) => left.distance - right.distance)[0];
-  const sourceRange = readDocumentTextRange(nearest.element);
+  const fragmentRange = readDocumentAttributeRange(
+    nearest.element,
+    DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+    DOCUMENT_FRAGMENT_TO_ATTRIBUTE
+  );
+  const sourceRange = fragmentRange || readDocumentTextRange(nearest.element);
   if (!sourceRange) return null;
   const position = clientY <= nearest.rect.top
     || (clientY <= nearest.rect.bottom && clientX <= nearest.rect.left)
     ? sourceRange.from
     : sourceRange.to;
-  return clampStructuredDocumentPosition(editor, position);
+  return {
+    position: clampStructuredDocumentPosition(editor, position),
+    fragmentId: nearest.element.getAttribute(DOCUMENT_FRAGMENT_ID_ATTRIBUTE),
+  };
 };
 
 const decorateStructuredTextHtml = ({
@@ -2214,13 +2551,13 @@ const decorateStructuredTextHtml = ({
   selectionFrom,
   selectionTo,
   caretPosition,
-  activeEditBlockIndexes,
+  activeEditFragmentIds,
 }: {
   html: string;
   selectionFrom: number | null;
   selectionTo: number | null;
   caretPosition: number | null;
-  activeEditBlockIndexes: readonly number[];
+  activeEditFragmentIds: readonly string[];
 }) => {
   if (
     typeof document === 'undefined'
@@ -2228,17 +2565,20 @@ const decorateStructuredTextHtml = ({
       selectionFrom === null
       && selectionTo === null
       && caretPosition === null
-      && activeEditBlockIndexes.length === 0
+      && activeEditFragmentIds.length === 0
     )
   ) return html;
   const host = document.createElement('div');
   host.innerHTML = html;
-  const activeBlockIndexes = new Set(activeEditBlockIndexes);
-  if (activeBlockIndexes.size > 0) {
-    Array.from(host.children).forEach((element) => {
-      const blockIndex = Number(element.getAttribute('data-document-block-index'));
-      if (!activeBlockIndexes.has(blockIndex)) return;
-      element.setAttribute('data-document-active-edit-block', 'true');
+  const activeFragmentIds = new Set(activeEditFragmentIds);
+  if (activeFragmentIds.size > 0) {
+    host.querySelectorAll<HTMLElement>(
+      `[${DOCUMENT_FRAGMENT_ID_ATTRIBUTE}]`
+    ).forEach((element) => {
+      if (!activeFragmentIds.has(
+        element.getAttribute(DOCUMENT_FRAGMENT_ID_ATTRIBUTE) || ''
+      )) return;
+      element.setAttribute('data-document-active-edit-fragment', 'true');
     });
   }
   const textNodes: Text[] = [];
@@ -2264,8 +2604,16 @@ const decorateStructuredTextHtml = ({
       ? readDocumentTextRange(sourceElement)
       : null;
     if (!sourceElement || !sourceRange) return;
+    const fragmentElement = findDocumentFragmentElement(textNode);
+    const fragmentIsActive = Boolean(
+      fragmentElement?.hasAttribute('data-document-active-edit-fragment')
+    );
+    // The real ProseMirror surface owns the active fragment's caret and
+    // selection. Do not create a second synthetic decoration on the frozen
+    // copy of the same text.
+    if (fragmentIsActive) return;
     const text = textNode.textContent || '';
-    const textStart = sourceRange.from + getTextOffsetWithinElement(
+    const textStart = sourceRange.from + getDocumentTextOffsetWithinElement(
       sourceElement,
       textNode,
       0
@@ -2336,13 +2684,17 @@ const decorateStructuredTextHtml = ({
 
   if (caretPosition !== null && !caretInserted) {
     const candidates = Array.from(host.querySelectorAll<HTMLElement>(
-      `[${DOCUMENT_TEXT_FROM_ATTRIBUTE}][${DOCUMENT_TEXT_TO_ATTRIBUTE}]`
+      `[${DOCUMENT_FRAGMENT_FROM_ATTRIBUTE}][${DOCUMENT_FRAGMENT_TO_ATTRIBUTE}]`
     ));
     const candidate = candidates.find((element) => {
-      const range = readDocumentTextRange(element);
+      const range = readDocumentAttributeRange(
+        element,
+        DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+        DOCUMENT_FRAGMENT_TO_ATTRIBUTE
+      );
       return range && caretPosition >= range.from && caretPosition <= range.to;
     });
-    if (candidate) {
+    if (candidate && !candidate.hasAttribute('data-document-active-edit-fragment')) {
       const caret = document.createElement('span');
       caret.className = 'document-structured-caret';
       caret.setAttribute('data-document-editor-only', 'true');
@@ -2401,6 +2753,7 @@ export const StructuredDocumentSpanLayout = ({
   revision,
   selectionRevision,
   textEditing,
+  activeTextFragmentId = null,
   viewScale,
   minimumImageWidthPx,
   maximumFlowImageWidthPx,
@@ -2499,7 +2852,8 @@ export const StructuredDocumentSpanLayout = ({
           language,
         },
         stableImageGroups,
-        pagePositionOriginOffsetPx
+        pagePositionOriginOffsetPx,
+        pageId
       );
       const buildDurationMs = typeof performance === 'undefined'
         ? 0
@@ -2526,6 +2880,7 @@ export const StructuredDocumentSpanLayout = ({
       stableDropCap,
       stableImageGroups,
       pagePositionOriginOffsetPx,
+      pageId,
       previewOverrides,
       revision,
       stableTypographyStyle,
@@ -2837,29 +3192,27 @@ export const StructuredDocumentSpanLayout = ({
     clearDragVisualPreview(pending.imageIds);
   }, [clearDragVisualPreview, model, revision]);
 
-  const activeTextEditTarget = textEditing
-    ? getStructuredTextEditTarget(editor)
+  const activeTextEditTarget = textEditing && model
+    ? getStructuredTextEditTarget(
+        editor,
+        model.textFragments,
+        activeTextFragmentId
+      )
     : null;
-  const activeEditBlockIndexes = activeTextEditTarget?.blockIndexes || [];
-  const activeEditBlockSignature = activeEditBlockIndexes.join(',');
+  const activeEditFragmentIds = activeTextEditTarget?.fragmentIds || [];
+  const activeEditFragmentSignature = activeEditFragmentIds.join('|');
 
   useLayoutEffect(() => {
     const root = layoutRef.current;
     const editorRoot = root?.closest<HTMLElement>('.document-flow-editor');
-    if (!root || !editorRoot) return;
-
-    const activeIndexes = new Set(
-      activeEditBlockSignature
-        .split(',')
-        .filter((value) => value.length > 0)
-        .map(Number)
-    );
+    if (!root || !editorRoot || !model) return;
 
     // Do not decorate the managed ProseMirror block DOM directly. ProseMirror
     // observes attributes/styles on those nodes as possible editor mutations,
     // which can force a DOM reconciliation during every keystroke. The
     // stylesheet is owned by the surrounding editor shell and addresses the
-    // real PM nodes by their current child index instead.
+    // real PM nodes by their current child index instead. Geometry comes from
+    // the structured fragment model, never from a competing live DOM rect.
     const liveEditStyle = editorRoot.ownerDocument.createElement('style');
     liveEditStyle.setAttribute('data-document-live-edit-style', 'true');
     editorRoot.ownerDocument.head.appendChild(liveEditStyle);
@@ -2870,6 +3223,10 @@ export const StructuredDocumentSpanLayout = ({
     const clearLiveEditStyle = () => {
       liveEditStyle.textContent = '';
       editorRoot.removeAttribute('data-document-local-editing-style');
+      root.dataset.activeEditFragmentId = '';
+      root.dataset.activeEditColumn = '';
+      root.dataset.activeEditRegionId = '';
+      root.dataset.activeEditRect = '';
       styledSurface = null;
       styledChildCount = -1;
       styledSignature = '';
@@ -2879,7 +3236,7 @@ export const StructuredDocumentSpanLayout = ({
       const liveSurface = editorRoot.querySelector<HTMLElement>(
         '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
       );
-      if (!liveSurface || !textEditing || activeIndexes.size === 0) {
+      if (!liveSurface || !textEditing || activeEditFragmentIds.length === 0) {
         clearLiveEditStyle();
         return;
       }
@@ -2887,84 +3244,143 @@ export const StructuredDocumentSpanLayout = ({
       const needsGeometry = forceGeometry
         || styledSurface !== liveSurface
         || styledChildCount !== liveSurface.children.length
-        || styledSignature !== activeEditBlockSignature;
+        || styledSignature !== activeEditFragmentSignature;
       if (!needsGeometry) return;
 
-      let sourceRect: DOMRect | null = null;
-      let scaleX = 1;
-      let scaleY = 1;
-      let fallback: DOMRect | null = null;
-      const canonicalByBlockIndex = new Map<number, HTMLElement>();
-      root.querySelectorAll<HTMLElement>(
-        '[data-document-active-edit-block="true"][data-document-block-index]'
-      ).forEach((element) => {
-        const blockIndex = Number(element.dataset.documentBlockIndex);
-        if (Number.isFinite(blockIndex)) {
-          canonicalByBlockIndex.set(blockIndex, element);
+      const fragmentsById = new Map(
+        model.textFragments.map((fragment) => [fragment.id, fragment])
+      );
+      const activeFragments = activeEditFragmentIds.flatMap((id) => {
+        const fragment = fragmentsById.get(id);
+        return fragment ? [fragment] : [];
+      });
+      if (activeFragments.length === 0) {
+        clearLiveEditStyle();
+        return;
+      }
+      // A PM block can produce several fragments. The live source node is one
+      // DOM node, so expose it at the primary clicked fragment while masking
+      // only the exact canonical fragments included in this edit target.
+      const fragmentByBlockIndex = new Map<number, StructuredTextFragmentIdentity>();
+      activeFragments.forEach((fragment) => {
+        if (!fragmentByBlockIndex.has(fragment.blockIndex)) {
+          fragmentByBlockIndex.set(fragment.blockIndex, fragment);
         }
       });
-      sourceRect = liveSurface.getBoundingClientRect();
-      scaleX = sourceRect.width / Math.max(1, liveSurface.offsetWidth);
-      scaleY = sourceRect.height / Math.max(1, liveSurface.offsetHeight);
-      fallback = root.querySelector<HTMLElement>(
-        '[data-layout-role="explicit-text-column"]'
-      )?.getBoundingClientRect() || root.getBoundingClientRect();
+      const rootRect = root.getBoundingClientRect();
+      const rootScaleX = rootRect.width / Math.max(1, root.offsetWidth);
+      const rootScaleY = rootRect.height / Math.max(1, root.offsetHeight);
 
-      const rules: string[] = [
+      const baseRules: string[] = [
         '[data-document-local-editing-style="true"]'
-          + ' .document-flow-editor__content--structured-local-block-editing'
+          + ' .document-flow-editor__content--structured-local-fragment-editing'
           + ' .document-flow-prosemirror { position: relative !important; }',
       ];
-      const firstActive: {
-        rect: DOMRect | null;
-        element: HTMLElement | null;
-      } = { rect: null, element: null };
-      Array.from(activeIndexes).forEach((index) => {
-        const canonicalElement = canonicalByBlockIndex.get(index);
-        const canonicalRect = canonicalElement?.getBoundingClientRect() || fallback;
-        if (!sourceRect || !canonicalRect) return;
-        const leftPx = (canonicalRect.left - sourceRect.left)
-          / Math.max(0.05, scaleX);
-        const topPx = (canonicalRect.top - sourceRect.top)
-          / Math.max(0.05, scaleY);
-        const widthPx = canonicalRect.width / Math.max(0.05, scaleX);
+      const firstActive = activeFragments[0];
+      const placements = [...fragmentByBlockIndex.values()].map((fragment) => {
         const selector = '[data-document-local-editing-style="true"]'
-          + ' .document-flow-editor__content--structured-local-block-editing'
-          + ` .document-flow-prosemirror > :nth-child(${index + 1})`;
-        rules.push(`${selector} {
+          + ' .document-flow-editor__content--structured-local-fragment-editing'
+          + ` .document-flow-prosemirror > :nth-child(${fragment.blockIndex + 1})`;
+        return { fragment, selector };
+      });
+      const makePlacementRule = (
+        placement: (typeof placements)[number],
+        leftPx: number,
+        topPx: number,
+        clipToFragment: boolean
+      ) => {
+        const clipRule = clipToFragment
+          ? `height: ${Math.max(1, placement.fragment.geometry.heightPx)}px !important;
+          overflow: hidden !important;`
+          : '';
+        return `${placement.selector} {
           visibility: visible !important;
           position: absolute !important;
           left: ${leftPx}px !important;
           top: ${topPx}px !important;
-          width: ${Math.max(1, widthPx)}px !important;
+          width: ${Math.max(1, placement.fragment.geometry.widthPx)}px !important;
+          ${clipRule}
           z-index: 1 !important;
           pointer-events: none !important;
-        }`);
-        if (!firstActive.rect) {
-          firstActive.rect = canonicalRect;
-          firstActive.element = canonicalElement || null;
-        }
-      });
+        }`;
+      };
       editorRoot.setAttribute('data-document-local-editing-style', 'true');
-      liveEditStyle.textContent = rules.join('\n');
+      liveEditStyle.textContent = [
+        ...baseRules,
+        ...placements.map((placement) => makePlacementRule(
+          placement,
+          placement.fragment.geometry.leftPx,
+          placement.fragment.geometry.topPx,
+          false
+        )),
+      ].join('\n');
+
+      // A PM block can be split into several structured fragments. The real
+      // PM node remains the editing owner, so for a single-fragment edit use
+      // the model rectangle as the target and clip the source DOM to the
+      // selected PM subrange. The DOM range is only an internal content
+      // offset; it never replaces the structured model's page geometry.
+      const singleFragmentEdit = activeFragments.length === 1;
+      const sourceRangeRect = singleFragmentEdit && firstActive
+        ? (() => {
+            try {
+              const from = editor.view.domAtPos(firstActive.fragmentFrom);
+              const to = editor.view.domAtPos(firstActive.fragmentTo);
+              const range = editorRoot.ownerDocument.createRange();
+              range.setStart(from.node, from.offset);
+              range.setEnd(to.node, to.offset);
+              return range.getBoundingClientRect();
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+      const adjustedRules = placements.map((placement) => {
+        const fragment = placement.fragment;
+        if (
+          !sourceRangeRect
+          || fragment.id !== firstActive?.id
+          || sourceRangeRect.width <= 0
+          || sourceRangeRect.height <= 0
+        ) {
+          return makePlacementRule(
+            placement,
+            fragment.geometry.leftPx,
+            fragment.geometry.topPx,
+            false
+          );
+        }
+        const targetLeft = rootRect.left + fragment.geometry.leftPx * rootScaleX;
+        const targetTop = rootRect.top + fragment.geometry.topPx * rootScaleY;
+        const leftPx = fragment.geometry.leftPx
+          + (targetLeft - sourceRangeRect.left) / Math.max(0.05, rootScaleX);
+        const topPx = fragment.geometry.topPx
+          + (targetTop - sourceRangeRect.top) / Math.max(0.05, rootScaleY);
+        return makePlacementRule(
+          placement,
+          leftPx,
+          topPx,
+          true
+        );
+      });
+      liveEditStyle.textContent = [
+        baseRules[0],
+        ...adjustedRules,
+      ].join('\n');
       styledSurface = liveSurface;
       styledChildCount = liveSurface.children.length;
-      styledSignature = activeEditBlockSignature;
-      const activeEditRect = firstActive.rect ? {
-        left: firstActive.rect.left,
-        top: firstActive.rect.top,
-        width: firstActive.rect.width,
-        height: firstActive.rect.height,
+      styledSignature = activeEditFragmentSignature;
+      const activeEditRect = firstActive ? {
+        left: rootRect.left + firstActive.geometry.leftPx * rootScaleX,
+        top: rootRect.top + firstActive.geometry.topPx * rootScaleY,
+        width: firstActive.geometry.widthPx * rootScaleX,
+        height: firstActive.geometry.heightPx * rootScaleY,
       } : null;
-      const activeTextColumn = firstActive.element?.closest<HTMLElement>(
-        '[data-layout-role="explicit-text-column"]'
-      );
-      root.dataset.activeEditColumn = firstActive.element?.dataset.column
-        || activeTextColumn?.dataset.column
-        || '';
-      root.dataset.activeEditRegionId = firstActive.element?.dataset.regionId
-        || activeTextColumn?.dataset.regionId
-        || '';
+      root.dataset.activeEditFragmentId = firstActive?.id || '';
+      root.dataset.activeEditColumn = firstActive
+        ? String(firstActive.columnIndex)
+        : '';
+      root.dataset.activeEditRegionId = firstActive?.segmentId || '';
       root.dataset.activeEditRect = JSON.stringify(activeEditRect);
     };
 
@@ -2998,7 +3414,8 @@ export const StructuredDocumentSpanLayout = ({
       liveEditStyle.remove();
     };
   }, [
-    activeEditBlockSignature,
+    activeEditFragmentSignature,
+    activeTextFragmentId,
     model,
     textEditing,
     viewScale,
@@ -3022,6 +3439,8 @@ export const StructuredDocumentSpanLayout = ({
       finishResizeRef.current(event.pointerId, false);
       finishFlowResizeRef.current(event.pointerId, false);
       finishTextSelectionRef.current(event.pointerId);
+      const intent = interactionIntentRef.current;
+      if (intent?.pointerId === event.pointerId) intent.phase = 'released';
     };
     const handlePointerCancel = (event: globalThis.PointerEvent) => {
       finishDragRef.current(event.pointerId, true);
@@ -3198,7 +3617,7 @@ export const StructuredDocumentSpanLayout = ({
     if (event.button !== 0 || dragRef.current || resizeRef.current) return;
     const root = layoutRef.current;
     if (!root) return;
-    const position = resolveStructuredDocumentPositionAtPoint({
+    const textHit = resolveStructuredDocumentTextAtPoint({
       root,
       editor,
       clientX: event.clientX,
@@ -3209,14 +3628,16 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'text',
-      textPosition: position,
+      phase: 'pressed',
+      fragmentId: textHit?.fragmentId,
+      textPosition: textHit?.position ?? null,
     };
-    onEditText(position ?? undefined);
-    if (position === null) return;
+    onEditText(textHit?.position, textHit?.fragmentId);
+    if (!textHit) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     textSelectionDragRef.current = {
       pointerId: event.pointerId,
-      anchorPosition: position,
+      anchorPosition: textHit.position,
       captureElement: event.currentTarget,
     };
   };
@@ -3228,6 +3649,8 @@ export const StructuredDocumentSpanLayout = ({
     if (!selection || selection.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
+    const intent = interactionIntentRef.current;
+    if (intent?.pointerId === event.pointerId) intent.phase = 'dragging';
     const root = layoutRef.current;
     if (!root) return;
     const position = resolveStructuredDocumentPositionAtPoint({
@@ -3246,6 +3669,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishTextSelection(event.pointerId);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current.phase = 'released';
+    }
   };
 
   const handleTextPointerCancel = (
@@ -3254,6 +3680,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishTextSelection(event.pointerId);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current = null;
+    }
   };
 
   const handleImagePointerDown = (
@@ -3266,6 +3695,7 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'image',
+      phase: 'pressed',
       imageId: image.imageId,
     };
     onSelectImage(
@@ -3360,6 +3790,7 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'resize',
+      phase: 'pressed',
       imageId: image.imageId,
     };
     onSelectImage(image.imagePosition, image.imageId, false);
@@ -3428,6 +3859,8 @@ export const StructuredDocumentSpanLayout = ({
     if (!resize || resize.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
+    const intent = interactionIntentRef.current;
+    if (intent?.pointerId === event.pointerId) intent.phase = 'dragging';
     const pointerDelta = viewportDeltaToLayoutDelta(
       viewportDelta(event.clientX - resize.startClientX, 0),
       viewScale,
@@ -3515,6 +3948,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishResize(event.pointerId, false);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current.phase = 'released';
+    }
   };
 
   const handleResizePointerCancel = (
@@ -3523,6 +3959,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishResize(event.pointerId, true);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current = null;
+    }
   };
 
   const handleResizeClick = (event: MouseEvent<HTMLButtonElement>) => {
@@ -3540,6 +3979,7 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'resize',
+      phase: 'pressed',
       imageId: image.imageId,
     };
     onSelectImage(image.imagePosition, image.imageId, false, image.nodeType);
@@ -3590,6 +4030,8 @@ export const StructuredDocumentSpanLayout = ({
     if (!resize || resize.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
+    const intent = interactionIntentRef.current;
+    if (intent?.pointerId === event.pointerId) intent.phase = 'dragging';
     const widthPx = calculateDocumentImageResizeWidth({
       startWidthPx: resize.startWidth,
       pointerDeltaX: event.clientX - resize.startClientX,
@@ -3649,6 +4091,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishFlowResize(event.pointerId, false);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current.phase = 'released';
+    }
   };
 
   const handleFlowResizePointerCancel = (
@@ -3657,6 +4102,9 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishFlowResize(event.pointerId, true);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current = null;
+    }
   };
 
   const handleImagePointerMove = (
@@ -3674,6 +4122,8 @@ export const StructuredDocumentSpanLayout = ({
       return;
     }
     drag.dragStarted = true;
+    const intent = interactionIntentRef.current;
+    if (intent?.pointerId === event.pointerId) intent.phase = 'dragging';
     event.preventDefault();
     event.stopPropagation();
     const pointerDelta = viewportDeltaToLayoutDelta(
@@ -3805,22 +4255,33 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     finishDrag(event.pointerId, false);
+    const intent = interactionIntentRef.current;
+    if (intent?.pointerId === event.pointerId) intent.phase = 'released';
   };
 
   const handleImagePointerCancel = (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
     finishDrag(event.pointerId, true);
+    if (interactionIntentRef.current?.pointerId === event.pointerId) {
+      interactionIntentRef.current = null;
+    }
+  };
+
+  const consumeOwnedClick = (event: MouseEvent<HTMLElement>) => {
+    const intent = interactionIntentRef.current;
+    if (!intent) return false;
+    // A pointerdown has already selected the gesture owner. The click phase is
+    // only a browser compatibility notification and must not reclassify it
+    // after React/CSS has changed the DOM.
+    event.preventDefault();
+    event.stopPropagation();
+    interactionIntentRef.current = null;
+    return true;
   };
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
-    const intent = interactionIntentRef.current;
-    if (intent) {
-      event.preventDefault();
-      event.stopPropagation();
-      interactionIntentRef.current = null;
-      return;
-    }
+    if (consumeOwnedClick(event)) return;
     const target = event.target as HTMLElement;
     const imageSlot = target.closest<HTMLElement>(
       '[data-layout-role="occupied-columns"]'
@@ -3843,15 +4304,15 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     const root = layoutRef.current;
-    const position = root
-      ? resolveStructuredDocumentPositionAtPoint({
+    const textHit = root
+      ? resolveStructuredDocumentTextAtPoint({
           root,
           editor,
           clientX: event.clientX,
           clientY: event.clientY,
         })
       : null;
-    onEditText(position ?? undefined);
+    onEditText(textHit?.position, textHit?.fragmentId);
   };
 
   const handleLayoutPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -3864,8 +4325,8 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     const root = layoutRef.current;
-    const position = root
-      ? resolveStructuredDocumentPositionAtPoint({
+    const textHit = root
+      ? resolveStructuredDocumentTextAtPoint({
           root,
           editor,
           clientX: event.clientX,
@@ -3875,20 +4336,17 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'text',
-      textPosition: position,
+      phase: 'pressed',
+      textPosition: textHit?.position ?? null,
     };
-    onEditText(position ?? undefined);
+    onEditText(textHit?.position, textHit?.fragmentId);
   };
 
   const handleImageClick = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
     const imageId = event.currentTarget.dataset.imageId || '';
-    const intent = interactionIntentRef.current;
-    if (intent) {
-      interactionIntentRef.current = null;
-      return;
-    }
+    if (consumeOwnedClick(event)) return;
     const image = model.images.find(
       (candidate) => candidate.imageId === imageId
     );
@@ -3910,6 +4368,7 @@ export const StructuredDocumentSpanLayout = ({
     interactionIntentRef.current = {
       pointerId: event.pointerId,
       owner: 'image',
+      phase: 'pressed',
       imageId: image.imageId,
     };
     onSelectImage(
@@ -3924,11 +4383,7 @@ export const StructuredDocumentSpanLayout = ({
     event.preventDefault();
     event.stopPropagation();
     const imageId = event.currentTarget.dataset.imageId || '';
-    const intent = interactionIntentRef.current;
-    if (intent) {
-      interactionIntentRef.current = null;
-      return;
-    }
+    if (consumeOwnedClick(event)) return;
     const image = model.flowImages.find(
       (candidate) => candidate.imageId === imageId
     );
@@ -4040,6 +4495,10 @@ export const StructuredDocumentSpanLayout = ({
       data-active-edit-block-indexes={
         activeTextEditTarget?.blockIndexes.join(',')
       }
+      data-active-edit-fragment-ids={
+        activeTextEditTarget?.fragmentIds.join('|')
+      }
+      data-active-edit-fragment-id={activeTextEditTarget?.primaryFragmentId || undefined}
       data-hidden-for-editing="false"
       style={style}
       onPointerDown={handleLayoutPointerDown}
@@ -4079,6 +4538,9 @@ export const StructuredDocumentSpanLayout = ({
                 data-document-region-id={band.id}
                 data-document-from={band.documentFrom ?? undefined}
                 data-document-to={band.documentTo ?? undefined}
+                data-document-fragment-ids={band.fragments.map(
+                  (fragment) => fragment.id
+                ).join('|') || undefined}
                 data-line-from={band.lineFrom ?? undefined}
                 data-line-to={band.lineTo ?? undefined}
                 data-column={column}
@@ -4108,7 +4570,7 @@ export const StructuredDocumentSpanLayout = ({
                     selectionFrom,
                     selectionTo,
                     caretPosition,
-                    activeEditBlockIndexes,
+                    activeEditFragmentIds,
                   }),
                 }}
               />

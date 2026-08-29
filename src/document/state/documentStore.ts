@@ -68,6 +68,11 @@ type DocumentStoreState = {
   currentLibraryProjectId: string | null;
   /** Runtime identity used to distinguish project replacement from page edits. */
   sessionIdentity: string;
+  /**
+   * Legacy persistence fields. Unified editor chrome reads the shared
+   * ProjectLifecycleAuthority; these remain for compatibility and storage
+   * execution paths.
+   */
   isDirty: boolean;
   saveStatus: DocumentSaveStatus;
   lifecycleAuthorityMode: DocumentLifecycleAuthorityMode;
@@ -76,7 +81,12 @@ type DocumentStoreState = {
   revision: number;
   zoom: number;
   isReferenceAdjustMode: boolean;
+  /**
+   * Compatibility mirrors for legacy adapters. Document UI selection is
+   * projected from the current editor selection in DocumentEditorShell.
+   */
   selectedOverlayId: string | null;
+  /** @see selectedOverlayId */
   selectedFlowImageId: string | null;
   isOverflowing: boolean;
   toastMessage: string | null;
@@ -157,7 +167,7 @@ type DocumentStoreState = {
     deltaYPx: number
   ) => boolean;
   removeOverlay: (id: string, pageId?: string) => boolean;
-  setReference: (reference?: ScanReference) => void;
+  setReference: (reference?: ScanReference, pageId?: string) => void;
   setZoom: (zoom: number) => void;
   setReferenceAdjustMode: (enabled: boolean) => void;
   setSelectedOverlayId: (id: string | null) => void;
@@ -1373,7 +1383,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     return true;
   },
 
-  setReference: (reference) => get().updatePage({ reference }),
+  setReference: (reference, pageId) => get().updatePage({ reference }, pageId),
   setZoom: (zoom) => set({ zoom: Math.max(0.25, Math.min(2, zoom)) }),
   setReferenceAdjustMode: (enabled) => set({
     isReferenceAdjustMode: enabled,

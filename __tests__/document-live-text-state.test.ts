@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getDocumentLiveTextDiagnostics,
   resetDocumentLiveTextDiagnostics,
 } from '../src/document/services/documentLiveTextDiagnostics';
-import { flushDocumentLiveDrafts, registerDocumentLiveDraftFlushHandler } from '../src/document/services/documentLiveDraft';
+import {
+  createDocumentLiveDraftScope,
+  flushDocumentLiveDrafts,
+  registerDocumentLiveDraftFlushHandler,
+} from '../src/document/services/documentLiveDraft';
 import {
   useDocumentStore,
 } from '../src/document/state/documentStore';
@@ -84,5 +88,27 @@ describe('document live text state boundary', () => {
     expect(metrics.repairDocumentImageGroups?.count || 0).toBe(0);
     expect(metrics.documentPagesAreEquivalent?.count || 0).toBe(0);
     unregister();
+  });
+
+  it('keeps draft flush ownership scoped to each mounted editor', () => {
+    const firstScope = createDocumentLiveDraftScope();
+    const secondScope = createDocumentLiveDraftScope();
+    const firstHandler = vi.fn(() => 1);
+    const secondHandler = vi.fn(() => 2);
+    const unregisterFirst = firstScope.register(firstHandler);
+    const unregisterSecond = secondScope.register(secondHandler);
+
+    expect(firstScope.flush()).toBe(1);
+    expect(firstHandler).toHaveBeenCalledTimes(1);
+    expect(secondHandler).not.toHaveBeenCalled();
+    expect(secondScope.flush()).toBe(2);
+    expect(flushDocumentLiveDrafts()).toBe(3);
+    expect(firstHandler).toHaveBeenCalledTimes(2);
+    expect(secondHandler).toHaveBeenCalledTimes(2);
+
+    unregisterFirst();
+    firstScope.dispose();
+    unregisterSecond();
+    secondScope.dispose();
   });
 });

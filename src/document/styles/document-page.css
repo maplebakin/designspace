@@ -1434,21 +1434,22 @@
 /*
  * WebKit lays out a contenteditable multicolumn tree synchronously on each
  * text mutation. Keep the canonical structured compositor frozen as the page
- * context, while the live ProseMirror editing surface uses one inexpensive
- * flow. The canonical columns are restored as soon as text editing ends.
+ * context, while the mounted ProseMirror source uses one inexpensive internal
+ * flow. The source is a fragment-scoped interaction surface, not a second
+ * full-page visual presentation.
  */
-.document-flow-editor__content--structured-live-single-column
+.document-flow-editor__content--structured-source-single-column
   .document-flow-prosemirror {
   column-count: 1 !important;
   column-gap: 0;
   column-fill: auto;
 }
 
-.document-flow-editor__content--structured-local-block-editing {
+.document-flow-editor__content--structured-local-fragment-editing {
   z-index: 3;
 }
 
-.document-flow-editor__content--structured-local-block-editing
+.document-flow-editor__content--structured-local-fragment-editing
   .document-flow-prosemirror > * {
   visibility: hidden;
 }
@@ -1548,10 +1549,10 @@
 
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column
-  [data-document-active-edit-block="true"],
+  [data-document-active-edit-fragment="true"],
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column
-  [data-document-active-edit-block="true"] * {
+  [data-document-active-edit-fragment="true"] * {
   color: transparent !important;
 }
 

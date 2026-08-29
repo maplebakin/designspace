@@ -195,6 +195,7 @@ export interface DocumentImageAttributes {
 
 export interface DocumentImageReplaceRequest {
   editor: Editor;
+  /** Diagnostic insertion-time hint only; replacement resolves `attributes.id` again. */
   position: number | undefined;
   nodeType: DocumentImageNodeName;
   attributes: DocumentImageAttributes;
@@ -206,6 +207,7 @@ export interface DocumentImageExtensionOptions {
   onCommittedImageLayout?: (imageId: string) => void;
   onSelectImage?: (request: {
     editor: Editor;
+    /** Diagnostic DOM hint only; selection is resolved by imageId. */
     position: number | undefined;
     imageId: string;
     additive: boolean;

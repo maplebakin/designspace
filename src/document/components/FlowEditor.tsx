@@ -106,6 +106,12 @@ const documentImageIdentitySignature = (doc: ProseMirrorNode) => {
   return ids.sort().join('|');
 };
 
+const documentBlockStructureSignature = (doc: ProseMirrorNode) => {
+  const blockTypes: string[] = [];
+  doc.forEach((node) => blockTypes.push(node.type.name));
+  return blockTypes.join('|');
+};
+
 export type DocumentColumnCount = 1 | 2 | 3;
 
 export interface SelectedDocumentImage {
@@ -132,6 +138,35 @@ export const getSelectedDocumentImage = (
     nodeType,
     attributes: normalizeDocumentImageAttributes(
       selection.node.attrs as Partial<DocumentImageAttributes>,
+      nodeType === 'documentInlineImage' ? 'inline' : 'float-left'
+    ),
+  };
+};
+
+/**
+ * Resolves an image projection from the current editor document. The returned
+ * position is diagnostic convenience only; every mutation must resolve the ID
+ * again immediately before it dispatches.
+ */
+export const getDocumentImageById = (
+  editor: Editor,
+  imageId: string,
+  expectedNodeType?: DocumentImageNodeName
+): SelectedDocumentImage | null => {
+  const position = findDocumentImagePositionById(
+    editor,
+    imageId,
+    expectedNodeType
+  );
+  if (position === null) return null;
+  const node = editor.state.doc.nodeAt(position);
+  if (!node) return null;
+  const nodeType = node.type.name as DocumentImageNodeName;
+  return {
+    position,
+    nodeType,
+    attributes: normalizeDocumentImageAttributes(
+      node.attrs as Partial<DocumentImageAttributes>,
       nodeType === 'documentInlineImage' ? 'inline' : 'float-left'
     ),
   };
@@ -566,12 +601,14 @@ export const FlowEditor = ({
   const [layoutHeightPx, setLayoutHeightPx] = useState(720);
   const [pagePositionOriginOffsetPx, setPagePositionOriginOffsetPx] = useState(0);
   const [editingStructuredText, setEditingStructuredText] = useState(false);
+  const [activeTextFragmentId, setActiveTextFragmentId] = useState<string | null>(null);
   const typingInputCountRef = useRef(0);
   const typingVisibleUpdateCountRef = useRef(0);
   const typingLastInputToVisibleMsRef = useRef(0);
   const typingVisibilityFramesRef = useRef<number[]>([]);
   const hasStructuredSpanRef = useRef(false);
   const imageIdentitySignatureRef = useRef('');
+  const blockStructureSignatureRef = useRef('');
   const editingStructuredTextRef = useRef(false);
   const overflowMeasurePendingRef = useRef(false);
   const structuredLayoutDirtyRef = useRef(false);
@@ -891,6 +928,9 @@ export const FlowEditor = ({
         imageIdentitySignatureRef.current = documentImageIdentitySignature(
           createdEditor.state.doc
         );
+        blockStructureSignatureRef.current = documentBlockStructureSignature(
+          createdEditor.state.doc
+        );
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
         const transactionStartedAt = typeof performance === 'undefined'
@@ -933,11 +973,19 @@ export const FlowEditor = ({
               nextHasStructuredSpan !== hasStructuredSpanRef.current
               || selectedDocumentImage !== null
             );
+            const nextBlockStructureSignature = documentBlockStructureSignature(
+              updatedEditor.state.doc
+            );
+            const blockStructureChanged = (
+              nextBlockStructureSignature !== blockStructureSignatureRef.current
+            );
             hasStructuredSpanRef.current = nextHasStructuredSpan;
+            blockStructureSignatureRef.current = nextBlockStructureSignature;
             if (
               transaction.docChanged
               && (
                 structuredImageStructureChanged
+                || blockStructureChanged
                 || !editingStructuredTextRef.current
               )
             ) {
@@ -969,6 +1017,7 @@ export const FlowEditor = ({
       },
       onFocus: ({ editor: focusedEditor }) => {
         const selectedImage = getSelectedDocumentImage(focusedEditor);
+        if (selectedImage) setActiveTextFragmentId(null);
         editingStructuredTextRef.current = !selectedImage;
         setEditingStructuredText(!selectedImage);
         callbacksRef.current.onFocusChange?.(true, focusedEditor);
@@ -977,12 +1026,19 @@ export const FlowEditor = ({
         if (!enteringStructuredTextRef.current) {
           editingStructuredTextRef.current = false;
           setEditingStructuredText(false);
+          setActiveTextFragmentId(null);
           reconcileStructuredLayoutRef.current();
         }
         callbacksRef.current.onFocusChange?.(false, blurredEditor);
       },
       onSelectionUpdate: ({ editor: updatedEditor }) => {
         const selectedImage = getSelectedDocumentImage(updatedEditor);
+        if (
+          selectedImage
+          || (!updatedEditor.isFocused && !enteringStructuredTextRef.current)
+        ) {
+          setActiveTextFragmentId(null);
+        }
         editingStructuredTextRef.current = (
           enteringStructuredTextRef.current
           || (updatedEditor.isFocused && !selectedImage)
@@ -1002,6 +1058,8 @@ export const FlowEditor = ({
       onDestroy: () => {
         editorInstanceRef.current = null;
         imageIdentitySignatureRef.current = '';
+        blockStructureSignatureRef.current = '';
+        setActiveTextFragmentId(null);
       },
     },
     []
@@ -1016,6 +1074,10 @@ export const FlowEditor = ({
       onEditorReady?.(null);
     };
   }, [editor, onEditorReady, scheduleOverflowMeasure]);
+
+  useEffect(() => {
+    if (!editingStructuredText) setActiveTextFragmentId(null);
+  }, [editingStructuredText]);
 
   useEffect(() => {
     if (!isDocumentTypingLatencyBenchmarkEnabled()) return undefined;
@@ -1247,6 +1309,9 @@ export const FlowEditor = ({
     ? documentHasStructuredSpan(editor)
     : false;
   hasStructuredSpanRef.current = hasStructuredSpan;
+  const presentationState = hasStructuredSpan
+    ? editingStructuredText ? 'structured-text-editing' : 'structured-idle'
+    : editingStructuredText ? 'ordinary-text-editing' : 'ordinary';
 
   return (
     <section
@@ -1258,6 +1323,7 @@ export const FlowEditor = ({
       ].filter(Boolean).join(' ')}
       data-testid="document-flow-editor"
       data-document-region="body"
+      data-document-presentation-state={presentationState}
       data-column-count={columnCount}
       data-drop-cap={normalizedDropCap.enabled ? 'true' : 'false'}
       data-drop-cap-line-span={normalizedDropCap.lineSpan}
@@ -1283,10 +1349,10 @@ export const FlowEditor = ({
             ? 'document-flow-editor__content--structured-text-editing'
             : '',
           hasStructuredSpan && editingStructuredText
-            ? 'document-flow-editor__content--structured-live-single-column'
+            ? 'document-flow-editor__content--structured-source-single-column'
             : '',
           hasStructuredSpan && editingStructuredText
-            ? 'document-flow-editor__content--structured-local-block-editing'
+            ? 'document-flow-editor__content--structured-local-fragment-editing'
             : '',
         ].filter(Boolean).join(' ')}
       />
@@ -1301,6 +1367,7 @@ export const FlowEditor = ({
           revision={layoutRevision}
           selectionRevision={selectionRevision}
           textEditing={editingStructuredText}
+          activeTextFragmentId={activeTextFragmentId}
           viewScale={viewScale}
           minimumImageWidthPx={minImageWidthPx}
           maximumFlowImageWidthPx={maxImageWidthPx}
@@ -1326,6 +1393,8 @@ export const FlowEditor = ({
               nodeType
             );
             if (clickedPosition === null) return;
+            const clickedNode = editor.state.doc.nodeAt(clickedPosition);
+            if (!clickedNode || clickedNode.attrs.id !== imageId) return;
             const requestedPrimaryId =
               callbacksRef.current.onStructuredImageSelectionRequest?.(
                 imageId,
@@ -1338,8 +1407,7 @@ export const FlowEditor = ({
               !primaryId
               || selectDocumentImageById(
                 editor,
-                primaryId,
-                nodeType
+                primaryId
               ) === null
             ) return;
             editor.commands.focus(undefined, { scrollIntoView: false });
@@ -1382,9 +1450,10 @@ export const FlowEditor = ({
             }
             return committed;
           }}
-          onEditText={(position) => {
+          onEditText={(position, fragmentId) => {
             enteringStructuredTextRef.current = true;
             editingStructuredTextRef.current = true;
+            setActiveTextFragmentId(fragmentId || null);
             setEditingStructuredText(true);
             const requestedSelection = createDocumentTextSelection(
               editor,

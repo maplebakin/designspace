@@ -35,6 +35,7 @@ import {
   clampResizeWidthWithoutCollisions,
   getStructuredImageDragVisualDelta,
   getStructuredImageFrameGeometry,
+  getStructuredTextEditTarget,
   moveRectangleWithoutCollisions,
   rectanglesOverlap,
 } from '../src/document/components/StructuredDocumentSpanLayout';
@@ -396,6 +397,92 @@ describe('positioned document image contract', () => {
     expect((editor.state.selection as NodeSelection).node.attrs.id).toBe(
       'mixed-inline-c'
     );
+  });
+
+  it('keeps fragment ranges in PM space when one marked block is split', async () => {
+    const longText = [
+      'Ä marked opening 😀 ',
+      'The same paragraph continues through an image exclusion and across the ',
+      'remaining physical columns. ',
+      'This text is intentionally long so the allocator creates continuation ',
+      'fragments instead of treating the paragraph as one visual rectangle. ',
+    ].join('').repeat(12);
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { documentStyleId: 'body' },
+          content: [{
+            type: 'text',
+            text: longText,
+            marks: [{ type: 'bold' }],
+          }],
+        },
+        positionedImage({
+          id: 'fragment-exclusion',
+          spanStartColumn: 1,
+          xOffsetPx: 12,
+          yPx: 72,
+          caption: '',
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      3,
+      24,
+      720,
+      180,
+      {},
+      {},
+      [],
+      0,
+      'fragment-page'
+    );
+
+    expect(model).not.toBeNull();
+    const firstBlock = editor.state.doc.child(0);
+    const firstBlockFragments = model!.textFragments
+      .filter((fragment) => fragment.blockIndex === 0)
+      .sort((left, right) => left.fragmentFrom - right.fragmentFrom);
+    expect(firstBlockFragments.length).toBeGreaterThan(1);
+    expect(new Set(firstBlockFragments.map((fragment) => fragment.pageId)))
+      .toEqual(new Set(['fragment-page']));
+    expect(firstBlockFragments[0]).toMatchObject({
+      blockFrom: 1,
+      blockTo: firstBlock.nodeSize - 1,
+      fragmentFrom: 1,
+    });
+    expect(firstBlockFragments.at(-1)?.fragmentTo).toBe(firstBlock.nodeSize - 1);
+    firstBlockFragments.forEach((fragment, index) => {
+      expect(fragment.id).toContain(`fragment-page:block-0:fragment-${index}`);
+      expect(fragment.fragmentFrom).toBeGreaterThanOrEqual(fragment.blockFrom);
+      expect(fragment.fragmentTo).toBeLessThanOrEqual(fragment.blockTo);
+      expect(fragment.geometry.widthPx).toBeGreaterThan(0);
+      if (index > 0) {
+        expect(fragment.fragmentFrom).toBe(
+          firstBlockFragments[index - 1].fragmentTo
+        );
+      }
+    });
+
+    const selectedFragment = firstBlockFragments[1];
+    editor.view.dispatch(editor.state.tr.setSelection(
+      TextSelection.create(
+        editor.state.doc,
+        selectedFragment.fragmentFrom,
+        selectedFragment.fragmentFrom
+      )
+    ));
+    const target = getStructuredTextEditTarget(
+      editor,
+      model!.textFragments,
+      selectedFragment.id
+    );
+    expect(target?.primaryFragmentId).toBe(selectedFragment.id);
+    expect(target?.fragmentIds).toContain(selectedFragment.id);
   });
 
   it('selects a visible image by ID after its cached visual position is stale', async () => {
