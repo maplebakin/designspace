@@ -392,8 +392,8 @@ describe('Unified Editor Phase 1O Canvas theme color-lock observation', () => {
       await useEditorStore.getState().redo();
     });
 
-    expect(committed).toHaveBeenCalledTimes(2);
-    expect(committed).toHaveBeenLastCalledWith({
+    expect(committed).toHaveBeenCalledTimes(4);
+    expect(committed).toHaveBeenNthCalledWith(2, {
       action: 'modify-freeform-theme-color-lock',
       objectId: 'theme-color-lock-shape',
     });

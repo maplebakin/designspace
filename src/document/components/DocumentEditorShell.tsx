@@ -584,6 +584,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const nodeReplaceInputRef = useRef<HTMLInputElement | null>(null);
   const pendingNodeReplaceRef = useRef<DocumentImageReplaceRequest | null>(null);
   const liveDraftScopeRef = useRef<DocumentLiveDraftScope | null>(null);
+  const liveDraftLifecycleGenerationRef = useRef(0);
   const pendingTextDraftsRef = useRef(new Map<
     string,
     {
@@ -1636,15 +1637,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   useEffect(() => {
     const scope = liveDraftScopeRef.current;
     const unregister = scope?.register(flushPendingTextDrafts);
+    const lifecycleGeneration = (liveDraftLifecycleGenerationRef.current += 1);
     return () => {
       flushPendingTextDrafts();
       unregister?.();
+      // React StrictMode probes an effect with cleanup/setup in the same turn.
+      // Defer disposal so that probe cleanup cannot permanently invalidate the
+      // mounted editor's scoped registration.
+      queueMicrotask(() => {
+        if (liveDraftLifecycleGenerationRef.current !== lifecycleGeneration) return;
+        liveDraftScopeRef.current?.dispose();
+      });
     };
   }, [flushPendingTextDrafts]);
-
-  useEffect(() => () => {
-    liveDraftScopeRef.current?.dispose();
-  }, []);
 
   const handleStructuredEditorUpdate = useCallback((
     region: DocumentEditorRegion,

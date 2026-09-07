@@ -97,6 +97,10 @@ export type CanvasCommittedMutation =
   | Readonly<{
       action: 'group-freeform-objects' | 'ungroup-freeform-objects';
       groupId: string;
+    }>
+  | Readonly<{
+      action: 'undo-freeform' | 'redo-freeform';
+      pageScope: true;
     }>;
 
 export type CanvasDiscreteObjectMutationAction =

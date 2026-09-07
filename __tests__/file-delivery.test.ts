@@ -20,6 +20,7 @@ import {
   deliverFiles,
   ensureFileExtension,
 } from '../src/editor/services/fileDeliveryService';
+import { isTauriRecoveryAvailable } from '../src/editor/recovery/recoveryClient';
 
 const setTauriRuntime = (enabled: boolean) => {
   if (enabled) {
@@ -41,6 +42,14 @@ describe('file delivery service', () => {
     tauriMocks.open.mockReset();
     tauriMocks.writeFile.mockReset();
     document.body.innerHTML = '';
+  });
+
+  it('uses the configured internal Tauri bridge for platform detection', () => {
+    setTauriRuntime(true);
+    expect(isTauriRecoveryAvailable()).toBe(true);
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    Object.defineProperty(window, '__TAURI__', { configurable: true, value: {} });
+    expect(isTauriRecoveryAvailable()).toBe(true);
   });
 
   it('keeps browser delivery on the normal Blob/ObjectURL download path', async () => {

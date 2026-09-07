@@ -79,6 +79,10 @@ import {
 } from '../project/projectSchema';
 import { generateProjectFromRecipe } from '../recipes/generateProjectFromRecipe';
 import type { ProductRecipeId } from '../recipes/recipeRegistry';
+import {
+    persistenceOperationStillOwnsCurrentState,
+    type PersistenceOperationContext,
+} from '../session/persistenceOperation';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
@@ -2867,20 +2871,41 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             unitMode,
         } = get();
         if (!canvas) return null;
+        get().syncActivePageFromCanvas();
+        const stateAtStart = get();
+        const projectIdentityAtStart = stateAtStart.productProjectFields?.projectId
+            || stateAtStart.currentLibraryProjectId
+            || 'canvas-session';
+        const operation: PersistenceOperationContext<{
+            pages: ProjectPage[];
+            imageAssets: Record<string, string>;
+            activePageIndex: number;
+            canvasSize: { width: number; height: number };
+        }> = {
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: projectIdentityAtStart,
+            targetIdentity: stateAtStart.currentLibraryProjectId,
+            capturedRevision: stateAtStart.changeRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+                canvasSize: getDocumentCanvasSize(),
+            },
+        };
         const { themeData, activeBrandCollectionId, brandVault } = useThemeStore.getState();
 
         const fallbackTheme = themeData
             || brandVault.find((brand) => brand.id === activeBrandCollectionId)?.themeData
             || null;
 
-        get().syncActivePageFromCanvas();
         let exportData: Awaited<ReturnType<typeof buildProjectPersistenceData>>;
         try {
             exportData = await buildProjectPersistenceData(
                 canvas,
-                get().pages,
-                get().imageAssets,
-                get().activePageIndex
+                operation.snapshot.pages,
+                operation.snapshot.imageAssets,
+                operation.snapshot.activePageIndex
             );
         } catch (error) {
             const message = error instanceof Error && error.message
@@ -2899,9 +2924,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             assets: exportData.assets,
             activeTheme: fallbackTheme,
             lastUpdated: savedAt,
-            canvasSize: getDocumentCanvasSize(),
+            canvasSize: operation.snapshot.canvasSize,
             unitMode,
-        }, get().productProjectFields, { now: savedAt });
+        }, stateAtStart.productProjectFields, { now: savedAt });
 
         const json = JSON.stringify(payload, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
@@ -2923,6 +2948,17 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return null;
         }
         if (delivery.status === 'cancelled') return delivery;
+        const current = get();
+        if (!persistenceOperationStillOwnsCurrentState(operation, {
+            sessionIdentity: current.sessionIdentity,
+            projectIdentity: current.productProjectFields?.projectId
+                || current.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: current.currentLibraryProjectId,
+            revision: current.changeRevision,
+        })) {
+            return delivery;
+        }
         set({
             productProjectFields: extractProductProjectFields(payload),
             pages: exportData.pages,
@@ -3088,6 +3124,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         await history.undo();
         set({ isDirty: true });
         get().setAutoSaveStatus('dirty');
+        observeSemanticMutation({ action: 'undo-freeform', pageScope: true });
     },
 
     redo: async () => {
@@ -3098,6 +3135,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         await history.redo();
         set({ isDirty: true });
         get().setAutoSaveStatus('dirty');
+        observeSemanticMutation({ action: 'redo-freeform', pageScope: true });
     },
 
     // --- THEME ACTIONS (Delegated to theme store) ---
@@ -3522,29 +3560,49 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
         const safeName = name.trim() || projectName?.trim() || 'Untitled Project';
         const { themeData } = useThemeStore.getState();
+        get().syncActivePageFromCanvas();
+        const stateAtStart = get();
+        const operation: PersistenceOperationContext<{
+            pages: ProjectPage[];
+            imageAssets: Record<string, string>;
+            activePageIndex: number;
+            canvasSize: { width: number; height: number };
+        }> = {
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: stateAtStart.productProjectFields?.projectId
+                || currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: currentLibraryProjectId,
+            capturedRevision: stateAtStart.changeRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+                canvasSize: getDocumentCanvasSize(),
+            },
+        };
 
         try {
-            get().syncActivePageFromCanvas();
-            const revisionAtStart = get().changeRevision;
+            const revisionAtStart = operation.capturedRevision;
             const exportData = await buildProjectPersistenceData(
                 canvas,
-                get().pages,
-                get().imageAssets,
-                get().activePageIndex
+                operation.snapshot.pages,
+                operation.snapshot.imageAssets,
+                operation.snapshot.activePageIndex
             );
 
             const savedAt = new Date().toISOString();
             const payload = buildProjectFilePayload({
                 projectName: safeName,
                 pages: exportData.pages,
-                activePageIndex: get().activePageIndex,
+                activePageIndex: operation.snapshot.activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
                 activeTheme: themeData,
                 lastUpdated: savedAt,
-                canvasSize: getDocumentCanvasSize(),
+                canvasSize: operation.snapshot.canvasSize,
                 unitMode,
-            }, get().productProjectFields, {
+            }, stateAtStart.productProjectFields, {
                 projectId: currentLibraryProjectId ?? undefined,
                 now: savedAt,
             });
@@ -3574,7 +3632,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             if (!nextLibraryProjectId) {
                 nextLibraryProjectId = await db.saveProject(safeName, jsonPayload, thumbnail);
             }
-            const hasNewerChanges = get().changeRevision !== revisionAtStart;
+            const current = get();
+            const ownsCurrentState = persistenceOperationStillOwnsCurrentState(operation, {
+                sessionIdentity: current.sessionIdentity,
+                projectIdentity: current.productProjectFields?.projectId
+                    || current.currentLibraryProjectId
+                    || 'canvas-session',
+                targetIdentity: current.currentLibraryProjectId,
+                revision: current.changeRevision,
+            });
+            const hasNewerChanges = current.changeRevision !== revisionAtStart;
+            if (!ownsCurrentState && current.sessionIdentity !== operation.sessionIdentity) {
+                return true;
+            }
+            if (!ownsCurrentState) return true;
             set({
                 currentLibraryProjectId: nextLibraryProjectId,
                 projectName: safeName,
@@ -3766,14 +3837,33 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     updateCurrentProject: async () => {
         const { projectName, currentLibraryProjectId, canvas } = get();
         if (!canvas || !projectName || !currentLibraryProjectId) return;
+        get().syncActivePageFromCanvas();
+        const stateAtStart = get();
+        const operation: PersistenceOperationContext<{
+            pages: ProjectPage[];
+            imageAssets: Record<string, string>;
+            activePageIndex: number;
+            canvasSize: { width: number; height: number };
+        }> = {
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: stateAtStart.productProjectFields?.projectId
+                || currentLibraryProjectId,
+            targetIdentity: currentLibraryProjectId,
+            capturedRevision: stateAtStart.changeRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+                canvasSize: getDocumentCanvasSize(),
+            },
+        };
 
         try {
-            get().syncActivePageFromCanvas();
             const exportData = await buildProjectPersistenceData(
                 canvas,
-                get().pages,
-                get().imageAssets,
-                get().activePageIndex
+                operation.snapshot.pages,
+                operation.snapshot.imageAssets,
+                operation.snapshot.activePageIndex
             );
             const { db } = await import('../db');
             const targetProjectId = currentLibraryProjectId;
@@ -3782,13 +3872,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const payload = buildProjectFilePayload({
                 projectName,
                 pages: exportData.pages,
-                activePageIndex: get().activePageIndex,
+                activePageIndex: operation.snapshot.activePageIndex,
                 canvasData: exportData.canvasData,
                 assets: exportData.assets,
                 activeTheme: useThemeStore.getState().themeData,
                 lastUpdated: savedAt,
-                canvasSize: getDocumentCanvasSize(),
-                unitMode: get().unitMode,
+                canvasSize: operation.snapshot.canvasSize,
+                unitMode: stateAtStart.unitMode,
             }, get().productProjectFields, {
                 projectId: targetProjectId,
                 now: savedAt,
@@ -3803,6 +3893,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             });
 
             await db.updateProject(targetProjectId, projectName, jsonPayload, thumbnail);
+            const current = get();
+            if (!persistenceOperationStillOwnsCurrentState(operation, {
+                sessionIdentity: current.sessionIdentity,
+                projectIdentity: current.productProjectFields?.projectId
+                    || current.currentLibraryProjectId
+                    || 'canvas-session',
+                targetIdentity: current.currentLibraryProjectId,
+                revision: current.changeRevision,
+            })) return;
             set({
                 currentLibraryProjectId: targetProjectId,
                 productProjectFields: extractProductProjectFields(payload),

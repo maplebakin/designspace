@@ -74,7 +74,9 @@ export type ProjectChangeAction =
   | 'modify-structured-image-metadata'
   | 'modify-structured-image-layout'
   | 'modify-structured-image-group'
-  | 'modify-page-metadata';
+  | 'modify-page-metadata'
+  | 'undo-freeform'
+  | 'redo-freeform';
 
 export type ProjectChangeTarget = Readonly<{
   kind: 'project' | 'page' | 'freeform-object' | 'freeform-group' | 'structured-image' | 'structured-group';

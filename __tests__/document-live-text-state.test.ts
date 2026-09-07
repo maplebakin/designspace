@@ -111,4 +111,22 @@ describe('document live text state boundary', () => {
     unregisterSecond();
     secondScope.dispose();
   });
+
+  it('allows an effect probe cleanup/setup before the real unmount', () => {
+    const scope = createDocumentLiveDraftScope();
+    const firstHandler = vi.fn(() => 1);
+    const secondHandler = vi.fn(() => 1);
+    const unregisterFirst = scope.register(firstHandler);
+
+    // This is the scoped lifecycle sequence React StrictMode performs.
+    unregisterFirst();
+    const unregisterSecond = scope.register(secondHandler);
+    expect(scope.flush()).toBe(1);
+    expect(secondHandler).toHaveBeenCalledTimes(1);
+
+    unregisterSecond();
+    scope.dispose();
+    expect(scope.flush()).toBe(0);
+    expect(scope.register(() => 1)()).toBeUndefined();
+  });
 });

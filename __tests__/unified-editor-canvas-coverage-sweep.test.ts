@@ -301,7 +301,7 @@ describe('Unified Editor Canvas coverage sweep', () => {
       await useEditorStore.getState().redo();
     });
 
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect((sourceCanvas.getObjects()[0] as any).visible).toBe(false);
 
     const serialized = {
@@ -316,12 +316,12 @@ describe('Unified Editor Canvas coverage sweep', () => {
 
     expect((reopenedCanvas.getObjects()[0] as any).visible).toBe(false);
     expect(useEditorStore.getState().canvasObjects[0].visible).toBe(false);
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(1);
 
     useEditorStore.getState().setCanvasReadyState('disposing');
     useEditorStore.getState().reportCommittedCanvasVisibility(shape.id as string, true);
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
   });
 
   it('keeps invalid Visibility targets and observer failure isolated', () => {
@@ -699,13 +699,13 @@ describe('Unified Editor Canvas coverage sweep', () => {
       await useEditorStore.getState().undo();
       await useEditorStore.getState().redo();
     });
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(1);
 
     useEditorStore.getState().reportCommittedCanvasSelectionLock('missing', true, true);
     useEditorStore.getState().setCanvasReadyState('disposing');
     useEditorStore.getState().reportCommittedCanvasSelectionLock(shape.id as string, true, true);
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
 
     useEditorStore.setState({ canvasReadyState: 'ready' });
     const throwingObserver = vi.fn(() => {

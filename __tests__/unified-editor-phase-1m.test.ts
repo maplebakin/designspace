@@ -329,7 +329,7 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
       await flushPromises();
     });
 
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect((canvas.getObjects()[0] as fabric.Rect).strokeDashArray).toEqual([12, 8]);
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(1);
     expect(useEditorStore.getState().isDirty).toBe(true);

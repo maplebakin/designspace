@@ -378,6 +378,24 @@ describe('mounted store editor integration', () => {
     expect(useHistoryStore.getState().canUndo()).toBe(true);
   });
 
+  it('reports completed undo and redo once without exposing replay events', async () => {
+    const observations: string[] = [];
+    useEditorStore.getState().setCommittedMutationObserver((mutation) => {
+      observations.push(mutation.action);
+    });
+    useEditorStore.getState().addObject(rectObject('history-observed'), { save: true, select: true });
+    await flushLayerAndHistory();
+    observations.length = 0;
+
+    await useEditorStore.getState().undo();
+    await flushPromises();
+    await useEditorStore.getState().redo();
+    await flushPromises();
+
+    expect(observations).toEqual(['undo-freeform', 'redo-freeform']);
+    useEditorStore.getState().setCommittedMutationObserver(null);
+  });
+
   it('switches and deletes pages without carrying stale selection or corrupting remaining page data', async () => {
     const pageOne = rectObject('page-one-shape');
     const pageTwo = rectObject('page-two-shape', { fill: '#0000ff' });

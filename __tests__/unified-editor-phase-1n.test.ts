@@ -440,7 +440,7 @@ describe('Unified Editor Phase 1N Canvas transform-lock observation', () => {
       await useEditorStore.getState().redo();
     });
 
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(1);
     expectTransformLockState(canvas.getObjects()[0], true);
   });

@@ -129,8 +129,13 @@ const createCanvasCommands = (
   },
   download: async () => {
     const revision = lifecycleAuthority.getSnapshot().authoredRevision;
+    const sessionIdentity = useEditorStore.getState().sessionIdentity;
     const result = await useEditorStore.getState().downloadProjectFile();
-    if (result?.status === 'saved') {
+    if (
+      result?.status === 'saved'
+      && useEditorStore.getState().sessionIdentity === sessionIdentity
+      && lifecycleAuthority.getSnapshot().authoredRevision === revision
+    ) {
       lifecycleAuthority.markPersistedRevision(revision);
     }
     return result;
@@ -164,8 +169,13 @@ const createDocumentCommands = (
   },
   download: async () => {
     const revision = lifecycleAuthority.getSnapshot().authoredRevision;
+    const sessionIdentity = useDocumentStore.getState().sessionIdentity;
     const result = await useDocumentStore.getState().downloadProjectFile();
-    if (result?.status === 'saved') {
+    if (
+      result?.status === 'saved'
+      && useDocumentStore.getState().sessionIdentity === sessionIdentity
+      && lifecycleAuthority.getSnapshot().authoredRevision === revision
+    ) {
       lifecycleAuthority.markPersistedRevision(revision);
     }
     return result;
@@ -580,6 +590,25 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     }
 
     if (mutation.action === 'reorder-freeform-objects') {
+      observeCommittedEngineChange(changeCoordinator, {
+        projectId: currentSession.projectId,
+        source: 'canvas',
+        action: mutation.action,
+        pageIds: [currentPageId],
+        domains: ['freeform-content'],
+        target: {
+          kind: 'page',
+          id: currentPageId,
+        },
+        assetEffect: 'none',
+      });
+      return;
+    }
+
+    if (
+      (mutation.action === 'undo-freeform' || mutation.action === 'redo-freeform')
+      && 'pageScope' in mutation
+    ) {
       observeCommittedEngineChange(changeCoordinator, {
         projectId: currentSession.projectId,
         source: 'canvas',

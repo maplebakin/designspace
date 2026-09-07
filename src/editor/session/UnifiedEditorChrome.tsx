@@ -21,6 +21,7 @@ import type {
   ProjectSessionSnapshot,
 } from './projectSession';
 import type { PageMutationCommand } from './projectMutation';
+import { isTauriRecoveryAvailable } from '../recovery/recoveryClient';
 
 type UnifiedPageNavigationProps = {
   session: ProjectSessionSnapshot;
@@ -603,8 +604,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     const init = async () => {
-      const isTauri = typeof window !== 'undefined' && !!(window as unknown as { __TAURI__?: unknown }).__TAURI__;
-      if (!isTauri) return;
+      if (!isTauriRecoveryAvailable()) return;
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         unlisten = await getCurrentWindow().onCloseRequested(async (event) => {

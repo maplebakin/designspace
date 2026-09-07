@@ -56,6 +56,10 @@ import {
   recordDocumentFastTextCommit,
 } from '../services/documentLiveTextDiagnostics';
 import { flushDocumentLiveDrafts } from '../services/documentLiveDraft';
+import {
+  persistenceOperationStillOwnsCurrentState,
+  type PersistenceOperationContext,
+} from '../../editor/session/persistenceOperation';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 export type DocumentLifecycleAuthorityMode = 'legacy' | 'shared';
@@ -733,24 +737,58 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const safeName = name?.trim() || project.projectName.trim() || 'Untitled Document';
     const revisionAtStart = get().revision;
     const sessionAtStart = projectSessionToken;
+    const sessionIdentityAtStart = get().sessionIdentity;
+    const libraryIdAtStart = get().currentLibraryProjectId;
+    const operation: PersistenceOperationContext<DocumentProjectPayload> = {
+      sessionIdentity: sessionIdentityAtStart,
+      projectIdentity: project.projectId,
+      targetIdentity: libraryIdAtStart,
+      capturedRevision: revisionAtStart,
+      snapshot: updateProjectTimestamp(
+        compactDocumentProjectForPersistence(project),
+        safeName
+      ),
+    };
     const payload = updateProjectTimestamp(
-      compactDocumentProjectForPersistence(project),
+      operation.snapshot,
       safeName
     );
-    set({ project: payload, saveStatus: 'saving' });
+    set({ saveStatus: 'saving' });
     try {
       const { db } = await import('../../editor/db');
-      let libraryId = get().currentLibraryProjectId;
+      let libraryId = libraryIdAtStart;
       if (libraryId && await db.loadProject(libraryId)) {
         await db.updateProject(libraryId, safeName, JSON.stringify(payload), undefined, 'document');
       } else {
         libraryId = await db.saveProject(safeName, JSON.stringify(payload), undefined, 'document');
       }
       if (projectSessionToken !== sessionAtStart) return false;
-      const hasNewerChanges = get().revision !== revisionAtStart;
+      const current = get();
+      const ownsCurrentState = persistenceOperationStillOwnsCurrentState(
+        operation,
+        {
+          sessionIdentity: current.sessionIdentity,
+          projectIdentity: current.project?.projectId || operation.projectIdentity,
+          targetIdentity: current.currentLibraryProjectId,
+          revision: current.revision,
+        }
+      );
+      const hasNewerChanges = current.revision !== revisionAtStart;
+      if (!ownsCurrentState) return true;
       set({
-        ...(hasNewerChanges ? {} : { project: payload }),
-        currentLibraryProjectId: libraryId,
+        ...(!hasNewerChanges && current.project
+          ? {
+              project: {
+                ...payload,
+                // Compaction is a persisted-payload concern. Keep orphaned
+                // bytes in the live session while renderer history can still
+                // restore their stable IDs.
+                assets: current.project.assets,
+                assetMetadata: current.project.assetMetadata,
+              },
+            }
+          : {}),
+        ...(ownsCurrentState ? { currentLibraryProjectId: libraryId } : {}),
         isDirty: hasNewerChanges,
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
         ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
@@ -777,6 +815,13 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return null;
+    const operation: PersistenceOperationContext<DocumentProjectPayload> = {
+      sessionIdentity: get().sessionIdentity,
+      projectIdentity: project.projectId,
+      targetIdentity: get().currentLibraryProjectId,
+      capturedRevision: get().revision,
+      snapshot: project,
+    };
     const payload = updateProjectTimestamp(
       compactDocumentProjectForPersistence(project)
     );
@@ -802,8 +847,16 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       return null;
     }
     if (delivery.status === 'cancelled') return delivery;
+    const current = get();
+    if (!persistenceOperationStillOwnsCurrentState(operation, {
+      sessionIdentity: current.sessionIdentity,
+      projectIdentity: current.project?.projectId || '',
+      targetIdentity: current.currentLibraryProjectId,
+      revision: current.revision,
+    })) {
+      return delivery;
+    }
     set({
-      project: payload,
       isDirty: false,
       saveStatus: 'saved',
       lastDirtyReason: null,
