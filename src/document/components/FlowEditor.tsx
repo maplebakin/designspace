@@ -57,6 +57,7 @@ import '../styles/document-page.css';
 import '../styles/document-print.css';
 import {
   measureDocumentPagePositionOriginOffsetPx,
+  activeStructuredFragmentBlockExtension,
   StructuredDocumentSpanLayout,
 } from './StructuredDocumentSpanLayout';
 import {
@@ -860,6 +861,7 @@ export const FlowEditor = ({
         DocumentInlineImageExtension.configure(imageExtensionOptions),
         DocumentFlowImageExtension.configure(imageExtensionOptions),
         DocumentImageCommandsExtension,
+        activeStructuredFragmentBlockExtension,
       ],
       editorProps: {
         attributes: {
@@ -1335,9 +1337,10 @@ export const FlowEditor = ({
       lang={language}
       style={style}
     >
-      <EditorContent
-        editor={editor}
-        className={[
+      <div className="document-flow-editor__active-fragment-viewport">
+        <EditorContent
+          editor={editor}
+          className={[
           'document-flow-editor__content',
           hasStructuredSpan && !editingStructuredText
             ? 'document-flow-editor__content--structured-source'
@@ -1354,8 +1357,9 @@ export const FlowEditor = ({
           hasStructuredSpan && editingStructuredText
             ? 'document-flow-editor__content--structured-local-fragment-editing'
             : '',
-        ].filter(Boolean).join(' ')}
-      />
+          ].filter(Boolean).join(' ')}
+        />
+      </div>
       {editor && hasStructuredSpan && (
         <StructuredDocumentSpanLayout
           editor={editor}

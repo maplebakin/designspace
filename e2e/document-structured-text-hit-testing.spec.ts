@@ -259,6 +259,8 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
   };
   const source = layout.closest<HTMLElement>('[data-testid="document-flow-editor"]')
     ?.querySelector<HTMLElement>('.document-flow-prosemirror');
+  const viewport = layout.closest<HTMLElement>('[data-testid="document-flow-editor"]')
+    ?.querySelector<HTMLElement>('.document-flow-editor__active-fragment-viewport');
   const activeIndexes = (layout.getAttribute('data-active-edit-block-indexes') || '')
     .split(',')
     .filter(Boolean)
@@ -295,6 +297,12 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
       ? rect(activeCanonical[activeCanonical.length - 1])
       : null,
     sourceColumnCount: source ? getComputedStyle(source).columnCount : null,
+    viewport: viewport
+      ? {
+          overflow: getComputedStyle(viewport).overflow,
+          rect: rect(viewport),
+        }
+      : null,
     sourceVisibleChildren: sourceChildren.filter(
       (child) => child.visibility === 'visible'
     ),
@@ -349,9 +357,8 @@ test.describe('structured text hit testing', () => {
     expect(editing.visibleNonActiveCanonicalCount).toBeGreaterThan(0);
     expect(editing.sourceVisibleChildren).toHaveLength(editing.activeIndexes.length);
     expect(editing.sourceHiddenChildren.length).toBeGreaterThan(0);
-    expect(editing.sourceVisibleChildren.every(
-      (child) => child.position === 'absolute'
-    )).toBe(true);
+    expect(editing.viewport?.overflow).toBe('hidden');
+    expect(editing.viewport?.rect.width).toBeGreaterThan(0);
     expect(editing.activeCanonicalRect).not.toBeNull();
     const activeSourceRect = editing.sourceVisibleChildren[0]?.rect;
     expect(activeSourceRect).not.toBeUndefined();
@@ -364,6 +371,12 @@ test.describe('structured text hit testing', () => {
     expect(Math.abs(
       (activeSourceRect?.width || 0) - (editing.activeCanonicalRect?.width || 0)
     )).toBeLessThan(3);
+    await expect(page.locator(
+      '.document-flow-editor__active-fragment-viewport'
+    )).toHaveScreenshot('active-fragment-viewport.png', {
+      animations: 'disabled',
+      caret: 'hide',
+    });
 
     await body.type(' local editing remains responsive', { delay: 10 });
     await expect(body).toContainText('local editing remains responsive');
@@ -375,9 +388,7 @@ test.describe('structured text hit testing', () => {
     expect(duringTyping.sourceVisibleChildren).toHaveLength(
       duringTyping.activeIndexes.length
     );
-    expect(duringTyping.sourceVisibleChildren.every(
-      (child) => child.position === 'absolute'
-    )).toBe(true);
+    expect(duringTyping.viewport?.overflow).toBe('hidden');
 
     const thirdColumnPoint = await getVisibleTextPoint(page, 3);
     await page.mouse.click(thirdColumnPoint.x, thirdColumnPoint.y);

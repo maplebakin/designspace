@@ -3402,9 +3402,12 @@ describe('live document editor UI', () => {
     expect(layout.dataset.activeEditBlockIndexes).toBe('0');
     expect(document.head.querySelector<HTMLStyleElement>(
       'style[data-document-live-edit-style]'
-    )?.textContent).toContain(':nth-child(1)');
-    expect(source.children[0]?.getAttribute('data-document-live-edit-block'))
-      .toBeNull();
+    )).toBeNull();
+    const viewport = container.querySelector<HTMLElement>(
+      '.document-flow-editor__active-fragment-viewport'
+    );
+    expect(viewport?.style.overflow).toBe('hidden');
+    expect(source.querySelector('.document-active-fragment-block')).not.toBeNull();
     expect((source.children[0] as HTMLElement | undefined)?.style.position || '')
       .toBe('');
 

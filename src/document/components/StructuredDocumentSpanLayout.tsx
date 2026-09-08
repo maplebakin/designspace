@@ -9,12 +9,16 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from 'react';
+import { Extension } from '@tiptap/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import {
   NodeSelection,
+  Plugin,
+  PluginKey,
   TextSelection,
 } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type {
   DocumentImageAttributes,
   DocumentImageNodeName,
@@ -53,6 +57,46 @@ import {
 import type {
   DocumentImageGroup,
 } from '../types/documentProject';
+
+type ActiveStructuredFragmentBlockState = Readonly<{
+  blockIndex: number | null;
+}>;
+
+export const activeStructuredFragmentBlockKey = new PluginKey<ActiveStructuredFragmentBlockState>(
+  'activeStructuredFragmentBlock'
+);
+
+export const activeStructuredFragmentBlockPlugin = new Plugin<ActiveStructuredFragmentBlockState>({
+  key: activeStructuredFragmentBlockKey,
+  state: {
+    init: () => ({ blockIndex: null }),
+    apply: (transaction, value) => (
+      transaction.getMeta(activeStructuredFragmentBlockKey) || value
+    ),
+  },
+  props: {
+    decorations: (state) => {
+      const blockIndex = activeStructuredFragmentBlockKey.getState(state)?.blockIndex;
+      if (blockIndex === null || blockIndex === undefined) return DecorationSet.empty;
+      let activePosition: number | null = null;
+      state.doc.forEach((_node, offset, index) => {
+        if (index === blockIndex) activePosition = offset;
+      });
+      if (activePosition === null) return DecorationSet.empty;
+      const node = state.doc.child(blockIndex);
+      return DecorationSet.create(state.doc, [Decoration.node(
+        activePosition,
+        activePosition + node.nodeSize,
+        { class: 'document-active-fragment-block' }
+      )]);
+    },
+  },
+});
+
+export const activeStructuredFragmentBlockExtension = Extension.create({
+  name: 'activeStructuredFragmentBlock',
+  addProseMirrorPlugins: () => [activeStructuredFragmentBlockPlugin],
+});
 import {
   normalizeDocumentDropCap,
   type DocumentDropCapSettings,
@@ -274,6 +318,21 @@ export type StructuredTextEditTarget = Readonly<{
   primaryFragmentId: string | null;
 }>;
 
+export type ActiveStructuredFragmentViewport = Readonly<{
+  fragmentId: string;
+  pageId: string | null;
+  blockIndex: number;
+  pmRange: { from: number; to: number } | null;
+  fragmentRect: Readonly<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }>;
+  sourceRangeRect: DOMRect | null;
+  alignmentOffset: Readonly<{ x: number; y: number }>;
+}>;
+
 /**
  * Resolve a frozen fragment against the current PM block without reusing its
  * stale numeric range. The fragment ID is the layout anchor; its original
@@ -389,6 +448,27 @@ export const getStructuredTextEditTarget = (
       ? selectionFrom >= preferredRange.from && selectionFrom <= preferredRange.to
       : preferredRange.to > selectionFrom && preferredRange.from < selectionTo
   );
+  const resolvedFragments = targetBlocks
+    .flatMap((block) => fragments.filter((fragment) => fragment.blockIndex === block.index))
+    .sort((left, right) => left.fragmentIndex - right.fragmentIndex);
+  const fallbackFragment = resolvedFragments
+    .map((fragment) => ({
+      fragment,
+      range: liveRanges.get(fragment.id),
+    }))
+    .filter((candidate): candidate is {
+      fragment: StructuredTextFragmentIdentity;
+      range: { from: number; to: number };
+    } => Boolean(candidate.range))
+    .sort((left, right) => {
+      const leftDistance = selectionFrom < left.range.from
+        ? left.range.from - selectionFrom
+        : selectionFrom > left.range.to ? selectionFrom - left.range.to : 0;
+      const rightDistance = selectionFrom < right.range.from
+        ? right.range.from - selectionFrom
+        : selectionFrom > right.range.to ? selectionFrom - right.range.to : 0;
+      return leftDistance - rightDistance;
+    })[0]?.fragment;
   const targetFragments = preferredOwnsSelection
     ? [
         preferredFragment!,
@@ -396,7 +476,9 @@ export const getStructuredTextEditTarget = (
           (fragment) => fragment.id !== preferredFragment.id
         ),
       ]
-    : selectedFragments;
+    : selectedFragments.length > 0
+      ? selectedFragments
+      : fallbackFragment ? [fallbackFragment] : [];
 
   return {
     blockFrom: Math.min(...targetBlocks.map((block) => block.from)),
@@ -3084,195 +3166,142 @@ export const StructuredDocumentSpanLayout = ({
     const editorRoot = root?.closest<HTMLElement>('.document-flow-editor');
     if (!root || !editorRoot || !model) return;
 
-    // Do not decorate the managed ProseMirror block DOM directly. ProseMirror
-    // observes attributes/styles on those nodes as possible editor mutations,
-    // which can force a DOM reconciliation during every keystroke. The
-    // stylesheet is owned by the surrounding editor shell and addresses the
-    // real PM nodes by their current child index instead. Geometry comes from
-    // the structured fragment model, never from a competing live DOM rect.
-    const liveEditStyle = editorRoot.ownerDocument.createElement('style');
-    liveEditStyle.setAttribute('data-document-live-edit-style', 'true');
-    editorRoot.ownerDocument.head.appendChild(liveEditStyle);
-    let styledSurface: HTMLElement | null = null;
-    let styledChildCount = -1;
-    let styledSignature = '';
+    const viewport = editorRoot.querySelector<HTMLElement>(
+      '.document-flow-editor__active-fragment-viewport'
+    );
+    const liveSurface = editorRoot.querySelector<HTMLElement>(
+      '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
+    );
+    if (!viewport || !liveSurface) return;
 
-    const clearLiveEditStyle = () => {
-      liveEditStyle.textContent = '';
-      editorRoot.removeAttribute('data-document-local-editing-style');
+    const clearActiveViewport = () => {
+      viewport.style.left = '';
+      viewport.style.top = '';
+      viewport.style.width = '';
+      viewport.style.height = '';
+      viewport.style.overflow = '';
+      liveSurface.style.transform = '';
+      const currentBlock = activeStructuredFragmentBlockKey.getState(editor.state)?.blockIndex;
+      if (currentBlock !== null && currentBlock !== undefined) {
+        editor.view.dispatch(editor.state.tr.setMeta(
+          activeStructuredFragmentBlockKey,
+          { blockIndex: null }
+        ).setMeta('addToHistory', false));
+      }
       root.dataset.activeEditFragmentId = '';
       root.dataset.activeEditColumn = '';
       root.dataset.activeEditRegionId = '';
       root.dataset.activeEditRect = '';
-      styledSurface = null;
-      styledChildCount = -1;
-      styledSignature = '';
     };
 
-    const syncLiveEditBlocks = (forceGeometry: boolean) => {
-      const liveSurface = editorRoot.querySelector<HTMLElement>(
-        '.document-flow-editor__content--structured-text-editing .document-flow-prosemirror'
-      );
-      if (!liveSurface || !textEditing || activeEditFragmentIds.length === 0) {
-        clearLiveEditStyle();
+    const syncActiveFragmentViewport = () => {
+      if (!textEditing || activeEditFragmentIds.length === 0) {
+        clearActiveViewport();
         return;
       }
-
-      const needsGeometry = forceGeometry
-        || styledSurface !== liveSurface
-        || styledChildCount !== liveSurface.children.length
-        || styledSignature !== activeEditFragmentSignature;
-      if (!needsGeometry) return;
-
       const fragmentsById = new Map(
         model.textFragments.map((fragment) => [fragment.id, fragment])
       );
-      const activeFragments = activeEditFragmentIds.flatMap((id) => {
-        const fragment = fragmentsById.get(id);
-        return fragment ? [fragment] : [];
-      });
-      if (activeFragments.length === 0) {
-        clearLiveEditStyle();
+      const activeFragment = fragmentsById.get(activeEditFragmentIds[0]);
+      if (!activeFragment) {
+        clearActiveViewport();
         return;
       }
-      // A PM block can produce several fragments. The live source node is one
-      // DOM node, so expose it at the primary clicked fragment while masking
-      // only the exact canonical fragments included in this edit target.
-      const fragmentByBlockIndex = new Map<number, StructuredTextFragmentIdentity>();
-      activeFragments.forEach((fragment) => {
-        if (!fragmentByBlockIndex.has(fragment.blockIndex)) {
-          fragmentByBlockIndex.set(fragment.blockIndex, fragment);
-        }
-      });
       const rootRect = root.getBoundingClientRect();
       const rootScaleX = rootRect.width / Math.max(1, root.offsetWidth);
       const rootScaleY = rootRect.height / Math.max(1, root.offsetHeight);
-
-      const baseRules: string[] = [
-        '[data-document-local-editing-style="true"]'
-          + ' .document-flow-editor__content--structured-local-fragment-editing'
-          + ' .document-flow-prosemirror { position: relative !important; }',
-      ];
-      const firstActive = activeFragments[0];
-      const placements = [...fragmentByBlockIndex.values()].map((fragment) => {
-        const selector = '[data-document-local-editing-style="true"]'
-          + ' .document-flow-editor__content--structured-local-fragment-editing'
-          + ` .document-flow-prosemirror > :nth-child(${fragment.blockIndex + 1})`;
-        return { fragment, selector };
-      });
-      const makePlacementRule = (
-        placement: (typeof placements)[number],
-        leftPx: number,
-        topPx: number,
-        clipToFragment: boolean
-      ) => {
-        const clipRule = clipToFragment
-          ? `height: ${Math.max(1, placement.fragment.geometry.heightPx)}px !important;
-          overflow: hidden !important;`
-          : '';
-        return `${placement.selector} {
-          visibility: visible !important;
-          position: absolute !important;
-          left: ${leftPx}px !important;
-          top: ${topPx}px !important;
-          width: ${Math.max(1, placement.fragment.geometry.widthPx)}px !important;
-          ${clipRule}
-          z-index: 1 !important;
-          pointer-events: none !important;
-        }`;
+      const fragmentRect = {
+        left: activeFragment.geometry.leftPx,
+        top: activeFragment.geometry.topPx,
+        width: Math.max(1, activeFragment.geometry.widthPx),
+        height: Math.max(1, activeFragment.geometry.heightPx),
       };
-      editorRoot.setAttribute('data-document-local-editing-style', 'true');
-      liveEditStyle.textContent = [
-        ...baseRules,
-        ...placements.map((placement) => makePlacementRule(
-          placement,
-          placement.fragment.geometry.leftPx,
-          placement.fragment.geometry.topPx,
-          false
-        )),
-      ].join('\n');
 
-      // A PM block can be split into several structured fragments. The real
-      // PM node remains the editing owner, so for a single-fragment edit use
-      // the model rectangle as the target and clip the source DOM to the
-      // selected PM subrange. The DOM range is only an internal content
-      // offset; it never replaces the structured model's page geometry.
-      const singleFragmentEdit = activeFragments.length === 1;
-      const sourceRangeRect = singleFragmentEdit && firstActive
-        ? (() => {
-            try {
-              const from = editor.view.domAtPos(firstActive.fragmentFrom);
-              const to = editor.view.domAtPos(firstActive.fragmentTo);
-              const range = editorRoot.ownerDocument.createRange();
-              range.setStart(from.node, from.offset);
-              range.setEnd(to.node, to.offset);
-              return range.getBoundingClientRect();
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-      const adjustedRules = placements.map((placement) => {
-        const fragment = placement.fragment;
-        if (
-          !sourceRangeRect
-          || fragment.id !== firstActive?.id
-          || sourceRangeRect.width <= 0
-          || sourceRangeRect.height <= 0
-        ) {
-          return makePlacementRule(
-            placement,
-            fragment.geometry.leftPx,
-            fragment.geometry.topPx,
-            false
-          );
+      // Reset the viewport to a measurable source surface before resolving
+      // the internal PM range. The structured model, not this DOM range,
+      // determines which fragment owns the interaction.
+      viewport.style.left = '0px';
+      viewport.style.top = '0px';
+      viewport.style.width = '100%';
+      viewport.style.height = '100%';
+      viewport.style.overflow = 'visible';
+      liveSurface.style.transform = '';
+      const currentBlock = activeStructuredFragmentBlockKey.getState(editor.state)?.blockIndex;
+      if (currentBlock !== activeFragment.blockIndex) {
+        editor.view.dispatch(editor.state.tr.setMeta(
+          activeStructuredFragmentBlockKey,
+          { blockIndex: activeFragment.blockIndex }
+        ).setMeta('addToHistory', false));
+      }
+
+      const liveRange = resolveLiveStructuredFragmentRange(
+        editor,
+        activeFragment,
+        model.textFragments
+      );
+      let sourceRangeRect: DOMRect | null = null;
+      if (liveRange) {
+        try {
+          const from = editor.view.domAtPos(liveRange.from);
+          const to = editor.view.domAtPos(liveRange.to);
+          const range = editorRoot.ownerDocument.createRange();
+          range.setStart(from.node, from.offset);
+          range.setEnd(to.node, to.offset);
+          sourceRangeRect = range.getBoundingClientRect();
+        } catch {
+          sourceRangeRect = null;
         }
-        const targetLeft = rootRect.left + fragment.geometry.leftPx * rootScaleX;
-        const targetTop = rootRect.top + fragment.geometry.topPx * rootScaleY;
-        const leftPx = fragment.geometry.leftPx
-          + (targetLeft - sourceRangeRect.left) / Math.max(0.05, rootScaleX);
-        const topPx = fragment.geometry.topPx
-          + (targetTop - sourceRangeRect.top) / Math.max(0.05, rootScaleY);
-        return makePlacementRule(
-          placement,
-          leftPx,
-          topPx,
-          true
-        );
-      });
-      liveEditStyle.textContent = [
-        baseRules[0],
-        ...adjustedRules,
-      ].join('\n');
-      styledSurface = liveSurface;
-      styledChildCount = liveSurface.children.length;
-      styledSignature = activeEditFragmentSignature;
-      const activeEditRect = firstActive ? {
-        left: rootRect.left + firstActive.geometry.leftPx * rootScaleX,
-        top: rootRect.top + firstActive.geometry.topPx * rootScaleY,
-        width: firstActive.geometry.widthPx * rootScaleX,
-        height: firstActive.geometry.heightPx * rootScaleY,
-      } : null;
-      root.dataset.activeEditFragmentId = firstActive?.id || '';
-      root.dataset.activeEditColumn = firstActive
-        ? String(firstActive.columnIndex)
-        : '';
-      root.dataset.activeEditRegionId = firstActive?.segmentId || '';
+      }
+
+      const targetLeft = rootRect.left + fragmentRect.left * rootScaleX;
+      const targetTop = rootRect.top + fragmentRect.top * rootScaleY;
+      const alignmentOffset = sourceRangeRect
+        && sourceRangeRect.width > 0
+        && sourceRangeRect.height > 0
+        ? {
+            x: (targetLeft - sourceRangeRect.left) / Math.max(0.05, rootScaleX),
+            y: (targetTop - sourceRangeRect.top) / Math.max(0.05, rootScaleY),
+          }
+        : { x: 0, y: 0 };
+      const viewportModel: ActiveStructuredFragmentViewport = {
+        fragmentId: activeFragment.id,
+        pageId: activeFragment.pageId,
+        blockIndex: activeFragment.blockIndex,
+        pmRange: liveRange,
+        fragmentRect,
+        sourceRangeRect,
+        alignmentOffset,
+      };
+      viewport.style.left = `${fragmentRect.left}px`;
+      viewport.style.top = `${fragmentRect.top}px`;
+      viewport.style.width = `${fragmentRect.width}px`;
+      viewport.style.height = `${fragmentRect.height}px`;
+      viewport.style.overflow = 'hidden';
+      liveSurface.style.transform = `translate(${viewportModel.alignmentOffset.x}px, ${viewportModel.alignmentOffset.y}px)`;
+      const activeEditRect = {
+        left: targetLeft,
+        top: targetTop,
+        width: fragmentRect.width * rootScaleX,
+        height: fragmentRect.height * rootScaleY,
+      };
+      root.dataset.activeEditFragmentId = activeFragment.id;
+      root.dataset.activeEditColumn = String(activeFragment.columnIndex);
+      root.dataset.activeEditRegionId = activeFragment.segmentId;
       root.dataset.activeEditRect = JSON.stringify(activeEditRect);
     };
 
-    syncLiveEditBlocks(true);
+    syncActiveFragmentViewport();
     let syncFrame: number | null = null;
     const scheduleSync = () => {
       if (syncFrame !== null || typeof window === 'undefined') return;
       syncFrame = typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame(() => {
             syncFrame = null;
-            syncLiveEditBlocks(false);
+            syncActiveFragmentViewport();
           })
         : window.setTimeout(() => {
             syncFrame = null;
-            syncLiveEditBlocks(false);
+            syncActiveFragmentViewport();
           }, 0);
     };
     const handleTransaction = () => scheduleSync();
@@ -3287,12 +3316,12 @@ export const StructuredDocumentSpanLayout = ({
           window.clearTimeout(syncFrame);
         }
       }
-      clearLiveEditStyle();
-      liveEditStyle.remove();
+      clearActiveViewport();
     };
   }, [
     activeEditFragmentSignature,
     activeTextFragmentId,
+    editor,
     model,
     textEditing,
     viewScale,
