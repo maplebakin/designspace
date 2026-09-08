@@ -421,6 +421,19 @@ const repairDocumentImageGroupsMeasured = (
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let navigationPersistenceTimer: ReturnType<typeof setTimeout> | null = null;
 let projectSessionToken = 0;
+let documentPersistenceWriteQueue: Promise<void> = Promise.resolve();
+
+/** Serialize every whole-project Document write to the library row. */
+const enqueueDocumentPersistenceWrite = <T>(
+  write: () => Promise<T>
+): Promise<T> => {
+  const queued = documentPersistenceWriteQueue.then(write, write);
+  documentPersistenceWriteQueue = queued.then(
+    () => undefined,
+    () => undefined
+  );
+  return queued;
+};
 
 const cancelAutosave = () => {
   if (autosaveTimer) {
@@ -465,14 +478,16 @@ const persistNavigationState = async (): Promise<boolean> => {
   const payload = updateProjectTimestamp(project);
   useDocumentStore.setState({ saveStatus: 'saving' });
   try {
-    const { db } = await import('../../editor/db');
-    await db.updateProject(
-      currentLibraryProjectId,
-      payload.projectName,
-      JSON.stringify(payload),
-      undefined,
-      'document'
-    );
+    await enqueueDocumentPersistenceWrite(async () => {
+      const { db } = await import('../../editor/db');
+      await db.updateProject(
+        currentLibraryProjectId,
+        payload.projectName,
+        JSON.stringify(payload),
+        undefined,
+        'document'
+      );
+    });
     if (projectSessionToken !== sessionAtStart) return false;
     const current = useDocumentStore.getState();
     const hasNewerChanges = current.revision !== revision;
@@ -755,13 +770,15 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     );
     set({ saveStatus: 'saving' });
     try {
-      const { db } = await import('../../editor/db');
       let libraryId = libraryIdAtStart;
-      if (libraryId && await db.loadProject(libraryId)) {
-        await db.updateProject(libraryId, safeName, JSON.stringify(payload), undefined, 'document');
-      } else {
-        libraryId = await db.saveProject(safeName, JSON.stringify(payload), undefined, 'document');
-      }
+      await enqueueDocumentPersistenceWrite(async () => {
+        const { db } = await import('../../editor/db');
+        if (libraryId && await db.loadProject(libraryId)) {
+          await db.updateProject(libraryId, safeName, JSON.stringify(payload), undefined, 'document');
+        } else {
+          libraryId = await db.saveProject(safeName, JSON.stringify(payload), undefined, 'document');
+        }
+      });
       if (projectSessionToken !== sessionAtStart) return false;
       const current = get();
       const ownsCurrentState = persistenceOperationStillOwnsCurrentState(
@@ -1473,14 +1490,16 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const payload = updateProjectTimestamp(project);
     set({ project: payload, saveStatus: 'saving' });
     try {
-      const { db } = await import('../../editor/db');
-      await db.updateProject(
-        currentLibraryProjectId,
-        payload.projectName,
-        JSON.stringify(payload),
-        undefined,
-        'document'
-      );
+      await enqueueDocumentPersistenceWrite(async () => {
+        const { db } = await import('../../editor/db');
+        await db.updateProject(
+          currentLibraryProjectId,
+          payload.projectName,
+          JSON.stringify(payload),
+          undefined,
+          'document'
+        );
+      });
       if (projectSessionToken !== sessionAtStart) return false;
       const hasNewerChanges = get().revision !== revision;
       set({

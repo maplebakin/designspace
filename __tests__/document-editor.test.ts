@@ -60,6 +60,7 @@ import {
   normalizeDocumentImageAttributes,
 } from '../src/document/extensions/DocumentImageExtension';
 import { documentExportService } from '../src/document/services/documentExportService';
+import { flushDocumentLiveDrafts } from '../src/document/services/documentLiveDraft';
 import { DEFAULT_DOCUMENT_PAPER_COLOR } from '../src/document/utils/documentColor';
 import { updateDocumentPagePaper } from '../src/document/utils/documentPageOrientation';
 
@@ -1019,6 +1020,37 @@ describe('live document editor UI', () => {
       ).toContain('A typed body paragraph');
       expect(screen.queryByTestId('document-body-placeholder')).toBeNull();
     });
+  });
+
+  it('keeps the mounted StrictMode draft scope flushable until unmount', async () => {
+    const rendered = render(React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(DocumentEditorShell)
+    ));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Document body')).not.toBeNull();
+    });
+
+    const body = screen.getByLabelText('Document body') as HTMLElement;
+    const paragraph = body.querySelector('p');
+    expect(paragraph).not.toBeNull();
+    await act(async () => {
+      paragraph!.textContent = 'StrictMode flush boundary';
+      fireEvent.input(paragraph!, {
+        data: 'StrictMode flush boundary',
+        inputType: 'insertText',
+      });
+      await Promise.resolve();
+    });
+
+    const flushed = flushDocumentLiveDrafts();
+    expect(flushed).toBeGreaterThan(0);
+    expect(readDocumentText(useDocumentStore.getState().project?.pages[0].bodyContent))
+      .toContain('StrictMode flush boundary');
+
+    rendered.unmount();
+    expect(flushDocumentLiveDrafts()).toBe(0);
   });
 
   it('keeps an empty title out of page flow while preserving the add-title interaction', async () => {

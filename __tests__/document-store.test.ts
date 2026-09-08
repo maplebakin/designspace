@@ -555,6 +555,51 @@ describe('document project store', () => {
     });
   });
 
+  it('serializes an in-flight navigation snapshot before a newer authored write', async () => {
+    const persisted: string[] = [];
+    let libraryRowPayload = '';
+    let releaseNavigation: (() => void) | undefined;
+    let navigationStartedResolve: (() => void) | undefined;
+    const navigationStarted = new Promise<void>((resolve) => {
+      navigationStartedResolve = resolve;
+    });
+    const navigationBlocked = new Promise<void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    dbMocks.updateProject
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        persisted.push(args[2] as string);
+        libraryRowPayload = args[2] as string;
+        navigationStartedResolve?.();
+        await navigationBlocked;
+      })
+      .mockImplementation(async (...args: unknown[]) => {
+        persisted.push(args[2] as string);
+        libraryRowPayload = args[2] as string;
+      });
+
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Navigation snapshot');
+    await store.addPage();
+    store.hydrateProject(useDocumentStore.getState().project!, 'navigation-race-id');
+    store.selectPage(0);
+    vi.advanceTimersByTime(900);
+    await navigationStarted;
+
+    store.renameProject('Newer authored save');
+    const newerSave = useDocumentStore.getState().flushAutosave();
+    await Promise.resolve();
+    expect(persisted).toHaveLength(1);
+
+    releaseNavigation?.();
+    await newerSave;
+
+    expect(persisted).toHaveLength(2);
+    expect(JSON.parse(persisted[0]).projectName).toBe('Navigation snapshot');
+    expect(JSON.parse(persisted[1]).projectName).toBe('Newer authored save');
+    expect(JSON.parse(libraryRowPayload).projectName).toBe('Newer authored save');
+  });
+
   it('does not roll active page selection back when a manual save is in flight', async () => {
     let finishWrite: (() => void) | undefined;
     dbMocks.saveProject.mockReturnValueOnce(new Promise<string>((resolve) => {

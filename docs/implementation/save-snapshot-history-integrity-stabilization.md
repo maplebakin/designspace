@@ -118,8 +118,6 @@ bridge mocks are not native proof.
 
 - Canvas and Document still have renderer-specific history models; page,
   overlay, and metadata undo semantics are not unified.
-- Navigation persistence remains a separate Document writer and should be
-  brought under the same serialized operation boundary in a later pass.
 - Async photo ingestion paths still need the page/session targeting rule used
   by reference import.
 - Native close behavior needs an actual Tauri/WebKit close-request harness.
@@ -129,3 +127,38 @@ bridge mocks are not native proof.
 Most importantly: a successful old persistence operation can still write its
 own captured bytes to its intended external destination, but it can no longer
 overwrite newer live state or mark that newer state clean.
+
+## Move-1 follow-up: R11 navigation write ordering
+
+The R11 race was reproducible by controlling the real Document store boundary:
+an old navigation snapshot could enter `db.updateProject`, pause before its
+write completed, and a newer authored write could otherwise be allowed to race
+it. The existing post-write session/revision checks only protected live
+Zustand state; they did not protect the library row from an older whole-project
+payload becoming the last write.
+
+Document whole-project writes now use one small serialized write queue. Manual
+saves, shared/legacy autosaves, and delayed navigation persistence all enqueue
+their immutable payload writes in invocation order. The queue is a write-order
+contract, not another dirty flag or timer. The controlled regression proves:
+
+```
+old navigation snapshot captured
+→ old navigation write begins and is delayed
+→ newer authored snapshot is queued
+→ old write completes
+→ newer write completes last
+```
+
+The final persisted row contains the newer authored project name/content. The
+navigation completion still performs its session/revision checks and therefore
+cannot mark newer work clean. The shared 900 ms authored autosave debounce is
+unchanged.
+
+The StrictMode draft regression is now mounted through `DocumentEditorShell`:
+typing followed immediately by the global draft flush reports a non-zero
+flush and exact current body text, while unmount removes the old scope from
+the global flush path.
+
+This follow-up does not alter Document editing, geometry, image/reference
+handling, export, schema, Canvas, or the persistence operation context.
