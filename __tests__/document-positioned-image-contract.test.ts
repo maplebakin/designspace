@@ -36,6 +36,7 @@ import {
   getStructuredImageDragVisualDelta,
   getStructuredImageFrameGeometry,
   getStructuredTextEditTarget,
+  resolveLiveStructuredFragmentRange,
   moveRectangleWithoutCollisions,
   rectanglesOverlap,
 } from '../src/document/components/StructuredDocumentSpanLayout';
@@ -483,6 +484,34 @@ describe('positioned document image contract', () => {
     );
     expect(target?.primaryFragmentId).toBe(selectedFragment.id);
     expect(target?.fragmentIds).toContain(selectedFragment.id);
+
+    const originalRange = resolveLiveStructuredFragmentRange(
+      editor,
+      selectedFragment,
+      model!.textFragments
+    );
+    expect(originalRange).toEqual({
+      from: selectedFragment.fragmentFrom,
+      to: selectedFragment.fragmentTo,
+    });
+    editor.view.dispatch(editor.state.tr.insertText(
+      'new text before the frozen continuation ',
+      2,
+      2
+    ));
+    const liveRange = resolveLiveStructuredFragmentRange(
+      editor,
+      selectedFragment,
+      model!.textFragments
+    );
+    expect(liveRange).not.toEqual(originalRange);
+    expect(liveRange?.from).toBeLessThan(liveRange?.to || 0);
+    const mappedTarget = getStructuredTextEditTarget(
+      editor,
+      model!.textFragments,
+      selectedFragment.id
+    );
+    expect(mappedTarget?.primaryFragmentId).toBe(selectedFragment.id);
   });
 
   it('selects a visible image by ID after its cached visual position is stale', async () => {

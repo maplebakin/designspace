@@ -12,7 +12,6 @@ import {
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import {
-  AllSelection,
   NodeSelection,
   TextSelection,
 } from '@tiptap/pm/state';
@@ -275,6 +274,36 @@ export type StructuredTextEditTarget = Readonly<{
   primaryFragmentId: string | null;
 }>;
 
+/**
+ * Resolve a frozen fragment against the current PM block without reusing its
+ * stale numeric range. The fragment ID is the layout anchor; its original
+ * ordinal/span supplies a deterministic position in the live block while the
+ * compositor is intentionally frozen during typing.
+ */
+export const resolveLiveStructuredFragmentRange = (
+  editor: Editor,
+  fragment: StructuredTextFragmentIdentity,
+  fragments: readonly StructuredTextFragmentIdentity[]
+): { from: number; to: number } | null => {
+  const block = editor.state.doc.child(fragment.blockIndex);
+  if (!block) return null;
+  let blockFrom = 1;
+  for (let index = 0; index < fragment.blockIndex; index += 1) {
+    blockFrom += editor.state.doc.child(index).nodeSize;
+  }
+  const siblings = fragments
+    .filter((candidate) => candidate.blockIndex === fragment.blockIndex)
+    .sort((left, right) => left.fragmentIndex - right.fragmentIndex);
+  const originalFrom = siblings[0]?.fragmentFrom ?? fragment.fragmentFrom;
+  const originalTo = siblings[siblings.length - 1]?.fragmentTo ?? fragment.fragmentTo;
+  const originalSpan = Math.max(1, originalTo - originalFrom);
+  const fromRatio = (fragment.fragmentFrom - originalFrom) / originalSpan;
+  const toRatio = (fragment.fragmentTo - originalFrom) / originalSpan;
+  const from = blockFrom + Math.round(block.content.size * fromRatio);
+  const to = blockFrom + Math.round(block.content.size * toRatio);
+  return { from: Math.min(from, to), to: Math.max(from, to) };
+};
+
 export const getStructuredTextEditTarget = (
   editor: Editor,
   fragments: readonly StructuredTextFragmentIdentity[] = [],
@@ -329,28 +358,36 @@ export const getStructuredTextEditTarget = (
         && targetBlockIndexes.has(fragment.blockIndex)
       ))
     : undefined;
+  const liveRanges = new Map(
+    fragments.map((fragment) => [
+      fragment.id,
+      resolveLiveStructuredFragmentRange(editor, fragment, fragments),
+    ])
+  );
   const selectedFragments = fragments.filter((fragment) => {
     if (!targetBlockIndexes.has(fragment.blockIndex)) return false;
+    const liveRange = liveRanges.get(fragment.id);
+    if (!liveRange) return false;
     if (
       selection.empty
       && preferredFragment
       && fragment.id === preferredFragment.id
     ) return true;
     if (selection.empty) {
-      return selectionFrom >= fragment.fragmentFrom
-        && selectionFrom <= fragment.fragmentTo;
+      return selectionFrom >= liveRange.from && selectionFrom <= liveRange.to;
     }
     return (
-      fragment.fragmentTo > selectionFrom
-      && fragment.fragmentFrom < selectionTo
+      liveRange.to > selectionFrom
+      && liveRange.from < selectionTo
     );
   });
-  const preferredOwnsSelection = preferredFragment && (
+  const preferredRange = preferredFragment
+    ? liveRanges.get(preferredFragment.id)
+    : null;
+  const preferredOwnsSelection = preferredFragment && preferredRange && (
     selection.empty
-      ? selectionFrom >= preferredFragment.fragmentFrom
-        && selectionFrom <= preferredFragment.fragmentTo
-      : preferredFragment.fragmentTo > selectionFrom
-        && preferredFragment.fragmentFrom < selectionTo
+      ? selectionFrom >= preferredRange.from && selectionFrom <= preferredRange.to
+      : preferredRange.to > selectionFrom && preferredRange.from < selectionTo
   );
   const targetFragments = preferredOwnsSelection
     ? [
@@ -2546,166 +2583,6 @@ export const resolveStructuredDocumentTextAtPoint = ({
   };
 };
 
-const decorateStructuredTextHtml = ({
-  html,
-  selectionFrom,
-  selectionTo,
-  caretPosition,
-  activeEditFragmentIds,
-}: {
-  html: string;
-  selectionFrom: number | null;
-  selectionTo: number | null;
-  caretPosition: number | null;
-  activeEditFragmentIds: readonly string[];
-}) => {
-  if (
-    typeof document === 'undefined'
-    || (
-      selectionFrom === null
-      && selectionTo === null
-      && caretPosition === null
-      && activeEditFragmentIds.length === 0
-    )
-  ) return html;
-  const host = document.createElement('div');
-  host.innerHTML = html;
-  const activeFragmentIds = new Set(activeEditFragmentIds);
-  if (activeFragmentIds.size > 0) {
-    host.querySelectorAll<HTMLElement>(
-      `[${DOCUMENT_FRAGMENT_ID_ATTRIBUTE}]`
-    ).forEach((element) => {
-      if (!activeFragmentIds.has(
-        element.getAttribute(DOCUMENT_FRAGMENT_ID_ATTRIBUTE) || ''
-      )) return;
-      element.setAttribute('data-document-active-edit-fragment', 'true');
-    });
-  }
-  const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(host, 4 /* SHOW_TEXT */);
-  let current = walker.nextNode();
-  while (current) {
-    textNodes.push(current as Text);
-    current = walker.nextNode();
-  }
-  let caretInserted = false;
-  const lowerSelection = Math.min(
-    selectionFrom ?? Number.POSITIVE_INFINITY,
-    selectionTo ?? Number.POSITIVE_INFINITY
-  );
-  const upperSelection = Math.max(
-    selectionFrom ?? Number.NEGATIVE_INFINITY,
-    selectionTo ?? Number.NEGATIVE_INFINITY
-  );
-
-  textNodes.forEach((textNode) => {
-    const sourceElement = findDocumentTextRangeElement(textNode);
-    const sourceRange = sourceElement
-      ? readDocumentTextRange(sourceElement)
-      : null;
-    if (!sourceElement || !sourceRange) return;
-    const fragmentElement = findDocumentFragmentElement(textNode);
-    const fragmentIsActive = Boolean(
-      fragmentElement?.hasAttribute('data-document-active-edit-fragment')
-    );
-    // The real ProseMirror surface owns the active fragment's caret and
-    // selection. Do not create a second synthetic decoration on the frozen
-    // copy of the same text.
-    if (fragmentIsActive) return;
-    const text = textNode.textContent || '';
-    const textStart = sourceRange.from + getDocumentTextOffsetWithinElement(
-      sourceElement,
-      textNode,
-      0
-    );
-    const textEnd = textStart + text.length;
-    const markerOffsets: number[] = [];
-    if (
-      caretPosition !== null
-      && caretPosition >= textStart
-      && caretPosition <= textEnd
-    ) {
-      markerOffsets.push(caretPosition - textStart);
-    }
-    const selectedStart = selectionFrom !== null && selectionTo !== null
-      ? Math.max(textStart, lowerSelection)
-      : textStart;
-    const selectedEnd = selectionFrom !== null && selectionTo !== null
-      ? Math.min(textEnd, upperSelection)
-      : textStart;
-    const boundaries = new Set([0, text.length, ...markerOffsets]);
-    if (selectedStart < selectedEnd) {
-      boundaries.add(selectedStart - textStart);
-      boundaries.add(selectedEnd - textStart);
-    }
-    const orderedBoundaries = [...boundaries]
-      .filter((value) => value >= 0 && value <= text.length)
-      .sort((left, right) => left - right);
-    const fragment = textNode.ownerDocument.createDocumentFragment();
-    const appendCaret = () => {
-      const caret = textNode.ownerDocument.createElement('span');
-      caret.className = 'document-structured-caret';
-      caret.setAttribute('data-document-editor-only', 'true');
-      caret.setAttribute('data-document-export-exclude', 'true');
-      caret.setAttribute('aria-hidden', 'true');
-      fragment.appendChild(caret);
-      caretInserted = true;
-    };
-    for (let index = 0; index < orderedBoundaries.length - 1; index += 1) {
-      const from = orderedBoundaries[index];
-      const to = orderedBoundaries[index + 1];
-      if (markerOffsets.includes(from)) appendCaret();
-      if (to > from) {
-        const value = text.slice(from, to);
-        const documentFrom = textStart + from;
-        const documentTo = textStart + to;
-        const selected = (
-          selectionFrom !== null
-          && selectionTo !== null
-          && documentFrom < upperSelection
-          && documentTo > lowerSelection
-        );
-        if (selected) {
-          const highlight = textNode.ownerDocument.createElement('span');
-          highlight.className = 'document-structured-selection-highlight';
-          highlight.setAttribute('data-document-editor-only', 'true');
-          highlight.setAttribute('data-document-export-exclude', 'true');
-          highlight.textContent = value;
-          fragment.appendChild(highlight);
-        } else {
-          fragment.appendChild(textNode.ownerDocument.createTextNode(value));
-        }
-      }
-      if (index === orderedBoundaries.length - 2
-        && markerOffsets.includes(to)) appendCaret();
-    }
-    textNode.replaceWith(fragment);
-  });
-
-  if (caretPosition !== null && !caretInserted) {
-    const candidates = Array.from(host.querySelectorAll<HTMLElement>(
-      `[${DOCUMENT_FRAGMENT_FROM_ATTRIBUTE}][${DOCUMENT_FRAGMENT_TO_ATTRIBUTE}]`
-    ));
-    const candidate = candidates.find((element) => {
-      const range = readDocumentAttributeRange(
-        element,
-        DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
-        DOCUMENT_FRAGMENT_TO_ATTRIBUTE
-      );
-      return range && caretPosition >= range.from && caretPosition <= range.to;
-    });
-    if (candidate && !candidate.hasAttribute('data-document-active-edit-fragment')) {
-      const caret = document.createElement('span');
-      caret.className = 'document-structured-caret';
-      caret.setAttribute('data-document-editor-only', 'true');
-      caret.setAttribute('data-document-export-exclude', 'true');
-      caret.setAttribute('aria-hidden', 'true');
-      candidate.appendChild(caret);
-    }
-  }
-  return host.innerHTML;
-};
-
 export const clampResizeWidthWithoutCollisions = ({
   startWidthPx,
   desiredWidthPx,
@@ -3515,24 +3392,6 @@ export const StructuredDocumentSpanLayout = ({
     '--document-span-column-width': `${model.columnWidthPx}px`,
     '--document-span-available-height': `${model.availableHeightPx}px`,
   } as CSSProperties;
-  const activeTextSelection = (
-    textEditing
-    && editor.isFocused
-    && !(
-      editor.state.selection instanceof NodeSelection
-      || editor.state.selection instanceof AllSelection
-        && editor.state.selection.from === editor.state.selection.to
-    )
-  )
-    ? editor.state.selection
-    : null;
-  const selectionFrom = activeTextSelection?.from ?? null;
-  const selectionTo = activeTextSelection?.to ?? null;
-  const caretPosition = activeTextSelection instanceof TextSelection
-    && activeTextSelection.empty
-    ? activeTextSelection.from
-    : null;
-
   const applyPendingPreview = () => {
     previewFrameRef.current = null;
     const pending = pendingPreviewRef.current;
@@ -4543,6 +4402,11 @@ export const StructuredDocumentSpanLayout = ({
                 ).join('|') || undefined}
                 data-line-from={band.lineFrom ?? undefined}
                 data-line-to={band.lineTo ?? undefined}
+                data-document-active-edit-fragment={
+                  band.fragments.some((fragment) => activeEditFragmentIds.includes(fragment.id))
+                    ? 'true'
+                    : undefined
+                }
                 data-column={column}
                 data-band-left-px={band.leftPx}
                 data-band-top-px={band.topPx}
@@ -4564,15 +4428,7 @@ export const StructuredDocumentSpanLayout = ({
                 onPointerMove={handleTextPointerMove}
                 onPointerUp={handleTextPointerUp}
                 onPointerCancel={handleTextPointerCancel}
-                dangerouslySetInnerHTML={{
-                  __html: decorateStructuredTextHtml({
-                    html: band.html,
-                    selectionFrom,
-                    selectionTo,
-                    caretPosition,
-                    activeEditFragmentIds,
-                  }),
-                }}
+                dangerouslySetInnerHTML={{ __html: band.html }}
               />
             ))}
           </div>

@@ -1466,35 +1466,6 @@
   background: rgba(82, 103, 216, 0.28);
 }
 
-.document-structured-selection-highlight {
-  background: rgba(82, 103, 216, 0.28);
-  color: inherit;
-}
-
-.document-structured-caret {
-  /* Keep the marker out of inline layout.  A border on an inline-block
-     changes line breaking (especially in justified columns), so the caret
-     is painted by an absolutely-positioned pseudo element instead. */
-  position: relative;
-  display: inline;
-  width: 0;
-  height: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
-.document-structured-caret::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 1.18em;
-  border-left: 2px solid #3f51b5;
-  transform: translateY(-0.08em);
-  pointer-events: none;
-}
-
 .document-spanning-layout {
   position: relative;
   box-sizing: border-box;
@@ -1564,12 +1535,6 @@
   .document-span-layout__text-column > * * {
   color: #1f1c18 !important;
   opacity: 1 !important;
-}
-
-.document-spanning-layout[data-text-editing="true"]
-  .document-structured-selection-highlight {
-  color: transparent;
-  background: transparent;
 }
 
 .document-spanning-layout[data-text-editing="true"]

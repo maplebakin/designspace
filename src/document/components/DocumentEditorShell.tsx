@@ -366,6 +366,50 @@ const getActiveDocumentPageId = () => {
   )?.id;
 };
 
+type DocumentImageOperationContext = Readonly<{
+  sessionIdentity: string;
+  projectIdentity: string | null;
+  pageId: string;
+  position?: number;
+  imageId?: string;
+}>;
+
+const captureDocumentImageOperationContext = ({
+  position,
+  imageId,
+}: Pick<DocumentImageOperationContext, 'position' | 'imageId'> = {}): DocumentImageOperationContext | null => {
+  const state = useDocumentStore.getState();
+  const activePageIndex = state.project
+    ? Math.max(0, Math.min(
+        state.project.pages.length - 1,
+        Math.trunc(state.project.activePageIndex ?? 0)
+      ))
+    : 0;
+  const pageId = state.project?.pages[activePageIndex]?.id;
+  if (!pageId) return null;
+  return {
+    sessionIdentity: state.sessionIdentity,
+    projectIdentity: state.currentLibraryProjectId || null,
+    pageId,
+    ...(position === undefined ? {} : { position }),
+    ...(imageId ? { imageId } : {}),
+  };
+};
+
+const ownsDocumentImageOperation = (context: DocumentImageOperationContext) => {
+  const state = useDocumentStore.getState();
+  const activePageIndex = state.project
+    ? Math.max(0, Math.min(
+        state.project.pages.length - 1,
+        Math.trunc(state.project.activePageIndex ?? 0)
+      ))
+    : 0;
+  const activePageId = state.project?.pages[activePageIndex]?.id;
+  return state.sessionIdentity === context.sessionIdentity
+    && (state.currentLibraryProjectId || null) === context.projectIdentity
+    && activePageId === context.pageId;
+};
+
 const notifyCommittedFlowImageLifecycle = (
   callback: DocumentEditorShellProps['onCommittedMutation'],
   action:
@@ -1313,10 +1357,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const insertAssetIntoBody = useCallback((
     asset: DocumentAsset,
-    position?: number,
+    operation: DocumentImageOperationContext,
     wrap: DocumentFlowImageWrap = 'float-left'
   ): boolean => {
-    const pageId = getActiveDocumentPageId();
+    if (!ownsDocumentImageOperation(operation)) return false;
+    const pageId = operation.pageId;
     const editor = bodyEditorRef.current;
     if (!pageId || !editor || editor.isDestroyed) {
       setToastMessage('The document body is still initializing.');
@@ -1345,7 +1390,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       captionAlignment: 'inherit',
       captionItalic: 'inherit',
       captionSpacingPx: 'inherit',
-    }, position);
+    }, operation.position);
     if (!inserted) return false;
     const imagePositions = findDocumentFlowImagePositions(editor, imageId);
     if (imagePositions.length !== 1) return false;
@@ -1369,11 +1414,20 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     files: File[],
     position?: number
   ) => {
+    const operation = captureDocumentImageOperationContext({ position });
+    if (!operation) {
+      setToastMessage('Could not determine the document page for that image.');
+      return;
+    }
     let nextPosition = position;
     for (const file of files) {
       try {
         const asset = await ingestDocumentImage(file);
-        if (insertAssetIntoBody(asset, nextPosition)) {
+        if (!ownsDocumentImageOperation(operation)) return;
+        const insertion = nextPosition === undefined
+          ? operation
+          : { ...operation, position: nextPosition };
+        if (insertAssetIntoBody(asset, insertion)) {
           nextPosition = undefined;
         }
       } catch (error) {
@@ -1388,10 +1442,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     _region: DocumentEditorRegion
   ) => {
     if (!isImageClipboardPaste(event)) return false;
+    const operation = captureDocumentImageOperationContext({
+      position: _editor.state.selection.from,
+    });
+    if (!operation) return true;
     void ingestImageFromClipboardEvent(event)
       .then((result) => {
         if (result.handled) {
-          insertAssetIntoBody(result.asset);
+          if (ownsDocumentImageOperation(operation)) {
+            insertAssetIntoBody(result.asset, operation);
+          }
         } else if (result.reason !== 'duplicate') {
           setToastMessage('That clipboard image format is not supported.');
         }
@@ -2845,8 +2905,15 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [onCommittedMutation, page, selectedFlowImage]);
 
   const replaceSelectedImage = useCallback(async (file: File) => {
+    const selectedImageId = selectedFlowImage?.attributes.id || selectedOverlay?.id;
+    const operation = captureDocumentImageOperationContext({ imageId: selectedImageId });
+    if (!operation) {
+      setToastMessage('Could not determine the document page for that image.');
+      return;
+    }
     try {
       const asset = await ingestDocumentImage(file);
+      if (!ownsDocumentImageOperation(operation)) return;
       const assetId = addAsset(asset.id, asset.source, {
         mimeType: asset.mimeType,
         naturalWidth: asset.naturalWidth,
@@ -2862,7 +2929,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               selectedFlowImage.nodeType
             )
           : null;
-        if (!currentImage) return;
+        if (!currentImage || currentImage.attributes.id !== operation.imageId) return;
         const widthPx = currentImage.attributes.widthPx;
         const committed = editor?.chain()
           .focus()
@@ -2877,7 +2944,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         const committedImage = editor ? getSelectedDocumentImage(editor) : null;
         if (
           committed
-          && page
+          && page?.id === operation.pageId
           && committedImage?.attributes.id === selectedFlowImage.attributes.id
           && committedImage.attributes.assetId === assetId
         ) {
@@ -2889,17 +2956,18 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           );
         }
       } else if (selectedOverlay) {
+        if (selectedOverlay.id !== operation.imageId) return;
         updateOverlay(selectedOverlay.id, {
           assetId,
           naturalWidth: asset.naturalWidth,
           naturalHeight: asset.naturalHeight,
           heightPx: selectedOverlay.widthPx * asset.naturalHeight / asset.naturalWidth,
-        }, page?.id);
+        }, operation.pageId);
         const committedOverlay = useDocumentStore.getState().project?.pages.find(
-          (candidate) => candidate.id === page?.id
+          (candidate) => candidate.id === operation.pageId
         )?.overlayObjects.find((overlay) => overlay.id === selectedOverlay.id);
         if (
-          page
+          page?.id === operation.pageId
           && committedOverlay?.assetId === assetId
         ) {
           notifyCommittedStructuredImageMetadata(
