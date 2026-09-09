@@ -274,7 +274,7 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
       }))
     : [];
   const activeCanonical = Array.from(layout.querySelectorAll<HTMLElement>(
-    '[data-document-active-edit-fragment="true"]'
+    '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
   ));
   const canonicalFragments = Array.from(layout.querySelectorAll<HTMLElement>(
     '[data-document-fragment-id]'
@@ -296,6 +296,15 @@ const readLocalEditingPresentation = async (page: Page) => page.locator(
     activeCanonicalRect: activeCanonical.length > 0
       ? rect(activeCanonical[activeCanonical.length - 1])
       : null,
+    viewportDiagnostics: (() => {
+      const raw = layout.getAttribute('data-active-edit-viewport-diagnostics');
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })(),
     sourceColumnCount: source ? getComputedStyle(source).columnCount : null,
     viewport: viewport
       ? {
@@ -359,6 +368,27 @@ test.describe('structured text hit testing', () => {
     expect(editing.sourceHiddenChildren.length).toBeGreaterThan(0);
     expect(editing.viewport?.overflow).toBe('hidden');
     expect(editing.viewport?.rect.width).toBeGreaterThan(0);
+    expect(await layout.getAttribute('data-document-drop-cap')).toBe('true');
+    const liveRangeRect = editing.viewportDiagnostics?.finalLiveRangeClientRect as {
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+    } | null | undefined;
+    const canonicalRangeRect = editing.viewportDiagnostics?.canonicalFragmentClientRect as {
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+    } | null | undefined;
+    expect(liveRangeRect).not.toBeNull();
+    expect(canonicalRangeRect).not.toBeNull();
+    expect(Math.abs((liveRangeRect?.left || 0) - (canonicalRangeRect?.left || 0)))
+      .toBeLessThan(3);
+    expect(Math.abs((liveRangeRect?.top || 0) - (canonicalRangeRect?.top || 0)))
+      .toBeLessThan(3);
+    expect(Math.abs((liveRangeRect?.right || 0) - (canonicalRangeRect?.right || 0)))
+      .toBeLessThan(3);
     expect(editing.activeCanonicalRect).not.toBeNull();
     const activeSourceRect = editing.sourceVisibleChildren[0]?.rect;
     expect(activeSourceRect).not.toBeUndefined();

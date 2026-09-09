@@ -88,9 +88,9 @@ Measured against `5b616660`:
 
 | Surface | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| `StructuredDocumentSpanLayout.tsx` | 4,600 | 4,629 | +29 |
+| `StructuredDocumentSpanLayout.tsx` | 4,600 | 4,725 | +125 |
 | `FlowEditor.tsx` | 1,478 | 1,482 | +4 |
-| `document-page.css` | 2,417 | 2,455 | +38 |
+| `document-page.css` | 2,417 | 2,461 | +44 |
 | generated active-source style rules | present | 0 | −100% |
 | active presentation helpers | whole-block placement + clip branch | viewport model + PM decoration | replaced |
 
@@ -130,18 +130,80 @@ machinery remains.
 Passed:
 
 - full Vitest: 60 files, 637 tests;
-- coverage: 62.43% statements, 64.56% lines;
+- coverage: 62.49% statements, 64.62% lines;
 - focused Document editor/fragment tests: 110 passed;
-- focused structured hit-testing and live-typing browser set: 5 passed;
+- focused structured hit-testing, live-typing, and historical drop-cap browser
+  set: 6 passed;
 - TypeScript, ESLint, production build, `validate`, recovery tests, and Rust
   tests (20 passed);
 - intentional active-fragment viewport screenshot; no unrelated snapshots
   changed.
 
-The full Chromium run completed with 79/84 passing. Its failures were outside
-the new viewport assertions: one historical page-49 snapshot dimension drift,
-one reference-adjustment drag expectation, one fixed-photo geometry tolerance,
-and three title-click cases from the first pointer-event arrangement. The title
-workflow passed after restoring the pre-existing title affordance hit target;
-the focused viewport suite remained 5/5 green. Native Tauri/WebKit validation
+The final full Chromium run completed with 79/85 passing. Its six failures were
+outside the viewport assertions: reference persistence/image-loading and
+reference-adjustment timing, fixed-photo geometry tolerance, one flaky photo
+selection timing case (which passed when rerun alone), and two existing
+historical export/snapshot assumptions. The focused viewport/live-typing/
+historical reproduction set remained 6/6 green. Native Tauri/WebKit validation
 is unavailable in this environment.
+
+## 9. Alignment and masking follow-up
+
+The remaining overlap was not viewport spill. It was a canonical ownership
+failure: the active flag was placed on the whole structured text band whenever
+one of its fragments was active. That left the active fragment's frozen glyphs
+visible. A drop-cap `::first-letter` rule also supplied its own explicit color,
+so hiding the element's normal text color did not hide that glyph.
+
+The mask now lives on the exact element carrying the active
+`data-document-fragment-id`, and has an explicit `::first-letter` transparent
+rule. Non-active fragments in the same band remain untouched. The regression
+checks the exact active element and its drop-cap pseudo-element. Because the
+structured HTML is installed with React `dangerouslySetInnerHTML`, the
+imperative mask synchronizer also verifies the DOM's active-ID set before
+skipping a pass and reapplies it after a render replaces those nodes.
+
+The alignment calculation now names every boundary and converts through client
+space:
+
+```text
+structured fragment page/body CSS px
+        -> structured-layout client rect (zoomed)
+        -> editor-root client rect (zoomed)
+        -> viewport-local CSS px
+        -> live PM range client rect
+        -> editor-root CSS-pixel transform
+```
+
+The active viewport records these values in
+`data-active-edit-viewport-diagnostics`, including both the pre-transform
+source range and the final live range.
+
+On the historical page-49 first paragraph with a drop cap, the measured
+activation was:
+
+| Measurement | Result |
+| --- | ---: |
+| fragment page/body rect | `0, 0, 220.27 × 139.13` CSS px |
+| root/editor client origin | `848.668, 319.246` px (identical) |
+| root scale | `0.75548 × 0.75564` |
+| viewport client rect | `848.668, 319.246, 166.451 × 105.134` px |
+| source range before transform | top `320.757`, right `1015.119` px |
+| applied alignment transform | `x=0`, `y=-2.000` editor CSS px |
+| final live range | top `319.246`, right `1015.119` px |
+| active canonical fragment | top `319.246`, right `1015.119` px |
+
+The final live range and canonical fragment share the same left/top/right
+within sub-pixel measurement noise. Their bottom edges differ by 3.68 px because
+the DOM range reports painted glyph bounds while the canonical element reports
+its full line-box fragment rectangle; the visible baseline/glyph edge is the
+aligned contract.
+
+The focused historical regression is
+`historical-book-layout.spec.ts :: aligns and masks the active first drop-cap
+fragment`, with screenshot
+`historical-page-49-active-first-drop-cap-chromium-linux.png`. It passes with
+the page visually unchanged except for the live editor's caret/selection. It
+also records the client rectangles of every text column and occupied image
+before activation and requires each left/top/width/height delta to remain below
+1 CSS px during activation.

@@ -1558,10 +1558,16 @@
 
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column
-  [data-document-active-edit-fragment="true"],
+  [data-document-fragment-id][data-document-active-edit-fragment="true"],
 .document-spanning-layout[data-text-editing="true"]
   .document-span-layout__text-column
-  [data-document-active-edit-fragment="true"] * {
+  [data-document-fragment-id][data-document-active-edit-fragment="true"] * {
+  color: transparent !important;
+}
+
+.document-spanning-layout[data-text-editing="true"]
+  .document-span-layout__text-column
+  [data-document-fragment-id][data-document-active-edit-fragment="true"]::first-letter {
   color: transparent !important;
 }
 

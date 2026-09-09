@@ -330,6 +330,7 @@ export type ActiveStructuredFragmentViewport = Readonly<{
     height: number;
   }>;
   sourceRangeRect: DOMRect | null;
+  finalLiveRangeRect: DOMRect | null;
   alignmentOffset: Readonly<{ x: number; y: number }>;
 }>;
 
@@ -3174,7 +3175,72 @@ export const StructuredDocumentSpanLayout = ({
     );
     if (!viewport || !liveSurface) return;
 
+    let canonicalMaskSignature: string | null = null;
+    const clearCanonicalFragmentMask = () => {
+      root.querySelectorAll<HTMLElement>(
+        '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
+      ).forEach((fragment) => {
+        fragment.removeAttribute('data-document-active-edit-fragment');
+      });
+      canonicalMaskSignature = null;
+    };
+
+    const syncCanonicalFragmentMask = () => {
+      const activeIds = new Set(activeEditFragmentIds);
+      if (canonicalMaskSignature === activeEditFragmentSignature) {
+        const maskedIds = new Set(
+          Array.from(root.querySelectorAll<HTMLElement>(
+            '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
+          )).map((fragment) => fragment.dataset.documentFragmentId || '')
+        );
+        if (
+          maskedIds.size === activeIds.size
+          && activeEditFragmentIds.every((id) => maskedIds.has(id))
+        ) {
+          return;
+        }
+      }
+      root.querySelectorAll<HTMLElement>('[data-document-fragment-id]')
+        .forEach((fragment) => {
+          const active = activeIds.has(fragment.dataset.documentFragmentId || '');
+          if (active) {
+            fragment.setAttribute('data-document-active-edit-fragment', 'true');
+          } else {
+            fragment.removeAttribute('data-document-active-edit-fragment');
+          }
+        });
+      canonicalMaskSignature = activeEditFragmentSignature;
+    };
+
+    const rectSnapshot = (rect: DOMRect | null) => rect
+      ? {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        }
+      : null;
+
+    const measureLiveRange = (
+      liveRange: { from: number; to: number } | null
+    ): DOMRect | null => {
+      if (!liveRange) return null;
+      try {
+        const from = editor.view.domAtPos(liveRange.from);
+        const to = editor.view.domAtPos(liveRange.to);
+        const range = editorRoot.ownerDocument.createRange();
+        range.setStart(from.node, from.offset);
+        range.setEnd(to.node, to.offset);
+        return range.getBoundingClientRect();
+      } catch {
+        return null;
+      }
+    };
+
     const clearActiveViewport = () => {
+      clearCanonicalFragmentMask();
       viewport.style.left = '';
       viewport.style.top = '';
       viewport.style.width = '';
@@ -3192,6 +3258,7 @@ export const StructuredDocumentSpanLayout = ({
       root.dataset.activeEditColumn = '';
       root.dataset.activeEditRegionId = '';
       root.dataset.activeEditRect = '';
+      root.dataset.activeEditViewportDiagnostics = '';
     };
 
     const syncActiveFragmentViewport = () => {
@@ -3199,6 +3266,7 @@ export const StructuredDocumentSpanLayout = ({
         clearActiveViewport();
         return;
       }
+      syncCanonicalFragmentMask();
       const fragmentsById = new Map(
         model.textFragments.map((fragment) => [fragment.id, fragment])
       );
@@ -3210,6 +3278,9 @@ export const StructuredDocumentSpanLayout = ({
       const rootRect = root.getBoundingClientRect();
       const rootScaleX = rootRect.width / Math.max(1, root.offsetWidth);
       const rootScaleY = rootRect.height / Math.max(1, root.offsetHeight);
+      const editorRootRect = editorRoot.getBoundingClientRect();
+      const editorScaleX = editorRootRect.width / Math.max(1, editorRoot.offsetWidth);
+      const editorScaleY = editorRootRect.height / Math.max(1, editorRoot.offsetHeight);
       const fragmentRect = {
         left: activeFragment.geometry.leftPx,
         top: activeFragment.geometry.topPx,
@@ -3239,30 +3310,38 @@ export const StructuredDocumentSpanLayout = ({
         activeFragment,
         model.textFragments
       );
-      let sourceRangeRect: DOMRect | null = null;
-      if (liveRange) {
-        try {
-          const from = editor.view.domAtPos(liveRange.from);
-          const to = editor.view.domAtPos(liveRange.to);
-          const range = editorRoot.ownerDocument.createRange();
-          range.setStart(from.node, from.offset);
-          range.setEnd(to.node, to.offset);
-          sourceRangeRect = range.getBoundingClientRect();
-        } catch {
-          sourceRangeRect = null;
-        }
-      }
-
-      const targetLeft = rootRect.left + fragmentRect.left * rootScaleX;
-      const targetTop = rootRect.top + fragmentRect.top * rootScaleY;
+      const targetClientRect = {
+        left: rootRect.left + fragmentRect.left * rootScaleX,
+        top: rootRect.top + fragmentRect.top * rootScaleY,
+        width: fragmentRect.width * rootScaleX,
+        height: fragmentRect.height * rootScaleY,
+      };
+      // Viewport CSS coordinates are local to the editor root, while the
+      // structured geometry is local to the layout root. Convert through
+      // client space explicitly so page zoom and any body-root offset cannot
+      // leak into the live-source transform.
+      viewport.style.left = `${(
+        targetClientRect.left - editorRootRect.left
+      ) / Math.max(0.05, editorScaleX)}px`;
+      viewport.style.top = `${(
+        targetClientRect.top - editorRootRect.top
+      ) / Math.max(0.05, editorScaleY)}px`;
+      viewport.style.width = `${targetClientRect.width / Math.max(0.05, editorScaleX)}px`;
+      viewport.style.height = `${targetClientRect.height / Math.max(0.05, editorScaleY)}px`;
+      const viewportClientRect = viewport.getBoundingClientRect();
+      const sourceRangeRect = measureLiveRange(liveRange);
       const alignmentOffset = sourceRangeRect
         && sourceRangeRect.width > 0
         && sourceRangeRect.height > 0
         ? {
-            x: (targetLeft - sourceRangeRect.left) / Math.max(0.05, rootScaleX),
-            y: (targetTop - sourceRangeRect.top) / Math.max(0.05, rootScaleY),
+            x: (viewportClientRect.left - sourceRangeRect.left)
+              / Math.max(0.05, editorScaleX),
+            y: (viewportClientRect.top - sourceRangeRect.top)
+              / Math.max(0.05, editorScaleY),
           }
         : { x: 0, y: 0 };
+      liveSurface.style.transform = `translate(${alignmentOffset.x}px, ${alignmentOffset.y}px)`;
+      const finalLiveRangeRect = measureLiveRange(liveRange);
       const viewportModel: ActiveStructuredFragmentViewport = {
         fragmentId: activeFragment.id,
         pageId: activeFragment.pageId,
@@ -3270,24 +3349,46 @@ export const StructuredDocumentSpanLayout = ({
         pmRange: liveRange,
         fragmentRect,
         sourceRangeRect,
+        finalLiveRangeRect,
         alignmentOffset,
       };
-      viewport.style.left = `${fragmentRect.left}px`;
-      viewport.style.top = `${fragmentRect.top}px`;
-      viewport.style.width = `${fragmentRect.width}px`;
-      viewport.style.height = `${fragmentRect.height}px`;
       viewport.style.overflow = 'hidden';
-      liveSurface.style.transform = `translate(${viewportModel.alignmentOffset.x}px, ${viewportModel.alignmentOffset.y}px)`;
       const activeEditRect = {
-        left: targetLeft,
-        top: targetTop,
-        width: fragmentRect.width * rootScaleX,
-        height: fragmentRect.height * rootScaleY,
+        left: targetClientRect.left,
+        top: targetClientRect.top,
+        width: targetClientRect.width,
+        height: targetClientRect.height,
       };
+      const canonicalFragment = Array.from(root.querySelectorAll<HTMLElement>(
+        '[data-document-fragment-id]'
+      )).find((fragment) => (
+        fragment.dataset.documentFragmentId === activeFragment.id
+      ));
       root.dataset.activeEditFragmentId = activeFragment.id;
       root.dataset.activeEditColumn = String(activeFragment.columnIndex);
       root.dataset.activeEditRegionId = activeFragment.segmentId;
       root.dataset.activeEditRect = JSON.stringify(activeEditRect);
+      root.dataset.activeEditViewportDiagnostics = JSON.stringify({
+        coordinateSpaces: {
+          fragment: 'page/body CSS px relative to structured layout root',
+          rootClient: 'viewport/client px',
+          editorClient: 'viewport/client px',
+          sourceRange: 'viewport/client px',
+          alignment: 'editor-root CSS px',
+        },
+        fragmentPageRect: fragmentRect,
+        rootClientRect: rectSnapshot(rootRect),
+        editorRootClientRect: rectSnapshot(editorRootRect),
+        viewportClientRect: rectSnapshot(viewportClientRect),
+        sourceRangeClientRect: rectSnapshot(sourceRangeRect),
+        finalLiveRangeClientRect: rectSnapshot(viewportModel.finalLiveRangeRect),
+        canonicalFragmentClientRect: rectSnapshot(
+          canonicalFragment?.getBoundingClientRect() || null
+        ),
+        rootScale: { x: rootScaleX, y: rootScaleY },
+        editorScale: { x: editorScaleX, y: editorScaleY },
+        alignmentOffset,
+      });
     };
 
     syncActiveFragmentViewport();
@@ -4431,11 +4532,6 @@ export const StructuredDocumentSpanLayout = ({
                 ).join('|') || undefined}
                 data-line-from={band.lineFrom ?? undefined}
                 data-line-to={band.lineTo ?? undefined}
-                data-document-active-edit-fragment={
-                  band.fragments.some((fragment) => activeEditFragmentIds.includes(fragment.id))
-                    ? 'true'
-                    : undefined
-                }
                 data-column={column}
                 data-band-left-px={band.leftPx}
                 data-band-top-px={band.topPx}

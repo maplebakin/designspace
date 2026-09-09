@@ -904,4 +904,109 @@ test.describe('historical book acceptance fixture', () => {
       expect(await readGeometry()).toEqual(idleGeometry);
     }
   });
+
+  test('aligns and masks the active first drop-cap fragment', async ({ page }) => {
+    test.slow();
+    await loadHistoricalFixture(page);
+    await page.getByTestId('document-page-tab-0').click();
+
+    const layout = page.locator('[data-document-span-layout]');
+    const readPaintedGeometry = async () => layout.evaluate((root) => {
+      const rect = (element: Element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          left: bounds.left,
+          top: bounds.top,
+          width: bounds.width,
+          height: bounds.height,
+        };
+      };
+      return {
+        columns: Array.from(root.querySelectorAll(
+          '[data-layout-role="explicit-text-column"]'
+        )).map(rect),
+        images: Array.from(root.querySelectorAll(
+          '[data-layout-role="occupied-columns"]'
+        )).map(rect),
+      };
+    });
+    await expect(layout).toHaveAttribute('data-text-editing', 'false');
+    const idlePaintedGeometry = await readPaintedGeometry();
+    const firstParagraph = page.locator(
+      '[data-layout-role="explicit-text-column"] p:visible'
+    ).first();
+    await firstParagraph.click();
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    await expect(layout).toHaveAttribute('data-document-drop-cap', 'true');
+    const activePaintedGeometry = await readPaintedGeometry();
+    expect(activePaintedGeometry.columns).toHaveLength(idlePaintedGeometry.columns.length);
+    expect(activePaintedGeometry.images).toHaveLength(idlePaintedGeometry.images.length);
+    for (const [index, idleRect] of idlePaintedGeometry.columns.entries()) {
+      const activeRect = activePaintedGeometry.columns[index];
+      expect(Math.abs(activeRect.left - idleRect.left)).toBeLessThan(1);
+      expect(Math.abs(activeRect.top - idleRect.top)).toBeLessThan(1);
+      expect(Math.abs(activeRect.width - idleRect.width)).toBeLessThan(1);
+      expect(Math.abs(activeRect.height - idleRect.height)).toBeLessThan(1);
+    }
+    for (const [index, idleRect] of idlePaintedGeometry.images.entries()) {
+      const activeRect = activePaintedGeometry.images[index];
+      expect(Math.abs(activeRect.left - idleRect.left)).toBeLessThan(1);
+      expect(Math.abs(activeRect.top - idleRect.top)).toBeLessThan(1);
+      expect(Math.abs(activeRect.width - idleRect.width)).toBeLessThan(1);
+      expect(Math.abs(activeRect.height - idleRect.height)).toBeLessThan(1);
+    }
+
+    const diagnostics = await layout.evaluate((root) => {
+      const raw = root.getAttribute('data-active-edit-viewport-diagnostics');
+      if (!raw) throw new Error('Active viewport diagnostics are missing.');
+      return JSON.parse(raw) as {
+        finalLiveRangeClientRect: {
+          left: number;
+          top: number;
+          right: number;
+          bottom: number;
+        } | null;
+        canonicalFragmentClientRect: {
+          left: number;
+          top: number;
+          right: number;
+          bottom: number;
+        } | null;
+      };
+    });
+    expect(diagnostics.finalLiveRangeClientRect).not.toBeNull();
+    expect(diagnostics.canonicalFragmentClientRect).not.toBeNull();
+    expect(Math.abs(
+      diagnostics.finalLiveRangeClientRect!.left
+      - diagnostics.canonicalFragmentClientRect!.left
+    )).toBeLessThan(3);
+    expect(Math.abs(
+      diagnostics.finalLiveRangeClientRect!.top
+      - diagnostics.canonicalFragmentClientRect!.top
+    )).toBeLessThan(3);
+    expect(Math.abs(
+      diagnostics.finalLiveRangeClientRect!.right
+      - diagnostics.canonicalFragmentClientRect!.right
+    )).toBeLessThan(3);
+    expect(Math.abs(
+      diagnostics.finalLiveRangeClientRect!.bottom
+      - diagnostics.canonicalFragmentClientRect!.bottom
+    )).toBeLessThan(5);
+
+    const activeFragments = layout.locator(
+      '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
+    );
+    await expect(activeFragments).toHaveCount(1);
+    await expect(activeFragments).toHaveCSS('color', 'rgba(0, 0, 0, 0)');
+    expect(await activeFragments.evaluate((element) => (
+      getComputedStyle(element, '::first-letter').color
+    ))).toBe('rgba(0, 0, 0, 0)');
+    await expect(page.locator(
+      '.document-flow-editor__active-fragment-viewport'
+    )).toHaveCSS('overflow', 'hidden');
+    await expect(page.getByTestId('document-page')).toHaveScreenshot(
+      'historical-page-49-active-first-drop-cap.png',
+      { animations: 'disabled', caret: 'hide', scale: 'css' }
+    );
+  });
 });
