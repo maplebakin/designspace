@@ -187,6 +187,124 @@ const getVisibleTextSpan = async (
   };
 }, region);
 
+const getVisibleTextCharacterPoint = async (
+  page: Page,
+  column: number,
+  characterOffset: number
+): Promise<VisibleTextPoint> => page.locator(
+  `[data-document-span-layout] [data-document-region-id][data-column="${column}"]`
+).evaluateAll((regions, requestedOffset) => {
+  for (const region of regions) {
+    const walker = document.createTreeWalker(region, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const text = node.textContent || '';
+      if (text.trim().length > 0) {
+        const sourceElement = (node.parentElement || region).closest<HTMLElement>(
+          '[data-document-from][data-document-to]'
+        );
+        if (!sourceElement) {
+          node = walker.nextNode();
+          continue;
+        }
+        const sourceFrom = Number(sourceElement.dataset.documentFrom);
+        const fragmentId = sourceElement.dataset.documentFragmentId;
+        if (!fragmentId) {
+          node = walker.nextNode();
+          continue;
+        }
+        const offset = Math.max(
+          0,
+          Math.min(text.length - 1, requestedOffset)
+        );
+        const sourceOffsetRange = document.createRange();
+        sourceOffsetRange.selectNodeContents(sourceElement);
+        sourceOffsetRange.setEnd(node, 0);
+        const sourceTextOffset = sourceOffsetRange.toString().length;
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const rect = range.getClientRects()[0] || range.getBoundingClientRect();
+        if (rect.width || rect.height) {
+          return {
+            x: rect.left + 1,
+            y: rect.top + rect.height / 2,
+            expectedPosition: sourceFrom + sourceTextOffset + offset,
+            text,
+            fragmentId,
+          };
+        }
+      }
+      node = walker.nextNode();
+    }
+  }
+  throw new Error('No visible text character in requested column');
+}, characterOffset);
+
+const getActiveLiveTextPoint = async (
+  page: Page,
+  characterOffset: number
+): Promise<{ x: number; y: number }> => page.evaluate((requestedOffset) => {
+  const layout = document.querySelector<HTMLElement>('[data-document-span-layout]');
+  const viewport = document.querySelector<HTMLElement>(
+    '.document-flow-editor__active-fragment-viewport'
+  );
+  const block = document.querySelector<HTMLElement>(
+    '.document-flow-prosemirror > .document-active-fragment-block'
+  );
+  const activeFragmentId = layout?.dataset.activeEditFragmentId;
+  const activeFragment = activeFragmentId
+    ? Array.from(document.querySelectorAll<HTMLElement>(
+      '[data-document-span-layout] [data-document-fragment-id]'
+    )).find((candidate) => candidate.dataset.documentFragmentId === activeFragmentId)
+    : null;
+  if (!viewport || !block || !activeFragment) {
+    throw new Error('Active live viewport is unavailable');
+  }
+  const viewportRect = viewport.getBoundingClientRect();
+  const activeFrom = Number(activeFragment.dataset.documentFrom);
+  const blockFrom = Number(activeFragment.dataset.documentBlockFrom);
+  const targetOffset = Math.max(0, activeFrom - blockFrom + requestedOffset);
+  const targetEndOffset = targetOffset + Math.max(
+    1,
+    Number(activeFragment.dataset.documentTo) - activeFrom
+  );
+  let textOffset = 0;
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const text = node.textContent || '';
+    const nodeStart = textOffset;
+    const nodeEnd = nodeStart + text.length;
+    const visibleStart = Math.max(nodeStart, targetOffset);
+    const visibleEnd = Math.min(nodeEnd, targetEndOffset);
+    for (let offset = visibleStart; offset < visibleEnd; offset += 1) {
+      const localOffset = offset - nodeStart;
+      const range = document.createRange();
+      range.setStart(node, localOffset);
+      range.setEnd(node, localOffset + 1);
+      const rect = range.getClientRects()[0] || range.getBoundingClientRect();
+      if (
+        rect.width > 0
+        && rect.height > 0
+        && rect.right > viewportRect.left
+        && rect.left < viewportRect.right
+        && rect.bottom > viewportRect.top
+        && rect.top < viewportRect.bottom
+      ) {
+        const x = Math.max(viewportRect.left + 1, rect.left + rect.width / 2);
+        const y = Math.max(viewportRect.top + 1, rect.top + rect.height / 2);
+        if (document.elementFromPoint(x, y)?.closest('.document-flow-prosemirror')) {
+          return { x, y };
+        }
+      }
+    }
+    textOffset = nodeEnd;
+    node = walker.nextNode();
+  }
+  throw new Error('Requested active-fragment text is not visible inside the viewport');
+}, characterOffset);
+
 const setZoomNear = async (page: Page, targetPercent: number) => {
   const controls = page.getByTestId('document-zoom-controls');
   for (let attempt = 0; attempt < 24; attempt += 1) {
@@ -442,6 +560,166 @@ test.describe('structured text hit testing', () => {
     expect(afterEnter.sourceVisibleChildren.length).toBeGreaterThan(0);
   });
 
+  test('hands active-fragment clicks and native selection to ProseMirror', async ({ page }) => {
+    test.slow();
+    await loadHistoricalFixture(page);
+    const layout = page.locator('[data-document-span-layout]');
+    const body = page.locator('.document-flow-prosemirror');
+    const firstClick = await getVisibleTextCharacterPoint(page, 1, 0);
+    const secondClick = await getVisibleTextCharacterPoint(page, 1, 8);
+
+    await page.mouse.click(firstClick.x, firstClick.y);
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).toBe(firstClick.expectedPosition);
+
+    // The active viewport is now the native event target. No canonical
+    // fragment resolver should rewrite this second caret position.
+    expect(await page.evaluate(({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      return {
+        live: target?.closest('.document-flow-prosemirror') !== null,
+        canonical: target?.closest('[data-document-span-layout]') !== null,
+      };
+    }, secondClick)).toEqual({ live: true, canonical: false });
+    await page.mouse.click(secondClick.x, secondClick.y);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).toBe(secondClick.expectedPosition);
+    await expect(layout).toHaveAttribute('data-document-selection-kind', 'text');
+    expect(await page.evaluate(() => {
+      const selection = window.getSelection();
+      return {
+        collapsed: Boolean(selection?.isCollapsed),
+        text: selection?.toString() || '',
+      };
+    })).toEqual({ collapsed: true, text: '' });
+    const directCaretRect = await page.evaluate(() => {
+      const selection = window.getSelection();
+      const range = selection && selection.rangeCount > 0
+        ? selection.getRangeAt(0).getBoundingClientRect()
+        : null;
+      return range && { left: range.left, top: range.top };
+    });
+    expect(directCaretRect).not.toBeNull();
+    expect(Math.abs(directCaretRect!.left - secondClick.x)).toBeLessThan(16);
+    expect(Math.abs(directCaretRect!.top - secondClick.y)).toBeLessThan(16);
+
+    // A frozen continuation is still routed by the canonical compositor.
+    const frozenContinuation = await getVisibleTextCharacterPoint(page, 3, 4);
+    const viewportBeforeSwitch = await page.locator(
+      '.document-flow-editor__active-fragment-viewport'
+    ).boundingBox();
+    expect(viewportBeforeSwitch).not.toBeNull();
+    expect(await page.evaluate(({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      return {
+        live: target?.closest('.document-flow-prosemirror') !== null,
+        canonical: target?.closest('[data-document-span-layout]') !== null,
+      };
+    }, frozenContinuation)).toEqual({ live: false, canonical: true });
+    await page.mouse.click(frozenContinuation.x, frozenContinuation.y);
+    await expect.poll(async () => layout.getAttribute(
+      'data-active-edit-fragment-id'
+    )).toBe(frozenContinuation.fragmentId);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).toBe(frozenContinuation.expectedPosition);
+
+    await expect.poll(async () => {
+      const viewport = await page.locator(
+        '.document-flow-editor__active-fragment-viewport'
+      ).boundingBox();
+      if (!viewport || !viewportBeforeSwitch) return 0;
+      return Math.max(
+        Math.abs(viewport.x - viewportBeforeSwitch.x),
+        Math.abs(viewport.y - viewportBeforeSwitch.y),
+        Math.abs(viewport.width - viewportBeforeSwitch.width),
+        Math.abs(viewport.height - viewportBeforeSwitch.height)
+      );
+    }).toBeGreaterThan(20);
+    await expect.poll(async () => {
+      const viewport = await page.locator(
+        '.document-flow-editor__active-fragment-viewport'
+      ).boundingBox();
+      const canonical = await layout.evaluate((root, fragmentId) => {
+        const element = Array.from(root.querySelectorAll<HTMLElement>(
+          '[data-document-fragment-id]'
+        )).find((candidate) => (
+          candidate.dataset.documentFragmentId === fragmentId
+        ));
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        };
+      }, frozenContinuation.fragmentId);
+      if (!viewport || !canonical) return Number.POSITIVE_INFINITY;
+      return Math.max(
+        Math.abs(viewport.x - canonical.x),
+        Math.abs(viewport.y - canonical.y),
+        Math.abs(viewport.width - canonical.width),
+        Math.abs(viewport.height - canonical.height)
+      );
+    }).toBeLessThan(10);
+    const nativeContinuationClick = await getActiveLiveTextPoint(page, 8);
+    await page.mouse.click(nativeContinuationClick.x, nativeContinuationClick.y);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).not.toBe(frozenContinuation.expectedPosition);
+    const continuationCaretRect = await page.evaluate(() => {
+      const selection = window.getSelection();
+      const range = selection && selection.rangeCount > 0
+        ? selection.getRangeAt(0).getBoundingClientRect()
+        : null;
+      return range && { left: range.left, top: range.top };
+    });
+    expect(continuationCaretRect).not.toBeNull();
+    expect(Math.abs(continuationCaretRect!.left - nativeContinuationClick.x))
+      .toBeLessThan(20);
+    expect(Math.abs(continuationCaretRect!.top - nativeContinuationClick.y))
+      .toBeLessThan(20);
+
+    await page.keyboard.type('abc');
+    await expect(body).toContainText('abc');
+    const earlierContinuation = await getActiveLiveTextPoint(page, 0);
+    const afterTypingPosition = Number(
+      await layout.getAttribute('data-document-selection-from')
+    );
+    await page.mouse.click(earlierContinuation.x, earlierContinuation.y);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-from')
+    )).not.toBe(afterTypingPosition);
+    await page.keyboard.type('XYZ');
+    await expect(body).toContainText('XYZ');
+
+    const doubleClickPoint = await getActiveLiveTextPoint(page, 1);
+    await page.mouse.dblclick(doubleClickPoint.x, doubleClickPoint.y);
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-to')
+    )).toBeGreaterThan(Number(
+      await layout.getAttribute('data-document-selection-from')
+    ));
+    expect(await layout.getAttribute('data-document-selection-text')).not.toBe('');
+
+    const dragStart = await getActiveLiveTextPoint(page, 0);
+    const dragEnd = await getActiveLiveTextPoint(page, 8);
+    await page.mouse.move(dragStart.x, dragStart.y);
+    await page.mouse.down();
+    await page.mouse.move(dragEnd.x, dragEnd.y);
+    await page.mouse.up();
+    await expect.poll(async () => Number(
+      await layout.getAttribute('data-document-selection-to')
+    )).toBeGreaterThan(Number(
+      await layout.getAttribute('data-document-selection-from')
+    ));
+    expect(await layout.getAttribute('data-document-selection-text')).not.toBe('');
+  });
+
   test('maps drags, copy, caret, and highlights across wrapped columns at zoom levels', async ({ page }) => {
     test.slow();
     test.setTimeout(180_000);
@@ -468,8 +746,15 @@ test.describe('structured text hit testing', () => {
         'data-document-selection-text'
       )).toBe(columnThreeSpan.expectedText);
       await expect(page.locator(
+        '.document-flow-editor__active-fragment-viewport'
+      )).toHaveCSS('pointer-events', 'auto');
+      await expect(page.locator(
         '.document-flow-editor__content--structured-text-editing'
-      )).toHaveCSS('pointer-events', 'none');
+      )).toHaveCSS('pointer-events', 'auto');
+      await expect(page.locator(
+        '.document-flow-editor__content--structured-text-editing '
+        + '.document-flow-prosemirror'
+      )).toHaveCSS('pointer-events', 'auto');
       expect(Number(await layout.getAttribute('data-document-selection-from')))
         .toBe(columnThreeSpan.start.expectedPosition);
       expect(Number(await layout.getAttribute('data-document-selection-to')))
@@ -499,15 +784,36 @@ test.describe('structured text hit testing', () => {
       await page.mouse.click(caretPoint.x, caretPoint.y);
       const nativeCaret = await page.evaluate(() => {
         const selection = window.getSelection();
+        const range = selection && selection.rangeCount > 0
+          ? selection.getRangeAt(0).getBoundingClientRect()
+          : null;
         return {
           collapsed: Boolean(selection?.isCollapsed),
           text: selection?.toString() || '',
+          rect: range && {
+            left: range.left,
+            top: range.top,
+            right: range.right,
+            bottom: range.bottom,
+          },
         };
       });
       expect(nativeCaret.collapsed).toBe(true);
       expect(nativeCaret.text).toBe('');
-      expect(Number(await layout.getAttribute('data-document-selection-from')))
-        .toBe(caretPoint.expectedPosition);
+      const viewportBox = await page.locator(
+        '.document-flow-editor__active-fragment-viewport'
+      ).boundingBox();
+      expect(viewportBox).not.toBeNull();
+      expect(nativeCaret.rect).not.toBeNull();
+      const caretTolerance = 8;
+      expect(nativeCaret.rect!.left).toBeGreaterThanOrEqual(viewportBox!.x - caretTolerance);
+      expect(nativeCaret.rect!.right).toBeLessThanOrEqual(
+        viewportBox!.x + viewportBox!.width + caretTolerance
+      );
+      expect(nativeCaret.rect!.top).toBeGreaterThanOrEqual(viewportBox!.y - caretTolerance);
+      expect(nativeCaret.rect!.bottom).toBeLessThanOrEqual(
+        viewportBox!.y + viewportBox!.height + caretTolerance
+      );
 
       const exclusionsBeforeImageClick = await layout.getAttribute(
         'data-layout-exclusions'

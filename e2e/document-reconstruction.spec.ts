@@ -798,11 +798,14 @@ test.describe('document reconstruction MVP', () => {
       + '.document-flow-prosemirror'
     );
     await expect(sourceBody).toBeVisible();
-    // Structured text regions own hit-testing; the transparent ProseMirror
-    // source remains a keyboard/input layer and must not intercept clicks.
+    // The bounded active viewport owns native text hit-testing; only the
+    // canonical structured regions outside it remain the proxy surface.
+    await expect(page.locator(
+      '.document-flow-editor__active-fragment-viewport'
+    )).toHaveCSS('pointer-events', 'auto');
     await expect(page.locator(
       '.document-flow-editor__content--structured-text-editing'
-    )).toHaveCSS('pointer-events', 'none');
+    )).toHaveCSS('pointer-events', 'auto');
     await columnOne.locator('p').first().click();
     await expect(page.getByTestId('document-image-inspector')).toHaveCount(0);
     await expect(imageSlot).toBeVisible();

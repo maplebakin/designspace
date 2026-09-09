@@ -1445,7 +1445,12 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
-  pointer-events: none;
+  clip-path: inset(0);
+  /* This element is sized to the one active structured fragment by the
+     viewport synchronizer. It is the only native pointer target while the
+     rest of the page remains owned by the frozen compositor. */
+  z-index: 5;
+  pointer-events: auto;
 }
 
 .document-flow-editor[data-document-presentation-state="structured-text-editing"]
@@ -1453,7 +1458,7 @@
   .document-flow-editor__content {
   position: absolute;
   inset: 0;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .document-flow-editor__content--structured-text-editing
@@ -1464,7 +1469,7 @@
   color: #1f1c18;
   caret-color: #3f51b5;
   text-shadow: none;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 /*
