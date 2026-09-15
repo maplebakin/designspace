@@ -8,6 +8,12 @@ import {
   prepareStartupStorage,
 } from '../src/editor/persistence/startupStorageRecovery';
 
+const migrationMocks = vi.hoisted(() => ({
+  migrateFromLocalStorage: vi.fn(),
+}));
+
+vi.mock('../src/editor/services/templateService', () => migrationMocks);
+
 const setStorageEstimate = (usage: number) => {
   Object.defineProperty(window.navigator, 'storage', {
     configurable: true,
@@ -76,5 +82,22 @@ describe('startup persistence recovery', () => {
     expect(status.indexedDbBlocked).toBe(false);
     expect(status.reason).toBe('healthy');
     expect(window.localStorage.getItem(STORAGE_RECOVERY_MARKER_KEY)).toBeNull();
+  });
+
+  it('keeps the legacy migration source and exposes a recoverable failure when migration aborts', async () => {
+    const legacy = JSON.stringify({
+      state: {
+        userTemplates: [{ name: 'Forensic template', canvasData: { objects: [] } }],
+      },
+    });
+    window.localStorage.removeItem(TEMPLATE_MIGRATION_FLAG_KEY);
+    window.localStorage.setItem('designspace-editor', legacy);
+    migrationMocks.migrateFromLocalStorage.mockRejectedValueOnce(new Error('injected migration failure'));
+
+    const status = await prepareStartupStorage();
+
+    expect(status.migrationError).toBe('injected migration failure');
+    expect(window.localStorage.getItem('designspace-editor')).toBe(legacy);
+    expect(window.localStorage.getItem(TEMPLATE_MIGRATION_FLAG_KEY)).toBeNull();
   });
 });

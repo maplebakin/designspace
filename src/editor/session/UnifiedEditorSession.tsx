@@ -75,6 +75,10 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     fitPageRef.current = fitPage;
   }, []);
 
+  const markAuthoredMutation = useCallback(() => {
+    lifecycleAuthority.markAuthoredMutation();
+  }, [lifecycleAuthority]);
+
   const sharedCommands = useMemo(() => {
     if (!commands) return null;
     return {
@@ -198,6 +202,7 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
         >
           <LegacyRenderer
             onSelectionEvent={handleSelectionEvent}
+            onAuthoredMutation={markAuthoredMutation}
             changeCoordinator={changeCoordinator}
             useSharedChrome
             onRegisterFitPage={registerFitPage}

@@ -36,11 +36,13 @@ type CanvasNavKey = 'insert' | 'layers';
 
 type CanvasStageProps = {
   onSelectNav?: (nav: CanvasNavKey) => void;
+  onAuthoredMutation?: () => void;
   onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
 };
 
 export const CanvasStage: React.FC<CanvasStageProps> = ({
   onSelectNav: _onSelectNav,
+  onAuthoredMutation,
   onCommittedMutation,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -139,6 +141,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   const cancelScheduledViewportRef = useRef<(() => void) | null>(null);
   const pendingUpdateCanvasRef = useRef<fabric.Canvas | null>(null);
   const lifecycleQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const layerSyncGenerationRef = useRef(0);
   const persistCountRef = useRef(0); // PHASE 2.3: Counter-based persistence
   const activeToolRef = useRef(activeTool);
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
@@ -457,6 +460,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   const forceRerenderCanvas = useCallback(() => {
     if (!fabricCanvas) return;
+    const requestGeneration = ++layerSyncGenerationRef.current;
+    const sessionIdentity = useEditorStore.getState().sessionIdentity;
     const background = fabricCanvas.backgroundColor;
     const backgroundImage = fabricCanvas.backgroundImage;
     fabricCanvas.discardActiveObject();
@@ -470,7 +475,18 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     if (backgroundImage) {
       fabricCanvas.backgroundImage = backgroundImage;
     }
-    void syncCanvasLayers(canvasObjects, fabricCanvas, { selectedObjectId }).then(({ layersById: nextLayersById }) => {
+    void syncCanvasLayers(canvasObjects, fabricCanvas, {
+      selectedObjectId,
+      isCurrent: () => {
+        const current = useEditorStore.getState();
+        return current.canvas === fabricCanvas
+          && current.canvasReadyState === 'ready'
+          && current.sessionIdentity === sessionIdentity
+          && layerSyncGenerationRef.current === requestGeneration;
+      },
+    }).then((result) => {
+      if (!result || layerSyncGenerationRef.current !== requestGeneration) return;
+      const { layersById: nextLayersById } = result;
       useEditorStore.setState({ layersById: nextLayersById });
       const { selectedLayerIds, selectObjectsByIds, clearSelection } = useEditorStore.getState();
       if (selectedLayerIds.length > 0) {
@@ -741,7 +757,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   const trackPromise = <T,>(promise: Promise<T>, abortSignal?: AbortSignal) => {
     pendingPromisesRef.current.add(promise);
-    promise.finally(() => pendingPromisesRef.current.delete(promise));
+    // Do not create an unhandled rejecting `finally` branch for an operation
+    // whose rejection is intentionally owned by its caller/abort cleanup.
+    void promise.then(
+      () => pendingPromisesRef.current.delete(promise),
+      () => pendingPromisesRef.current.delete(promise),
+    );
 
     // If aborted, return a rejected promise immediately
     if (abortSignal?.aborted) {
@@ -788,13 +809,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
     // Register layer sync handler BEFORE setting canvas in store.
     setLayerSyncHandler(() => {
+      const requestGeneration = ++layerSyncGenerationRef.current;
       frameScheduler.scheduleTask(() => {
         const state = useEditorStore.getState();
+        const sessionIdentity = state.sessionIdentity;
         const pendingSelectionIds = getPendingInsertionCandidateIds() ?? getPendingLayerSyncSelectionIds();
         const requestedSelectionIds = [...(pendingSelectionIds ?? state.pendingLayerSyncSelectionIds ?? state.selectedLayerIds)];
         void syncCanvasLayers(state.canvasObjects, canvas, {
           selectedObjectId: state.selectedObjectId,
-        }).then(({ layersById: nextLayersById, selectOnInsertIds }) => {
+          isCurrent: () => {
+            const current = useEditorStore.getState();
+            return current.canvas === canvas
+              && current.canvasReadyState === 'ready'
+              && current.sessionIdentity === sessionIdentity
+              && layerSyncGenerationRef.current === requestGeneration;
+          },
+        }).then((result) => {
+          if (!result || layerSyncGenerationRef.current !== requestGeneration) return;
+          const { layersById: nextLayersById, selectOnInsertIds } = result;
           const resolvedSelectionIds = selectOnInsertIds.length > 0 ? selectOnInsertIds : requestedSelectionIds;
           const strippedCanvasObjects = selectOnInsertIds.length > 0
             ? useEditorStore.getState().canvasObjects.map((object) => {
@@ -832,6 +864,10 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       callbacks: {
         onUpdate: scheduleUpdate,
         onHistoryDirty: markHistoryDirty,
+        onAuthoredMutation: () => {
+          useEditorStore.getState().markProjectDirty();
+          onAuthoredMutation?.();
+        },
         onCommittedMutation,
         onSelectedObjectId: setSelectedObjectId,
         onSelectedLayerIds: setSelectedLayerIds,
@@ -854,6 +890,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
     // Return cleanup function that will be called by the lifecycle hook
     return () => {
+      // Invalidate any async layer revival that has not reached its completion
+      // callback before this canvas/listener generation is disposed.
+      layerSyncGenerationRef.current += 1;
       // Clean up pending promises
       const pendingPromises = Array.from(pendingPromisesRef.current);
       pendingPromises.forEach((promise) => {

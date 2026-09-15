@@ -11,9 +11,10 @@ import {
   type FileBatchDeliveryResult,
   type FileDeliveryResult,
 } from '../services/fileDeliveryService';
-import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { loadCanvasFromJsonSafely, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
 import type { ProjectPage } from '../state/editorStore';
+import { serializeCanvasObjects } from '../utils/serialization';
 
 export type AdvancedExportFormat = 'png' | 'jpeg' | 'svg' | 'pdf';
 
@@ -41,6 +42,13 @@ export type ExportedPageBlob = {
   pageNumber: number;
   fileName: string;
   blob: Blob;
+};
+
+type ExportSceneSnapshot = {
+  objects: any[];
+  width: number;
+  height: number;
+  backgroundColor: string | null;
 };
 
 const normalizeDpi = (value: number | undefined, fallback: number) =>
@@ -73,6 +81,14 @@ const waitForDocumentFonts = async () => {
   await document.fonts.ready;
 };
 
+/** Capture authored scene data before export awaits fonts or image revival. */
+const captureExportScene = (canvas: fabric.Canvas): ExportSceneSnapshot => ({
+  objects: serializeCanvasObjects(canvas),
+  width: Math.max(1, Math.round(canvas.getWidth())),
+  height: Math.max(1, Math.round(canvas.getHeight())),
+  backgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+});
+
 export class AdvancedExportManager {
   async export(
     canvas: fabric.Canvas,
@@ -81,9 +97,10 @@ export class AdvancedExportManager {
   ): Promise<FileDeliveryResult> {
     pluginManager.emitHook('onExport', { format, options });
     const fileName = sanitizeExportBaseName(options.fileName);
+    const scene = captureExportScene(canvas);
 
     if (format === 'png') {
-      const blob = await this.exportPng(canvas, options);
+      const blob = await this.exportPng(canvas, options, scene);
       return deliverFile({
         content: blob,
         fileName: `${fileName}.png`,
@@ -94,7 +111,7 @@ export class AdvancedExportManager {
     }
 
     if (format === 'jpeg') {
-      const blob = await this.exportJpeg(canvas, options);
+      const blob = await this.exportJpeg(canvas, options, scene);
       return deliverFile({
         content: blob,
         fileName: `${fileName}.jpeg`,
@@ -105,8 +122,7 @@ export class AdvancedExportManager {
     }
 
     if (format === 'svg') {
-      await waitForDocumentFonts();
-      const blob = this.exportSvg(canvas, options);
+      const blob = await this.exportSnapshotSvg(scene, options);
       return deliverFile({
         content: blob,
         fileName: `${fileName}.svg`,
@@ -116,7 +132,7 @@ export class AdvancedExportManager {
       });
     }
 
-    const blob = await this.exportPdf(canvas, options);
+    const blob = await this.exportPdf(canvas, options, scene);
     return deliverFile({
       content: blob,
       fileName: `${fileName}.pdf`,
@@ -126,28 +142,62 @@ export class AdvancedExportManager {
     });
   }
 
-  async exportPng(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
-    await waitForDocumentFonts();
-    const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
-    const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
-    return renderCanvasToPngBlob(canvas, {
-      scale: scaleFactor,
-      includeBackground: options.includeBackground ?? true,
-      backgroundColor: background,
-    });
+  async exportPng(
+    canvas: fabric.Canvas,
+    options: AdvancedExportOptions = {},
+    scene?: ExportSceneSnapshot,
+  ): Promise<Blob> {
+    return this.exportSnapshotPng(scene ?? captureExportScene(canvas), options);
   }
 
-  async exportJpeg(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
+  private async exportSnapshotPng(
+    scene: ExportSceneSnapshot,
+    options: AdvancedExportOptions = {},
+  ): Promise<Blob> {
     await waitForDocumentFonts();
-    const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
-    const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null) ?? '#ffffff';
-    return renderCanvasToPngBlob(canvas, {
-      scale: scaleFactor,
-      includeBackground: true,
-      backgroundColor: background,
-      format: 'jpeg',
-      quality: options.quality ?? 0.92,
-    });
+    const { canvas, element } = await this.createSnapshotCanvas(scene);
+    try {
+      const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
+      const background = options.backgroundColor ?? scene.backgroundColor;
+      return await renderCanvasToPngBlob(canvas, {
+        scale: scaleFactor,
+        includeBackground: options.includeBackground ?? true,
+        backgroundColor: background,
+      });
+    } finally {
+      canvas.dispose();
+      element.remove();
+    }
+  }
+
+  async exportJpeg(
+    canvas: fabric.Canvas,
+    options: AdvancedExportOptions = {},
+    scene?: ExportSceneSnapshot,
+  ): Promise<Blob> {
+    return this.exportSnapshotJpeg(scene ?? captureExportScene(canvas), options);
+  }
+
+  private async exportSnapshotJpeg(
+    scene: ExportSceneSnapshot,
+    options: AdvancedExportOptions = {},
+  ): Promise<Blob> {
+    await waitForDocumentFonts();
+    const { canvas, element } = await this.createSnapshotCanvas(scene);
+    try {
+      const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
+      const background = options.backgroundColor ?? scene.backgroundColor ?? '#ffffff';
+      return await renderCanvasToPngBlob(canvas, {
+        scale: scaleFactor,
+        includeBackground: true,
+        backgroundColor: background,
+        format: 'jpeg',
+        quality: options.quality ?? 0.92,
+      });
+    } finally {
+      canvas.dispose();
+      element.remove();
+    }
   }
 
   exportSvg(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Blob {
@@ -162,12 +212,17 @@ export class AdvancedExportManager {
     return new Blob([svg], { type: 'image/svg+xml' });
   }
 
-  async exportPdf(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Promise<Blob> {
-    const blob = await this.exportPng(canvas, options);
+  async exportPdf(
+    canvas: fabric.Canvas,
+    options: AdvancedExportOptions = {},
+    scene?: ExportSceneSnapshot,
+  ): Promise<Blob> {
+    const captured = scene ?? captureExportScene(canvas);
+    const blob = await this.exportSnapshotPng(captured, options);
     const imageUrl = URL.createObjectURL(blob);
     const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
-    const pageWidth = options.pageSize?.width ?? documentWidth;
-    const pageHeight = options.pageSize?.height ?? documentHeight;
+    const pageWidth = options.pageSize?.width ?? captured.width ?? documentWidth;
+    const pageHeight = options.pageSize?.height ?? captured.height ?? documentHeight;
     const { width: widthInches, height: heightInches } = calculatePdfPageSizeInches(
       pageWidth,
       pageHeight,
@@ -188,6 +243,48 @@ export class AdvancedExportManager {
       return pdfBlob;
     } finally {
       URL.revokeObjectURL(imageUrl);
+    }
+  }
+
+  private async createSnapshotCanvas(scene: ExportSceneSnapshot) {
+    const element = document.createElement('canvas');
+    const canvas = new fabric.Canvas(element, {
+      width: scene.width,
+      height: scene.height,
+      enableRetinaScaling: false,
+      renderOnAddRemove: false,
+    });
+    try {
+      await loadCanvasFromJsonSafely(canvas, {
+        objects: scene.objects,
+        background: scene.backgroundColor,
+      }, reviveCustomFabricProps);
+      canvas.setDimensions({ width: scene.width, height: scene.height });
+      canvas.backgroundColor = scene.backgroundColor ?? 'transparent';
+      canvas.renderAll();
+      return { canvas, element };
+    } catch (error) {
+      canvas.dispose();
+      element.remove();
+      throw error;
+    }
+  }
+
+  private async exportSnapshotSvg(
+    scene: ExportSceneSnapshot,
+    options: AdvancedExportOptions = {},
+  ): Promise<Blob> {
+    await waitForDocumentFonts();
+    const { canvas, element } = await this.createSnapshotCanvas(scene);
+    try {
+      return this.exportSvg(canvas, {
+        ...options,
+        backgroundColor: options.backgroundColor ?? scene.backgroundColor,
+        pageSize: options.pageSize ?? { width: scene.width, height: scene.height },
+      });
+    } finally {
+      canvas.dispose();
+      element.remove();
     }
   }
 

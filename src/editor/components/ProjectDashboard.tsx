@@ -12,12 +12,14 @@ import {
 import { useDocumentStore } from '../../document/state/documentStore';
 import { getStartupStorageStatus } from '../persistence/startupStorageRecovery';
 import { RecoveryWorkspace } from '../recovery/RecoveryWorkspace';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 interface ProjectItem {
   id: string;
   name: string;
   lastModified: Date;
   thumbnail?: string;
+  revision?: number;
 }
 
 const INITIAL_DISPLAY_COUNT = 5;
@@ -61,6 +63,23 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     createProject: state.createProject,
     setShowOnboarding: state.setShowOnboarding,
   }), shallow);
+  const legacyCanvasDirty = useEditorStore((state) => state.isDirty);
+  const legacyDocumentDirty = useDocumentStore((state) => state.isDirty);
+  const activeSession = useProjectSessionStore((state) => state.session);
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
+  );
+
+  const guardProjectReplacement = async () => {
+    if (prepareProjectReplacement) return prepareProjectReplacement();
+    // The dashboard can remain mounted after a close while legacy stores are
+    // still resetting.  Without an active routed session those mirrors are
+    // not an authored target that this replacement is about to destroy.
+    if (!activeSession) return true;
+    if (!legacyCanvasDirty && !legacyDocumentDirty) return true;
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') return false;
+    return window.confirm('Discard unsaved changes and open the selected project?');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +154,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     mode: EditorMode = 'canvas',
     session?: ProjectSessionDescriptor
   ) => {
+    if (!(await guardProjectReplacement())) return;
     await onProjectOpen?.(mode, session);
     if (mode === 'document') {
       await loadAction();
@@ -151,6 +171,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   const openProjectPresetsInEditor = async () => {
+    if (!(await guardProjectReplacement())) return;
     createProject({
       canvasSize: DEFAULT_CANVAS_SIZE,
       unitMode: 'in',
@@ -162,6 +183,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
   };
 
   const openBlankDocumentInEditor = async () => {
+    if (!(await guardProjectReplacement())) return;
     useDocumentStore.getState().createBlankProject();
     await onProjectOpen?.('document');
     await onOpenComplete?.();
@@ -175,9 +197,11 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
         return;
       }
       if (inspection.editorMode === 'document') {
+        if (!(await guardProjectReplacement())) return;
         useDocumentStore.getState().hydrateProject(
           inspection.payload,
-          inspection.libraryProjectId
+          inspection.libraryProjectId,
+          inspection.libraryProject.revision ?? 1,
         );
         await onProjectOpen?.('document', inspection.session);
         await onOpenComplete?.();
@@ -197,6 +221,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     try {
       const inspection = await inspectDesignSpaceProjectFile(file);
       if (inspection.editorMode === 'document') {
+        if (!(await guardProjectReplacement())) return;
         useDocumentStore.getState().hydrateProject(inspection.payload, null);
         await onProjectOpen?.('document', inspection.session);
         await onOpenComplete?.();
@@ -229,7 +254,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
     setEditDraft('');
     if (safeName === original) return;
     setAllProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, name: safeName } : p)));
-    await renameProject(projectId, safeName);
+    const revision = allProjects.find((project) => project.id === projectId)?.revision;
+    await renameProject(projectId, safeName, revision);
     if (currentLibraryProjectId === projectId) {
       setProjectName(safeName);
     }
@@ -366,7 +392,19 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({ onProjectOpe
             )}
           </div>
           <RecoveryWorkspace startupBlocked={storageStatus.indexedDbBlocked} />
-          {libraryError ? (
+          {storageStatus.migrationError ? (
+            <div
+              className="project-dashboard-empty-state rounded-2xl border border-amber-500/35 bg-amber-100/10 px-5 py-6 text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]"
+              data-testid="dashboard-migration-recovery"
+              role="alert"
+            >
+              <strong className="block text-[color:var(--ui-text)]">Template migration needs recovery</strong>
+              <span className="mt-1 block">
+                The legacy template import did not finish. Your original editor data was preserved; keep this window open and retry after resolving the storage error.
+              </span>
+              <span className="mt-2 block text-xs">Migration error: {storageStatus.migrationError}</span>
+            </div>
+          ) : libraryError ? (
             <div
               className="project-dashboard-empty-state rounded-2xl border border-amber-500/35 bg-amber-100/10 px-5 py-6 text-sm font-medium leading-6 text-[color:var(--ui-panel-text)]"
               data-testid="dashboard-library-recovery"

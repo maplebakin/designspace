@@ -67,6 +67,26 @@ const sortByUpdatedAtDesc = (records: TemplateRecord[]) =>
     return safeBTime - safeATime;
   });
 
+const buildTemplateRecord = (
+  name: string,
+  canvasData: unknown,
+  canvasSize: TemplateCanvasSize,
+  thumbnail: string | undefined,
+  options: SaveTemplateOptions,
+  now = new Date().toISOString(),
+): TemplateRecord => ({
+  name,
+  thumbnail,
+  canvasData: normalizeCanvasData(canvasData),
+  canvasSize: normalizeCanvasSize(canvasSize),
+  unitMode: options.unitMode,
+  defaultThemeId: options.defaultThemeId,
+  category: options.category,
+  tags: options.tags,
+  createdAt: toIsoTimestamp(options.createdAt, now),
+  updatedAt: toIsoTimestamp(options.updatedAt, now),
+});
+
 export const saveTemplate = async (
   name: string,
   canvasData: unknown,
@@ -74,20 +94,7 @@ export const saveTemplate = async (
   thumbnail?: string,
   options: SaveTemplateOptions = {}
 ): Promise<TemplateRecord> => {
-  const now = new Date().toISOString();
-  const record: TemplateRecord = {
-    name,
-    thumbnail,
-    canvasData: normalizeCanvasData(canvasData),
-    canvasSize: normalizeCanvasSize(canvasSize),
-    unitMode: options.unitMode,
-    defaultThemeId: options.defaultThemeId,
-    category: options.category,
-    tags: options.tags,
-    createdAt: toIsoTimestamp(options.createdAt, now),
-    updatedAt: toIsoTimestamp(options.updatedAt, now),
-  };
-
+  const record = buildTemplateRecord(name, canvasData, canvasSize, thumbnail, options);
   const db = await getDb();
   const id = await db.templates.add(record);
   return { ...record, id };
@@ -195,7 +202,7 @@ export const migrateFromLocalStorage = async (): Promise<TemplateRecord[]> => {
     ? stateCandidate.userTemplates
     : [];
 
-  const migrated: TemplateRecord[] = [];
+  const migrationRecords: TemplateRecord[] = [];
   for (let index = 0; index < userTemplates.length; index += 1) {
     const item = userTemplates[index];
     if (!isObject(item)) continue;
@@ -204,8 +211,7 @@ export const migrateFromLocalStorage = async (): Promise<TemplateRecord[]> => {
       ? item.name
       : `Migrated Template ${index + 1}`;
     const thumbnail = typeof item.thumbnail === 'string' ? item.thumbnail : undefined;
-
-    const saved = await saveTemplate(
+    migrationRecords.push(buildTemplateRecord(
       name,
       item.canvasData,
       normalizeCanvasSize(item.canvasSize),
@@ -219,11 +225,22 @@ export const migrateFromLocalStorage = async (): Promise<TemplateRecord[]> => {
           : undefined,
         createdAt: typeof item.createdAt === 'string' ? item.createdAt : undefined,
         updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : undefined,
-      }
-    );
-
-    migrated.push(saved);
+      },
+    ));
   }
+
+  // Migrate the complete batch in one transaction.  The legacy source is
+  // intentionally rewritten only after this commits, so an injected failure
+  // cannot leave a partial template batch that would be duplicated on retry.
+  const db = await getDb();
+  const migrated = await db.transaction('rw', db.templates, async () => {
+    const saved: TemplateRecord[] = [];
+    for (const record of migrationRecords) {
+      const id = await db.templates.add(record);
+      saved.push({ ...record, id: id as number });
+    }
+    return saved;
+  });
 
   const updatedPayload = removeLegacyVolatileEditorKeys(parsed);
   if (updatedPayload) {

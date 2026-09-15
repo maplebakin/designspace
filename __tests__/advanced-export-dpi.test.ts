@@ -6,6 +6,7 @@ import {
   calculatePdfPageSizeInches,
   calculateRasterExportScale,
 } from '../src/editor/export/advancedExportManager';
+import { renderCanvasToPngBlob } from '../src/editor/utils/renderToPng';
 
 const dataUrlToBlob = (dataUrl: string, mimeType: string) => {
   const encoded = dataUrl.split(',')[1] || '';
@@ -93,5 +94,37 @@ describe('advanced export DPI semantics', () => {
     expect(pageSize.width).toBeCloseTo(8.5 * 72, 4);
     expect(pageSize.height).toBeCloseTo(11 * 72, 4);
     expect(renderSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores temporary raster state before async blob conversion resumes', async () => {
+    const canvas = new StaticCanvas(null, {
+      width: 120,
+      height: 90,
+      enableRetinaScaling: false,
+      backgroundColor: '#112233',
+    });
+    canvas.setViewportTransform([2, 0, 0, 2, 10, 20]);
+
+    let resolveFetch: ((response: { blob: () => Promise<Blob> }) => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise((resolve) => {
+      resolveFetch = resolve as any;
+    }) as Promise<Response>);
+
+    const exportPromise = renderCanvasToPngBlob(canvas as any, {
+      scale: 1,
+      backgroundColor: '#abcdef',
+    });
+
+    expect(canvas.backgroundColor).toBe('#112233');
+    expect(canvas.viewportTransform).toEqual([2, 0, 0, 2, 10, 20]);
+
+    canvas.backgroundColor = '#fedcba';
+    canvas.setViewportTransform([3, 0, 0, 3, 30, 40]);
+    resolveFetch?.({ blob: async () => new Blob(['png']) });
+    await exportPromise;
+
+    expect(canvas.backgroundColor).toBe('#fedcba');
+    expect(canvas.viewportTransform).toEqual([3, 0, 0, 3, 30, 40]);
+    canvas.dispose();
   });
 });

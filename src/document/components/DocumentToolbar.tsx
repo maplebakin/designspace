@@ -109,6 +109,8 @@ type DocumentToolbarProps = {
   selectedImageGroup?: DocumentImageGroupInspectorValue | null;
   referenceAdjustMode: boolean;
   textFormatState: DocumentTextFormatState;
+  canUndo: boolean;
+  canRedo: boolean;
   onFormat: (
     command:
       | 'bold'
@@ -165,11 +167,13 @@ const numericValue = (value: string, fallback: number) => {
 const FormatButton = ({
   label,
   active,
+  disabled = false,
   onClick,
   children,
 }: {
   label: string;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) => (
@@ -178,6 +182,7 @@ const FormatButton = ({
     className={`document-context-icon-button ${active ? 'is-selected' : ''}`}
     aria-label={label}
     aria-pressed={active}
+    disabled={disabled}
     onClick={onClick}
   >
     {children}
@@ -1028,10 +1033,18 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             <strong>{props.activeTextRegion === 'title' ? 'Title' : 'Body text'}</strong>
           </div>
           <div className="document-context-button-group" aria-label="History">
-            <FormatButton label="Undo" onClick={() => props.onFormat('undo')}>
+            <FormatButton
+              label="Undo"
+              disabled={!props.canUndo}
+              onClick={() => props.onFormat('undo')}
+            >
               <Undo2 size={17} aria-hidden="true" />
             </FormatButton>
-            <FormatButton label="Redo" onClick={() => props.onFormat('redo')}>
+            <FormatButton
+              label="Redo"
+              disabled={!props.canRedo}
+              onClick={() => props.onFormat('redo')}
+            >
               <Redo2 size={17} aria-hidden="true" />
             </FormatButton>
           </div>

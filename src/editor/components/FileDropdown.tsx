@@ -4,6 +4,7 @@ import { ChevronDown, FileText } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
 import { PopoverSurface } from './PopoverSurface';
 import { inspectDesignSpaceProjectFile } from '../project/projectOpenService';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
 
@@ -32,6 +33,10 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
     }),
     shallow
   );
+  const legacyDirty = useEditorStore((state) => state.isDirty);
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
+  );
 
   const handleOpenFile = () => {
     fileInputRef.current?.click();
@@ -42,6 +47,13 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
     const file = event.target.files?.[0];
     if (!file) return;
     try {
+      if (prepareProjectReplacement) {
+        if (!(await prepareProjectReplacement())) return;
+      } else if (legacyDirty && !window.confirm(
+        'Discard unsaved changes and open the selected project file?'
+      )) {
+        return;
+      }
       const inspection = await inspectDesignSpaceProjectFile(file);
       if (inspection.editorMode === 'document') {
         setToastMessage('Open document projects from the Projects dashboard.');

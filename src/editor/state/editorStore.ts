@@ -9,6 +9,7 @@ import {
     reviveCustomFabricProps,
 } from '../fabric/initFabricCanvas';
 import { MemoryManager } from '../../utils/memoryManager';
+import { revokeTrackedBlobUrl } from '../services/assetLoader';
 import { createBoundedPersistStorage } from '../persistence/boundedPersistStorage';
 import {
     alignLeft,
@@ -22,7 +23,11 @@ import {
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
 import { resizeCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
-import { toSerializableObject } from '../utils/serialization';
+import {
+    isSerializedImageObject,
+    serializeCanvasObjects,
+    toSerializableObject,
+} from '../utils/serialization';
 import { useUiThemeStore } from './uiThemeStore';
 import { isPersistableCanvasObject, isUserObject } from '../utils/objectUtils';
 import type { ApocapaletteTheme } from '../types/apocapalette';
@@ -74,6 +79,7 @@ import {
     extractProductProjectFields,
     getDesignSpaceProjectEditorMode,
     normalizeDesignSpaceProjectPayload,
+    type EditorMode,
     type ProductAwareProjectPayload,
     type ProductProjectFields,
 } from '../project/projectSchema';
@@ -317,6 +323,8 @@ export interface SerializedFabricObject {
   ry?: number;
   points?: Array<{ x: number; y: number }>; // for polygons
   src?: string; // for images
+  /** Stable durable media identity; falls back to id for legacy scenes. */
+  assetId?: string;
   crossOrigin?: string;
   filters?: any[];
 
@@ -637,10 +645,13 @@ const collectImageObjects = (objects: fabric.Object[]) => {
 
 const replaceImageSources = (objects: any[], assets: Record<string, string>): any[] => objects.map((obj) => {
     if (!obj) return obj;
-    if (obj.type === 'image') {
+    if (isSerializedImageObject(obj)) {
         const id = typeof obj.id === 'string' && obj.id.trim().length > 0 ? obj.id : '';
-        if (id && assets[id]) {
-            return { ...obj, id, src: id };
+        const assetId = typeof obj.assetId === 'string' && obj.assetId.trim().length > 0
+            ? obj.assetId
+            : id;
+        if (assetId && assets[assetId]) {
+            return { ...obj, id, assetId, src: assetId };
         }
         return obj;
     }
@@ -728,18 +739,21 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
             failedIds.push('unknown');
             continue;
         }
+        const assetId = typeof (image as any).assetId === 'string' && (image as any).assetId.trim()
+            ? (image as any).assetId
+            : id;
         try {
             const dataUrl = await resolveImageDataUrl(image);
             if (!dataUrl) {
                 throw new Error(`Image ${id} did not return a data URL.`);
             }
-            assets[id] = dataUrl;
+            assets[assetId] = dataUrl;
         } catch (error) {
-            failedIds.push(id);
+            failedIds.push(assetId);
         }
     }
 
-    const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+    const serializedObjects = serializeCanvasObjects(canvas);
     const objectsWithAssets = replaceImageSources(serializedObjects, assets);
     return {
         canvasData: {
@@ -755,8 +769,11 @@ const collectReferencedImageAssetIds = (canvasData: unknown, target = new Set<st
     const parsed = normalizePageCanvasData(canvasData) as { objects?: any[] };
     const visit = (object: any) => {
         if (!object || typeof object !== 'object') return;
-        if (object.type === 'image' && typeof object.id === 'string' && object.id.trim()) {
-            target.add(object.id);
+        if (isSerializedImageObject(object)) {
+            const assetId = typeof object.assetId === 'string' && object.assetId.trim()
+                ? object.assetId
+                : object.id;
+            if (typeof assetId === 'string' && assetId.trim()) target.add(assetId);
         }
         if (Array.isArray(object.objects)) {
             object.objects.forEach(visit);
@@ -838,6 +855,35 @@ const buildProjectPersistenceData = async (
         assets: serializedAssets.assets,
         failedAssetIds: Array.from(new Set([
             ...activeExport.failedAssetIds,
+            ...serializedAssets.failedAssetIds,
+        ])),
+    };
+};
+
+/**
+ * Build a portable snapshot for auxiliary durable surfaces (templates and
+ * Vision Board design states).  Those records do not have a separate project
+ * asset table, so the asset bundle travels beside the scene JSON.  A blob URL
+ * is a session capability, never a portable asset value.
+ */
+export const buildPortableCanvasSnapshot = async (
+    canvas: fabric.Canvas,
+    imageAssets: Record<string, string> = {},
+) => {
+    const exported = await buildExportCanvasData(canvas);
+    const referencedIds = collectReferencedImageAssetIds(exported.canvasData);
+    const serializedAssets = await serializeProjectImageAssets(
+        { ...imageAssets, ...exported.assets },
+        referencedIds,
+    );
+    return {
+        canvasData: {
+            ...exported.canvasData,
+            objects: replaceImageSources(exported.canvasData.objects, serializedAssets.assets),
+        },
+        assets: serializedAssets.assets,
+        failedAssetIds: Array.from(new Set([
+            ...exported.failedAssetIds,
             ...serializedAssets.failedAssetIds,
         ])),
     };
@@ -971,6 +1017,57 @@ const stageCanvasDataLoad = async (canvasData: any) => {
     }
 };
 
+/**
+ * History full-checkpoint loads are staged away from the live canvas. Fabric's
+ * loadFromJSON performs its clear/add commit in the promise continuation; a
+ * session replacement can otherwise interleave there and let stale history
+ * install into a reused canvas. Objects are transferred only after the caller's
+ * scope fence still holds.
+ */
+const loadHistoryCanvasState = async (
+    canvas: fabric.Canvas,
+    canvasData: any,
+    reviver: any,
+    isCurrent: () => boolean,
+) => {
+    if (typeof document === 'undefined') {
+        await loadCanvasFromJsonSafely(canvas, canvasData, reviver);
+        return isCurrent();
+    }
+    const element = document.createElement('canvas');
+    const stagingCanvas = new fabric.StaticCanvas(element, {
+        width: Math.max(1, canvas.getWidth()),
+        height: Math.max(1, canvas.getHeight()),
+        renderOnAddRemove: false,
+    });
+    try {
+        await loadCanvasFromJsonSafely(stagingCanvas, canvasData, reviver);
+        if (!isCurrent()) return false;
+        const stagedObjects = stagingCanvas.getObjects().slice();
+        stagingCanvas.remove(...stagedObjects);
+        if (!isCurrent()) {
+            stagedObjects.forEach((object) => object.dispose());
+            return false;
+        }
+        // Replace only authored objects.  Paper, guides, and other renderer
+        // infrastructure belong to the live canvas and must not disappear
+        // merely because a history checkpoint is replayed.  Keeping them in
+        // place also means a same-size replay does not need to manufacture a
+        // second set of transient objects.
+        canvas.discardActiveObject();
+        const authoredObjects = canvas.getObjects().filter(isPersistableCanvasObject);
+        withCanvasObjectMutationSuppressed(canvas, () => {
+            authoredObjects.forEach((object) => canvas.remove(object));
+            canvas.add(...stagedObjects);
+        });
+        canvas.requestRenderAll();
+        return isCurrent();
+    } finally {
+        await Promise.resolve(stagingCanvas.dispose());
+        element.remove();
+    }
+};
+
 const buildProjectFilePayload = (
     legacyPayload: ProjectFilePayload,
     productProjectFields: ProductProjectFields | null,
@@ -1019,16 +1116,29 @@ const getPayloadActiveTheme = (payload: ProductAwareProjectPayload<ProjectPage>)
 
 const buildLayerStateFromObjects = (
     objects: fabric.Object[],
-    canvas?: fabric.Canvas | null
+    canvas?: fabric.Canvas | null,
+    serializedObjects?: SerializedFabricObject[],
 ) => {
     const nextLayers: Layer[] = [];
     const nextById: Record<string, fabric.Object> = {};
     const nextCanvasObjects: SerializedFabricObject[] = [];
 
+    const runtimeById = new Map<string, fabric.Object>();
     objects.forEach((obj) => {
-        if (!isUserObject(obj)) return;
-        ensureObjectId(obj, canvas ?? undefined);
-        const serialized = toSerializableObject(obj) as SerializedFabricObject;
+        if (isUserObject(obj)) {
+            ensureObjectId(obj, canvas ?? undefined);
+            const id = (obj as any).id;
+            if (typeof id === 'string' && id.length > 0) runtimeById.set(id, obj);
+        }
+    });
+    const sceneObjects = serializedObjects
+        ?? (canvas
+            ? serializeCanvasObjects(canvas, isUserObject) as SerializedFabricObject[]
+            : objects.filter(isUserObject).map((obj) => toSerializableObject(obj) as SerializedFabricObject));
+
+    sceneObjects.forEach((serialized) => {
+        const obj = runtimeById.get(serialized.id || '');
+        if (!obj || !isUserObject(obj)) return;
         nextCanvasObjects.push(serialized);
         const layer = buildLayerFromSerializedObject(serialized);
         if (!layer.id) return;
@@ -1141,6 +1251,8 @@ interface EditorState {
   projectName: string;
   productProjectFields: ProductProjectFields | null;
   currentLibraryProjectId: string | null;
+  /** Revision last acknowledged by the browser-library project record. */
+  currentLibraryProjectRevision: number | null;
   /** Runtime identity used to distinguish project replacement from page edits. */
   sessionIdentity: string;
   pages: ProjectPage[];
@@ -1169,6 +1281,8 @@ interface EditorState {
     isLocked: boolean;
     reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch' | null;
     queuedSync: boolean;
+    /** Stable ownership token; unlike the state object, it survives queued-sync updates. */
+    token: string | null;
   };
 
   setCanvas: (canvas: fabric.Canvas | null) => void;
@@ -1262,13 +1376,18 @@ interface EditorState {
   removeObject: (id: string, options?: { save?: boolean }) => void;
 
   // PHASE 2.2: Sync Lock Management
-  acquireSyncLock: (reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch') => void;
-  releaseSyncLock: () => void;
+  acquireSyncLock: (reason: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch') => boolean;
+  releaseSyncLock: (
+    reason?: 'init' | 'theme-apply' | 'undo' | 'redo' | 'batch',
+    token?: unknown,
+  ) => void;
 
   startBatch: () => void;
   endBatch: () => void;
   markHistoryDirty: () => void;
   consumeHistoryDirty: () => boolean;
+  /** Mark a renderer-observed authored mutation before a frame is flushed. */
+  markProjectDirty: (options?: { scheduleAutosave?: boolean }) => void;
   toggleShowGuides: () => void;
   saveState: (options?: { force?: boolean }) => void;
   triggerAutoSave: () => void;
@@ -1302,7 +1421,7 @@ interface EditorState {
   incrementAssetRef: (id: string) => void;
   decrementAssetRef: (id: string) => void;
   loadTemplate: (template: Template) => void;
-  saveCurrentAsTemplate: () => void;
+  saveCurrentAsTemplate: () => Promise<void>;
   createProject: (options?: CreateProjectOptions) => void;
   createProjectFromRecipe: (recipeId: ProductRecipeId | string) => Promise<void>;
   startNewProject: (options?: {
@@ -1358,7 +1477,7 @@ interface EditorState {
   loadProject: (projectId: string) => Promise<void>;
   deleteProject: (projectId: string) => Promise<void>;
   duplicateProject: (projectId: string, newName: string) => Promise<void>;
-  renameProject: (projectId: string, newName: string) => Promise<void>;
+  renameProject: (projectId: string, newName: string, expectedRevision?: number) => Promise<void>;
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
   setAutoSaveStatus: (status: AutoSaveStatus) => void;
@@ -1392,6 +1511,174 @@ interface EditorState {
 // Fabric mutates a shared canvas throughout loadFromJSON. Serialize page loads so
 // rapid navigation cannot leave page metadata and visible canvas content out of sync.
 let pageSwitchQueue: Promise<void> = Promise.resolve();
+// A page replacement invalidates in-flight history replay even while Fabric
+// is still reviving the destination page. The active-page index changes only
+// after that async load commits, so the generation is part of the history
+// scope rather than relying on the eventual index update.
+let pageNavigationGeneration = 0;
+// Serialize browser-library writes and fence queued work by the session that
+// captured it. A stale operation may finish its own in-flight transaction, but
+// it cannot start a queued write after the user has replaced the session.
+let canvasPersistenceWriteQueue: Promise<void> = Promise.resolve();
+// Hydration is asynchronous (JSON parsing, image revival and Fabric layout).
+// A newer project replacement invalidates older loads before they can install
+// their staged scene into the live canvas.
+let canvasLoadRequestToken = 0;
+
+type LibraryPersistenceDb = {
+    updateProject: (...args: any[]) => Promise<boolean>;
+    saveProject: (...args: any[]) => Promise<string>;
+    getAllProjects?: () => Promise<Array<{ id?: string; revision?: number }>>;
+    updateProjectIfRevision?: (...args: any[]) => Promise<{
+        status: 'saved' | 'conflict';
+        projectId: string;
+        revision?: number;
+        expectedRevision?: number;
+        actualRevision?: number;
+    }>;
+    saveProjectWithRevision?: (...args: any[]) => Promise<{
+        projectId: string;
+        revision: number;
+    }>;
+    renameProjectIfRevision?: (...args: any[]) => Promise<{
+        status: 'saved' | 'conflict';
+        projectId: string;
+        revision?: number;
+        expectedRevision?: number;
+        actualRevision?: number;
+    }>;
+};
+
+const isDurableRevisionConflict = (error: unknown): error is {
+    name: 'ProjectRevisionConflictError';
+    projectId: string;
+    expectedRevision: number;
+    actualRevision: number;
+} => {
+    if (!error || typeof error !== 'object') return false;
+    const candidate = error as Record<string, unknown>;
+    return candidate.name === 'ProjectRevisionConflictError'
+        && typeof candidate.projectId === 'string'
+        && typeof candidate.expectedRevision === 'number'
+        && typeof candidate.actualRevision === 'number';
+};
+
+const saveLibraryProject = async (
+    db: LibraryPersistenceDb,
+    name: string,
+    jsonPayload: string,
+    thumbnail: string | undefined,
+    editorMode?: EditorMode,
+): Promise<{ projectId: string; revision: number }> => {
+    if (typeof db.saveProjectWithRevision === 'function') {
+        return db.saveProjectWithRevision(name, jsonPayload, thumbnail, editorMode);
+    }
+    return {
+        projectId: editorMode
+            ? await db.saveProject(name, jsonPayload, thumbnail, editorMode)
+            : await db.saveProject(name, jsonPayload, thumbnail),
+        revision: 1,
+    };
+};
+
+const updateLibraryProject = async (
+    db: LibraryPersistenceDb,
+    projectId: string,
+    name: string,
+    jsonPayload: string,
+    thumbnail: string | undefined,
+    editorMode: EditorMode | undefined,
+    expectedRevision: number | null,
+): Promise<number | null> => {
+    if (
+        expectedRevision !== null
+        && Number.isFinite(expectedRevision)
+        && typeof db.updateProjectIfRevision === 'function'
+    ) {
+        const result = await db.updateProjectIfRevision(
+            projectId,
+            name,
+            jsonPayload,
+            thumbnail,
+            editorMode,
+            expectedRevision,
+        );
+        if (result.status === 'conflict') {
+            const error = new Error(
+                `Project ${projectId} changed in another context (expected revision ${result.expectedRevision}, found ${result.actualRevision}).`
+            ) as Error & {
+                name: 'ProjectRevisionConflictError';
+                projectId: string;
+                expectedRevision: number;
+                actualRevision: number;
+            };
+            error.name = 'ProjectRevisionConflictError';
+            error.projectId = projectId;
+            error.expectedRevision = result.expectedRevision ?? expectedRevision;
+            error.actualRevision = result.actualRevision ?? expectedRevision + 1;
+            throw error;
+        }
+        return result.revision ?? expectedRevision + 1;
+    }
+    if (editorMode) {
+        await db.updateProject(projectId, name, jsonPayload, thumbnail, editorMode);
+    } else {
+        await db.updateProject(projectId, name, jsonPayload, thumbnail);
+    }
+    return expectedRevision === null ? null : expectedRevision + 1;
+};
+
+const reserveCanvasPersistenceWrite = () => {
+    const previous = canvasPersistenceWriteQueue;
+    let releaseSlot: (() => void) | undefined;
+    let released = false;
+    const slot = new Promise<void>((resolve) => {
+        releaseSlot = resolve;
+    });
+    canvasPersistenceWriteQueue = slot;
+    const release = () => {
+        if (released) return;
+        released = true;
+        releaseSlot?.();
+    };
+    return {
+        run: async <T>(write: () => Promise<T>) => {
+            await previous;
+            try {
+                return await write();
+            } finally {
+                release();
+            }
+        },
+        cancel: release,
+    };
+};
+
+const releaseCanvasAssetResources = (assets: Record<string, string>) => {
+    Object.values(assets).forEach((source) => {
+        if (typeof source !== 'string' || !source.startsWith('blob:')) return;
+        if (!revokeTrackedBlobUrl(source)) {
+            if (typeof URL !== 'undefined') URL.revokeObjectURL?.(source);
+        }
+    });
+};
+
+const releaseDetachedCanvasAssetResources = (
+    assets: Record<string, string>,
+    retainedAssets: Record<string, string> = {},
+) => {
+    const retainedSources = new Set(Object.values(retainedAssets));
+    Object.values(assets).forEach((source) => {
+        if (
+            typeof source !== 'string'
+            || !source.startsWith('blob:')
+            || retainedSources.has(source)
+        ) return;
+        if (!revokeTrackedBlobUrl(source)) {
+            if (typeof URL !== 'undefined') URL.revokeObjectURL?.(source);
+        }
+    });
+};
 
 // --- ZUSTAND STORE IMPLEMENTATION ---
 export const useEditorStore = createWithEqualityFn<EditorState>()(
@@ -1399,10 +1686,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     (set, get) => {
         useHistoryStore.getState().setContext({
             getCanvas: () => get().canvas,
+            getScope: () => {
+                const state = get();
+                const activePage = state.pages[state.activePageIndex];
+                return `${state.sessionIdentity}:${pageNavigationGeneration}:${activePage?.id ?? state.activePageIndex}`;
+            },
             getImageAssets: () => get().imageAssets,
             setImageAssets: (imageAssets) => set({ imageAssets }),
             getAssetRefCount: () => get().assetRefCount,
             setAssetRefCount: (assetRefCount) => set({ assetRefCount }),
+            isAssetRetained: (id) => {
+                const pages = get().pages;
+                return pages.some((page) => collectReferencedImageAssetIds(page.canvasData).has(id));
+            },
             getDirtyObjectsRef: () => get().dirtyObjectsRef,
             requestLayerSync: () => get().requestLayerSync(),
             syncCanvasToStore: () => {
@@ -1413,23 +1709,105 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             clearSelection: () => get().clearSelection(),
             getBackground: () => getSerializedPageBackground(),
             setBackground: (background) => useThemeStore.getState().setCanvasBackgroundColor(background),
+            getCanvasSize: () => getDocumentCanvasSize(),
+            setCanvasSize: (size) => {
+                const currentSize = useCanvasStore.getState();
+                const sizeChanged = currentSize.width !== size.width
+                    || currentSize.height !== size.height;
+                useCanvasStore.getState().setCanvasSize(size.width, size.height);
+                set((state) => {
+                    const activePage = state.pages[state.activePageIndex];
+                    if (!activePage
+                        || (activePage.canvasSize.width === size.width
+                            && activePage.canvasSize.height === size.height)) {
+                        return state;
+                    }
+                    const pages = [...state.pages];
+                    pages[state.activePageIndex] = {
+                        ...activePage,
+                        canvasSize: { width: size.width, height: size.height },
+                    };
+                    return { pages };
+                });
+                if (sizeChanged && get().canvas) {
+                    // Reuse the production resize path without recording a
+                    // second history entry. This keeps the paper, page
+                    // border, guides, and logical canvas dimensions coherent
+                    // when a full history checkpoint is replayed.
+                    resizeCanvas(size.width, size.height, {
+                        save: false,
+                        resetViewport: false,
+                    });
+                }
+            },
             acquireSyncLock: (reason) => get().acquireSyncLock(reason),
-            releaseSyncLock: () => get().releaseSyncLock(),
+            releaseSyncLock: (reason, token) => get().releaseSyncLock(reason, token),
+            getSyncLockToken: () => get().syncLock.token,
+            isSyncLockOwned: (reason, token) => {
+                const lock = get().syncLock;
+                return lock.isLocked
+                    && lock.reason === reason
+                    && (token === undefined || token === null || lock.token === token);
+            },
+            loadCanvasState: loadHistoryCanvasState,
         });
+
+        const retainLiveCanvasImageRefs = () => {
+            const canvas = get().canvas;
+            if (!canvas) return;
+            const liveCounts = new Map<string, number>();
+            collectImageObjects(canvas.getObjects()).forEach((image) => {
+                const id = (image as any).id;
+                if (typeof id !== 'string' || id.trim().length === 0) return;
+                liveCounts.set(id, (liveCounts.get(id) ?? 0) + 1);
+            });
+            // resetHistory() has discarded every old history root. Rebuild
+            // the remaining reference counts from the current canvas rather
+            // than trying to infer which counts belonged to a live canvas
+            // that Fabric may have replaced during page/project hydration.
+            // This prevents each page switch from retaining another stale
+            // live owner while still leaving inactive-page assets available.
+            const pageAssetIds = get().pages.reduce(
+                (ids, page) => collectReferencedImageAssetIds(page.canvasData, ids),
+                new Set<string>(),
+            );
+            const retainedIds = new Set([...pageAssetIds, ...liveCounts.keys()]);
+            const currentAssets = get().imageAssets;
+            const removedAssets: Record<string, string> = {};
+            const nextAssets: Record<string, string> = {};
+            Object.entries(currentAssets).forEach(([id, source]) => {
+                if (retainedIds.has(id)) {
+                    nextAssets[id] = source;
+                } else {
+                    removedAssets[id] = source;
+                }
+            });
+            if (Object.keys(removedAssets).length > 0) {
+                releaseCanvasAssetResources(removedAssets);
+            }
+            set({ assetRefCount: liveCounts, imageAssets: nextAssets });
+        };
 
         const resetHistoryToCurrentCanvas = () => {
             const history = useHistoryStore.getState();
             history.resetHistory();
+            // Hydration intentionally suppresses object:added events. Retain
+            // one live-canvas reference before the baseline snapshot so a
+            // later delete cannot revoke an asset that the retained history
+            // still needs for Undo/Redo.
+            retainLiveCanvasImageRefs();
             history.takeSnapshot();
         };
 
-        const markProjectDirty = () => {
+        const markProjectDirty = (options: { scheduleAutosave?: boolean } = {}) => {
             set((state) => ({
                 isDirty: true,
                 changeRevision: state.changeRevision + 1,
             }));
             get().setAutoSaveStatus('dirty');
             if (
+                options.scheduleAutosave !== false
+                &&
                 get().currentLibraryProjectId
                 && get().lifecycleAuthorityMode === 'legacy'
             ) {
@@ -1518,6 +1896,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         projectName: 'Untitled Project',
         productProjectFields: null,
         currentLibraryProjectId: null,
+        currentLibraryProjectRevision: null,
         sessionIdentity: uuidv4(),
         pages: [{ id: uuidv4(), name: 'Page 1', canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE }, thumbnail: undefined }],
         activePageIndex: 0,
@@ -1545,6 +1924,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             isLocked: false,
             reason: null,
             queuedSync: false,
+            token: null,
         },
 
     setCanvas: (canvas) => {
@@ -1988,7 +2368,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const targetCanvas = canvasOverride ?? get().canvas;
         if (!targetCanvas) return;
         const objects = targetCanvas.getObjects();
-        const nextState = buildLayerStateFromObjects(objects, targetCanvas);
+        const serializedObjects = serializeCanvasObjects(targetCanvas) as SerializedFabricObject[];
+        const nextState = buildLayerStateFromObjects(objects, targetCanvas, serializedObjects);
         set({ ...nextState, layoutSuggestions: getSuggestedLayouts(nextState.canvasObjects) });
     },
     removeSelectedObject: () => {
@@ -2162,20 +2543,36 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const { syncLock } = get();
         if (syncLock.isLocked) {
             console.warn(`[Phase 2.2] Sync lock already held by "${syncLock.reason}", cannot acquire for "${reason}"`);
-            return;
+            return false;
         }
-        set({ syncLock: { isLocked: true, reason, queuedSync: false } });
+        set({ syncLock: { isLocked: true, reason, queuedSync: false, token: uuidv4() } });
+        return true;
     },
 
-    releaseSyncLock: () => {
+    releaseSyncLock: (reason, token) => {
         const { syncLock } = get();
         if (!syncLock.isLocked) {
             console.warn('[Phase 2.2] Attempted to release sync lock, but lock is not held');
             return;
         }
+        if (reason && syncLock.reason !== reason) {
+            // A stale async replay must not release a lock acquired by the
+            // replacement session after its own scope became invalid.
+            return;
+        }
+        if (
+            token !== undefined
+            && token !== null
+            && syncLock.token !== token
+        ) {
+            // A replay may have yielded while its lock was released and
+            // reacquired for another operation. Never release that newer
+            // owner's lock from the stale completion.
+            return;
+        }
 
         const hadQueuedSync = syncLock.queuedSync;
-        set({ syncLock: { isLocked: false, reason: null, queuedSync: false } });
+        set({ syncLock: { isLocked: false, reason: null, queuedSync: false, token: null } });
 
         // If sync was queued while locked, execute it now
         if (hadQueuedSync) {
@@ -2298,6 +2695,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     markHistoryDirty: () => {
         useHistoryStore.getState().markHistoryDirty();
+    },
+    markProjectDirty: (options) => {
+        markProjectDirty(options);
     },
     consumeHistoryDirty: () => {
         return useHistoryStore.getState().consumeHistoryDirty();
@@ -2502,13 +2902,51 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     renameCurrentProject: async (newName) => {
         const safeName = newName.trim() || 'Untitled Project';
         set({ projectName: safeName });
-        const { currentLibraryProjectId } = get();
+        const { currentLibraryProjectId, currentLibraryProjectRevision } = get();
         if (currentLibraryProjectId) {
             try {
                 const { db } = await import('../db');
+                if (typeof (db as LibraryPersistenceDb).renameProjectIfRevision === 'function') {
+                    const renameIfRevision = (db as LibraryPersistenceDb).renameProjectIfRevision;
+                    if (!renameIfRevision) return;
+                    let expectedRevision: number | undefined = currentLibraryProjectRevision ?? undefined;
+                    if (!Number.isFinite(expectedRevision)) {
+                        const projects = typeof (db as LibraryPersistenceDb).getAllProjects === 'function'
+                            ? await (db as LibraryPersistenceDb).getAllProjects!()
+                            : [];
+                        expectedRevision = projects.find((project) => project.id === currentLibraryProjectId)?.revision;
+                    }
+                    if (!Number.isFinite(expectedRevision) || (expectedRevision as number) < 1) {
+                        throw new Error('The project revision could not be established before renaming.');
+                    }
+                    const result = await renameIfRevision(
+                        currentLibraryProjectId,
+                        safeName,
+                        Math.trunc(expectedRevision as number),
+                    );
+                    if (result.status === 'conflict') {
+                        set({
+                            isDirty: true,
+                            autoSaveStatus: 'error',
+                            saveStatus: 'error',
+                            toastMessage: 'This project changed in another window. Reload it before renaming so neither version is lost.',
+                        });
+                        return;
+                    }
+                    set({ currentLibraryProjectRevision: result.revision ?? (expectedRevision as number) + 1 });
+                    return;
+                }
+                // Compatibility path for older injected/test bridges. The
+                // production Dexie bridge above always exposes the CAS API.
                 await db.renameProject(currentLibraryProjectId, safeName);
             } catch (error) {
                 console.error('[renameCurrentProject] Failed to persist name change:', error);
+                set({
+                    isDirty: true,
+                    autoSaveStatus: 'error',
+                    saveStatus: 'error',
+                    toastMessage: 'Could not persist the project name.',
+                });
             }
         }
     },
@@ -2516,6 +2954,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     setBrushSize: (size) => set({ brushSize: size }),
     setBrushColor: (color) => useThemeStore.getState().setBrushColor(color),
     loadTemplate: (template) => {
+        const requestToken = ++canvasLoadRequestToken;
+        const sessionIdentityAtStart = get().sessionIdentity;
         const {
             canvas,
             requestLayerSync,
@@ -2527,78 +2967,127 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         } = get();
         if (!canvas) return;
         const { brandVault, themeData } = useThemeStore.getState();
-
-        setLayers([]);
-        clearSelection();
-        withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
         const templateCanvasData = normalizePageCanvasData(template.canvasData);
-        useThemeStore.getState().setCanvasBackgroundColor(
-            typeof (templateCanvasData as any)?.background === 'string'
-                ? (templateCanvasData as any).background
-                : null
+        const templateAssets: Record<string, string> = Object.fromEntries(
+            Object.entries((templateCanvasData as any).assets ?? {})
+                .filter(([, source]) => typeof source === 'string' && source.length > 0)
+        ) as Record<string, string>;
+        const hydratedTemplateCanvasData = hydrateCanvasDataWithAssets(
+            templateCanvasData,
+            templateAssets,
         );
-
-        const nextWidth = template.canvasSize?.width;
-        const nextHeight = template.canvasSize?.height;
-        if (
-            typeof nextWidth === 'number'
-            && Number.isFinite(nextWidth)
-            && typeof nextHeight === 'number'
-            && Number.isFinite(nextHeight)
-        ) {
-            const normalizedWidth = Math.max(1, Math.round(nextWidth));
-            const normalizedHeight = Math.max(1, Math.round(nextHeight));
-            resizeCanvas(normalizedWidth, normalizedHeight, {
-                save: false,
-                skipRender: true,
-            });
-            useCanvasStore.getState().clearPendingSize();
-        }
-        if (template.unitMode) {
-            get().setUnitMode(template.unitMode);
-        }
-
         const themeToApply = template.defaultThemeId
             ? brandVault.find((brand) => brand.id === template.defaultThemeId)
             : null;
 
-        loadCanvasFromJsonSafely(canvas, templateCanvasData, reviveCustomFabricProps).then(() => {
-            canvas.backgroundColor = 'transparent';
-            resetViewCanvas();
-            sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
-            clearSelection();
-            commitCanvasMutation(canvas, {
-                syncCanvasToStore: get().syncCanvasToStore,
-                saveState: get().saveState,
-                requestLayerSync,
-            });
-            setToastMessage(`Template loaded: ${template.name}`);
+        // Validate/revive the template in a detached canvas before clearing
+        // the live scene. A failed image or malformed object must leave the
+        // current project usable, and a newer project replacement must fence
+        // every late completion from this request.
+        void (async () => {
+            try {
+                await stageCanvasDataLoad(hydratedTemplateCanvasData);
+                if (
+                    requestToken !== canvasLoadRequestToken
+                    || get().sessionIdentity !== sessionIdentityAtStart
+                    || get().canvas !== canvas
+                ) return;
 
-            if (template.defaultThemeId) {
-                if (themeToApply) {
-                    applyTheme(themeToApply.themeData, { observe: false });
-                    setToastMessage(`Applied template theme: ${themeToApply.name}`);
-                } else {
-                    setToastMessage(`Template theme not found: ${template.defaultThemeId}`);
+                setLayers([]);
+                clearSelection();
+                withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
+                useThemeStore.getState().setCanvasBackgroundColor(
+                    typeof (hydratedTemplateCanvasData as any)?.background === 'string'
+                        ? (hydratedTemplateCanvasData as any).background
+                        : null
+                );
+
+                const nextWidth = template.canvasSize?.width;
+                const nextHeight = template.canvasSize?.height;
+                if (
+                    typeof nextWidth === 'number'
+                    && Number.isFinite(nextWidth)
+                    && typeof nextHeight === 'number'
+                    && Number.isFinite(nextHeight)
+                ) {
+                    const normalizedWidth = Math.max(1, Math.round(nextWidth));
+                    const normalizedHeight = Math.max(1, Math.round(nextHeight));
+                    resizeCanvas(normalizedWidth, normalizedHeight, {
+                        save: false,
+                        skipRender: true,
+                    });
+                    useCanvasStore.getState().clearPendingSize();
+                }
+                if (template.unitMode) {
+                    get().setUnitMode(template.unitMode);
+                }
+
+                await loadCanvasFromJsonSafely(canvas, hydratedTemplateCanvasData, reviveCustomFabricProps);
+                if (
+                    requestToken !== canvasLoadRequestToken
+                    || get().sessionIdentity !== sessionIdentityAtStart
+                    || get().canvas !== canvas
+                ) return;
+                canvas.backgroundColor = 'transparent';
+                resetViewCanvas();
+                sanityCheckCanvas(canvas, themeToApply?.themeData ?? themeData);
+                clearSelection();
+                commitCanvasMutation(canvas, {
+                    syncCanvasToStore: get().syncCanvasToStore,
+                    saveState: get().saveState,
+                    requestLayerSync,
+                });
+                set((state) => ({
+                    imageAssets: {
+                        ...state.imageAssets,
+                        ...templateAssets,
+                    },
+                }));
+                setToastMessage(`Template loaded: ${template.name}`);
+
+                if (template.defaultThemeId) {
+                    if (themeToApply) {
+                        applyTheme(themeToApply.themeData, { observe: false });
+                        setToastMessage(`Applied template theme: ${themeToApply.name}`);
+                    } else {
+                        setToastMessage(`Template theme not found: ${template.defaultThemeId}`);
+                    }
+                }
+
+                observeSemanticMutation({
+                    action: 'apply-freeform-template',
+                    projectScope: true,
+                });
+            } catch (error) {
+                if (
+                    requestToken === canvasLoadRequestToken
+                    && get().sessionIdentity === sessionIdentityAtStart
+                ) {
+                    console.error('[loadTemplate] Failed to load template:', error);
+                    setToastMessage('Failed to load template. Your current project was kept intact.');
                 }
             }
-
-            observeSemanticMutation({
-                action: 'apply-freeform-template',
-                projectScope: true,
-            });
-
-            });
+        })();
     },
-    saveCurrentAsTemplate: () => {
+    saveCurrentAsTemplate: async () => {
         const { canvas, userTemplates, unitMode } = get();
         const { activeBrandCollectionId } = useThemeStore.getState();
         if (!canvas) return;
-        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+        let portable: Awaited<ReturnType<typeof buildPortableCanvasSnapshot>>;
+        try {
+            portable = await buildPortableCanvasSnapshot(canvas, get().imageAssets);
+        } catch (error) {
+            set({
+                toastMessage: error instanceof Error
+                    ? error.message
+                    : 'Unable to preserve image bytes in this template.',
+            });
+            return;
+        }
         const documentSize = getDocumentCanvasSize();
         const json = {
-            objects: serializedObjects,
-            background: getSerializedPageBackground(),
+            ...portable.canvasData,
+            assets: portable.assets,
         };
         const thumbnail = canvas.toDataURL({ multiplier: 0.1 });
         const newTemplate: Template = {
@@ -2618,6 +3107,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     },
 
     createProject: (options) => {
+        if (options?.source !== 'load-project-db' && options?.source !== 'load-project-file') {
+            canvasLoadRequestToken += 1;
+        }
+        // A pending history timer belongs to the outgoing scene.  Cancel it
+        // before replacing the canvas; the history context is global and
+        // otherwise the callback could capture the newly created project.
+        useHistoryStore.getState().cancelPendingSave();
         const {
             canvas,
             pages,
@@ -2663,6 +3159,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             useCanvasStore.getState().setCanvasSize(nextWidth, nextHeight);
         }
 
+        // The outgoing history and page snapshots are discarded below. Drop
+        // their session-scoped image URLs at the same replacement boundary so
+        // a blank/new project cannot retain or accidentally persist old bytes.
+        releaseCanvasAssetResources(get().imageAssets);
+
         // Initialize default theme from theme store
         useThemeStore.getState().initializeDefaultTheme();
         applyActiveThemeToCanvas();
@@ -2674,6 +3175,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectName: nextProjectName,
             productProjectFields: null,
             currentLibraryProjectId: null,
+            currentLibraryProjectRevision: null,
             sessionIdentity: uuidv4(),
             pages: [{
                 id: uuidv4(),
@@ -2688,11 +3190,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             pendingViewportFit: shouldHideOnboarding,
             autoSaveStatus: 'idle',
             saveStatus: 'saved',
+            imageAssets: {},
+            assetRefCount: new Map(),
         });
         resetHistoryToCurrentCanvas();
 
     },
     createProjectFromRecipe: async (recipeId) => {
+        // Recipe creation replaces the current project just like the blank
+        // project path. Invalidate pending loads/history callbacks before the
+        // asynchronous recipe scene can be installed under the old session.
+        const requestToken = ++canvasLoadRequestToken;
+        useHistoryStore.getState().cancelPendingSave();
         const {
             canvas,
             clearSelection,
@@ -2720,6 +3229,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 throw new Error(`Recipe did not generate a usable first page: ${recipeId}`);
             }
 
+            // Invalidate saves that captured the outgoing project before the
+            // asynchronous recipe scene is loaded. Keep this identity for the
+            // replacement so late completions cannot mutate the new session.
+            const replacementSessionIdentity = uuidv4();
+            set({ sessionIdentity: replacementSessionIdentity });
+
+            releaseCanvasAssetResources(get().imageAssets);
             clearSelection();
             withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
             resizeCanvas(generatedProject.document.pageSize.width, generatedProject.document.pageSize.height, {
@@ -2737,7 +3253,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             );
 
             await loadCanvasFromJsonSafely(canvas, firstPage.canvasData, reviveCustomFabricProps);
+            if (
+                requestToken !== canvasLoadRequestToken
+                || get().sessionIdentity !== replacementSessionIdentity
+                || get().canvas !== canvas
+            ) return;
             canvas.backgroundColor = 'transparent';
+            // Publish the loaded runtime objects before sanity checks can
+            // request a layer sync; otherwise a pending sync may compare the
+            // new Fabric scene against the outgoing empty mirror and remove it.
             get().syncCanvasToStore(canvas);
             resetViewCanvas();
             sanityCheckCanvas(canvas, generatedProject.activeTheme as ApocapaletteTheme | null);
@@ -2747,6 +3271,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 projectName: generatedProject.projectName,
                 productProjectFields: extractProductProjectFields(generatedProject),
                 currentLibraryProjectId: null,
+                currentLibraryProjectRevision: null,
+                sessionIdentity: replacementSessionIdentity,
                 imageAssets: {},
                 assetRefCount: new Map(),
                 pages: generatedProject.pages as ProjectPage[],
@@ -2778,7 +3304,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
     syncActivePageFromCanvas: () => {
         const { canvas, pages, activePageIndex, imageAssets } = get();
         if (!canvas || !pages[activePageIndex]) return;
-        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+        const serializedObjects = serializeCanvasObjects(canvas);
         const rawData = { objects: serializedObjects, background: getSerializedPageBackground() };
         const prepared = prepareCanvasDataForPersistence(rawData, imageAssets);
         const documentSize = getDocumentCanvasSize();
@@ -2792,16 +3318,38 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         set({ pages: nextPages, imageAssets: prepared.imageAssets });
     },
     switchToPage: (index, options) => {
+        const requested = get();
+        const requestedSessionIdentity = requested.sessionIdentity;
+        const requestedPageId = requested.pages[index]?.id;
+        const requestedLoadToken = canvasLoadRequestToken;
         const performSwitch = async () => {
             const { canvas, pages } = get();
-            if (!canvas || index < 0 || index >= pages.length) return;
+            if (
+                !canvas
+                || index < 0
+                || index >= pages.length
+                || pages[index]?.id !== requestedPageId
+                || get().sessionIdentity !== requestedSessionIdentity
+                || canvasLoadRequestToken !== requestedLoadToken
+            ) return;
+            const requestedPageGeneration = ++pageNavigationGeneration;
             if (options?.saveCurrent !== false) {
+                useHistoryStore.getState().flushPendingSave();
                 get().syncActivePageFromCanvas();
+            } else {
+                useHistoryStore.getState().cancelPendingSave();
             }
             const page = get().pages[index];
             if (!page) return;
             const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
             await loadCanvasFromJsonSafely(canvas, hydrated, reviveCustomFabricProps);
+            if (
+                get().sessionIdentity !== requestedSessionIdentity
+                || canvasLoadRequestToken !== requestedLoadToken
+                || get().canvas !== canvas
+                || get().pages[index]?.id !== requestedPageId
+                || pageNavigationGeneration !== requestedPageGeneration
+            ) return;
             const nextSize = normalizePageSize(page.canvasSize, getDocumentCanvasSize());
             resizeCanvas(nextSize.width, nextSize.height, {
                 save: false,
@@ -2834,15 +3382,21 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         observeSemanticMutation({ action: 'add-page', pageId: next.id });
     },
     deletePage: async (index) => {
-        const { pages, activePageIndex } = get();
-        if (pages.length <= 1) return;
-        const removedPage = pages[index];
+        const initial = get();
+        if (initial.pages.length <= 1) return;
+        const removedPage = initial.pages[index];
         if (!removedPage) return;
+        // Synchronization updates the page snapshot and asset map.  Read the
+        // result back before filtering; retaining the pre-sync array drops
+        // edits made on the active page whenever another page is deleted.
         get().syncActivePageFromCanvas();
-        const nextPages = pages.filter((_, i) => i !== index);
+        const { pages, activePageIndex } = get();
+        const currentIndex = pages.findIndex((page) => page.id === removedPage.id);
+        if (currentIndex < 0 || pages.length <= 1) return;
+        const nextPages = pages.filter((page) => page.id !== removedPage.id);
         let nextIndex = activePageIndex;
         if (activePageIndex >= nextPages.length) nextIndex = nextPages.length - 1;
-        if (index < activePageIndex) nextIndex -= 1;
+        if (currentIndex < activePageIndex) nextIndex -= 1;
         const safeNextIndex = Math.max(0, nextIndex);
         set({ pages: nextPages, activePageIndex: safeNextIndex });
         await get().switchToPage(safeNextIndex, { saveCurrent: false });
@@ -2959,14 +3513,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         })) {
             return delivery;
         }
-        set({
-            productProjectFields: extractProductProjectFields(payload),
-            pages: exportData.pages,
-            imageAssets: exportData.runtimeImageAssets,
-        });
-        get().setAutoSaveStatus('saved');
-        set({ isDirty: false });
-        if (exportData.failedAssetIds.length > 0) {
+        if (delivery.status === 'saved') {
+            set({
+                productProjectFields: extractProductProjectFields(payload),
+                pages: exportData.pages,
+                imageAssets: exportData.runtimeImageAssets,
+            });
+            get().setAutoSaveStatus('saved');
+            set({ isDirty: false });
+        }
+        if (delivery.status === 'initiated') {
+            setToastMessage('Project download started. Keep the editor open until the browser finishes saving it.');
+        } else if (exportData.failedAssetIds.length > 0) {
             setToastMessage(
                 delivery.path
                     ? `Saved project to ${delivery.path} with ${exportData.failedAssetIds.length} linked image(s). Some images may require network access when reopened.`
@@ -2988,6 +3546,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             resetViewCanvas,
         } = get();
         if (!canvas) return;
+        const requestToken = ++canvasLoadRequestToken;
+        let stagedAssets: Record<string, string> = {};
+        let stagedAssetsInstalled = false;
+        const abandonStagedAssets = () => {
+            if (stagedAssetsInstalled) return;
+            releaseDetachedCanvasAssetResources(stagedAssets, get().imageAssets);
+            stagedAssets = {};
+        };
 
         try {
             if (typeof file.size === 'number' && file.size > MAX_PROJECT_FILE_BYTES) {
@@ -3026,13 +3592,43 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 normalizedPayload.assets && typeof normalizedPayload.assets === 'object'
                     ? normalizedPayload.assets
                     : {};
+            // Prepare every page, not only the active one.  Otherwise an
+            // inactive page can retain an asset ID/blob source that has no
+            // runtime entry when it is selected after reopening.
+            const pagesForPreparation = rawPages
+                ? (rawPages as ProjectPage[]).map((page, index) => (
+                    page.canvasData == null && index === safeActivePageIndex
+                        ? { ...page, canvasData }
+                        : page
+                ))
+                : null;
+            const preparedProjectPages = pagesForPreparation
+                ? prepareProjectPagesForPersistence(pagesForPreparation, fileAssets)
+                : null;
             const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
-                prepareCanvasDataForPersistence(canvasData || { objects: [] }, fileAssets);
+                prepareCanvasDataForPersistence(
+                    getInitialPageLoadData(
+                        preparedProjectPages?.pages ?? null,
+                        safeActivePageIndex,
+                        canvasData,
+                    ) || { objects: [] },
+                    preparedProjectPages?.imageAssets ?? fileAssets,
+                );
+            stagedAssets = nextAssets;
             const hydratedCanvasData = hydrateCanvasDataWithAssets(
                 migratedCanvasData,
                 nextAssets
             );
+            await canvasPersistenceWriteQueue;
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
             await stageCanvasDataLoad(hydratedCanvasData);
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
 
             const nextSize = normalizedPayload.canvasSize;
             const pageSize = rawPages && rawPages.length > 0
@@ -3048,16 +3644,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 source: 'load-project-file',
             });
 
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
+
             const nextCanvas = get().canvas;
-            if (!nextCanvas) return;
+            if (!nextCanvas) {
+                abandonStagedAssets();
+                return;
+            }
             await loadCanvasFromJsonSafely(nextCanvas, hydratedCanvasData, reviveCustomFabricProps);
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
             get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
 
             sanityCheckCanvas(nextCanvas, activeTheme);
             requestLayerSync();
 
-            const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
+            const normalizedPages = preparedProjectPages?.pages?.length
+                ? preparedProjectPages.pages
+                : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
                 projectName,
                 productProjectFields: extractProductProjectFields(normalizedPayload),
@@ -3067,6 +3677,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 activePageIndex: safeActivePageIndex,
                 isDirty: false,
             });
+            stagedAssetsInstalled = true;
             useThemeStore.getState().setCanvasBackgroundColor(
                 typeof (migratedCanvasData as any)?.background === 'string'
                     ? (migratedCanvasData as any).background
@@ -3089,7 +3700,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             resetHistoryToCurrentCanvas();
             set({ isDirty: false, autoSaveStatus: 'idle', saveStatus: 'saved' });
             setToastMessage(`Project loaded: ${projectName}`);
-            } catch (error) {
+        } catch (error) {
+            abandonStagedAssets();
             setToastMessage('Failed to load project file.');
         }
     },
@@ -3118,22 +3730,26 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
 
     undo: async () => {
         const history = useHistoryStore.getState();
+        history.flushPendingSave();
         if (!history.canUndo()) {
             return;
         }
-        await history.undo();
-        set({ isDirty: true });
+        const replayed = await history.undo();
+        if (!replayed) return;
+        set((state) => ({ isDirty: true, changeRevision: state.changeRevision + 1 }));
         get().setAutoSaveStatus('dirty');
         observeSemanticMutation({ action: 'undo-freeform', pageScope: true });
     },
 
     redo: async () => {
         const history = useHistoryStore.getState();
+        history.flushPendingSave();
         if (!history.canRedo()) {
             return;
         }
-        await history.redo();
-        set({ isDirty: true });
+        const replayed = await history.redo();
+        if (!replayed) return;
+        set((state) => ({ isDirty: true, changeRevision: state.changeRevision + 1 }));
         get().setAutoSaveStatus('dirty');
         observeSemanticMutation({ action: 'redo-freeform', pageScope: true });
     },
@@ -3534,6 +4150,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
 
         try {
+            useHistoryStore.getState().flushPendingSave();
+            get().syncActivePageFromCanvas();
             if (options.format === 'png' || options.format === 'svg' || options.format === 'jpeg') {
                 await advancedExportManager.export(canvas, options.format, {
                     includeBackground: true,
@@ -3573,6 +4191,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 || currentLibraryProjectId
                 || 'canvas-session',
             targetIdentity: currentLibraryProjectId,
+            durableRevision: stateAtStart.currentLibraryProjectRevision,
             capturedRevision: stateAtStart.changeRevision,
             snapshot: {
                 pages: stateAtStart.pages,
@@ -3581,6 +4200,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvasSize: getDocumentCanvasSize(),
             },
         };
+        // Reserve before image serialization so writes retain capture order
+        // even when a newer scene finishes preparing first.
+        const writeTicket = reserveCanvasPersistenceWrite();
 
         try {
             const revisionAtStart = operation.capturedRevision;
@@ -3616,38 +4238,110 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 quality: 0.8
             });
 
-            // Import and use the database
-            const { db } = await import('../db');
             let nextLibraryProjectId = currentLibraryProjectId;
+            let nextLibraryProjectRevision = operation.durableRevision
+                ?? (currentLibraryProjectId ? 1 : null);
             let didUpdateExistingProject = false;
-            if (nextLibraryProjectId) {
-                const existingProject = await db.loadProject(nextLibraryProjectId);
-                if (existingProject) {
-                    await db.updateProject(nextLibraryProjectId, safeName, jsonPayload, thumbnail);
-                    didUpdateExistingProject = true;
-                } else {
-                    nextLibraryProjectId = null;
+            await writeTicket.run(async () => {
+                if (get().sessionIdentity !== operation.sessionIdentity) return;
+                const { db } = await import('../db');
+                // A second save may have been queued while this first-save
+                // allocation was pending.  Adopt the target established by
+                // the earlier write instead of creating a duplicate row.
+                nextLibraryProjectId = nextLibraryProjectId
+                    || get().currentLibraryProjectId;
+                if (nextLibraryProjectId) {
+                    const existingProject = await db.loadProject(nextLibraryProjectId);
+                    if (existingProject) {
+                        const expectedRevision = nextLibraryProjectRevision
+                            ?? existingProject.project.revision
+                            ?? 1;
+                        nextLibraryProjectRevision = await updateLibraryProject(
+                            db as LibraryPersistenceDb,
+                            nextLibraryProjectId,
+                            safeName,
+                            jsonPayload,
+                            thumbnail,
+                            undefined,
+                            expectedRevision,
+                        );
+                        didUpdateExistingProject = true;
+                    } else {
+                        nextLibraryProjectId = null;
+                        nextLibraryProjectRevision = null;
+                    }
                 }
-            }
-            if (!nextLibraryProjectId) {
-                nextLibraryProjectId = await db.saveProject(safeName, jsonPayload, thumbnail);
-            }
-            const current = get();
-            const ownsCurrentState = persistenceOperationStillOwnsCurrentState(operation, {
-                sessionIdentity: current.sessionIdentity,
-                projectIdentity: current.productProjectFields?.projectId
-                    || current.currentLibraryProjectId
-                    || 'canvas-session',
-                targetIdentity: current.currentLibraryProjectId,
-                revision: current.changeRevision,
+                if (!nextLibraryProjectId) {
+                    const allocated = await saveLibraryProject(
+                        db as LibraryPersistenceDb,
+                        safeName,
+                        jsonPayload,
+                        thumbnail,
+                        undefined,
+                    );
+                    nextLibraryProjectId = allocated.projectId;
+                    nextLibraryProjectRevision = allocated.revision;
+                }
+                if (
+                    nextLibraryProjectId
+                    && nextLibraryProjectRevision !== null
+                    && get().sessionIdentity === operation.sessionIdentity
+                    && (
+                        get().currentLibraryProjectId === null
+                        || get().currentLibraryProjectId === nextLibraryProjectId
+                    )
+                ) {
+                    set({ currentLibraryProjectRevision: nextLibraryProjectRevision });
+                }
+                // Publish a newly allocated target before releasing the queue
+                // latch so a save already queued behind this one updates the
+                // same record.  Payload installation/clean-state handling is
+                // still gated by the captured revision below.
+                if (
+                    !operation.targetIdentity
+                    && nextLibraryProjectId
+                    && get().sessionIdentity === operation.sessionIdentity
+                    && get().currentLibraryProjectId === null
+                ) {
+                    set({
+                        currentLibraryProjectId: nextLibraryProjectId,
+                        currentLibraryProjectRevision: nextLibraryProjectRevision,
+                    });
+                }
             });
+            const current = get();
+            const sameSession = current.sessionIdentity === operation.sessionIdentity;
+            const targetStillOwned = operation.targetIdentity
+                ? current.currentLibraryProjectId === operation.targetIdentity
+                : current.currentLibraryProjectId === null
+                    || current.currentLibraryProjectId === nextLibraryProjectId;
+            const ownsCurrentState = sameSession
+                && targetStillOwned
+                && current.changeRevision === revisionAtStart;
             const hasNewerChanges = current.changeRevision !== revisionAtStart;
-            if (!ownsCurrentState && current.sessionIdentity !== operation.sessionIdentity) {
+            if (!sameSession) {
                 return true;
             }
-            if (!ownsCurrentState) return true;
+            if (!targetStillOwned) return true;
+            if (!ownsCurrentState) {
+                // A first save allocates the durable target even when newer
+                // edits arrived while the write was pending.  Only the target
+                // identity is adopted here; the older snapshot must never
+                // replace the newer live scene or clear its dirty state.
+                if (!operation.targetIdentity && current.currentLibraryProjectId === null) {
+                    set({
+                        currentLibraryProjectId: nextLibraryProjectId,
+                        currentLibraryProjectRevision: nextLibraryProjectRevision,
+                        isDirty: true,
+                        autoSaveStatus: 'dirty',
+                        saveStatus: 'unsaved',
+                    });
+                }
+                return true;
+            }
             set({
                 currentLibraryProjectId: nextLibraryProjectId,
+                currentLibraryProjectRevision: nextLibraryProjectRevision,
                 projectName: safeName,
                 productProjectFields: extractProductProjectFields(payload),
                 pages: exportData.pages,
@@ -3663,19 +4357,46 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             });
             return true;
         } catch (error) {
+            writeTicket.cancel();
             console.error('Failed to save project:', error);
-            set({ toastMessage: 'Failed to save project.' });
+            if (isDurableRevisionConflict(error)) {
+                set({
+                    isDirty: true,
+                    autoSaveStatus: 'error',
+                    saveStatus: 'error',
+                    toastMessage: 'This project changed in another window. Reload it before saving again so neither version is lost.',
+                });
+            } else {
+                set({ toastMessage: 'Failed to save project.' });
+            }
             return false;
         }
     },
 
     loadProject: async (projectId) => {
+        const requestToken = ++canvasLoadRequestToken;
+        let stagedAssets: Record<string, string> = {};
+        let stagedAssetsInstalled = false;
+        const abandonStagedAssets = () => {
+            if (stagedAssetsInstalled) return;
+            releaseDetachedCanvasAssetResources(stagedAssets, get().imageAssets);
+            stagedAssets = {};
+        };
         try {
+            await canvasPersistenceWriteQueue;
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
             const { db } = await import('../db');
             const result = await db.loadProject(projectId);
 
             if (!result) {
                 console.error('Project not found');
+                return;
+            }
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
                 return;
             }
 
@@ -3712,13 +4433,42 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 : normalizedPayload.canvasSize;
             const unitMode = normalizedPayload.unitMode;
 
+            // Normalize image references on inactive pages as well as the
+            // active page so page switching after load cannot expose a stale
+            // session URL or an unresolved asset ID.
+            const pagesForPreparation = rawPages
+                ? (rawPages as ProjectPage[]).map((page, index) => (
+                    page.canvasData == null && index === safeActivePageIndex
+                        ? { ...page, canvasData: rawCanvasData }
+                        : page
+                ))
+                : null;
+            const preparedProjectPages = pagesForPreparation
+                ? prepareProjectPagesForPersistence(pagesForPreparation, rawAssets)
+                : null;
             const { canvasData: migratedCanvasData, imageAssets: nextAssets } =
-                prepareCanvasDataForPersistence(rawCanvasData || { objects: [] }, rawAssets);
+                prepareCanvasDataForPersistence(
+                    getInitialPageLoadData(
+                        preparedProjectPages?.pages ?? null,
+                        safeActivePageIndex,
+                        rawCanvasData,
+                    ) || { objects: [] },
+                    preparedProjectPages?.imageAssets ?? rawAssets,
+                );
+            stagedAssets = nextAssets;
             const hydratedCanvasData = hydrateCanvasDataWithAssets(
                 migratedCanvasData,
                 nextAssets
             );
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
             await stageCanvasDataLoad(hydratedCanvasData);
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
 
             const normalizedWidth =
                 canvasSize
@@ -3744,9 +4494,21 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 source: 'load-project-db',
             });
 
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
+
             const nextCanvas = get().canvas;
-            if (!nextCanvas) return;
+            if (!nextCanvas) {
+                abandonStagedAssets();
+                return;
+            }
             await loadCanvasFromJsonSafely(nextCanvas, hydratedCanvasData, reviveCustomFabricProps);
+            if (requestToken !== canvasLoadRequestToken) {
+                abandonStagedAssets();
+                return;
+            }
             get().syncCanvasToStore(nextCanvas);
             resetViewCanvas();
             sanityCheckCanvas(nextCanvas, activeTheme);
@@ -3763,9 +4525,12 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 useThemeStore.getState().setActiveBrandCollectionId(null);
             }
 
-            const normalizedPages = rawPages && rawPages.length > 0 ? rawPages : [{ id: uuidv4(), name: "Page 1", canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
+            const normalizedPages = preparedProjectPages?.pages?.length
+                ? preparedProjectPages.pages
+                : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
             set({
                 currentLibraryProjectId: projectId,
+                currentLibraryProjectRevision: result.project.revision ?? 1,
                 imageAssets: nextAssets,
                 projectName: result.project.name,
                 productProjectFields: extractProductProjectFields(normalizedPayload),
@@ -3774,6 +4539,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 activePageIndex: safeActivePageIndex,
                 isDirty: false,
             });
+            stagedAssetsInstalled = true;
 
             setShowOnboarding(false);
             useThemeStore.getState().setCanvasBackgroundColor(
@@ -3786,6 +4552,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ isDirty: false, autoSaveStatus: 'idle', saveStatus: 'saved' });
             set({ toastMessage: `Loaded project: ${result.project.name}` });
             } catch (error) {
+            abandonStagedAssets();
             console.error('Failed to load project:', error);
             set({ toastMessage: 'Failed to load project.' });
         }
@@ -3811,12 +4578,45 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             set({ toastMessage: 'Failed to duplicate project.' });
         }
     },
-    renameProject: async (projectId, newName) => {
+    renameProject: async (projectId, newName, expectedRevision) => {
         const normalizedName = newName.trim();
         if (!normalizedName) return;
         try {
             const { db } = await import('../db');
-            await db.renameProject(projectId, normalizedName);
+            const persistenceDb = db as LibraryPersistenceDb;
+            if (typeof persistenceDb.renameProjectIfRevision === 'function') {
+                // Dashboard callers normally pass the revision read with the
+                // project card.  Resolve it for older callers as well so no
+                // production route silently falls back to last-write-wins.
+                let revision = expectedRevision;
+                if (!Number.isFinite(revision)) {
+                    const projects = typeof persistenceDb.getAllProjects === 'function'
+                        ? await persistenceDb.getAllProjects()
+                        : [];
+                    revision = projects.find((project) => project.id === projectId)?.revision;
+                }
+                if (!Number.isFinite(revision) || (revision as number) < 1) {
+                    throw new Error('The project revision could not be established before renaming.');
+                }
+                const result = await persistenceDb.renameProjectIfRevision(
+                    projectId,
+                    normalizedName,
+                    Math.trunc(revision as number),
+                );
+                if (result.status === 'conflict') {
+                    set({
+                        toastMessage: 'This project changed in another window. Reload it before renaming so neither version is lost.',
+                    });
+                    return;
+                }
+                if (projectId === get().currentLibraryProjectId) {
+                    set({ currentLibraryProjectRevision: result.revision ?? (revision as number) + 1 });
+                }
+            } else {
+                // Compatibility path for an older injected/test bridge. The
+                // production Dexie bridge exposes the CAS API above.
+                await db.renameProject(projectId, normalizedName);
+            }
             set({ toastMessage: `Project renamed to: ${normalizedName}` });
         } catch (error) {
             console.error('Failed to rename project:', error);
@@ -3830,7 +4630,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return await db.getAllProjects();
         } catch (error) {
             console.error('Failed to get projects:', error);
-            return [];
+            set({
+                toastMessage: 'The browser project library could not be opened. Existing data was left untouched; use recovery before creating a new project.',
+            });
+            throw error;
         }
     },
 
@@ -3849,6 +4652,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             projectIdentity: stateAtStart.productProjectFields?.projectId
                 || currentLibraryProjectId,
             targetIdentity: currentLibraryProjectId,
+            durableRevision: stateAtStart.currentLibraryProjectRevision,
             capturedRevision: stateAtStart.changeRevision,
             snapshot: {
                 pages: stateAtStart.pages,
@@ -3857,6 +4661,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvasSize: getDocumentCanvasSize(),
             },
         };
+        const writeTicket = reserveCanvasPersistenceWrite();
 
         try {
             const exportData = await buildProjectPersistenceData(
@@ -3892,7 +4697,25 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 quality: 0.8
             });
 
-            await db.updateProject(targetProjectId, projectName, jsonPayload, thumbnail);
+            let nextLibraryProjectRevision = operation.durableRevision ?? 1;
+            await writeTicket.run(async () => {
+                if (get().sessionIdentity !== operation.sessionIdentity) return;
+                nextLibraryProjectRevision = await updateLibraryProject(
+                    db as LibraryPersistenceDb,
+                    targetProjectId,
+                    projectName,
+                    jsonPayload,
+                    thumbnail,
+                    undefined,
+                    nextLibraryProjectRevision,
+                ) ?? nextLibraryProjectRevision;
+                if (
+                    get().sessionIdentity === operation.sessionIdentity
+                    && get().currentLibraryProjectId === targetProjectId
+                ) {
+                    set({ currentLibraryProjectRevision: nextLibraryProjectRevision });
+                }
+            });
             const current = get();
             if (!persistenceOperationStillOwnsCurrentState(operation, {
                 sessionIdentity: current.sessionIdentity,
@@ -3904,12 +4727,22 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             })) return;
             set({
                 currentLibraryProjectId: targetProjectId,
+                currentLibraryProjectRevision: nextLibraryProjectRevision,
                 productProjectFields: extractProductProjectFields(payload),
                 pages: exportData.pages,
                 imageAssets: exportData.runtimeImageAssets,
             });
         } catch (error) {
+            writeTicket.cancel();
             console.error('Failed to update project:', error);
+            if (isDurableRevisionConflict(error)) {
+                set({
+                    isDirty: true,
+                    autoSaveStatus: 'error',
+                    saveStatus: 'error',
+                    toastMessage: 'This project changed in another window. Reload it before saving again so neither version is lost.',
+                });
+            }
             throw error;
         }
     },
@@ -4030,10 +4863,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const revisionAtStart = get().changeRevision;
             set({ autoSaveTimer: null });
             setAutoSaveStatus('saving');
+            const sessionAtStart = get().sessionIdentity;
+            const targetAtStart = get().currentLibraryProjectId;
             try {
                 await updateCurrentProject();
                 if (get().lifecycleAuthorityMode === 'shared') return;
-                if (get().changeRevision !== revisionAtStart) {
+                const current = get();
+                if (
+                    current.sessionIdentity !== sessionAtStart
+                    || current.currentLibraryProjectId !== targetAtStart
+                ) {
+                    return;
+                }
+                if (current.changeRevision !== revisionAtStart) {
                     setAutoSaveStatus('dirty');
                     get().triggerAutoSave();
                     return;
@@ -4095,6 +4937,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             isPreviewMode: state.isPreviewMode,
             projectName: state.projectName,
             currentLibraryProjectId: state.currentLibraryProjectId,
+            currentLibraryProjectRevision: state.currentLibraryProjectRevision,
             activeTool: state.activeTool,
             brushSize: state.brushSize,
             snapEnabled: state.snapEnabled,

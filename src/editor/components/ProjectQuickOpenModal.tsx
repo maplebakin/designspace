@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { Search, FileText } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 type ProjectItem = {
   id: string;
@@ -27,14 +28,19 @@ const toProjectItem = (project: any): ProjectItem | null => {
 };
 
 export const ProjectQuickOpenModal: React.FC = () => {
-  const { isOpen, setOpen, getAllProjects, loadProject } = useEditorStore(
+  const { isOpen, setOpen, getAllProjects, loadProject, setToastMessage, legacyDirty } = useEditorStore(
     (state) => ({
       isOpen: state.isProjectQuickOpenOpen,
       setOpen: state.setProjectQuickOpenOpen,
       getAllProjects: state.getAllProjects,
       loadProject: state.loadProject,
+      setToastMessage: state.setToastMessage,
+      legacyDirty: state.isDirty,
     }),
     shallow
+  );
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
   );
   const [query, setQuery] = useState('');
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -58,6 +64,15 @@ export const ProjectQuickOpenModal: React.FC = () => {
           .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
         setProjects(normalized);
         setSelectedIndex(0);
+      } catch (error) {
+        if (!cancelled) {
+          setProjects([]);
+          setToastMessage(
+            error instanceof Error
+              ? error.message
+              : 'The browser project library could not be opened.'
+          );
+        }
       } finally {
         if (!cancelled) {
           setIsLoading(false);
@@ -69,7 +84,7 @@ export const ProjectQuickOpenModal: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [getAllProjects, isOpen]);
+  }, [getAllProjects, isOpen, setToastMessage]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -97,6 +112,15 @@ export const ProjectQuickOpenModal: React.FC = () => {
     if (!project || isOpening) return;
     setIsOpening(true);
     try {
+      if (prepareProjectReplacement) {
+        if (!(await prepareProjectReplacement())) return;
+      } else if (legacyDirty) {
+        // The standalone legacy shell predates the shared command adapter;
+        // retain an explicit discard/cancel guard there as well.
+        if (typeof window === 'undefined' || !window.confirm(
+          'Discard unsaved changes and open the selected project?'
+        )) return;
+      }
       await loadProject(project.id);
       setOpen(false);
     } finally {

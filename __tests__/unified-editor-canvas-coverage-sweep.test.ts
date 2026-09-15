@@ -510,7 +510,7 @@ describe('Unified Editor Canvas coverage sweep', () => {
     expect(useEditorStore.getState().canvasObjects.map((object) => object.id)).toEqual(userOrder(canvas));
   });
 
-  it('keeps z-order and drag replay/reopen silent while preserving dirty history', async () => {
+  it('replays z-order and keeps hydration/reopen silent while preserving dirty history', async () => {
     const sourceCanvas = createCanvas();
     installCanvas(sourceCanvas);
     seedShapes(sourceCanvas);
@@ -523,14 +523,15 @@ describe('Unified Editor Canvas coverage sweep', () => {
       await useEditorStore.getState().undo();
       await useEditorStore.getState().redo();
     });
-    expect(committed).toHaveBeenCalledTimes(1);
+    // Order-only history is now a real reversible scene mutation. Undo and
+    // redo are reported as completed editor transitions, while hydration
+    // remains silent below.
+    expect(committed).toHaveBeenCalledTimes(3);
     expect(useEditorStore.getState()).toMatchObject({
       isDirty: true,
-      changeRevision: 1,
+      changeRevision: 3,
     });
-    // The legacy diff history does not encode object-array order. The sweep
-    // preserves that behavior while proving replay attempts remain silent.
-    expect(useHistoryStore.getState().canUndo()).toBe(false);
+    expect(useHistoryStore.getState().canUndo()).toBe(true);
 
     const serialized = {
       version: fabric.version,
@@ -543,7 +544,7 @@ describe('Unified Editor Canvas coverage sweep', () => {
     useEditorStore.getState().syncCanvasToStore(reopenedCanvas);
 
     expect(userOrder(reopenedCanvas)).toEqual(['middle', 'bottom', 'top']);
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
     expect(diagnostic.view.getSnapshot().observedRevision).toBe(1);
 
     useEditorStore.getState().setCanvasReadyState('disposing');
@@ -553,7 +554,7 @@ describe('Unified Editor Canvas coverage sweep', () => {
       ['middle', 'bottom', 'top'],
       ['middle', 'bottom', 'top'],
     );
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
   });
 
   it('isolates z-order observer failure and invalid targets from legacy ordering', () => {

@@ -1,13 +1,17 @@
 
 import React from 'react';
 import { shallow } from 'zustand/shallow';
-import { DEFAULT_CANVAS_BACKGROUND, useEditorStore, Template } from '../state/editorStore';
+import {
+    DEFAULT_CANVAS_BACKGROUND,
+    buildPortableCanvasSnapshot,
+    useEditorStore,
+    Template,
+} from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
-import { toSerializableObject } from '../utils/serialization';
-import { isPersistableCanvasObject, isUserObject } from '../utils/objectUtils';
+import { isUserObject } from '../utils/objectUtils';
 import { renderCanvasToPngBlob } from '../utils/renderToPng';
 import { commitCanvasMutation } from '../utils/commitCanvasMutation';
 import {
@@ -16,6 +20,7 @@ import {
     deleteTemplate,
 } from '../services/templateService';
 import type { TemplateRecord } from '../db';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 type TemplateThumbnailProps = {
     name: string;
@@ -226,6 +231,9 @@ export const TemplateBrowser: React.FC = () => {
         }),
         shallow
     );
+    const prepareProjectReplacement = useProjectSessionStore(
+        (state) => state.commands?.prepareProjectReplacement
+    );
     const [myTemplates, setMyTemplates] = React.useState<TemplateRecord[]>([]);
 
     const normalizeUnitMode = (value?: string): 'in' | 'px' | undefined =>
@@ -435,19 +443,28 @@ export const TemplateBrowser: React.FC = () => {
         void refreshMyTemplates();
     }, [refreshMyTemplates]);
 
-    const handleLoadTemplate = (template: Template) => {
-        const confirmLoad = window.confirm(
-            'Loading a new template will clear your current canvas. Are you sure?'
-        );
-        if (confirmLoad) {
-            loadTemplate(template);
+    const handleLoadTemplate = async (template: Template) => {
+        // Template loading replaces the current project just like Quick Open,
+        // presets, and file-open. Route it through the lifecycle authority so
+        // dirty state is flushed/saved or explicitly discarded before the
+        // canvas is cleared. Keep the confirm fallback for legacy mounts that
+        // have not installed the shared session commands yet.
+        if (prepareProjectReplacement) {
+            if (!(await prepareProjectReplacement())) return;
         } else {
-            setToastMessage('Template loading cancelled.');
+            const confirmLoad = window.confirm(
+                'Loading a new template will clear your current canvas. Are you sure?'
+            );
+            if (!confirmLoad) {
+                setToastMessage('Template loading cancelled.');
+                return;
+            }
         }
+        loadTemplate(template);
     };
 
-    const handleLoadMyTemplate = (template: TemplateRecord) => {
-        handleLoadTemplate(toEditorTemplate(template));
+    const handleLoadMyTemplate = async (template: TemplateRecord) => {
+        await handleLoadTemplate(toEditorTemplate(template));
     };
 
     const handleSaveAsTemplate = async () => {
@@ -457,10 +474,24 @@ export const TemplateBrowser: React.FC = () => {
         }
 
         const pageBackground = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
-        const serializedObjects = canvas.getObjects().filter(isPersistableCanvasObject).map(toSerializableObject);
+        let portable: Awaited<ReturnType<typeof buildPortableCanvasSnapshot>>;
+        try {
+            portable = await buildPortableCanvasSnapshot(
+                canvas,
+                useEditorStore.getState().imageAssets,
+            );
+        } catch (error) {
+            setToastMessage(
+                error instanceof Error
+                    ? error.message
+                    : 'Unable to preserve image bytes in this template.'
+            );
+            return;
+        }
         const canvasData = {
-            objects: serializedObjects,
+            ...portable.canvasData,
             background: pageBackground,
+            assets: portable.assets,
         };
         const templateName = `Template ${new Date().toISOString()}`;
 
@@ -529,10 +560,12 @@ export const TemplateBrowser: React.FC = () => {
         }
     };
 
-    const handleBlankPreset = (preset: BlankPreset) => {
+    const handleBlankPreset = async (preset: BlankPreset) => {
         if (!canvas) return;
         const hasContent = canvas.getObjects().some(isUserObject);
-        if (hasContent) {
+        if (prepareProjectReplacement) {
+            if (!(await prepareProjectReplacement())) return;
+        } else if (hasContent) {
             const proceed = window.confirm(
                 'Starting a new blank canvas will clear your current design. Continue?'
             );
@@ -612,7 +645,7 @@ export const TemplateBrowser: React.FC = () => {
                                 >
                                     <button
                                         data-testid={`template-my-${toTestSlug(template.name)}`}
-                                        onClick={() => handleLoadMyTemplate(template)}
+                                onClick={() => { void handleLoadMyTemplate(template); }}
                                         className="w-full text-left"
                                     >
                                         <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">
@@ -661,7 +694,7 @@ export const TemplateBrowser: React.FC = () => {
                         <button 
                             key={template.id}
                             data-testid={`template-community-${template.id}`}
-                            onClick={() => handleLoadTemplate(template)}
+                            onClick={() => { void handleLoadTemplate(template); }}
                             className="w-full text-left p-3 bg-white/5 rounded-lg border border-transparent hover:border-[color:var(--brand-primary)] transition-all duration-300 ease-in-out backdrop-blur-[var(--ui-blur)]"
                         >
                             <div className="w-full aspect-[3/2] rounded-md overflow-hidden mb-2">

@@ -1,7 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { ScanReference } from '../types/documentProject';
 
 type ScanReferenceLayerProps = {
+  pageId: string;
   reference?: ScanReference;
   source?: string;
   adjustMode: boolean;
@@ -11,6 +12,7 @@ type ScanReferenceLayerProps = {
 };
 
 export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
+  pageId,
   reference,
   source,
   adjustMode,
@@ -21,14 +23,42 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
   const [loadedSource, setLoadedSource] = useState<string | null>(null);
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const dragStart = useRef<{
+    pageId: string;
+    assetId: string;
+    source: string;
     pointerX: number;
     pointerY: number;
     offsetX: number;
     offsetY: number;
   } | null>(null);
 
+  const canAdjust = Boolean(
+    adjustMode
+    && reference?.visible
+    && !reference?.locked
+    && reference
+    && source
+  );
+
+  useEffect(() => {
+    const initial = dragStart.current;
+    if (!initial) return;
+    const sameOwner = (
+      initial.pageId === pageId
+      && initial.assetId === reference?.assetId
+      && initial.source === source
+    );
+    if (canAdjust && sameOwner) return;
+    dragStart.current = null;
+    if (sameOwner) {
+      onChange({
+        offsetXPx: initial.offsetX,
+        offsetYPx: initial.offsetY,
+      });
+    }
+  }, [canAdjust, onChange, pageId, reference?.assetId, source]);
+
   if (!reference || !source || !reference.visible) return null;
-  const canAdjust = adjustMode && !reference.locked;
   const imageState = loadedSource === source
     ? 'loaded'
     : failedSource === source
@@ -40,6 +70,9 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStart.current = {
+      pageId,
+      assetId: reference.assetId,
+      source,
       pointerX: event.clientX,
       pointerY: event.clientY,
       offsetX: reference.offsetXPx,
@@ -66,6 +99,11 @@ export const ScanReferenceLayer: React.FC<ScanReferenceLayerProps> = ({
     }
     if (completed && initial) {
       onCommit?.({
+        offsetXPx: initial.offsetX,
+        offsetYPx: initial.offsetY,
+      });
+    } else if (initial) {
+      onChange({
         offsetXPx: initial.offsetX,
         offsetYPx: initial.offsetY,
       });

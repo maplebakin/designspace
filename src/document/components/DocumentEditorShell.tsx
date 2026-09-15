@@ -143,14 +143,22 @@ import {
 } from '../state/documentSelectionProjection';
 import {
   createDocumentLiveDraftScope,
+  flushDocumentLiveDrafts,
   type DocumentLiveDraftScope,
 } from '../services/documentLiveDraft';
+import {
+  createDocumentHistory,
+  type DocumentHistory,
+  type DocumentHistoryState,
+} from '../state/documentHistory';
 import '../styles/document-page.css';
 import '../styles/document-print.css';
 
 type DocumentEditorShellProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent?: (event: SelectionEvent) => void;
+  /** Records history replay as an authored lifecycle revision. */
+  onAuthoredMutation?: () => void;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
   onCommittedMutation?: (mutation: DocumentCommittedMutation) => void;
@@ -548,6 +556,7 @@ const readTextFormatState = (
 export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  onAuthoredMutation,
   useSharedChrome = false,
   onRegisterFitPage,
   onCommittedMutation,
@@ -623,6 +632,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const titleEditorRef = useRef<Editor | null>(null);
   const bodyEditorRef = useRef<Editor | null>(null);
+  const documentHistoryRef = useRef<DocumentHistory | null>(null);
+  if (!documentHistoryRef.current) {
+    documentHistoryRef.current = createDocumentHistory();
+  }
+  const documentHistory = documentHistoryRef.current;
+  const [documentHistoryState, setDocumentHistoryState] =
+    useState<DocumentHistoryState>(() => documentHistory.getState());
   const exportRootRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const nodeReplaceInputRef = useRef<HTMLInputElement | null>(null);
@@ -858,6 +874,27 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   useEffect(() => {
     recordDocumentProjectSubscriberUpdate();
   }, [project]);
+
+  useEffect(() => {
+    const history = documentHistory;
+    const current = useDocumentStore.getState();
+    history.reset(current.project, current.sessionIdentity);
+    const unsubscribeStore = useDocumentStore.subscribe((state, previous) => {
+      history.observeTransition(
+        previous.project,
+        state.project,
+        {
+          previousSessionIdentity: previous.sessionIdentity,
+          sessionIdentity: state.sessionIdentity,
+        }
+      );
+    });
+    const unsubscribeHistory = history.subscribe(setDocumentHistoryState);
+    return () => {
+      unsubscribeStore();
+      unsubscribeHistory();
+    };
+  }, [documentHistory]);
 
   /**
    * Reconcile compatibility selection mirrors with the authoritative editor
@@ -1573,6 +1610,180 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     );
   }, [project]);
 
+  const applyDocumentHistoryProject = useCallback((nextProject: typeof project) => {
+    if (!nextProject) return;
+    const currentProject = useDocumentStore.getState().project;
+    const replaySessionIdentity = useDocumentStore.getState().sessionIdentity;
+    const currentActivePageIndex = currentProject
+      ? Math.max(
+          0,
+          Math.min(
+            currentProject.pages.length - 1,
+            Math.trunc(currentProject.activePageIndex ?? 0)
+          )
+        )
+      : 0;
+    const currentPageId = currentProject?.pages[currentActivePageIndex]?.id;
+    const focusedEditor = titleEditorRef.current?.isFocused
+      ? {
+          region: 'title' as const,
+          selection: titleEditorRef.current.state.selection,
+        }
+      : bodyEditorRef.current?.isFocused
+        ? {
+            region: 'body' as const,
+            selection: bodyEditorRef.current.state.selection,
+          }
+        : null;
+    titleEditorRef.current?.commands.blur();
+    bodyEditorRef.current?.commands.blur();
+    useDocumentStore.getState().restoreDocumentHistoryProject(nextProject);
+    const activeIndex = Math.max(
+      0,
+      Math.min(
+        nextProject.pages.length - 1,
+        Math.trunc(nextProject.activePageIndex ?? 0)
+      )
+    );
+    const restoredPage = nextProject.pages[activeIndex];
+    if (!restoredPage) return;
+    // Selection is view state, not part of an authored history entry. Clear
+    // the old image/overlay projection before replay can render a replacement
+    // page; a restored text focus will project itself again below.
+    setSelectionProjectionIfChanged({
+      ...EMPTY_DOCUMENT_SELECTION_PROJECTION,
+      pageId: restoredPage.id,
+    });
+    const restoreSelection = focusedEditor
+      && focusedEditor.selection instanceof TextSelection
+      && currentPageId === restoredPage.id
+      ? {
+          region: focusedEditor.region,
+          from: focusedEditor.selection.from,
+          to: focusedEditor.selection.to,
+        }
+      : null;
+    const syncEditors = () => {
+      const current = useDocumentStore.getState();
+      const currentProject = current.project;
+      const currentPageIndex = currentProject
+        ? Math.max(
+            0,
+            Math.min(
+              currentProject.pages.length - 1,
+              Math.trunc(currentProject.activePageIndex ?? 0)
+            )
+          )
+        : 0;
+      // React may have replaced the route or active page before this queued
+      // editor synchronization runs. Never let an old replay write into a
+      // replacement session or a newly selected page.
+      if (
+        current.sessionIdentity !== replaySessionIdentity
+        || currentProject?.pages[currentPageIndex]?.id !== restoredPage.id
+      ) return;
+      const editorBelongsToPage = (editor: Editor) => (
+        editor.view.dom.closest<HTMLElement>('[data-page-id]')?.dataset.pageId
+          === restoredPage.id
+      );
+      const titleEditor = titleEditorRef.current;
+      if (titleEditor && !titleEditor.isDestroyed && editorBelongsToPage(titleEditor)) {
+        titleEditor.commands.setContent(restoredPage.titleContent, {
+          emitUpdate: false,
+          errorOnInvalidContent: true,
+        });
+        if (restoreSelection?.region === 'title') {
+          const maxPosition = titleEditor.state.doc.content.size;
+          titleEditor.commands.setTextSelection({
+            from: Math.max(1, Math.min(maxPosition, restoreSelection.from)),
+            to: Math.max(1, Math.min(maxPosition, restoreSelection.to)),
+          });
+          titleEditor.commands.focus();
+        } else {
+          titleEditor.commands.blur();
+        }
+      }
+      const bodyEditor = bodyEditorRef.current;
+      if (bodyEditor && !bodyEditor.isDestroyed && editorBelongsToPage(bodyEditor)) {
+        bodyEditor.commands.setContent(restoredPage.bodyContent, {
+          emitUpdate: false,
+          errorOnInvalidContent: true,
+        });
+        if (restoreSelection?.region === 'body') {
+          const maxPosition = bodyEditor.state.doc.content.size;
+          bodyEditor.commands.setTextSelection({
+            from: Math.max(1, Math.min(maxPosition, restoreSelection.from)),
+            to: Math.max(1, Math.min(maxPosition, restoreSelection.to)),
+          });
+          bodyEditor.commands.focus();
+        } else {
+          bodyEditor.commands.blur();
+        }
+      }
+    };
+    if (typeof queueMicrotask === 'function') queueMicrotask(syncEditors);
+    else window.setTimeout(syncEditors, 0);
+  }, [setSelectionProjectionIfChanged]);
+
+  const undoDocument = useCallback(() => {
+    flushDocumentLiveDrafts();
+    const applied = documentHistory.undo(applyDocumentHistoryProject);
+    if (applied) onAuthoredMutation?.();
+    return applied;
+  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation]);
+
+  const redoDocument = useCallback(() => {
+    flushDocumentLiveDrafts();
+    const applied = documentHistory.redo(applyDocumentHistoryProject);
+    if (applied) onAuthoredMutation?.();
+    return applied;
+  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation]);
+
+  useEffect(() => {
+    const handleDocumentHistoryKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      // Let the IME own composition undo/redo.  Intercepting a composing
+      // keystroke would make the document journal race the editor's native
+      // composition transaction.
+      if (event.isComposing) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const insideDocumentEditor = Boolean(
+        target?.closest('.document-title-prosemirror, .document-flow-prosemirror')
+      );
+      const isNativeTextControl = (
+        target instanceof HTMLTextAreaElement
+        || (
+          target instanceof HTMLInputElement
+          && !['button', 'checkbox', 'color', 'file', 'image', 'radio', 'range', 'reset', 'submit']
+            .includes(target.type)
+        )
+        || Boolean(target?.isContentEditable)
+      );
+      // Keep native undo available for project-name, inspector, and other
+      // form fields. The document journal owns ProseMirror editing and
+      // non-text interaction surfaces, but it must not steal a field's local
+      // editing history.
+      if (isNativeTextControl && !insideDocumentEditor) return;
+      const key = event.key.toLowerCase();
+      const isUndo = key === 'z' && !event.shiftKey;
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y';
+      if (!isUndo && !isRedo) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // Undo must be allowed to flush a live text draft before consulting the
+      // journal. A draft typed inside the debounce window has no journal entry
+      // yet, but it is still an authored action the user can undo now.
+      if (isUndo) undoDocument();
+      if (isRedo && documentHistory.canRedo()) redoDocument();
+    };
+    window.addEventListener('keydown', handleDocumentHistoryKeyDown, true);
+    return () => window.removeEventListener(
+      'keydown',
+      handleDocumentHistoryKeyDown,
+      true
+    );
+  }, [documentHistory, redoDocument, undoDocument]);
+
   const handleFormat = useCallback((
     command:
       | 'bold'
@@ -1585,6 +1796,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       | 'align-right'
       | 'align-justify'
   ) => {
+    if (command === 'undo') {
+      undoDocument();
+      return;
+    }
+    if (command === 'redo') {
+      redoDocument();
+      return;
+    }
     const editor = activeTextRegion === 'title'
       ? titleEditorRef.current
       : bodyEditorRef.current;
@@ -1593,8 +1812,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     if (command === 'bold') chain.toggleBold().run();
     if (command === 'italic') chain.toggleItalic().run();
     if (command === 'underline') chain.toggleUnderline().run();
-    if (command === 'undo') chain.undo().run();
-    if (command === 'redo') chain.redo().run();
     if (command === 'align-left') chain.setDocumentTextAlign('left').run();
     if (command === 'align-center') chain.setDocumentTextAlign('center').run();
     if (command === 'align-right') chain.setDocumentTextAlign('right').run();
@@ -1606,7 +1823,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         activeTextRegion === 'title' ? 'article-title' : 'body'
       ));
     }
-  }, [activeTextRegion, project]);
+  }, [activeTextRegion, project, redoDocument, undoDocument]);
 
   const handleFontSizeChange = useCallback((fontSizePt: number) => {
     const editor = activeTextRegion === 'title'
@@ -3148,6 +3365,16 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       setToastMessage('Unlock the reference before adjusting it.');
       return;
     }
+    if (
+      enabled
+      && (
+        !page?.reference?.visible
+        || !assetSources[page.reference.assetId]
+      )
+    ) {
+      setToastMessage('Show the reference before adjusting it.');
+      return;
+    }
     if (enabled) {
       setSelectedFlowImage(null);
       setSelectedStructuredImageIds([]);
@@ -3168,7 +3395,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
     setReferenceAdjustMode(enabled);
   }, [
+    assetSources,
     page?.reference?.locked,
+    page?.reference?.visible,
+    page?.reference?.assetId,
     setReferenceAdjustMode,
     setSelectedFlowImageId,
     setSelectedOverlayId,
@@ -3395,6 +3625,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       className={shellClassName}
       data-testid="document-editor-shell"
       data-editor-mode="document"
+      data-document-history-length={documentHistoryState.length}
+      data-document-history-index={documentHistoryState.index}
+      data-document-history-can-undo={documentHistoryState.canUndo ? 'true' : 'false'}
+      data-document-history-can-redo={documentHistoryState.canRedo ? 'true' : 'false'}
       data-document-selection-mode={selectionProjection.mode}
       data-document-selection-page-id={selectionProjection.pageId || undefined}
       data-document-selection-primary-image-id={
@@ -3849,6 +4083,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               : null}
             referenceAdjustMode={isReferenceAdjustMode}
             textFormatState={textFormatState}
+            canUndo={documentHistoryState.canUndo}
+            canRedo={documentHistoryState.canRedo}
             onFormat={handleFormat}
             onFontSizeChange={handleFontSizeChange}
             onBlockStyleChange={handleBlockStyleChange}

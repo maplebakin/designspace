@@ -622,6 +622,75 @@ describe('document project store', () => {
     });
   });
 
+  it('adopts a first-save library target without clearing newer edits', async () => {
+    let finishWrite: ((id: string) => void) | undefined;
+    dbMocks.saveProject.mockReturnValueOnce(new Promise<string>((resolve) => {
+      finishWrite = resolve;
+    }));
+    const store = useDocumentStore.getState();
+    store.createBlankProject('First save');
+
+    const save = store.saveProject('First save');
+    await Promise.resolve();
+    store.renameProject('Edited while saving');
+    finishWrite?.('first-save-library-id');
+    await save;
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'first-save-library-id',
+      isDirty: true,
+      saveStatus: 'unsaved',
+      project: { projectName: 'Edited while saving' },
+    });
+
+    await useDocumentStore.getState().flushAutosave();
+    expect(dbMocks.updateProject).toHaveBeenCalledWith(
+      'first-save-library-id',
+      'Edited while saving',
+      expect.any(String),
+      undefined,
+      'document'
+    );
+  });
+
+  it('reuses a first-save target when another manual save queues before allocation completes', async () => {
+    let finishFirstWrite: ((id: string) => void) | undefined;
+    dbMocks.saveProject.mockImplementationOnce(() => new Promise<string>((resolve) => {
+      finishFirstWrite = resolve;
+    }));
+    dbMocks.saveProject.mockResolvedValue('unexpected-duplicate-id');
+
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Queued first save');
+    const firstSave = store.saveProject('Queued first save');
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    expect(dbMocks.saveProject).toHaveBeenCalledTimes(1);
+
+    dbMocks.loadProject.mockResolvedValue({
+      project: { id: 'queued-first-save-id', name: 'Queued first save' },
+      canvasData: '{}',
+    });
+    const secondSave = useDocumentStore.getState().saveProject('Queued second save');
+    finishFirstWrite?.('queued-first-save-id');
+    await Promise.all([firstSave, secondSave]);
+
+    expect(dbMocks.saveProject).toHaveBeenCalledTimes(1);
+    expect(dbMocks.updateProject).toHaveBeenCalledWith(
+      'queued-first-save-id',
+      'Queued second save',
+      expect.any(String),
+      undefined,
+      'document'
+    );
+    expect(useDocumentStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'queued-first-save-id',
+      isDirty: false,
+      saveStatus: 'saved',
+      project: { projectName: 'Queued second save' },
+    });
+  });
+
   it('ignores non-finite page action indexes without dirtying the project', () => {
     const store = useDocumentStore.getState();
     store.createBlankProject('Safe page indexes');
@@ -1303,6 +1372,24 @@ describe('document project store', () => {
     });
   });
 
+  it('uses the same durable asset compaction for autosave while retaining live history bytes', async () => {
+    const project = createBlankDocumentProject('Compaction parity');
+    project.assets = { orphan: 'data:image/png;base64,AAAA' };
+    project.assetMetadata = {
+      orphan: { contentHash: 'orphan-hash', byteLength: 4 },
+    };
+    useDocumentStore.getState().hydrateProject(project, 'compaction-library-id');
+    useDocumentStore.getState().updatePage({ columnCount: 2 });
+
+    await useDocumentStore.getState().flushAutosave();
+
+    const persisted = JSON.parse(dbMocks.updateProject.mock.calls.at(-1)?.[2] as string);
+    expect(persisted.assets).toEqual({});
+    expect(persisted.assetMetadata).toEqual({});
+    expect(useDocumentStore.getState().project?.assets).toEqual(project.assets);
+    expect(useDocumentStore.getState().project?.assetMetadata).toEqual(project.assetMetadata);
+  });
+
   it('lets the shared lifecycle authority flush authored document changes explicitly', async () => {
     const existing = createBlankDocumentProject('Shared Autosave Document');
     useDocumentStore.getState().hydrateProject(existing, 'shared-autosave-id');
@@ -1384,6 +1471,44 @@ describe('document project store', () => {
       currentLibraryProjectId: 'replacement-library-id',
       isDirty: false,
       saveStatus: 'saved',
+    });
+  });
+
+  it('drains an in-flight write before loading a replacement project', async () => {
+    let finishWrite: (() => void) | undefined;
+    dbMocks.updateProject.mockReturnValueOnce(new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    }));
+    const first = createBlankDocumentProject('Queued old project');
+    useDocumentStore.getState().hydrateProject(first, 'queued-old-id');
+    useDocumentStore.getState().updatePage({ columnCount: 2 });
+    expect(useDocumentStore.getState().isDirty).toBe(true);
+    expect(useDocumentStore.getState().lifecycleAuthorityMode).toBe('legacy');
+    const pendingWrite = useDocumentStore.getState().flushAutosave();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    expect(dbMocks.updateProject).toHaveBeenCalledTimes(1);
+
+    const replacement = createBlankDocumentProject('Queued replacement');
+    dbMocks.loadProject.mockResolvedValueOnce({
+      project: {
+        id: 'queued-replacement-id',
+        name: 'Queued replacement',
+        lastModified: new Date(NOW),
+        canvasDataId: 'queued-replacement-data',
+      },
+      canvasData: JSON.stringify(replacement),
+    });
+    const pendingLoad = useDocumentStore.getState().loadLibraryProject('queued-replacement-id');
+    await Promise.resolve();
+    expect(dbMocks.loadProject).not.toHaveBeenCalled();
+
+    finishWrite?.();
+    await pendingWrite;
+    await pendingLoad;
+    expect(useDocumentStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'queued-replacement-id',
+      project: { projectName: 'Queued replacement' },
     });
   });
 

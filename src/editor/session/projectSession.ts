@@ -140,6 +140,8 @@ export type ProjectSessionCommands = Readonly<{
   close?: () => Promise<void>;
   notify: (message: string) => void;
   isDirty: () => boolean;
+  /** Guard a user-triggered project replacement with save/discard/cancel. */
+  prepareProjectReplacement?: () => Promise<boolean>;
   renameProject: (name: string) => Promise<void>;
   /** Product-level page actions are delegated by stable ID at the adapter boundary. */
   mutatePage: (command: PageMutationCommand) => Promise<PageMutationResult>;

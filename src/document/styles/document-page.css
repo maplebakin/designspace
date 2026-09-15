@@ -1199,6 +1199,12 @@
   position: relative;
   box-sizing: border-box;
   overflow: hidden;
+  /* The page surface is a clipped viewport, never a scroll owner.  Its
+   * absolute export root is intentionally page-sized and is two CSS pixels
+   * larger than the bordered client box; `hidden` still permits scroll
+   * anchoring to move that root, which changes authored page-space geometry
+   * between an initial session and a reopened page. */
+  overflow: clip;
   border: 1px solid #aeb5c0;
   color: #1f1c18;
   background: #fff;
@@ -2338,6 +2344,23 @@
   overflow: hidden;
   user-select: none;
   touch-action: none;
+}
+
+/* Reference adjustment is a page interaction mode, not a property of an
+ * individual text/image descendant.  The reference surface is raised above
+ * the editor/export surface for the duration of the mode so hit testing has
+ * one owner across text, whitespace, photos, and overlays.  The export root
+ * remains transparent to pointer events in this mode; ordinary pointer
+ * ownership is restored by removing the page data attribute. */
+.document-page-sheet[data-document-reference-adjusting="true"]
+  > .document-scan-reference.is-adjusting {
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.document-page-sheet[data-document-reference-adjusting="true"]
+  > .document-page-export-root {
+  pointer-events: none !important;
 }
 
 .document-overlay-snap-guide {

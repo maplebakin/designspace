@@ -62,6 +62,8 @@ export type ProjectLifecycleAuthority = Readonly<{
   }) => void;
   endSession: () => void;
   save: (name?: string) => Promise<boolean>;
+  /** Record a visible authored mutation before its semantic completion event. */
+  markAuthoredMutation: () => void;
   markPersistedRevision: (revision: number) => void;
   dispose: () => void;
 }>;
@@ -125,9 +127,10 @@ const safeCapability = (read: () => boolean) => {
 /**
  * Runtime-only lifecycle authority for a unified editor session.
  *
- * ProjectChange is the only authored-revision input. Renderer adapters remain
- * responsible for serialization and writing; this module owns only lifecycle
- * state, revision watermarks, and the one shared autosave schedule.
+ * Renderer adapters report semantic ProjectChange transactions and can also
+ * mark a visible live draft before its completion event. Renderer adapters
+ * remain responsible for serialization and writing; this module owns only
+ * lifecycle state, revision watermarks, and the one shared autosave schedule.
  */
 export const createProjectLifecycleAuthority = (
   options: ProjectLifecycleAuthorityOptions
@@ -479,6 +482,25 @@ export const createProjectLifecycleAuthority = (
     if (newerChanges) scheduleAutosave(activeSession.generation);
   };
 
+  const markAuthoredMutation = () => {
+    if (disposed || !activeSession) return;
+    const generation = activeSession.generation;
+    const adapter = activeSession.adapter;
+    setSnapshot({
+      ...snapshot,
+      authoredRevision: snapshot.authoredRevision + 1,
+      saveStatus: 'unsaved',
+      autosaveEligible: safeCapability(adapter.canAutosave),
+      pendingAutosave: (
+        safeCapability(adapter.canAutosave)
+        && inFlightSave?.generation !== generation
+      )
+        ? true
+        : snapshot.pendingAutosave,
+    });
+    scheduleAutosave(generation);
+  };
+
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
@@ -493,6 +515,7 @@ export const createProjectLifecycleAuthority = (
     startSession,
     endSession,
     save,
+    markAuthoredMutation,
     markPersistedRevision,
     dispose: () => {
       if (disposed) return;

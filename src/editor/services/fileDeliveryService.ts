@@ -17,6 +17,11 @@ export type FileDeliveryResult =
       path?: string;
     }
   | {
+      /** Browser download was initiated; the application cannot confirm disk persistence. */
+      status: 'initiated';
+      fileName: string;
+    }
+  | {
       status: 'cancelled';
       fileName: string;
     };
@@ -28,6 +33,22 @@ export type FileBatchDeliveryResult =
         fileName: string;
         path?: string;
       }>;
+      directory?: string;
+    }
+  | {
+      status: 'initiated';
+      files: Array<{
+        fileName: string;
+      }>;
+    }
+  | {
+      status: 'partial';
+      files: Array<{
+        fileName: string;
+        path?: string;
+      }>;
+      failedFileName: string;
+      error: string;
       directory?: string;
     }
   | {
@@ -142,11 +163,11 @@ const getErrorMessage = (error: unknown, fallback: string) =>
   recoveryErrorMessage(error, fallback);
 
 const loadTauriDeliveryApis = async () => {
-  const [{ save, open }, { writeFile }] = await Promise.all([
+  const [{ save, open }, { writeFile, rename, remove }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/plugin-fs'),
   ]);
-  return { save, open, writeFile };
+  return { save, open, writeFile, rename, remove };
 };
 
 const createDialogFilters = (request: FileDeliveryRequest) => {
@@ -160,12 +181,38 @@ const createDialogFilters = (request: FileDeliveryRequest) => {
 
 const writeTauriFile = async (
   writeFile: (path: string, data: Uint8Array) => Promise<void>,
+  rename: ((oldPath: string, newPath: string) => Promise<void>) | undefined,
+  remove: ((path: string) => Promise<void>) | undefined,
   path: string,
   fileName: string,
   content: FileDeliveryContent
 ) => {
   try {
-    await writeFile(path, await fileContentToBytes(content));
+    const bytes = await fileContentToBytes(content);
+    if (rename) {
+      // Stage beside the final target and atomically replace it. This keeps a
+      // failed write from truncating an existing important export.
+      const temporaryPath = `${path}.design-space-${crypto.randomUUID()}.tmp`;
+      try {
+        await writeFile(temporaryPath, bytes);
+        await rename(temporaryPath, path);
+      } catch (error) {
+        if (remove) {
+          try {
+            await remove(temporaryPath);
+          } catch {
+            // Preserve the original write/rename error; cleanup is best effort.
+          }
+        }
+        throw error;
+      }
+    } else {
+      // A direct write can truncate an existing important export before a
+      // disk-full or interruption error is reported. Refuse that fallback so
+      // native delivery never claims the staged/atomic contract when the
+      // bridge cannot provide rename.
+      throw new Error('Atomic native file replacement is unavailable in this runtime.');
+    }
   } catch (error) {
     const message = getErrorMessage(error, 'The selected destination could not be written.');
     throw new Error(`Could not save ${fileName}: ${message}`);
@@ -178,10 +225,10 @@ export const deliverFile = async (request: FileDeliveryRequest): Promise<FileDel
 
   if (!isTauriRecoveryAvailable()) {
     triggerBrowserFileDownload(request.content, fileName);
-    return { status: 'saved', fileName };
+    return { status: 'initiated', fileName };
   }
 
-  const { save, writeFile } = await loadTauriDeliveryApis();
+  const { save, writeFile, rename, remove } = await loadTauriDeliveryApis();
   let selectedPath: string | null;
   try {
     selectedPath = await save({
@@ -197,7 +244,7 @@ export const deliverFile = async (request: FileDeliveryRequest): Promise<FileDel
   if (!selectedPath) return { status: 'cancelled', fileName };
 
   const finalPath = ensureFileExtension(selectedPath, extension);
-  await writeTauriFile(writeFile, finalPath, fileName, request.content);
+  await writeTauriFile(writeFile, rename, remove, finalPath, fileName, request.content);
   return { status: 'saved', fileName, path: finalPath };
 };
 
@@ -214,10 +261,10 @@ export const deliverFiles = async (
       if (result.status === 'cancelled') return { status: 'cancelled', files: [] };
       files.push({ fileName: result.fileName });
     }
-    return { status: 'saved', files };
+    return { status: 'initiated', files: files.map(({ fileName }) => ({ fileName })) };
   }
 
-  const { open, writeFile } = await loadTauriDeliveryApis();
+  const { open, writeFile, rename, remove } = await loadTauriDeliveryApis();
   let selectedDirectory: string | string[] | null;
   try {
     selectedDirectory = await open({
@@ -240,8 +287,18 @@ export const deliverFiles = async (
     const extension = getRequestedExtension(request);
     const fileName = sanitizeDeliveredFileName(request.fileName, extension);
     const path = joinDirectoryAndFileName(directory, fileName);
-    await writeTauriFile(writeFile, path, fileName, request.content);
-    files.push({ fileName, path });
+    try {
+      await writeTauriFile(writeFile, rename, remove, path, fileName, request.content);
+      files.push({ fileName, path });
+    } catch (error) {
+      return {
+        status: 'partial',
+        files,
+        failedFileName: fileName,
+        error: getErrorMessage(error, 'The selected destination could not be written.'),
+        directory,
+      };
+    }
   }
   return { status: 'saved', files, directory };
 };

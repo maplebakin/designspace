@@ -3,6 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { useEditorStore } from '../state/editorStore';
 import { isActiveSelection } from '../utils/typeGuards';
 import { isUserObject } from '../utils/objectUtils';
+import {
+  normalizeSerializedObjectForFabric,
+  serializeCanvasObjects,
+  toSerializableObject,
+} from '../utils/serialization';
+import { reviveCustomFabricProps } from '../fabric/initFabricCanvas';
 import { attachTextboxAutoFitHandlers } from './textboxDrawingService';
 import { withCanvasObjectMutationSuppressed } from './canvasMutationObservation';
 
@@ -18,21 +24,6 @@ let clipboardBuffer: any[] | null = null;
 
 // Paste offset to prevent perfect overlapping
 const PASTE_OFFSET = 20;
-const CLIPBOARD_CUSTOM_PROPS = [
-  'id',
-  'tokenRole',
-  'colorLocked',
-  'isPlaceholder',
-  'adjustments',
-  '__fixedWidth',
-  '__fixedHeight',
-  'originalFontSize',
-  'recipeId',
-  'recipePageId',
-  'slotId',
-  'semanticRole',
-];
-
 type SingleObjectZOrderAction =
   | 'move-freeform-forward'
   | 'move-freeform-backward'
@@ -60,22 +51,32 @@ export const copySelection = async (): Promise<boolean> => {
   if (!activeObject) return false;
 
   try {
-    // Clone the active object(s) and store in buffer
-    const cloned = await activeObject.clone(CLIPBOARD_CUSTOM_PROPS);
-
     if (isActiveSelection(activeObject)) {
-      // Multiple objects selected - store each one
       const selection = activeObject as fabric.ActiveSelection;
-      const objects = selection.getObjects();
-      clipboardBuffer = await Promise.all(
-        objects.map(async (obj) => {
-          const clonedObj = await obj.clone(CLIPBOARD_CUSTOM_PROPS);
-          return clonedObj.toObject(CLIPBOARD_CUSTOM_PROPS);
-        })
-      );
+      const selectedObjects = new Set(selection.getObjects());
+      // The canvas-level scene serializer realizes an ActiveSelection's
+      // matrix for each child.  Serializing children through clone()/toObject
+      // alone leaves them in selection-local coordinates.
+      clipboardBuffer = serializeCanvasObjects(
+        canvas,
+        (object) => selectedObjects.has(object),
+      ).map((serialized: any) => {
+        if (serialized.type?.toLowerCase() !== 'image') return serialized;
+        const assetId = typeof serialized.assetId === 'string' && serialized.assetId.trim()
+          ? serialized.assetId
+          : (typeof serialized.id === 'string' ? serialized.id : undefined);
+        return assetId ? { ...serialized, assetId } : serialized;
+      });
     } else {
-      // Single object selected
-      clipboardBuffer = [cloned.toObject(CLIPBOARD_CUSTOM_PROPS)];
+      const serialized = toSerializableObject(activeObject);
+      if (serialized?.type?.toLowerCase() === 'image') {
+        const assetId = typeof serialized.assetId === 'string' && serialized.assetId.trim()
+          ? serialized.assetId
+          : (typeof serialized.id === 'string' ? serialized.id : undefined);
+        clipboardBuffer = [assetId ? { ...serialized, assetId } : serialized];
+      } else {
+        clipboardBuffer = [serialized];
+      }
     }
 
     return true;
@@ -94,14 +95,17 @@ export const pasteFromClipboard = async (): Promise<boolean> => {
 
   try {
     const pastedObjects: fabric.Object[] = [];
+    const usedIds = collectCanvasObjectIds(canvas);
 
     for (const objectData of clipboardBuffer) {
       // Create object from serialized data
       const obj = await createObjectFromData(objectData);
       if (!obj) continue;
 
-      // Assign new ID and offset position
-      (obj as any).id = uuidv4();
+      // Every pasted object tree receives fresh runtime identity.  Asset
+      // identity is deliberately separate for images so two objects can
+      // reference one durable byte payload without duplicating it.
+      assignFreshObjectTreeIds(obj, usedIds);
       obj.set({
         left: (obj.left || 0) + PASTE_OFFSET,
         top: (obj.top || 0) + PASTE_OFFSET,
@@ -171,51 +175,68 @@ export const duplicateSelection = async (): Promise<boolean> => {
  */
 const createObjectFromData = async (data: any): Promise<fabric.Object | null> => {
   try {
-    const type = typeof data.type === 'string' ? data.type.toLowerCase() : data.type;
-    const { type: _type, ...options } = data;
-
-    switch (type) {
-      case 'rect':
-        return new fabric.Rect(options);
-      case 'circle':
-        return new fabric.Circle(options);
-      case 'ellipse':
-        return new fabric.Ellipse(options);
-      case 'triangle':
-        return new fabric.Triangle(options);
-      case 'polygon':
-        return new fabric.Polygon(data.points || [], options);
-      case 'polyline':
-        return new fabric.Polyline(data.points || [], options);
-      case 'line':
-        return new fabric.Line([data.x1 || 0, data.y1 || 0, data.x2 || 0, data.y2 || 0], options);
-      case 'path':
-        return new fabric.Path(data.path, options);
-      case 'text':
-        return new fabric.Text(data.text || '', options);
-      case 'i-text':
-        return new fabric.IText(data.text || '', options);
-      case 'textbox':
-        return new fabric.Textbox(data.text || '', options);
-      case 'image':
-        if (data.src) {
-          return await fabric.FabricImage.fromURL(data.src, { crossOrigin: 'anonymous', ...options });
-        }
-        return null;
-      case 'group': {
-        const groupObjects = await Promise.all(
-          (data.objects || []).map((objData: any) => createObjectFromData(objData))
-        );
-        const validObjects = groupObjects.filter((obj): obj is fabric.Object => obj !== null);
-        return new fabric.Group(validObjects, options);
-      }
-      default:
-        console.warn(`[ClipboardService] Unknown object type: ${type}`);
-        return null;
-    }
+    const normalized = normalizeSerializedObjectForFabric(data);
+    const revived = await fabric.util.enlivenObjects([normalized], {
+      reviver: (serialized, instance) => {
+        if (instance) reviveCustomFabricProps(serialized as any, instance as any);
+      },
+    }) as fabric.Object[];
+    const object = revived[0];
+    if (!object) return null;
+    reviveObjectTree(normalized, object);
+    return object;
   } catch (error) {
     console.error('[ClipboardService] Failed to create object:', error);
     return null;
+  }
+};
+
+const collectCanvasObjectIds = (canvas: fabric.Canvas): Set<string> => {
+  const ids = new Set<string>();
+  const visit = (object: fabric.Object) => {
+    const id = (object as any).id;
+    if (typeof id === 'string' && id.trim()) ids.add(id);
+    if (typeof (object as any).getObjects === 'function') {
+      (object as fabric.Group).getObjects().forEach(visit);
+    }
+    const clipPath = (object as any).clipPath;
+    if (clipPath instanceof fabric.Object) visit(clipPath);
+  };
+  canvas.getObjects().forEach(visit);
+  return ids;
+};
+
+const assignFreshObjectTreeIds = (
+  object: fabric.Object,
+  usedIds: Set<string>,
+) => {
+  let nextId = uuidv4();
+  while (usedIds.has(nextId)) nextId = uuidv4();
+  (object as any).id = nextId;
+  usedIds.add(nextId);
+  if (typeof (object as any).getObjects === 'function') {
+    (object as fabric.Group).getObjects().forEach((child) => {
+      assignFreshObjectTreeIds(child, usedIds);
+    });
+  }
+  const clipPath = (object as any).clipPath;
+  if (clipPath instanceof fabric.Object) assignFreshObjectTreeIds(clipPath, usedIds);
+};
+
+const reviveObjectTree = (serialized: any, object: fabric.Object) => {
+  reviveCustomFabricProps(serialized as any, object as any);
+  const children = Array.isArray(serialized?.objects)
+    && typeof (object as any).getObjects === 'function'
+    ? (object as fabric.Group).getObjects()
+    : [];
+  if (Array.isArray(serialized?.objects)) {
+    serialized.objects.forEach((child: any, index: number) => {
+      const revivedChild = children[index];
+      if (revivedChild) reviveObjectTree(child, revivedChild);
+    });
+  }
+  if (serialized?.clipPath && (object as any).clipPath instanceof fabric.Object) {
+    reviveObjectTree(serialized.clipPath, (object as any).clipPath);
   }
 };
 

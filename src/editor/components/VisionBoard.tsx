@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
+import * as fabric from 'fabric';
 import { shallow } from 'zustand/shallow';
 import {
   ZoomIn,
@@ -11,22 +12,51 @@ import {
   Grid3X3,
 } from 'lucide-react';
 import { useVisionBoardStore, useExtractedColors, useSortedItems, VisionItem } from '../state/visionBoardStore';
-import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
+import {
+  DEFAULT_CANVAS_BACKGROUND,
+  buildPortableCanvasSnapshot,
+  useEditorStore,
+} from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { captureCanvasState } from '../utils/serialization';
 import { BoardItem } from './BoardItem';
-import { loadCanvasFromJsonSafely } from '../fabric/initFabricCanvas';
+import { loadCanvasFromJsonSafely, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { resizeCanvas } from '../fabric/canvasUtils';
+import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
 import { withCanvasObjectMutationSuppressed } from '../services/canvasMutationObservation';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 interface VisionBoardProps {
   onClose?: () => void;
 }
+
+/**
+ * Validate/revive an auxiliary design state before touching the live editor.
+ * Vision Board records are durable user content, so a malformed or stale
+ * record must not clear the currently authored canvas before it fails.
+ */
+const stageDesignState = async (canvasData: Record<string, any>) => {
+  if (!Array.isArray(canvasData.objects)) {
+    throw new Error('The saved design state has no valid object list.');
+  }
+  if (typeof document === 'undefined') return;
+  const element = document.createElement('canvas');
+  const stagingCanvas = new fabric.StaticCanvas(element, { width: 1, height: 1 });
+  try {
+    await loadCanvasFromJsonSafely(stagingCanvas, canvasData, reviveCustomFabricProps);
+  } finally {
+    await Promise.resolve(stagingCanvas.dispose());
+    element.remove();
+  }
+};
 
 export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [showColorPalette, setShowColorPalette] = useState(false);
+  const designLoadGenerationRef = useRef(0);
+  const designLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Vision Board Store
   const {
@@ -65,6 +95,9 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
   const sortedItems = useSortedItems();
   const extractedColors = useExtractedColors();
   const canvasBackgroundColor = useThemeStore((state) => state.canvasBackgroundColor);
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
+  );
 
   // Editor Store - for loading states and pinning current design
   const { canvas, setToastMessage } = useEditorStore(
@@ -80,55 +113,89 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
     (item: VisionItem) => {
       if (item.type !== 'design-state' || !canvas) return;
 
-      void (async () => {
+      const generation = ++designLoadGenerationRef.current;
+      const load = async () => {
         try {
-        const data = JSON.parse(item.canvasData);
-        const objects = data.objects || [];
+          if (
+            prepareProjectReplacement
+            && !(await prepareProjectReplacement())
+          ) return;
+          if (generation !== designLoadGenerationRef.current) return;
 
-        const {
-          clearSelection,
-          setCanvasBackgroundColor,
-          syncCanvasToStore,
-          syncActivePageFromCanvas,
-          saveState,
-          reportCommittedCanvasPageContent,
-        } = useEditorStore.getState();
-        const beforeFingerprint = JSON.stringify({
-          objects: useEditorStore.getState().canvasObjects,
-          background: useThemeStore.getState().canvasBackgroundColor,
-        });
-        clearSelection();
-        setCanvasBackgroundColor(typeof data.background === 'string' ? data.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
-        canvas.backgroundColor = 'transparent';
+          const data = JSON.parse(item.canvasData);
+          const assets: Record<string, string> = Object.fromEntries(
+            Object.entries(data.assets ?? {})
+              .filter(([, source]) => typeof source === 'string' && source.length > 0)
+          ) as Record<string, string>;
+          const hydratedData = hydrateCanvasDataWithAssets(data, assets);
+          await stageDesignState(hydratedData);
+          if (generation !== designLoadGenerationRef.current) return;
+          const objects = hydratedData.objects || [];
 
-        if (objects.length > 0) {
-          await loadCanvasFromJsonSafely(canvas, { objects });
-          canvas.backgroundColor = 'transparent';
-          canvas.requestRenderAll();
-          syncCanvasToStore();
-          setToastMessage(`Loaded: ${item.label || 'Design state'}`);
-        } else {
-          withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
-          canvas.requestRenderAll();
-          setToastMessage(`Loaded empty state: ${item.label || 'Design state'}`);
-        }
-        syncCanvasToStore(canvas);
-        syncActivePageFromCanvas();
-        saveState();
-        reportCommittedCanvasPageContent(
-          beforeFingerprint,
-          JSON.stringify({
+          const {
+            clearSelection,
+            setCanvasBackgroundColor,
+            syncCanvasToStore,
+            syncActivePageFromCanvas,
+            saveState,
+            reportCommittedCanvasPageContent,
+          } = useEditorStore.getState();
+          const beforeFingerprint = JSON.stringify({
             objects: useEditorStore.getState().canvasObjects,
             background: useThemeStore.getState().canvasBackgroundColor,
-          }),
-        );
+          });
+          clearSelection();
+          setCanvasBackgroundColor(typeof hydratedData.background === 'string' ? hydratedData.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
+          canvas.backgroundColor = 'transparent';
+
+          const savedWidth = Number(data.canvasSize?.width ?? item.canvasSize?.width);
+          const savedHeight = Number(data.canvasSize?.height ?? item.canvasSize?.height);
+          if (
+            Number.isFinite(savedWidth)
+            && savedWidth > 0
+            && Number.isFinite(savedHeight)
+            && savedHeight > 0
+          ) {
+            resizeCanvas(Math.round(savedWidth), Math.round(savedHeight), {
+              save: false,
+              skipRender: true,
+            });
+          }
+
+          if (objects.length > 0) {
+            await loadCanvasFromJsonSafely(canvas, hydratedData, reviveCustomFabricProps);
+            if (generation !== designLoadGenerationRef.current) return;
+            canvas.backgroundColor = 'transparent';
+            canvas.requestRenderAll();
+            syncCanvasToStore();
+            setToastMessage(`Loaded: ${item.label || 'Design state'}`);
+          } else {
+            withCanvasObjectMutationSuppressed(canvas, () => canvas.clear());
+            canvas.requestRenderAll();
+            setToastMessage(`Loaded empty state: ${item.label || 'Design state'}`);
+          }
+          syncCanvasToStore(canvas);
+          syncActivePageFromCanvas();
+          saveState();
+          reportCommittedCanvasPageContent(
+            beforeFingerprint,
+            JSON.stringify({
+              objects: useEditorStore.getState().canvasObjects,
+              background: useThemeStore.getState().canvasBackgroundColor,
+            }),
+          );
         } catch (error) {
-          console.error('Failed to load design state:', error);
-          setToastMessage('Failed to load design state');
+          if (generation === designLoadGenerationRef.current) {
+            console.error('Failed to load design state:', error);
+            setToastMessage('Failed to load design state');
+          }
         }
-      })();
+      };
+
+      const queuedLoad = designLoadQueueRef.current.then(load, load);
+      designLoadQueueRef.current = queuedLoad.catch(() => undefined);
     },
-    [canvas, setToastMessage]
+    [canvas, prepareProjectReplacement, setToastMessage]
   );
 
   // Handle double-click on items
@@ -142,7 +209,7 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
   );
 
   // Pin current canvas state to board
-  const handlePinCurrentDesign = useCallback(() => {
+  const handlePinCurrentDesign = useCallback(async () => {
     if (!canvas) {
       setToastMessage('No canvas available');
       return;
@@ -154,19 +221,36 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
       backgroundColor: canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND,
     });
 
-    addItem({
-      type: 'design-state',
-      canvasData: state.canvasData,
-      thumbnail: state.thumbnail,
-      canvasSize: state.canvasSize,
-      label: `Iteration ${new Date().toLocaleTimeString()}`,
-      position: {
-        x: Math.random() * 200 + 50,
-        y: Math.random() * 200 + 50,
-        width: 200,
-        height: (200 * state.canvasSize.height) / state.canvasSize.width,
-      },
-    });
+    try {
+      const portable = await buildPortableCanvasSnapshot(
+        canvas,
+        useEditorStore.getState().imageAssets,
+      );
+      addItem({
+        type: 'design-state',
+        canvasData: JSON.stringify({
+          ...portable.canvasData,
+          canvasSize: state.canvasSize,
+          assets: portable.assets,
+        }),
+        thumbnail: state.thumbnail,
+        canvasSize: state.canvasSize,
+        label: `Iteration ${new Date().toLocaleTimeString()}`,
+        position: {
+          x: Math.random() * 200 + 50,
+          y: Math.random() * 200 + 50,
+          width: 200,
+          height: (200 * state.canvasSize.height) / state.canvasSize.width,
+        },
+      });
+    } catch (error) {
+      setToastMessage(
+        error instanceof Error
+          ? error.message
+          : 'Unable to preserve image bytes in this design snapshot.'
+      );
+      return;
+    }
 
     setToastMessage('Design pinned to vision board');
   }, [canvas, canvasBackgroundColor, addItem, setToastMessage]);

@@ -38,14 +38,14 @@ export const renderCanvasToPngBlob = async (
     visible: object.visible,
   }));
 
-  canvas.setZoom(1);
-  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-  canvas.backgroundColor = nextBackgroundColor;
-  hiddenObjects.forEach(({ object }) => object.set('visible', false));
-  canvas.renderAll();
-
+  let dataUrl: string;
   try {
-    const dataUrl = canvas.toDataURL({
+    canvas.setZoom(1);
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    canvas.backgroundColor = nextBackgroundColor;
+    hiddenObjects.forEach(({ object }) => object.set('visible', false));
+    canvas.renderAll();
+    dataUrl = canvas.toDataURL({
       format: options.format ?? 'png',
       multiplier: scale,
       left: 0,
@@ -54,8 +54,6 @@ export const renderCanvasToPngBlob = async (
       height,
       quality: options.quality ?? 1,
     });
-    const response = await fetch(dataUrl);
-    return await response.blob();
   } finally {
     hiddenObjects.forEach(({ object, visible }) => object.set('visible', visible));
     canvas.setZoom(originalZoom);
@@ -63,4 +61,11 @@ export const renderCanvasToPngBlob = async (
     canvas.backgroundColor = originalBackgroundColor;
     canvas.renderAll();
   }
+
+  // Converting the already captured data URL can yield across fetch/blob
+  // implementations. Keep that await outside the temporary live-canvas
+  // mutation window so a concurrent edit can never be overwritten by a stale
+  // restoration when the conversion completes.
+  const response = await fetch(dataUrl);
+  return await response.blob();
 };

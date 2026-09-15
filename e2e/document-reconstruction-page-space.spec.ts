@@ -85,6 +85,30 @@ const readPageSpaceGeometry = async (page: Page, imageId: string) => {
   };
 };
 
+const readAuthoredPhotoGeometry = async (page: Page, imageId: string) => page.evaluate((id) => {
+  const slot = document.querySelector<HTMLElement>(
+    `[data-layout-role="occupied-columns"][data-image-id="${id}"]`
+  );
+  const image = document.querySelector<HTMLElement>(
+    `.document-image-node[data-image-id="${id}"]`
+  );
+  if (!slot || !image) throw new Error('Authored photo geometry is unavailable.');
+  const readNumber = (element: Element, attribute: string) => {
+    const value = Number(element.getAttribute(attribute));
+    if (!Number.isFinite(value)) throw new Error(`Invalid ${attribute} for ${id}.`);
+    return value;
+  };
+  return {
+    left: readNumber(slot, 'data-image-left-px'),
+    top: readNumber(slot, 'data-image-top-px'),
+    xOffset: readNumber(slot, 'data-image-x-offset-px'),
+    width: readNumber(image, 'data-width-px'),
+    height: readNumber(image, 'data-height-px'),
+    coordinateSpace: image.getAttribute('data-coordinate-space'),
+    verticalAnchor: image.getAttribute('data-vertical-anchor'),
+  };
+}, imageId);
+
 const dragSpanWithoutChangingTheDropdown = async (
   page: Page,
   imageId: string,
@@ -162,6 +186,44 @@ const inspectScanPixels = async (page: Page) => {
     y: sheet!.height * ratio.y,
   })));
 };
+
+const readReferenceAssetIdentity = async (page: Page) => page.evaluate(async () => {
+  const reference = document.querySelector<HTMLElement>('[data-reference-layer="true"]');
+  const image = reference?.querySelector<HTMLImageElement>('img');
+  const sheet = document.querySelector<HTMLElement>('[data-testid="document-page"]');
+  if (!reference || !image || !sheet) {
+    throw new Error('Reference asset identity is unavailable.');
+  }
+  const source = image.currentSrc || image.src;
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  const imageRect = image.getBoundingClientRect();
+  const sheetRect = sheet.getBoundingClientRect();
+  return {
+    sourceHash: `${source.length}-${(first >>> 0).toString(16)}-${(second >>> 0).toString(16)}`,
+    sourceLength: source.length,
+    sourceProtocol: source.slice(0, source.indexOf(':')).toLowerCase(),
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+    imageRect: {
+      left: imageRect.left - sheetRect.left,
+      top: imageRect.top - sheetRect.top,
+      width: imageRect.width,
+      height: imageRect.height,
+    },
+    referenceTransform: image.style.transform,
+    objectFit: image.style.objectFit,
+    objectPosition: image.style.objectPosition,
+    opacity: reference.style.opacity,
+    sourceType: reference.dataset.referenceSourceType,
+    scrollTop: sheet.scrollTop,
+  };
+});
 
 const waitForDarkScanPixel = async (page: Page) => {
   await expect.poll(async () => {
@@ -414,7 +476,6 @@ test.describe('reconstruction page-space interactions', () => {
     expect(Number(rasterDiagnostics[0].height)).toBeGreaterThan(0);
     expect(Number(rasterDiagnostics[0].nonTransparentPixelCount)).toBeGreaterThan(0);
     expect(Number(rasterDiagnostics[0].luminanceVariance)).toBeGreaterThan(0);
-    console.log('scanned PDF raster diagnostics', rasterDiagnostics[0]);
     const dimensions = await page.getByTestId('document-reference-layer').locator('img')
       .evaluate((element) => ({
         width: (element as HTMLImageElement).naturalWidth,
@@ -475,7 +536,7 @@ test.describe('reconstruction page-space interactions', () => {
     expect(Math.min(...differences)).toBeLessThan(45);
   });
 
-  test('persists a scanned PDF reference through page switching and reopen', async ({ page }) => {
+  test('persists a scanned PDF reference through page switching and reopen', async ({ page, browser }) => {
     const fixture = await createScannedReferenceFixture();
     await openReconstruction(page, 'Scanned PDF Persistence Regression');
     await page.locator('.document-flow-prosemirror').fill('');
@@ -486,6 +547,9 @@ test.describe('reconstruction page-space interactions', () => {
     });
     await expect(page.getByTestId('document-reference-layer'))
       .toHaveAttribute('data-reference-image-state', 'loaded');
+    const beforeAsset = await readReferenceAssetIdentity(page);
+    expect(beforeAsset.sourceProtocol).toBe('data');
+    expect(beforeAsset.sourceType).toBe('pdf');
     const before = await inspectScanPixels(page);
 
     await page.getByTestId('document-add-page').click();
@@ -496,38 +560,61 @@ test.describe('reconstruction page-space interactions', () => {
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
 
-    await page.getByRole('button', { name: 'Back to projects' }).click();
-    await page.getByTestId('dashboard-project-card')
-      .filter({ hasText: 'Scanned PDF Persistence Regression' })
-      .getByRole('button')
-      .first()
-      .click();
-    await expect(page.getByTestId('document-reference-layer'))
-      .toHaveAttribute('data-reference-image-state', 'loaded');
-    await expect(page.getByLabel('Reference fit')).toHaveValue('contain');
-    await expect(page.getByLabel('Reference opacity')).toHaveValue('0.35');
-    const after = await inspectScanPixels(page);
-    const differences = before.map((pixel, index) => pixel.reduce(
-      (total, channel, channelIndex) => total + Math.abs(channel - after[index][channelIndex]),
-      0,
-    ));
-    expect(Math.max(...differences)).toBeLessThan(12);
+    const durableStorageState = await page.context().storageState({ indexedDB: true });
+    await page.close();
+    const reopenedContext = await browser.newContext({ storageState: durableStorageState });
+    try {
+      const reopened = await reopenedContext.newPage();
+      await reopened.goto('/');
+      await reopened.getByTestId('dashboard-project-card')
+        .filter({ hasText: 'Scanned PDF Persistence Regression' })
+        .getByRole('button')
+        .first()
+        .click();
+      await expect(reopened.getByTestId('document-reference-layer'))
+        .toHaveAttribute('data-reference-image-state', 'loaded');
+      await expect(reopened.getByLabel('Reference fit')).toHaveValue('contain');
+      await expect(reopened.getByLabel('Reference opacity')).toHaveValue('0.35');
+      const afterAsset = await readReferenceAssetIdentity(reopened);
+      expect(afterAsset).toMatchObject({
+        sourceHash: beforeAsset.sourceHash,
+        sourceLength: beforeAsset.sourceLength,
+        sourceProtocol: 'data',
+        sourceType: 'pdf',
+        naturalWidth: beforeAsset.naturalWidth,
+        naturalHeight: beforeAsset.naturalHeight,
+        imageRect: beforeAsset.imageRect,
+        referenceTransform: beforeAsset.referenceTransform,
+        objectFit: beforeAsset.objectFit,
+        objectPosition: beforeAsset.objectPosition,
+        opacity: beforeAsset.opacity,
+        scrollTop: 0,
+      });
+      const after = await inspectScanPixels(reopened);
+      const differences = before.map((pixel, index) => pixel.reduce(
+        (total, channel, channelIndex) => total + Math.abs(channel - after[index][channelIndex]),
+        0,
+      ));
+      expect(Math.max(...differences)).toBeLessThan(12);
 
-    const pngDownloadPromise = page.waitForEvent('download');
-    const exportButton = page.getByRole('button', { name: 'PNG', exact: true });
-    if (!await exportButton.isVisible()) {
-      await page.getByText('Export', { exact: true }).click();
+      const pngDownloadPromise = reopened.waitForEvent('download');
+      const exportButton = reopened.getByRole('button', { name: 'PNG', exact: true });
+      if (!await exportButton.isVisible()) {
+        await reopened.getByText('Export', { exact: true }).click();
+      }
+      await exportButton.click();
+      const pngDownload = await pngDownloadPromise;
+      const pngPath = await pngDownload.path();
+      expect(pngPath).not.toBeNull();
+      const exportedPixel = await inspectDownloadedPixel(
+        reopened,
+        await readFile(pngPath!),
+        { x: 0.26, y: 0.48 },
+      );
+      expect(exportedPixel).toEqual([250, 248, 245, 255]);
+    } finally {
+      await reopenedContext.close();
     }
-    await exportButton.click();
-    const pngDownload = await pngDownloadPromise;
-    const pngPath = await pngDownload.path();
-    expect(pngPath).not.toBeNull();
-    const exportedPixel = await inspectDownloadedPixel(
-      page,
-      await readFile(pngPath!),
-      { x: 0.26, y: 0.48 },
-    );
-    expect(exportedPixel).toEqual([250, 248, 245, 255]);
   });
 
   test('keeps an asynchronous reference import bound to its starting page', async ({ page }) => {
@@ -600,6 +687,11 @@ test.describe('reconstruction page-space interactions', () => {
     const visibility = page.getByTestId('document-reference-visibility');
     await visibility.click();
     await expect(layer).toHaveCount(0);
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await expect(page.getByTestId('document-toast'))
+      .toHaveText('Show the reference before adjusting it.');
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-adjusting', 'false');
     await visibility.click();
     await expect(layer).toBeVisible();
 
@@ -668,6 +760,241 @@ test.describe('reconstruction page-space interactions', () => {
     expect(layerAfterZoom).not.toBeNull();
     expect(layerAfterZoom!.width / pageAfterZoom!.width)
       .toBeCloseTo(layerBeforeZoom!.width / pageBeforeZoom!.width, 2);
+  });
+
+  test('gives reference adjustment exclusive pointer ownership over text, photos, and continuation surfaces', async ({ page }) => {
+    test.slow();
+    await openReconstruction(page, 'Reference Pointer Ownership Regression');
+    const imageId = await addPhoto(page, 'reference-pointer-photo.png');
+    expect(imageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'reference-pointer-scan.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(REFERENCE_PDF_BASE64, 'base64'),
+    });
+    const layer = page.getByTestId('document-reference-layer');
+    await expect(layer).toHaveAttribute('data-reference-image-state', 'loaded');
+
+    const points = await page.evaluate((requestedImageId) => {
+      const sheet = document.querySelector<HTMLElement>('[data-testid="document-page"]');
+      const columns = Array.from(document.querySelectorAll<HTMLElement>(
+        '[data-document-span-layout] [data-layout-role="explicit-text-column"]'
+      ));
+      const text = columns[0]?.querySelector<HTMLElement>('p');
+      const continuation = columns[1]?.querySelector<HTMLElement>('p') || text;
+      const image = document.querySelector<HTMLElement>(
+        `[data-layout-role="occupied-columns"][data-image-id="${requestedImageId}"] .document-image__frame`
+      );
+      if (!sheet || !text || !continuation || !image) {
+        throw new Error('Reference ownership hit-test surfaces are unavailable.');
+      }
+      const center = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      };
+      const sheetRect = sheet.getBoundingClientRect();
+      return {
+        text: center(text),
+        continuation: center(continuation),
+        image: center(image),
+        whitespace: {
+          x: sheetRect.left + 4,
+          y: sheetRect.top + 4,
+        },
+      };
+    }, imageId);
+
+    await page.mouse.click(points.text.x, points.text.y);
+    const selectionBefore = await page.locator('[data-document-span-layout]').evaluate((root) => ({
+      from: root.getAttribute('data-document-selection-from'),
+      to: root.getAttribute('data-document-selection-to'),
+      text: root.getAttribute('data-document-selection-text'),
+    }));
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-adjusting', 'true');
+
+    const readReferenceTarget = async (point: { x: number; y: number }) => (
+      page.evaluate(({ x, y }) => {
+        const target = document.elementFromPoint(x, y);
+        return {
+          tag: target?.tagName || null,
+          ownsReference: Boolean(target?.closest('[data-reference-layer="true"]')),
+          ownsEditor: Boolean(target?.closest('[data-document-export-root="true"]')),
+        };
+      }, point)
+    );
+    for (const point of [points.text, points.continuation, points.image, points.whitespace]) {
+      expect(await readReferenceTarget(point)).toMatchObject({
+        ownsReference: true,
+        ownsEditor: false,
+      });
+    }
+
+    const referenceBeforeCancel = {
+      x: await page.getByLabel('Reference X offset').inputValue(),
+      y: await page.getByLabel('Reference Y offset').inputValue(),
+    };
+    await page.mouse.move(points.whitespace.x, points.whitespace.y);
+    await page.mouse.down();
+    await page.mouse.move(points.whitespace.x + 30, points.whitespace.y + 15, { steps: 3 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-adjusting', 'false');
+    expect(await page.getByLabel('Reference X offset').inputValue())
+      .toBe(referenceBeforeCancel.x);
+    expect(await page.getByLabel('Reference Y offset').inputValue())
+      .toBe(referenceBeforeCancel.y);
+
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await page.mouse.move(points.text.x, points.text.y);
+    await page.mouse.down();
+    await page.mouse.move(points.text.x + 26, points.text.y + 18, { steps: 4 });
+    await page.mouse.up();
+    expect(await page.locator('[data-document-span-layout]').evaluate((root) => ({
+      from: root.getAttribute('data-document-selection-from'),
+      to: root.getAttribute('data-document-selection-to'),
+      text: root.getAttribute('data-document-selection-text'),
+    }))).toEqual(selectionBefore);
+
+    await page.getByTestId('document-context-toolbar')
+      .getByRole('button', { name: 'Finish adjusting', exact: true })
+      .click();
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-adjusting', 'false');
+    await expect(layer).toHaveCSS('pointer-events', 'none');
+
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('document-page'))
+      .toHaveAttribute('data-document-reference-adjusting', 'false');
+    await expect(layer).toHaveCSS('pointer-events', 'none');
+
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await page.getByRole('button', { name: 'Zoom in' }).click();
+    await expect.poll(async () => (
+      await page.getByTestId('document-page').getAttribute(
+        'data-document-reference-adjusting'
+      )
+    )).toBe('true');
+    const zoomedPoint = await page.getByTestId('document-page').evaluate(() => {
+      const rect = document.querySelector<HTMLElement>('[data-testid="document-page"]')
+        ?.getBoundingClientRect();
+      if (!rect) throw new Error('Zoomed page is unavailable.');
+      return { x: rect.left + 8, y: rect.top + 8 };
+    });
+    expect(await readReferenceTarget(zoomedPoint)).toMatchObject({
+      ownsReference: true,
+      ownsEditor: false,
+    });
+  });
+
+  test('keeps text, photo, and reference ownership coherent through save and reopen', async ({ page }) => {
+    test.slow();
+    await openReconstruction(page, 'Structured Interaction Ownership Workflow');
+    const body = page.locator('.document-flow-prosemirror');
+    const layout = page.locator('[data-document-span-layout]');
+    const imageId = await addPhoto(page, 'structured-ownership-photo.png');
+    expect(imageId).toBeTruthy();
+    await configureSpanWithoutPinning(page, 'span-2');
+
+    const textPoints = await page.evaluate(() => {
+      const columns = Array.from(document.querySelectorAll<HTMLElement>(
+        '[data-document-span-layout] [data-layout-role="explicit-text-column"]'
+      ));
+      const first = columns[0]?.querySelector<HTMLElement>('p');
+      const continuation = columns[1]?.querySelector<HTMLElement>('p') || first;
+      const image = document.querySelector<HTMLElement>(
+        '[data-layout-role="occupied-columns"] .document-image__frame'
+      );
+      if (!first || !continuation || !image) {
+        throw new Error('Structured workflow surfaces are unavailable.');
+      }
+      const center = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      };
+      return {
+        first: center(first),
+        continuation: center(continuation),
+        image: center(image),
+      };
+    });
+
+    await page.mouse.click(textPoints.first.x, textPoints.first.y);
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    await body.press('ControlOrMeta+Home');
+    await body.type('Boundary intro ');
+    await body.press('End');
+    await body.type(' boundary suffix');
+    await expect(body).toContainText('Boundary intro');
+
+    await page.mouse.move(textPoints.first.x, textPoints.first.y);
+    await page.mouse.down();
+    await page.mouse.move(textPoints.continuation.x, textPoints.continuation.y, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(async () => (
+      (await layout.getAttribute('data-document-selection-text') || '').length
+    )).toBeGreaterThan(20);
+
+    await page.mouse.click(textPoints.image.x, textPoints.image.y);
+    await expect(page.getByTestId('document-editor-shell'))
+      .toHaveAttribute('data-selected-flow-image-id', imageId!);
+
+    await page.getByTestId('document-reference-file-input').setInputFiles({
+      name: 'structured-ownership-reference.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(REFERENCE_PDF_BASE64, 'base64'),
+    });
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
+    await page.mouse.click(textPoints.first.x, textPoints.first.y);
+    const selectionBeforeReference = await layout.evaluate((root) => ({
+      from: root.getAttribute('data-document-selection-from'),
+      to: root.getAttribute('data-document-selection-to'),
+      text: root.getAttribute('data-document-selection-text'),
+    }));
+    await page.getByRole('button', { name: 'Adjust reference', exact: true }).click();
+    await page.mouse.move(textPoints.first.x, textPoints.first.y);
+    await page.mouse.down();
+    await page.mouse.move(textPoints.first.x + 24, textPoints.first.y + 14, { steps: 4 });
+    await page.mouse.up();
+    expect(await layout.evaluate((root) => ({
+      from: root.getAttribute('data-document-selection-from'),
+      to: root.getAttribute('data-document-selection-to'),
+      text: root.getAttribute('data-document-selection-text'),
+    }))).toEqual(selectionBeforeReference);
+    await page.getByTestId('document-context-toolbar')
+      .getByRole('button', { name: 'Finish adjusting', exact: true })
+      .click();
+
+    await page.mouse.click(textPoints.continuation.x, textPoints.continuation.y);
+    await body.type(' resumed text');
+    await expect(body).toContainText('resumed text');
+    await page.locator('.document-sidebar__heading').first().click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByTestId('document-save-status')).toHaveText(/saved/i);
+    await page.getByRole('button', { name: 'Back to projects' }).click();
+    await page.getByTestId('dashboard-project-card')
+      .filter({ hasText: 'Structured Interaction Ownership Workflow' })
+      .getByRole('button')
+      .first()
+      .click();
+    await expect(page.locator('.document-flow-prosemirror'))
+      .toContainText('Boundary intro');
+    await expect(page.locator('.document-flow-prosemirror'))
+      .toContainText('resumed text');
+    const restoredImages = await page.locator(
+      `[data-document-image="true"][data-image-id="${imageId}"]`
+    ).evaluateAll((elements) => elements.filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }).length);
+    expect(restoredImages).toBeGreaterThan(0);
+    await expect(page.getByTestId('document-reference-layer'))
+      .toHaveAttribute('data-reference-image-state', 'loaded');
   });
 
   test('reconstructs independent page-position photos by dragging from article flow', async ({ page }) => {
@@ -839,6 +1166,7 @@ test.describe('reconstruction page-space interactions', () => {
     await configureSpanWithoutPinning(page, 'span-2');
     await dragSpanWithoutChangingTheDropdown(page, imageId!, 44, 30);
     const fixedBeforeTitle = await readPageSpaceGeometry(page, imageId!);
+    const authoredBefore = await readAuthoredPhotoGeometry(page, imageId!);
 
     const placeholder = page.getByTestId('document-title-placeholder');
     await placeholder.click();
@@ -869,6 +1197,7 @@ test.describe('reconstruction page-space interactions', () => {
       .first()
       .click();
     await expect(page.getByTestId('document-title-placeholder')).toBeVisible();
+    expect(await readAuthoredPhotoGeometry(page, imageId!)).toEqual(authoredBefore);
     expect(await readPageSpaceGeometry(page, imageId!)).toEqual(fixedBeforeTitle);
   });
 });

@@ -68,17 +68,21 @@ export const ungroupObjects = (canvas: fabric.Canvas): CanvasCommittedMutation |
   const group = activeObject as fabric.Group;
   const groupId = (group as any).id;
   const children = group.getObjects();
+  const groupIndex = canvas.getObjects().indexOf(group);
   if (children.length === 0) {
     return null;
   }
   const canObserveGroup = isCanvasObjectObservationTarget(group)
     && children.every(isCanvasObjectObservationTarget);
   withCanvasObjectMutationSuppressed(canvas, () => {
+    // `Group.remove`/`removeAll` calls Fabric's supported exit path.  This
+    // clears both `group` and `parent` and realizes the group's transform in
+    // page coordinates before the children become canvas objects again.
+    group.removeAll();
     canvas.remove(group);
-    children.forEach((child) => {
-      canvas.add(child);
-      child.setCoords();
-    });
+    const insertionIndex = groupIndex < 0 ? canvas.getObjects().length : groupIndex;
+    canvas.insertAt(insertionIndex, ...children);
+    children.forEach((child) => child.setCoords());
   });
 
   useEditorStore.getState().clearSelection();

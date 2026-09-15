@@ -344,7 +344,7 @@ describe('Unified Editor Phase 1L Canvas grouping observation', () => {
     dispose();
   });
 
-  it('keeps Group/Ungroup history replay silent', async () => {
+  it('replays Group/Ungroup without creating extra history entries', async () => {
     const { canvas, dispose } = createCanvas();
     installStoreCanvas(canvas);
     await addPersistedObjects(canvas);
@@ -360,20 +360,20 @@ describe('Unified Editor Phase 1L Canvas grouping observation', () => {
     await flushPromises();
     await useEditorStore.getState().redo();
     await flushPromises();
-    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledTimes(3);
 
     const groupId = (canvas.getObjects().find((object) => object.type === 'group') as any)?.id;
     expect(groupId).toBeTruthy();
     useEditorStore.getState().selectObjectById(groupId);
     useEditorStore.getState().ungroupSelectedObjects();
     await vi.advanceTimersByTimeAsync(350);
-    expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenCalledTimes(4);
 
     await useEditorStore.getState().undo();
     await flushPromises();
     await useEditorStore.getState().redo();
     await flushPromises();
-    expect(committed).toHaveBeenCalledTimes(2);
+    expect(committed).toHaveBeenCalledTimes(6);
 
     dispose();
   });

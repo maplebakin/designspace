@@ -388,6 +388,45 @@ describe('Unified Editor high-volume authored content and style coverage', () =>
     registration.cleanup();
   });
 
+  it('reports a live text mutation when the browser omits editing-entered', () => {
+    const canvas = createCanvas();
+    installCanvas(canvas);
+    const text = seedText(canvas);
+    const { committed } = installCanvasDiagnostic();
+    const registration = registerTextHandlers(canvas, committed);
+
+    text.set('text', 'without entered event');
+    canvas.fire('text:changed', { target: text });
+    canvas.fire('object:modified', { target: text });
+
+    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-text-content',
+      objectId: 'canvas-text',
+    });
+    registration.cleanup();
+  });
+
+  it('falls back to the completed text edit when text:changed is omitted', () => {
+    const canvas = createCanvas();
+    installCanvas(canvas);
+    const text = seedText(canvas);
+    const { committed } = installCanvasDiagnostic();
+    const registration = registerTextHandlers(canvas, committed);
+
+    canvas.fire('text:editing:entered', { target: text });
+    text.set('text', 'completed without live event');
+    canvas.fire('text:editing:exited', { target: text });
+    canvas.fire('object:modified', { target: text });
+
+    expect(committed).toHaveBeenCalledTimes(1);
+    expect(committed).toHaveBeenCalledWith({
+      action: 'modify-freeform-text-content',
+      objectId: 'canvas-text',
+    });
+    registration.cleanup();
+  });
+
   it('provides one explicit range commit for pointer and keyboard interaction', () => {
     const changes: number[] = [];
     const commits: Array<[number, number]> = [];

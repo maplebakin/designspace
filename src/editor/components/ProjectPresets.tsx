@@ -3,6 +3,7 @@ import { shallow } from 'zustand/shallow';
 import { useEditorStore } from '../state/editorStore';
 import { isUserObject } from '../utils/objectUtils';
 import { PROJECT_PRESET_GROUPS, type CanvasPreset } from '../config/canvasPresets';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 const confirmClearMessage =
   'Selecting a new preset will clear your current design. Save first if needed before continuing.';
@@ -23,18 +24,25 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     }),
     shallow
   );
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
+  );
   const presetsReady = !!canvas && canvasReadyState === 'ready';
 
-  const applyPreset = (preset: CanvasPreset) => {
+  const applyPreset = async (preset: CanvasPreset) => {
     if (!presetsReady || !canvas) return;
-    const hasUserCanvasObjects = canvas.getObjects().some(isUserObject);
-    const hasUserPageContent = pages.some((page) =>
-      Array.isArray(page?.canvasData?.objects)
-      && page.canvasData.objects.some(isUserObject)
-    );
-    if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
-      const proceed = window.confirm(confirmClearMessage);
-      if (!proceed) return;
+    if (prepareProjectReplacement) {
+      if (!(await prepareProjectReplacement())) return;
+    } else {
+      const hasUserCanvasObjects = canvas.getObjects().some(isUserObject);
+      const hasUserPageContent = pages.some((page) =>
+        Array.isArray(page?.canvasData?.objects)
+        && page.canvasData.objects.some(isUserObject)
+      );
+      if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
+        const proceed = window.confirm(confirmClearMessage);
+        if (!proceed) return;
+      }
     }
 
     createProject({
@@ -50,7 +58,7 @@ export const ProjectPresets: React.FC<ProjectPresetsProps> = ({ onPresetApplied 
     <button
       key={`${preset.name}-${preset.width}-${preset.height}`}
       disabled={!presetsReady}
-      onClick={() => applyPreset(preset)}
+      onClick={() => { void applyPreset(preset); }}
       data-testid={`project-preset-${preset.id}`}
       className={`project-presets-card w-full text-left px-3 py-3 rounded-2xl border transition-all duration-300 ease-in-out flex flex-col gap-1 ${
         preset.name === 'US Letter'

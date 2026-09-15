@@ -12,6 +12,7 @@ import {
 import { Extension } from '@tiptap/core';
 import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { Mapping } from '@tiptap/pm/transform';
 import {
   NodeSelection,
   Plugin,
@@ -334,40 +335,135 @@ export type ActiveStructuredFragmentViewport = Readonly<{
   alignmentOffset: Readonly<{ x: number; y: number }>;
 }>;
 
+type StructuredFragmentRangeMapping = Readonly<{
+  map: (position: number, assoc?: number) => number;
+  mapResult?: (
+    position: number,
+    assoc?: number
+  ) => { pos: number; deleted: boolean };
+}>;
+
+type StructuredFragmentMappingState = {
+  model: MultiDocumentSpanLayoutModel | null;
+  mapping: Mapping;
+};
+
+const resolveCurrentBlockForStructuredFragment = (
+  editor: Editor,
+  fragment: StructuredTextFragmentIdentity,
+  rangeMapping?: StructuredFragmentRangeMapping | null
+) => {
+  const mappedBlockFrom = rangeMapping
+    // Use the fragment's authored start as the block anchor. Mapping the
+    // frozen block start cannot distinguish an Enter/split inserted before a
+    // continuation fragment: the block start remains in the preceding block
+    // even though the fragment itself now belongs to the following one.
+    ? rangeMapping.map(fragment.fragmentFrom, 1)
+    : fragment.blockFrom;
+  const doc = editor.state.doc;
+  if (doc.childCount === 0) return null;
+  const clampedPosition = Math.max(
+    1,
+    Math.min(doc.content.size, mappedBlockFrom)
+  );
+  const resolved = doc.resolve(clampedPosition);
+  const resolvedIndex = resolved.depth > 0
+    ? resolved.index(0)
+    : Math.max(0, resolved.index(0) - 1);
+  const index = Math.min(
+    Math.max(0, resolvedIndex),
+    doc.childCount - 1
+  );
+  const node = doc.child(index);
+  if (resolved.depth > 0 && resolved.index(0) === index) {
+    const from = resolved.start(1);
+    return {
+      index,
+      from,
+      to: from + node.nodeSize - 2,
+      node,
+    };
+  }
+
+  // A mapped anchor can land exactly at a top-level node boundary (for
+  // example after a block join). Resolve that rare case with a bounded walk;
+  // ordinary typing stays on the O(1) resolved-position path above.
+  let from = 0;
+  for (let candidateIndex = 0; candidateIndex < index; candidateIndex += 1) {
+    from += doc.child(candidateIndex).nodeSize;
+  }
+  from += 1;
+  return {
+    index,
+    from,
+    to: from + node.nodeSize - 2,
+    node,
+  };
+};
+
 /**
  * Resolve a frozen fragment against the current PM block without reusing its
- * stale numeric range. The fragment ID is the layout anchor; its original
- * ordinal/span supplies a deterministic position in the live block while the
- * compositor is intentionally frozen during typing.
+ * stale numeric range. The fragment ID is the layout anchor; its authored
+ * ProseMirror boundaries are mapped through the real transactions that have
+ * happened since the compositor snapshot was built.
  */
 export const resolveLiveStructuredFragmentRange = (
   editor: Editor,
   fragment: StructuredTextFragmentIdentity,
-  fragments: readonly StructuredTextFragmentIdentity[]
+  _fragments: readonly StructuredTextFragmentIdentity[],
+  rangeMapping?: StructuredFragmentRangeMapping | null
 ): { from: number; to: number } | null => {
-  const block = editor.state.doc.child(fragment.blockIndex);
-  if (!block) return null;
-  let blockFrom = 1;
-  for (let index = 0; index < fragment.blockIndex; index += 1) {
-    blockFrom += editor.state.doc.child(index).nodeSize;
+  const currentBlock = resolveCurrentBlockForStructuredFragment(
+    editor,
+    fragment,
+    rangeMapping
+  );
+  if (!currentBlock) return null;
+  const blockFrom = currentBlock.from;
+  const blockTo = currentBlock.to;
+
+  // While typing, the page-space compositor is deliberately frozen. Map the
+  // authored fragment boundaries through every real PM transaction instead of
+  // guessing a proportional character offset from the changed block length.
+  if (rangeMapping) {
+    const fromResult = rangeMapping.mapResult?.(
+      fragment.fragmentFrom,
+      -1
+    );
+    const toResult = rangeMapping.mapResult?.(
+      fragment.fragmentTo,
+      1
+    );
+    if (fromResult?.deleted && toResult?.deleted) return null;
+    const from = fromResult?.pos
+      ?? rangeMapping.map(fragment.fragmentFrom, -1);
+    const to = toResult?.pos
+      ?? rangeMapping.map(fragment.fragmentTo, 1);
+    return {
+      from: Math.max(blockFrom, Math.min(blockTo, Math.min(from, to))),
+      to: Math.max(blockFrom, Math.min(blockTo, Math.max(from, to))),
+    };
   }
-  const siblings = fragments
-    .filter((candidate) => candidate.blockIndex === fragment.blockIndex)
-    .sort((left, right) => left.fragmentIndex - right.fragmentIndex);
-  const originalFrom = siblings[0]?.fragmentFrom ?? fragment.fragmentFrom;
-  const originalTo = siblings[siblings.length - 1]?.fragmentTo ?? fragment.fragmentTo;
-  const originalSpan = Math.max(1, originalTo - originalFrom);
-  const fromRatio = (fragment.fragmentFrom - originalFrom) / originalSpan;
-  const toRatio = (fragment.fragmentTo - originalFrom) / originalSpan;
-  const from = blockFrom + Math.round(block.content.size * fromRatio);
-  const to = blockFrom + Math.round(block.content.size * toRatio);
+
+  // No mapping is needed for an untouched snapshot (the common helper/test
+  // case). Never infer a range from current block length: callers that keep a
+  // frozen model across edits must provide the transaction mapping above.
+  const from = Math.max(
+    blockFrom,
+    Math.min(blockTo, fragment.fragmentFrom)
+  );
+  const to = Math.max(
+    blockFrom,
+    Math.min(blockTo, fragment.fragmentTo)
+  );
   return { from: Math.min(from, to), to: Math.max(from, to) };
 };
 
 export const getStructuredTextEditTarget = (
   editor: Editor,
   fragments: readonly StructuredTextFragmentIdentity[] = [],
-  preferredFragmentId?: string | null
+  preferredFragmentId?: string | null,
+  rangeMapping?: StructuredFragmentRangeMapping | null
 ): StructuredTextEditTarget | null => {
   const selection = editor.state.selection;
   if (selection instanceof NodeSelection) return null;
@@ -412,20 +508,37 @@ export const getStructuredTextEditTarget = (
   const targetBlockIndexes = new Set(
     targetBlocks.map((block) => block.index)
   );
+  const fragmentBlockIndexes = new Map(
+    fragments.map((fragment) => [
+      fragment.id,
+      resolveCurrentBlockForStructuredFragment(
+        editor,
+        fragment,
+        rangeMapping
+      )?.index ?? fragment.blockIndex,
+    ])
+  );
   const preferredFragment = preferredFragmentId
     ? fragments.find((fragment) => (
         fragment.id === preferredFragmentId
-        && targetBlockIndexes.has(fragment.blockIndex)
+        && targetBlockIndexes.has(fragmentBlockIndexes.get(fragment.id) ?? fragment.blockIndex)
       ))
     : undefined;
   const liveRanges = new Map(
     fragments.map((fragment) => [
       fragment.id,
-      resolveLiveStructuredFragmentRange(editor, fragment, fragments),
+      resolveLiveStructuredFragmentRange(
+        editor,
+        fragment,
+        fragments,
+        rangeMapping
+      ),
     ])
   );
   const selectedFragments = fragments.filter((fragment) => {
-    if (!targetBlockIndexes.has(fragment.blockIndex)) return false;
+    if (!targetBlockIndexes.has(
+      fragmentBlockIndexes.get(fragment.id) ?? fragment.blockIndex
+    )) return false;
     const liveRange = liveRanges.get(fragment.id);
     if (!liveRange) return false;
     if (
@@ -450,8 +563,15 @@ export const getStructuredTextEditTarget = (
       : preferredRange.to > selectionFrom && preferredRange.from < selectionTo
   );
   const resolvedFragments = targetBlocks
-    .flatMap((block) => fragments.filter((fragment) => fragment.blockIndex === block.index))
-    .sort((left, right) => left.fragmentIndex - right.fragmentIndex);
+    .flatMap((block) => fragments.filter((fragment) => (
+      (fragmentBlockIndexes.get(fragment.id) ?? fragment.blockIndex)
+        === block.index
+    )))
+    .sort((left, right) => {
+      const leftBlock = fragmentBlockIndexes.get(left.id) ?? left.blockIndex;
+      const rightBlock = fragmentBlockIndexes.get(right.id) ?? right.blockIndex;
+      return leftBlock - rightBlock || left.fragmentIndex - right.fragmentIndex;
+    });
   const fallbackFragment = resolvedFragments
     .map((fragment) => ({
       fragment,
@@ -2848,6 +2968,34 @@ export const StructuredDocumentSpanLayout = ({
     ]
   );
 
+  // The canonical structured model is frozen while the native PM surface is
+  // being edited. Keep a model-scoped mapping of every doc-changing
+  // transaction so fragment ownership follows authored positions without
+  // rebuilding the expensive page compositor on each keystroke.
+  const fragmentMappingRef = useRef<StructuredFragmentMappingState | null>(null);
+  if (fragmentMappingRef.current?.model !== model) {
+    fragmentMappingRef.current = {
+      model,
+      mapping: new Mapping(),
+    };
+  }
+  useLayoutEffect(() => {
+    if (!model) return undefined;
+    const modelAtSubscription = model;
+    const handleTransaction = ({ transaction }: {
+      transaction: import('@tiptap/pm/state').Transaction;
+    }) => {
+      if (!transaction.docChanged) return;
+      const state = fragmentMappingRef.current;
+      if (state?.model !== modelAtSubscription) return;
+      state.mapping.appendMapping(transaction.mapping);
+    };
+    editor.on('transaction', handleTransaction);
+    return () => {
+      editor.off('transaction', handleTransaction);
+    };
+  }, [editor, model]);
+
   useLayoutEffect(() => {
     const root = layoutRef.current;
     if (!root || !model) {
@@ -3156,7 +3304,8 @@ export const StructuredDocumentSpanLayout = ({
     ? getStructuredTextEditTarget(
         editor,
         model.textFragments,
-        activeTextFragmentId
+        activeTextFragmentId,
+        fragmentMappingRef.current?.mapping
       )
     : null;
   const activeEditFragmentIds = activeTextEditTarget?.fragmentIds || [];
@@ -3186,8 +3335,14 @@ export const StructuredDocumentSpanLayout = ({
     };
 
     const syncCanonicalFragmentMask = () => {
-      const activeIds = new Set(activeEditFragmentIds);
-      if (canonicalMaskSignature === activeEditFragmentSignature) {
+      // A single live viewport replaces one canonical fragment. Keeping every
+      // selected continuation transparent would mask authored text without a
+      // live surface painting that region back.
+      const maskedFragmentId = activeEditFragmentIds[0] || '';
+      const activeIds = new Set(
+        maskedFragmentId ? [maskedFragmentId] : []
+      );
+      if (canonicalMaskSignature === maskedFragmentId) {
         const maskedIds = new Set(
           Array.from(root.querySelectorAll<HTMLElement>(
             '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
@@ -3195,7 +3350,7 @@ export const StructuredDocumentSpanLayout = ({
         );
         if (
           maskedIds.size === activeIds.size
-          && activeEditFragmentIds.every((id) => maskedIds.has(id))
+          && (!maskedFragmentId || maskedIds.has(maskedFragmentId))
         ) {
           return;
         }
@@ -3209,7 +3364,7 @@ export const StructuredDocumentSpanLayout = ({
             fragment.removeAttribute('data-document-active-edit-fragment');
           }
         });
-      canonicalMaskSignature = activeEditFragmentSignature;
+      canonicalMaskSignature = maskedFragmentId;
     };
 
     const rectSnapshot = (rect: DOMRect | null) => rect
@@ -3257,6 +3412,8 @@ export const StructuredDocumentSpanLayout = ({
       root.dataset.activeEditFragmentId = '';
       root.dataset.activeEditColumn = '';
       root.dataset.activeEditRegionId = '';
+      root.dataset.activeEditMaskedFragmentId = '';
+      root.dataset.activeEditPmRange = '';
       root.dataset.activeEditRect = '';
       root.dataset.activeEditViewportDiagnostics = '';
     };
@@ -3297,18 +3454,26 @@ export const StructuredDocumentSpanLayout = ({
       viewport.style.height = '100%';
       viewport.style.overflow = 'visible';
       liveSurface.style.transform = '';
+      const currentFragmentBlock = resolveCurrentBlockForStructuredFragment(
+        editor,
+        activeFragment,
+        fragmentMappingRef.current?.mapping
+      );
+      const currentFragmentBlockIndex = currentFragmentBlock?.index
+        ?? activeFragment.blockIndex;
       const currentBlock = activeStructuredFragmentBlockKey.getState(editor.state)?.blockIndex;
-      if (currentBlock !== activeFragment.blockIndex) {
+      if (currentBlock !== currentFragmentBlockIndex) {
         editor.view.dispatch(editor.state.tr.setMeta(
           activeStructuredFragmentBlockKey,
-          { blockIndex: activeFragment.blockIndex }
+          { blockIndex: currentFragmentBlockIndex }
         ).setMeta('addToHistory', false));
       }
 
       const liveRange = resolveLiveStructuredFragmentRange(
         editor,
         activeFragment,
-        model.textFragments
+        model.textFragments,
+        fragmentMappingRef.current?.mapping
       );
       const targetClientRect = {
         left: rootRect.left + fragmentRect.left * rootScaleX,
@@ -3345,7 +3510,7 @@ export const StructuredDocumentSpanLayout = ({
       const viewportModel: ActiveStructuredFragmentViewport = {
         fragmentId: activeFragment.id,
         pageId: activeFragment.pageId,
-        blockIndex: activeFragment.blockIndex,
+        blockIndex: currentFragmentBlockIndex,
         pmRange: liveRange,
         fragmentRect,
         sourceRangeRect,
@@ -3367,6 +3532,10 @@ export const StructuredDocumentSpanLayout = ({
       root.dataset.activeEditFragmentId = activeFragment.id;
       root.dataset.activeEditColumn = String(activeFragment.columnIndex);
       root.dataset.activeEditRegionId = activeFragment.segmentId;
+      root.dataset.activeEditMaskedFragmentId = activeEditFragmentIds[0] || '';
+      root.dataset.activeEditPmRange = liveRange
+        ? JSON.stringify(liveRange)
+        : '';
       root.dataset.activeEditRect = JSON.stringify(activeEditRect);
       root.dataset.activeEditViewportDiagnostics = JSON.stringify({
         coordinateSpaces: {

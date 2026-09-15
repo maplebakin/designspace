@@ -4,6 +4,7 @@ import type {
   JSONContent,
 } from '@tiptap/core';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
+import { Mapping } from '@tiptap/pm/transform';
 import {
   act,
   cleanup,
@@ -494,24 +495,312 @@ describe('positioned document image contract', () => {
       from: selectedFragment.fragmentFrom,
       to: selectedFragment.fragmentTo,
     });
-    editor.view.dispatch(editor.state.tr.insertText(
+    const mapping = new Mapping();
+    const insertion = editor.state.tr.insertText(
       'new text before the frozen continuation ',
       2,
       2
-    ));
+    );
+    mapping.appendMapping(insertion.mapping);
+    editor.view.dispatch(insertion);
     const liveRange = resolveLiveStructuredFragmentRange(
       editor,
       selectedFragment,
-      model!.textFragments
+      model!.textFragments,
+      mapping
     );
     expect(liveRange).not.toEqual(originalRange);
     expect(liveRange?.from).toBeLessThan(liveRange?.to || 0);
     const mappedTarget = getStructuredTextEditTarget(
       editor,
       model!.textFragments,
-      selectedFragment.id
+      selectedFragment.id,
+      mapping
     );
     expect(mappedTarget?.primaryFragmentId).toBe(selectedFragment.id);
+  });
+
+  it('maps frozen fragment boundaries through authored transactions', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph(
+          'Opening text before the continuation boundary. '.repeat(24)
+        ),
+        positionedImage({
+          id: 'mapped-fragment-exclusion',
+          spanStartColumn: 1,
+          xOffsetPx: 12,
+          yPx: 72,
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      2,
+      24,
+      720,
+      180,
+      {},
+      {},
+      [],
+      0,
+      'mapped-fragment-page'
+    );
+    expect(model).not.toBeNull();
+    const fragments = model!.textFragments
+      .filter((fragment) => fragment.blockIndex === 0)
+      .sort((left, right) => left.fragmentFrom - right.fragmentFrom);
+    expect(fragments.length).toBeGreaterThan(1);
+    const selected = fragments[1];
+    const mapping = new Mapping();
+    const insertionPosition = selected.fragmentFrom + 3;
+    const transaction = editor.state.tr.insertText(
+      'authored insertion in the middle ',
+      insertionPosition,
+      insertionPosition
+    );
+    mapping.appendMapping(transaction.mapping);
+    editor.view.dispatch(transaction);
+
+    const mapped = resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    );
+    expect(mapped).toEqual({
+      from: selected.fragmentFrom,
+      to: selected.fragmentTo + 'authored insertion in the middle '.length,
+    });
+    editor.view.dispatch(editor.state.tr.setSelection(
+      TextSelection.create(editor.state.doc, mapped.from)
+    ));
+
+    const target = getStructuredTextEditTarget(
+      editor,
+      model!.textFragments,
+      selected.id,
+      mapping
+    );
+    expect(target?.primaryFragmentId).toBe(selected.id);
+
+    const deletionFrom = mapped.from + 2;
+    const deletionTo = deletionFrom + 4;
+    const deletion = editor.state.tr.delete(deletionFrom, deletionTo);
+    mapping.appendMapping(deletion.mapping);
+    editor.view.dispatch(deletion);
+    expect(resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    )).toEqual({
+      from: mapped.from,
+      to: mapped.to - (deletionTo - deletionFrom),
+    });
+  });
+
+  it('tracks authored deletions at the beginning, middle, and end of a fragment', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Deletion boundaries must stay authored and ordered. '.repeat(28)),
+        positionedImage({
+          id: 'deletion-fragment-exclusion',
+          spanStartColumn: 1,
+          xOffsetPx: 12,
+          yPx: 72,
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      2,
+      24,
+      720,
+      180,
+      {},
+      {},
+      [],
+      0,
+      'deletion-fragment-page'
+    );
+    expect(model).not.toBeNull();
+    const fragments = model!.textFragments
+      .filter((fragment) => fragment.blockIndex === 0)
+      .sort((left, right) => left.fragmentFrom - right.fragmentFrom);
+    expect(fragments.length).toBeGreaterThan(1);
+    const selected = fragments[0];
+    const mapping = new Mapping();
+    const deleteOne = (position: number) => {
+      const transaction = editor.state.tr.delete(position, position + 1);
+      mapping.appendMapping(transaction.mapping);
+      editor.view.dispatch(transaction);
+    };
+    const initial = resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    )!;
+    deleteOne(initial.from);
+    const afterBeginning = resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    )!;
+    expect(afterBeginning.from).toBe(initial.from);
+    expect(afterBeginning.to).toBe(initial.to - 1);
+
+    const middlePosition = afterBeginning.from + Math.max(
+      1,
+      Math.floor((afterBeginning.to - afterBeginning.from) / 2)
+    );
+    deleteOne(middlePosition);
+    const afterMiddle = resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    )!;
+    expect(afterMiddle.from).toBe(afterBeginning.from);
+    expect(afterMiddle.to).toBe(afterBeginning.to - 1);
+
+    deleteOne(afterMiddle.to - 1);
+    const afterEnd = resolveLiveStructuredFragmentRange(
+      editor,
+      selected,
+      model!.textFragments,
+      mapping
+    )!;
+    expect(afterEnd.from).toBe(afterMiddle.from);
+    expect(afterEnd.to).toBe(afterMiddle.to - 1);
+  });
+
+  it('assigns boundary insertions to the authored fragment range', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Boundary text that continues across columns. '.repeat(26)),
+        positionedImage({
+          id: 'boundary-fragment-exclusion',
+          spanStartColumn: 1,
+          xOffsetPx: 12,
+          yPx: 72,
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      2,
+      24,
+      720,
+      180,
+      {},
+      {},
+      [],
+      0,
+      'boundary-fragment-page'
+    );
+    expect(model).not.toBeNull();
+    const fragments = model!.textFragments
+      .filter((fragment) => fragment.blockIndex === 0)
+      .sort((left, right) => left.fragmentFrom - right.fragmentFrom);
+    expect(fragments.length).toBeGreaterThan(1);
+    const first = fragments[0];
+    const last = fragments.at(-1)!;
+    const mapping = new Mapping();
+    const prefix = 'beginning ';
+    const beginning = editor.state.tr.insertText(
+      prefix,
+      first.fragmentFrom,
+      first.fragmentFrom
+    );
+    mapping.appendMapping(beginning.mapping);
+    editor.view.dispatch(beginning);
+    const suffix = ' ending';
+    const currentEnd = mapping.map(last.fragmentTo, 1);
+    const ending = editor.state.tr.insertText(suffix, currentEnd, currentEnd);
+    mapping.appendMapping(ending.mapping);
+    editor.view.dispatch(ending);
+
+    expect(resolveLiveStructuredFragmentRange(
+      editor,
+      first,
+      model!.textFragments,
+      mapping
+    )).toEqual({
+      from: first.fragmentFrom,
+      to: first.fragmentTo + prefix.length,
+    });
+    expect(resolveLiveStructuredFragmentRange(
+      editor,
+      last,
+      model!.textFragments,
+      mapping
+    )).toEqual({
+      from: last.fragmentFrom + prefix.length,
+      to: last.fragmentTo + prefix.length + suffix.length,
+    });
+  });
+
+  it('keeps fragment ownership when an authored edit splits its source block', async () => {
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        textParagraph('Split this authored block across a new paragraph. '.repeat(24)),
+        positionedImage({
+          id: 'split-fragment-exclusion',
+          spanStartColumn: 1,
+          xOffsetPx: 12,
+          yPx: 72,
+        }),
+      ],
+    };
+    const { editor } = await renderFlowEditor({ content });
+    const model = buildMultiDocumentSpanLayoutModel(
+      editor,
+      2,
+      24,
+      720,
+      180,
+      {},
+      {},
+      [],
+      0,
+      'split-fragment-page'
+    );
+    expect(model).not.toBeNull();
+    const fragments = model!.textFragments
+      .filter((fragment) => fragment.blockIndex === 0)
+      .sort((left, right) => left.fragmentFrom - right.fragmentFrom);
+    expect(fragments.length).toBeGreaterThan(1);
+    const selected = fragments.at(-1)!;
+    // Split immediately before this frozen continuation so its authored
+    // range moves to the newly-created block as a unit.
+    const splitPosition = selected.fragmentFrom - 1;
+    const mapping = new Mapping();
+    const split = editor.state.tr.split(splitPosition);
+    mapping.appendMapping(split.mapping);
+    editor.view.dispatch(split);
+    const caretAfterSplit = mapping.map(selected.fragmentFrom + 2, 1);
+    editor.view.dispatch(editor.state.tr.setSelection(
+      TextSelection.near(editor.state.doc.resolve(caretAfterSplit), 1)
+    ));
+
+    const target = getStructuredTextEditTarget(
+      editor,
+      model!.textFragments,
+      selected.id,
+      mapping
+    );
+    expect(target?.fragmentIds).toContain(selected.id);
+    expect(target?.blockIndexes).toContain(1);
   });
 
   it('selects a visible image by ID after its cached visual position is stale', async () => {

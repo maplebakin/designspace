@@ -168,6 +168,7 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     expect(useEditorStore.getState().changeRevision).toBe(initialRevision + 2);
     expect((canvas.getObjects()[0] as fabric.Rect).fill).toBe('#223344');
     expect(committed).toHaveBeenCalledTimes(1);
+
     expect(committed).toHaveBeenCalledWith({
       action: 'modify-freeform-style',
       objectId: 'border-shape',
@@ -176,6 +177,7 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(350);
     });
+
   });
 
   it('maps one successful Border Style selection to one normalized style transaction', async () => {
@@ -322,12 +324,14 @@ describe('Unified Editor Phase 1M Canvas Border Style observation', () => {
     });
     expect(committed).toHaveBeenCalledTimes(1);
 
+
     await act(async () => {
       await useEditorStore.getState().undo();
       await flushPromises();
       await useEditorStore.getState().redo();
       await flushPromises();
     });
+
 
     expect(committed).toHaveBeenCalledTimes(3);
     expect((canvas.getObjects()[0] as fabric.Rect).strokeDashArray).toEqual([12, 8]);

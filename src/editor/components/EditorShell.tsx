@@ -1,5 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
+import * as fabric from 'fabric';
 import { shallow } from 'zustand/shallow';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
@@ -19,12 +20,13 @@ import {
   Search,
 } from 'lucide-react';
 import {
+  buildPortableCanvasSnapshot,
   getPendingInsertionCandidateIds,
   getPendingLayerSyncSelectionIds,
   useEditorStore,
   DEFAULT_CANVAS_BACKGROUND,
 } from '../state/editorStore';
-import { useCanUndo, useCanRedo } from '../state/useHistoryStore';
+import { useCanUndo, useCanRedo, useHistoryStore } from '../state/useHistoryStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { AssetLibrary } from './AssetLibrary';
@@ -57,6 +59,17 @@ import { ProductStarter } from './ProductStarter';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 import { RightInspector, type InspectorTab } from './RightInspector';
 import { ProjectNameEditor } from './ProjectNameEditor';
+import { groupObjects, ungroupObjects } from '../fabric/grouping';
+import { resizeCanvasOnly, resizeCanvasAndScaleContent } from '../fabric/canvasUtils';
+import { serializeCanvasObjects } from '../utils/serialization';
+import { loadCanvasFromJsonSafely, reviveCustomFabricProps } from '../fabric/initFabricCanvas';
+import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
+import { useVisionBoardStore } from '../state/visionBoardStore';
+import { copySelection, pasteFromClipboard } from '../services/clipboardService';
+import {
+  setDurableWriteBarrierForTests,
+  type DurableWriteBoundary,
+} from '../db';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
@@ -69,6 +82,7 @@ interface EditorShellProps {
   onBackToDashboard?: () => void;
   useSharedChrome?: boolean;
   sharedPageStrip?: React.ReactNode;
+  onAuthoredMutation?: () => void;
   onCommittedCanvasMutation?: (mutation: CanvasCommittedMutation) => void;
 }
 
@@ -76,6 +90,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
   onBackToDashboard,
   useSharedChrome = false,
   sharedPageStrip,
+  onAuthoredMutation,
   onCommittedCanvasMutation,
 }) => {
   useKeyboardShortcuts();
@@ -245,17 +260,421 @@ export const EditorShell: React.FC<EditorShellProps> = ({
               height: object.height,
               scaleX: object.scaleX,
               scaleY: object.scaleY,
+              angle: object.angle,
+              skewX: object.skewX,
+              skewY: object.skewY,
               visible: object.visible,
               selectable: object.selectable,
               evented: object.evented,
               lockMovementX: object.lockMovementX,
               lockMovementY: object.lockMovementY,
               text: (object as any).text ?? null,
+              // Keep the browser contract able to prove that a reopened
+              // Fabric image is backed by durable bytes, rather than merely
+              // having the same object id.  This is intentionally exposed
+              // only through the development QA bridge.
+              imageSource: object.type === 'image'
+                ? ((object as any).getSrc?.() ?? (object as any).src ?? null)
+                : null,
               isEditing: (object as any).isEditing ?? false,
+              corners: (() => {
+                object.setCoords();
+                return object.getCoords().map((point) => ({ x: point.x, y: point.y }));
+              })(),
             })) ?? [],
           canvasObjects: state.canvasObjects,
+          imageAssetIds: Object.keys(state.imageAssets),
           layers: state.layers,
+          currentLibraryProjectId: state.currentLibraryProjectId,
+          currentLibraryProjectRevision: state.currentLibraryProjectRevision,
+          isDirty: state.isDirty,
+          changeRevision: state.changeRevision,
+          saveStatus: state.saveStatus,
+          autoSaveStatus: state.autoSaveStatus,
         };
+      },
+      holdP0DurableWrite: (boundary: DurableWriteBoundary) => {
+        let release: (() => void) | null = null;
+        let calls = 0;
+        setDurableWriteBarrierForTests((currentBoundary) => {
+          if (currentBoundary !== boundary) return;
+          calls += 1;
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        });
+        (window as any).__P0_DURABLE_WRITE__ = {
+          calls: () => calls,
+          release: () => {
+            release?.();
+            release = null;
+          },
+          clear: () => {
+            setDurableWriteBarrierForTests(null);
+            release = null;
+          },
+        };
+      },
+      mutateP0FirstObject: (updates: Record<string, unknown>) => {
+        const state = useEditorStore.getState();
+        const target = state.canvas?.getObjects().find((object) => {
+          const candidate = object as any;
+          return !candidate.isGuide && !candidate.isSmartGuide && !candidate.isDocumentPaper
+            && !candidate.isSafeZoneOverlay;
+        });
+        if (!target || !state.canvas) throw new Error('No user object is available');
+        target.set(updates as any);
+        target.setCoords();
+        state.canvas.fire('object:modified', { target });
+        return { id: (target as any).id ?? null, ...updates };
+      },
+      pinP0VisionBoardSnapshot: async () => {
+        const state = useEditorStore.getState();
+        if (!state.canvas) throw new Error('Canvas is not ready');
+        const portable = await buildPortableCanvasSnapshot(state.canvas, state.imageAssets);
+        const canvasStore = useCanvasStore.getState();
+        const canvasSize = { width: canvasStore.width, height: canvasStore.height };
+        const id = useVisionBoardStore.getState().addItem({
+          type: 'design-state',
+          canvasData: JSON.stringify({
+            ...portable.canvasData,
+            canvasSize,
+            assets: portable.assets,
+          }),
+          canvasSize,
+          thumbnail: undefined,
+          label: 'P0 durable vision snapshot',
+          position: { x: 40, y: 40, width: 240, height: 240 },
+        });
+        return { id, canvasSize };
+      },
+      restoreP0VisionBoardSnapshot: async (id: string) => {
+        const state = useEditorStore.getState();
+        if (!state.canvas) throw new Error('Canvas is not ready');
+        await (useVisionBoardStore as any).persist?.rehydrate?.();
+        const item = useVisionBoardStore.getState().getItemById(id);
+        if (!item || item.type !== 'design-state') throw new Error('Vision snapshot not found');
+        const data = JSON.parse(item.canvasData);
+        const assets = Object.fromEntries(
+          Object.entries(data.assets ?? {}).filter(([, source]) => typeof source === 'string' && source.length > 0),
+        ) as Record<string, string>;
+        const hydrated = hydrateCanvasDataWithAssets(data, assets);
+        await loadCanvasFromJsonSafely(state.canvas, hydrated, reviveCustomFabricProps);
+        state.syncCanvasToStore(state.canvas);
+        state.canvas.requestRenderAll();
+        return state.canvas.getObjects().filter((object) => !(object as any).isGuide).length;
+      },
+      prepareP0ActiveSelection: () => {
+        const state = useEditorStore.getState();
+        const canvas = state.canvas;
+        if (!canvas) throw new Error('Canvas is not ready');
+        const userObjects = canvas.getObjects().filter((object) => {
+          const target = object as any;
+          return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper
+            && !target.isSafeZoneOverlay && !target.isPageBorder;
+        });
+        if (userObjects.length < 2) throw new Error('At least two uploaded objects are required');
+
+        const audit = (objects: fabric.Object[]) => objects.map((object) => {
+          object.setCoords();
+          const matrix = object.calcTransformMatrix();
+          const width = (object.width ?? 0) + ((object as any).strokeWidth ?? 0);
+          const height = (object.height ?? 0) + ((object as any).strokeWidth ?? 0);
+          const corners = ([
+            [-width / 2, -height / 2],
+            [width / 2, -height / 2],
+            [width / 2, height / 2],
+            [-width / 2, height / 2],
+          ] as number[][]).map(([x, y]) => ({
+            x: matrix[0] * x + matrix[2] * y + matrix[4],
+            y: matrix[1] * x + matrix[3] * y + matrix[5],
+          }));
+          return {
+            id: (object as any).id ?? null,
+            type: object.type,
+            left: object.left,
+            top: object.top,
+            width: object.width,
+            height: object.height,
+            scaleX: object.scaleX,
+            scaleY: object.scaleY,
+            angle: object.angle,
+            skewX: object.skewX,
+            skewY: object.skewY,
+            corners,
+          };
+        });
+
+        // Keep the ActiveSelection live through the save. This is the
+        // browser-level proof that persistence does not require deselection.
+        const selection = new fabric.ActiveSelection(userObjects.slice(0, 2), { canvas });
+        canvas.setActiveObject(selection);
+        selection.set({ left: 300, top: 220, scaleX: 1.28, scaleY: 0.74, angle: 29 });
+        selection.setCoords();
+        const selectionGeometry = audit(userObjects.slice(0, 2));
+        const selectionSerialized = serializeCanvasObjects(canvas) as any[];
+        const selectionSerializedById = new Map(
+          selectionSerialized.map((object) => [object.id, object]),
+        );
+        const selectionAudit = selectionGeometry.map((geometry) => ({
+          ...geometry,
+          ...(selectionSerializedById.get(geometry.id) ?? {}),
+          corners: geometry.corners,
+        }));
+        state.syncCanvasToStore(canvas);
+        state.saveState({ force: true });
+        return {
+          selectionAudit,
+          selectionSaveActiveObjectType: canvas.getActiveObject()?.type ?? null,
+        };
+      },
+      prepareP0GroupHistory: async () => {
+        const state = useEditorStore.getState();
+        const canvas = state.canvas;
+        if (!canvas) throw new Error('Canvas is not ready');
+        const userObjects = canvas.getObjects().filter((object) => {
+          const target = object as any;
+          return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper
+            && !target.isSafeZoneOverlay && !target.isPageBorder;
+        });
+        if (userObjects.length < 2) throw new Error('At least two uploaded objects are required');
+        const audit = (objects: fabric.Object[]) => objects.map((object) => {
+          object.setCoords();
+          const matrix = object.calcTransformMatrix();
+          const width = (object.width ?? 0) + ((object as any).strokeWidth ?? 0);
+          const height = (object.height ?? 0) + ((object as any).strokeWidth ?? 0);
+          const corners = ([
+            [-width / 2, -height / 2],
+            [width / 2, -height / 2],
+            [width / 2, height / 2],
+            [-width / 2, height / 2],
+          ] as number[][]).map(([x, y]) => ({
+            x: matrix[0] * x + matrix[2] * y + matrix[4],
+            y: matrix[1] * x + matrix[3] * y + matrix[5],
+          }));
+          return {
+            id: (object as any).id ?? null,
+            type: object.type,
+            left: object.left,
+            top: object.top,
+            width: object.width,
+            height: object.height,
+            scaleX: object.scaleX,
+            scaleY: object.scaleY,
+            angle: object.angle,
+            skewX: object.skewX,
+            skewY: object.skewY,
+            corners,
+          };
+        });
+
+        // Exercise the production group/ungroup path in the reopened session.
+        canvas.discardActiveObject();
+        const groupSelection = new fabric.ActiveSelection(userObjects.slice(0, 2), { canvas });
+        canvas.setActiveObject(groupSelection);
+        const grouped = groupObjects(canvas);
+        const group = canvas.getActiveObject();
+        if (!group || group.type !== 'group') throw new Error('Could not create transformed test group');
+        group.set({ left: 350, top: 270, scaleX: 1.17, scaleY: 0.63, angle: -23 });
+        group.setCoords();
+        const groupAudit = audit((group as fabric.Group).getObjects());
+        const ungrouped = ungroupObjects(canvas);
+        if (!ungrouped) throw new Error('Could not ungroup transformed test group');
+        const finalObjects = canvas.getObjects().filter((object) => userObjects.includes(object));
+        const finalAudit = audit(finalObjects);
+
+        const history = useHistoryStore.getState();
+        history.flushPendingSave();
+        const undo = await history.undo().catch(() => false);
+        const redo = await history.redo().catch(() => false);
+        state.syncCanvasToStore(canvas);
+        state.saveState({ force: true });
+
+        return {
+          groupAudit,
+          finalAudit,
+          grouped: !!grouped,
+          ungrouped: !!ungrouped,
+          undo,
+          redo,
+          activeObjectType: canvas.getActiveObject()?.type ?? null,
+        };
+      },
+      prepareP1ClipboardScene: async () => {
+        const state = useEditorStore.getState();
+        const canvas = state.canvas;
+        if (!canvas) throw new Error('Canvas is not ready');
+        const userObjects = canvas.getObjects().filter((object) => {
+          const target = object as any;
+          return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper
+            && !target.isSafeZoneOverlay && !target.isPageBorder;
+        });
+        if (userObjects.length < 2) throw new Error('At least an image and shape are required');
+        const image = userObjects.find((object) => object.type === 'image');
+        if (!image) throw new Error('An uploaded image is required');
+        image.set({
+          scaleX: 1.65,
+          scaleY: 0.62,
+          angle: 23,
+          opacity: 0.63,
+          cropX: 0,
+          cropY: 0,
+        });
+        image.setCoords();
+        (image as any).filters = [new fabric.filters.Brightness({ brightness: 0.18 })];
+        (image as any).applyFilters();
+        image.clipPath = new fabric.Circle({ radius: Math.max(1, (image.width ?? 10) / 3) });
+        image.clipPath.setCoords();
+        canvas.discardActiveObject();
+        const selection = new fabric.ActiveSelection(userObjects.slice(0, 2), { canvas });
+        canvas.setActiveObject(selection);
+        selection.set({ left: 320, top: 240, scaleX: 1.27, scaleY: 0.73, angle: 29 });
+        selection.setCoords();
+        const audit = (objects: fabric.Object[]) => objects.map((object) => {
+          object.setCoords();
+          return {
+            id: (object as any).id ?? null,
+            type: object.type,
+            left: object.left,
+            top: object.top,
+            width: object.width,
+            height: object.height,
+            scaleX: object.scaleX,
+            scaleY: object.scaleY,
+            angle: object.angle,
+            opacity: object.opacity,
+            imageSource: object.type === 'image'
+              ? ((object as any).getSrc?.() ?? (object as any).src ?? null)
+              : null,
+            corners: object.getCoords().map((point) => ({ x: point.x, y: point.y })),
+          };
+        });
+        const selectedObjects = userObjects.slice(0, 2);
+        const canonicalSerialized = serializeCanvasObjects(canvas) as any[];
+        const stagingElement = document.createElement('canvas');
+        const stagingCanvas = new fabric.StaticCanvas(stagingElement, {
+          width: canvas.getWidth(),
+          height: canvas.getHeight(),
+          renderOnAddRemove: false,
+        });
+        let canonicalObjects: fabric.Object[] = [];
+        try {
+          await stagingCanvas.loadFromJSON({ objects: canonicalSerialized });
+          canonicalObjects = selectedObjects
+            .map((object) => {
+              const id = (object as any).id;
+              return stagingCanvas.getObjects().find((candidate) => (candidate as any).id === id);
+            })
+            .filter((object): object is fabric.Object => !!object);
+        } finally {
+          await Promise.resolve(stagingCanvas.dispose());
+          stagingElement.remove();
+        }
+        state.syncCanvasToStore(canvas);
+        state.saveState({ force: true });
+        return {
+          activeObjectType: canvas.getActiveObject()?.type ?? null,
+          objects: audit(canonicalObjects),
+        };
+      },
+      copyP1Selection: () => copySelection(),
+      pasteP1Selection: () => pasteFromClipboard(),
+      groupP1ClipboardObjects: () => {
+        const state = useEditorStore.getState();
+        const canvas = state.canvas;
+        if (!canvas) throw new Error('Canvas is not ready');
+        const userObjects = canvas.getObjects().filter((object) => {
+          const target = object as any;
+          return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper
+            && !target.isSafeZoneOverlay && !target.isPageBorder;
+        });
+        if (userObjects.length < 2) throw new Error('At least two objects are required');
+        state.selectObjectsByIds(userObjects.slice(0, 2).map((object) => String((object as any).id)));
+        const mutation = groupObjects(canvas);
+        const group = canvas.getActiveObject();
+        if (!mutation || !group || group.type !== 'group') throw new Error('Could not group clipboard objects');
+        group.set({ left: 350, top: 270, scaleX: 1.19, scaleY: 0.67, angle: -21 });
+        group.setCoords();
+        state.syncCanvasToStore(canvas);
+        state.saveState({ force: true });
+        return {
+          type: group.type,
+          id: (group as any).id,
+          childIds: (group as fabric.Group).getObjects().map((object) => (object as any).id),
+        };
+      },
+      auditP1ClipboardObjects: () => {
+        const canvas = useEditorStore.getState().canvas;
+        if (!canvas) throw new Error('Canvas is not ready');
+        const activeObjectType = canvas.getActiveObject()?.type ?? null;
+        // Fabric represents selected children in ActiveSelection-local
+        // coordinates.  Discard only for this read-only QA measurement; the
+        // clipboard operation itself has already completed without requiring
+        // deselection.
+        canvas.discardActiveObject();
+        const audit = (object: fabric.Object): any => ({
+          id: (object as any).id ?? null,
+          type: object.type,
+          left: object.left,
+          top: object.top,
+          width: object.width,
+          height: object.height,
+          scaleX: object.scaleX,
+          scaleY: object.scaleY,
+          angle: object.angle,
+          opacity: object.opacity,
+          imageSource: object.type === 'image'
+            ? ((object as any).getSrc?.() ?? (object as any).src ?? null)
+            : null,
+          filters: object.type === 'image'
+            ? ((object as any).filters ?? []).map((filter: any) => filter?.type ?? null)
+            : [],
+          filtersAreFabric: object.type === 'image'
+            ? ((object as any).filters ?? []).every((filter: any) => filter instanceof fabric.filters.BaseFilter)
+            : true,
+          clipPathType: (object as any).clipPath?.type ?? null,
+          clipPathIsFabric: !(object as any).clipPath || (object as any).clipPath instanceof fabric.Object,
+          corners: (() => {
+            object.setCoords();
+            return object.getCoords().map((point) => ({ x: point.x, y: point.y }));
+          })(),
+          objects: typeof (object as any).getObjects === 'function'
+            ? (object as fabric.Group).getObjects().map(audit)
+            : [],
+        });
+        return {
+          activeObjectType,
+          objects: canvas.getObjects()
+          .filter((object) => {
+            const target = object as any;
+            return !target.isGuide && !target.isSmartGuide && !target.isDocumentPaper
+              && !target.isSafeZoneOverlay && !target.isPageBorder;
+          })
+          .map(audit),
+        };
+      },
+      resizeP1Canvas: (width: number, height: number, scaleContent = false) => {
+        if (scaleContent) {
+          resizeCanvasAndScaleContent(width, height);
+        } else {
+          resizeCanvasOnly(width, height);
+        }
+        const state = useEditorStore.getState();
+        if (state.canvas) state.syncActivePageFromCanvas();
+        state.saveState({ force: true });
+        return (window as any).__DESIGN_SPACE_QA__.snapshot();
+      },
+      undoP1: async () => {
+        await useEditorStore.getState().undo();
+        return (window as any).__DESIGN_SPACE_QA__.snapshot();
+      },
+      redoP1: async () => {
+        await useEditorStore.getState().redo();
+        return (window as any).__DESIGN_SPACE_QA__.snapshot();
+      },
+      flushP1History: () => {
+        useHistoryStore.getState().flushPendingSave();
+        return useHistoryStore.getState().historyLength();
       },
       documentLayout: () => {
         const canvas = useEditorStore.getState().canvas;
@@ -502,6 +921,10 @@ export const EditorShell: React.FC<EditorShellProps> = ({
       },
     };
     return () => {
+      if (typeof setDurableWriteBarrierForTests === 'function') {
+        setDurableWriteBarrierForTests(null);
+      }
+      delete (window as any).__P0_DURABLE_WRITE__;
       delete (window as any).__DESIGN_SPACE_QA__;
     };
   }, []);
@@ -525,12 +948,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
 
   // Cleanup tracked blob URLs on unmount
   useEffect(() => {
-    const handleUnload = () => {
-      cleanupAssets();
-    };
-    window.addEventListener('beforeunload', handleUnload);
     return () => {
-      window.removeEventListener('beforeunload', handleUnload);
       cleanupAssets();
     };
   }, []);
@@ -973,6 +1391,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
             <SelectionToolbar />
             <CanvasStage
               onSelectNav={handleSelectNav}
+              onAuthoredMutation={onAuthoredMutation}
               onCommittedMutation={onCommittedCanvasMutation}
             />
         </main>

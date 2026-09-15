@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
 import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
 import { useThemeStore } from '../state/useThemeStore';
 import { advancedExportManager, type AdvancedExportFormat } from '../export/advancedExportManager';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 import { deliverFile, type FileBatchDeliveryResult, type FileDeliveryResult } from '../services/fileDeliveryService';
+import { useHistoryStore } from '../state/useHistoryStore';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -34,6 +35,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const [exportError, setExportError] = useState<string | null>(null);
   const [isProductZipLoading, setIsProductZipLoading] = useState(false);
   const [productZipError, setProductZipError] = useState<string | null>(null);
+  const exportInFlightRef = useRef(false);
+  const productZipInFlightRef = useRef(false);
   const fileName = projectName;
   const sourceDpi = productProjectFields?.document?.pageSize?.dpi
     || (unitMode === 'px' ? 96 : 300);
@@ -60,25 +63,41 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const runExport = async (
     job: () => Promise<FileDeliveryResult | FileBatchDeliveryResult | void>
   ) => {
-    if (isExportLoading) return;
+    // The disabled button is only a presentation guard; the ref closes the
+    // same-event-loop race where two commands can arrive before React has
+    // committed the loading state.  One modal instance owns one export job.
+    if (exportInFlightRef.current) return;
+    exportInFlightRef.current = true;
     setExportError(null);
     setIsExportLoading(true);
     try {
       const result = await job();
       if (result?.status === 'cancelled') return;
+      if (result?.status === 'partial') {
+        setExportError(
+          `Export stopped after ${result.files.length} file(s). ${result.failedFileName}: ${result.error}`
+        );
+        return;
+      }
       onClose();
     } catch (error) {
       setExportError(error instanceof Error ? error.message : 'Export failed. Please try again.');
     } finally {
+      exportInFlightRef.current = false;
       setIsExportLoading(false);
     }
   };
 
   const handleExport = async (format: AdvancedExportFormat) => {
     if (!canvas) return;
+    // Export consumes the authored scene, not a pending debounced history
+    // snapshot or a stale page mirror. Flush and synchronize at this boundary
+    // before handing the canvas to the canonical export manager.
+    useHistoryStore.getState().flushPendingSave();
+    syncActivePageFromCanvas();
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     await runExport(async () => {
-      await advancedExportManager.export(canvas, format, {
+      return advancedExportManager.export(canvas, format, {
         includeBackground,
         backgroundColor: background,
         dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
@@ -93,15 +112,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
       || !canvas
       || pages.length === 0
       || isProductZipLoading
+      || productZipInFlightRef.current
     ) return;
+    productZipInFlightRef.current = true;
     setProductZipError(null);
     setIsProductZipLoading(true);
 
     try {
+      useHistoryStore.getState().flushPendingSave();
+      syncActivePageFromCanvas();
       const [artifactModule, packageModule] = await Promise.all([
         import('../productForge/generateProductForgeArtifacts'),
         import('../productForge/packageProductForgeZip'),
       ]);
+      useHistoryStore.getState().flushPendingSave();
       syncActivePageFromCanvas();
       const state = useEditorStore.getState();
       const pagesForExport = state.pages.length > 0 ? state.pages : pages;
@@ -136,7 +160,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         dialogTitle: 'Save Product ZIP',
         filterName: 'ZIP archive',
       });
-      if (delivery.status === 'saved') onClose();
+      if (delivery.status !== 'cancelled') onClose();
     } catch (error) {
       const message = error instanceof Error && error.message
         ? error.message
@@ -144,17 +168,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
       console.error('[ExportModal] Product ZIP generation failed:', error);
       setProductZipError(message);
     } finally {
+      productZipInFlightRef.current = false;
       setIsProductZipLoading(false);
     }
   };
   const handleExportAllPagesPdf = async () => {
     if (!canvas) return;
+    useHistoryStore.getState().flushPendingSave();
     syncActivePageFromCanvas();
     const nextPages = useEditorStore.getState().pages;
     const nextImageAssets = useEditorStore.getState().imageAssets;
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     await runExport(async () => {
-      await advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
+      return advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
         includeBackground,
         backgroundColor: background,
         dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
@@ -166,13 +192,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   };
   const handleExportAllPages = async (format: Exclude<AdvancedExportFormat, 'pdf'>) => {
     if (!canvas) return;
+    useHistoryStore.getState().flushPendingSave();
     syncActivePageFromCanvas();
     const nextPages = useEditorStore.getState().pages;
     const nextImageAssets = useEditorStore.getState().imageAssets;
     const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     const pagesForExport = nextPages.length > 0 ? nextPages : pages;
     await runExport(async () => {
-      await advancedExportManager.exportPages(pagesForExport, format, {
+      return advancedExportManager.exportPages(pagesForExport, format, {
         includeBackground,
         backgroundColor: background,
         dpi: unitMode === 'px' ? sourceDpi * 2 : 300,

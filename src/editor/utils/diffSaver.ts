@@ -9,12 +9,20 @@ export type ObjectPatch = {
   id: string;
   prev: Partial<SerializedObject>;
   next: Partial<SerializedObject>;
+  /** Properties that existed in only one side of the patch. */
+  unsetPrev?: string[];
+  unsetNext?: string[];
 };
 
 export type ObjectDiff = {
   added: SerializedObject[];
   removed: SerializedObject[];
   changed: ObjectPatch[];
+  /** Complete persisted-object order before and after the mutation. */
+  order?: {
+    before: string[];
+    after: string[];
+  };
 };
 
 const valuesEqual = (a: unknown, b: unknown) => {
@@ -33,6 +41,8 @@ const valuesEqual = (a: unknown, b: unknown) => {
 const buildPatch = (prevObj: SerializedObject, nextObj: SerializedObject): ObjectPatch | null => {
   const prevPatch: Partial<SerializedObject> = {};
   const nextPatch: Partial<SerializedObject> = {};
+  const unsetPrev: string[] = [];
+  const unsetNext: string[] = [];
   const keys = new Set<string>([
     ...Object.keys(prevObj),
     ...Object.keys(nextObj),
@@ -40,15 +50,30 @@ const buildPatch = (prevObj: SerializedObject, nextObj: SerializedObject): Objec
 
   keys.forEach((key) => {
     if (key === 'id') return;
+    const prevHasKey = Object.prototype.hasOwnProperty.call(prevObj, key);
+    const nextHasKey = Object.prototype.hasOwnProperty.call(nextObj, key);
     const prevValue = (prevObj as any)[key];
     const nextValue = (nextObj as any)[key];
     if (!valuesEqual(prevValue, nextValue)) {
-      (prevPatch as any)[key] = prevValue;
-      (nextPatch as any)[key] = nextValue;
+      if (prevHasKey && prevValue !== undefined) {
+        (prevPatch as any)[key] = prevValue;
+      } else {
+        unsetPrev.push(key);
+      }
+      if (nextHasKey && nextValue !== undefined) {
+        (nextPatch as any)[key] = nextValue;
+      } else {
+        unsetNext.push(key);
+      }
     }
   });
 
-  if (Object.keys(prevPatch).length === 0 && Object.keys(nextPatch).length === 0) {
+  if (
+    Object.keys(prevPatch).length === 0
+    && Object.keys(nextPatch).length === 0
+    && unsetPrev.length === 0
+    && unsetNext.length === 0
+  ) {
     return null;
   }
 
@@ -56,6 +81,8 @@ const buildPatch = (prevObj: SerializedObject, nextObj: SerializedObject): Objec
     id: prevObj.id,
     prev: prevPatch,
     next: nextPatch,
+    ...(unsetPrev.length > 0 ? { unsetPrev } : {}),
+    ...(unsetNext.length > 0 ? { unsetNext } : {}),
   };
 };
 
@@ -95,5 +122,16 @@ export function recordDiff(
     }
   }
 
-  return { added, removed, changed };
+  const previousOrder = prevObjects.map((object) => object.id);
+  const nextOrder = nextObjects.map((object) => object.id);
+  const order = JSON.stringify(previousOrder) === JSON.stringify(nextOrder)
+    ? undefined
+    : { before: previousOrder, after: nextOrder };
+
+  return {
+    added,
+    removed,
+    changed,
+    ...(order ? { order } : {}),
+  };
 }

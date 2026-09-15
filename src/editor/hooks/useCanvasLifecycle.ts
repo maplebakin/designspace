@@ -1,6 +1,7 @@
 import { useRef, useCallback } from 'react';
 import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
+import { useHistoryStore } from '../state/useHistoryStore';
 
 /**
  * Custom hook for atomic canvas lifecycle management.
@@ -199,6 +200,7 @@ export const useCanvasLifecycle = (
 
       if (abortController.signal.aborted) {
         // Aborted during setup
+        cleanupHandlers?.();
         canvas.dispose();
         recordCanvasDisposed(canvas);
         isInitializingRef.current = false;
@@ -251,7 +253,10 @@ export const useCanvasLifecycle = (
       return null;
     } finally {
       // PHASE 2.2: Always release sync lock after initialization
-      releaseSyncLock();
+      // Scope the release to the lock this initializer acquired so an
+      // earlier canvas cleanup cannot clear a concurrent history replay or
+      // replacement-session lock.
+      releaseSyncLock('init');
     }
   }, [
     canvasRef,
@@ -269,6 +274,10 @@ export const useCanvasLifecycle = (
   ) => {
     if (!canvas) return;
 
+    // A pending history debounce belongs to this canvas/session. Cancel it
+    // before disposal so its callback cannot serialize a disposed canvas (or
+    // a replacement session installed while disposal is awaiting Fabric).
+    useHistoryStore.getState().cancelPendingSave();
 
     // Step 1: Set state to disposing
     setCanvasReadyState('disposing');

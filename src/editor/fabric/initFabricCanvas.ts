@@ -2,6 +2,7 @@ import * as fabric from 'fabric';
 import { v4 as uuidv4 } from 'uuid';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { SAFE_MARGIN_PX } from '../utils/units';
+import { normalizeSerializedObjectForFabric } from '../utils/serialization';
 
 export const initFabricSerialization = () => {
   // Intentionally no-op: custom serialization handled via helpers.
@@ -21,7 +22,14 @@ export const loadCanvasFromJsonSafely = async (
 ) => {
   hydrationDepth.set(canvas, (hydrationDepth.get(canvas) ?? 0) + 1);
   try {
-    await canvas.loadFromJSON(canvasData, reviver);
+    // Keep the runtime hydration boundary symmetric with serialization. Fabric
+    // 7 writes class-style discriminants (for example `Image`) while its
+    // runtime registry resolves lower-case names (`image`). Normalize a copy
+    // here so every load path -- project reopen, history replay, auxiliary
+    // snapshots, and page switching -- accepts both representations.
+    const parsed = typeof canvasData === 'string' ? JSON.parse(canvasData) : canvasData;
+    const normalized = normalizeSerializedObjectForFabric(parsed);
+    await canvas.loadFromJSON(normalized, reviver);
   } finally {
     const nextDepth = (hydrationDepth.get(canvas) ?? 1) - 1;
     if (nextDepth <= 0) hydrationDepth.delete(canvas);
@@ -99,6 +107,9 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
     target.id = serialized.id;
   } else if (target.id == null) {
     target.id = null;
+  }
+  if (target.assetId === undefined) {
+    target.assetId = serialized?.assetId ?? serialized?.id ?? undefined;
   }
   if (target.tokenRole === undefined) target.tokenRole = serialized?.tokenRole ?? null;
   if (target.colorLocked === undefined) target.colorLocked = serialized?.colorLocked ?? false;

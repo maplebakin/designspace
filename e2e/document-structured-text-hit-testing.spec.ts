@@ -720,6 +720,85 @@ test.describe('structured text hit testing', () => {
     expect(await layout.getAttribute('data-document-selection-text')).not.toBe('');
   });
 
+  test('keeps the live fragment range anchored to authored edits', async ({ page }) => {
+    test.slow();
+    await loadHistoricalFixture(page);
+    const layout = page.locator('[data-document-span-layout]');
+    const body = page.locator('.document-flow-prosemirror');
+    const firstPoint = await getVisibleTextPoint(page, 1);
+    await page.mouse.click(firstPoint.x, firstPoint.y);
+    await expect(layout).toHaveAttribute('data-text-editing', 'true');
+    await body.press('ControlOrMeta+Home');
+
+    const before = await layout.evaluate((root) => {
+      const fragmentId = root.getAttribute('data-active-edit-fragment-id');
+      if (!fragmentId) throw new Error('Active fragment is unavailable.');
+      const fragment = Array.from(root.querySelectorAll<HTMLElement>(
+        '[data-document-fragment-id]'
+      )).find((candidate) => candidate.dataset.documentFragmentId === fragmentId);
+      const range = root.getAttribute('data-active-edit-pm-range');
+      if (!fragment || !range) throw new Error('Active PM range is unavailable.');
+      return {
+        id: fragmentId,
+        from: Number(JSON.parse(range).from),
+        to: Number(JSON.parse(range).to),
+        fragmentFrom: Number(fragment.dataset.documentFrom),
+        fragmentTo: Number(fragment.dataset.documentTo),
+        selection: Number(root.getAttribute('data-document-selection-from')),
+      };
+    });
+    const prefix = 'Authored prefix ';
+    await body.type(prefix);
+    await expect.poll(async () => {
+      const range = await layout.getAttribute('data-active-edit-pm-range');
+      return range ? JSON.parse(range) as { from: number; to: number } : null;
+    }).toEqual({
+      from: before.from,
+      to: before.to + prefix.length,
+    });
+    expect(Number(await layout.getAttribute('data-document-selection-from')))
+      .toBe(before.selection + prefix.length);
+    expect(await layout.getAttribute('data-active-edit-masked-fragment-id'))
+      .toBe(before.id);
+  });
+
+  test('does not mask frozen fragments that have no live replacement surface', async ({ page }) => {
+    test.slow();
+    await loadHistoricalFixture(page);
+    const layout = page.locator('[data-document-span-layout]');
+    const start = await getVisibleTextCharacterPoint(page, 1, 0);
+    const end = await getVisibleTextCharacterPoint(page, 3, 6);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(async () => (
+      Number(await layout.getAttribute('data-document-selection-to'))
+      - Number(await layout.getAttribute('data-document-selection-from'))
+    )).toBeGreaterThan(100);
+
+    const presentation = await layout.evaluate((root) => ({
+      selectionText: root.getAttribute('data-document-selection-text') || '',
+      activeIds: (root.getAttribute('data-active-edit-fragment-ids') || '')
+        .split('|')
+        .filter(Boolean),
+      maskedIds: Array.from(root.querySelectorAll<HTMLElement>(
+        '[data-document-fragment-id][data-document-active-edit-fragment="true"]'
+      )).map((fragment) => fragment.dataset.documentFragmentId || ''),
+      visibleCanonical: Array.from(root.querySelectorAll<HTMLElement>(
+        '[data-document-fragment-id]'
+      )).filter((fragment) => (
+        getComputedStyle(fragment).visibility === 'visible'
+        && getComputedStyle(fragment).color !== 'rgba(0, 0, 0, 0)'
+      )).length,
+    }));
+    expect(presentation.selectionText.length).toBeGreaterThan(100);
+    expect(presentation.activeIds.length).toBeGreaterThan(1);
+    expect(presentation.maskedIds).toHaveLength(1);
+    expect(presentation.maskedIds[0]).toBe(presentation.activeIds[0]);
+    expect(presentation.visibleCanonical).toBeGreaterThan(1);
+  });
+
   test('maps drags, copy, caret, and highlights across wrapped columns at zoom levels', async ({ page }) => {
     test.slow();
     test.setTimeout(180_000);

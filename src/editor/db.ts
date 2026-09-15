@@ -6,6 +6,44 @@ export const MAX_LIBRARY_PROJECT_CHARS = 100 * 1024 * 1024;
 export const MAX_LIBRARY_THUMBNAIL_CHARS = 2 * 1024 * 1024;
 export const MAX_DASHBOARD_PROJECTS = 100;
 
+/**
+ * Deterministic test-only barriers for the real IndexedDB write boundary.
+ *
+ * The barrier is intentionally process-local and has no effect unless a test
+ * installs it. `Dexie.waitFor` keeps the read/write transaction alive while a
+ * browser probe inspects the live session or performs history replay; the
+ * transaction is still committed by the production Dexie code after release.
+ */
+export type DurableWriteBoundary =
+  | 'create-project'
+  | 'update-project'
+  | 'rename-project';
+
+type DurableWriteBarrier = (
+  boundary: DurableWriteBoundary,
+) => Promise<void> | void;
+
+let durableWriteBarrierForTests: DurableWriteBarrier | null = null;
+
+export const setDurableWriteBarrierForTests = (
+  barrier: DurableWriteBarrier | null,
+) => {
+  durableWriteBarrierForTests = barrier;
+};
+
+const waitForDurableWriteBoundary = async (boundary: DurableWriteBoundary) => {
+  const barrier = durableWriteBarrierForTests;
+  if (!barrier) return;
+  await Dexie.waitFor(Promise.resolve(barrier(boundary)));
+};
+
+const normalizeProjectRevision = (value: unknown): number => {
+  const revision = Number(value);
+  return Number.isFinite(revision) && revision >= 1
+    ? Math.max(1, Math.trunc(revision))
+    : 1;
+};
+
 export const fingerprintProjectPayload = (value: string) => {
   let first = 0x811c9dc5;
   let second = 0x9e3779b9;
@@ -15,6 +53,46 @@ export const fingerprintProjectPayload = (value: string) => {
     second = Math.imul(second ^ code, 0x85ebca6b);
   }
   return `${value.length.toString(36)}-${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
+};
+
+/**
+ * Fingerprint authored project content without volatile save timestamps. A
+ * regenerated thumbnail or another save acknowledgement must not turn the
+ * same authored scene into a new durable-content identity.
+ */
+export const fingerprintProjectContent = (value: string) => {
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return fingerprintProjectPayload(value);
+    }
+    const stable = { ...(parsed as Record<string, unknown>) };
+    delete stable.updatedAt;
+    delete stable.lastUpdated;
+    // Page thumbnails are derived previews, not authored scene content. They
+    // are regenerated during synchronization and can legitimately differ
+    // while the durable scene remains identical. Keep them out of the
+    // content identity so a preview refresh does not force another giant
+    // canvas-data rewrite.
+    const stripPageThumbnails = (pages: unknown): unknown => {
+      if (!Array.isArray(pages)) return pages;
+      return pages.map((page) => {
+        if (!page || typeof page !== 'object' || Array.isArray(page)) return page;
+        const nextPage = { ...(page as Record<string, unknown>) };
+        delete nextPage.thumbnail;
+        if (Array.isArray(nextPage.pages)) {
+          nextPage.pages = stripPageThumbnails(nextPage.pages);
+        }
+        return nextPage;
+      });
+    };
+    if (Array.isArray(stable.pages)) {
+      stable.pages = stripPageThumbnails(stable.pages);
+    }
+    return fingerprintProjectPayload(JSON.stringify(stable));
+  } catch {
+    return fingerprintProjectPayload(value);
+  }
 };
 
 export interface Project {
@@ -28,6 +106,8 @@ export interface Project {
   editorMode?: EditorMode;
   contentHash?: string;
   payloadLength?: number;
+  /** Monotonic durable revision used by cross-context compare-and-swap writes. */
+  revision?: number;
   quarantinedAt?: string;
   quarantineReason?: string;
 }
@@ -39,6 +119,38 @@ export interface CanvasData {
   lastModified?: Date; // Optional last modified date
   contentHash?: string;
   payloadLength?: number;
+  /** Mirrors the owning project revision for forensic inspection/recovery. */
+  revision?: number;
+}
+
+export type ProjectWriteResult =
+  | {
+      status: 'saved';
+      projectId: string;
+      revision: number;
+    }
+  | {
+      status: 'conflict';
+      projectId: string;
+      expectedRevision: number;
+      actualRevision: number;
+    };
+
+/** A stale browser/tab/session attempted to replace a newer durable project. */
+export class ProjectRevisionConflictError extends Error {
+  readonly projectId: string;
+  readonly expectedRevision: number;
+  readonly actualRevision: number;
+
+  constructor(projectId: string, expectedRevision: number, actualRevision: number) {
+    super(
+      `Project ${projectId} changed in another context (expected revision ${expectedRevision}, found ${actualRevision}).`
+    );
+    this.name = 'ProjectRevisionConflictError';
+    this.projectId = projectId;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+  }
 }
 
 export interface ProjectRecoveryRecord {
@@ -109,6 +221,28 @@ export class DesignSpaceDB extends Dexie {
       templates: '++id, name, updatedAt, category',
       projectRecovery: 'projectId, quarantinedAt',
     });
+    // Version 6 deliberately removes indexes over the potentially enormous
+    // thumbnail/jsonPayload values. The values remain durable fields for
+    // compatibility, but IndexedDB no longer duplicates them in index
+    // storage. No row rewrite is performed so migration is recoverable and
+    // existing forensic duplicate rows remain untouched.
+    this.version(6).stores({
+      projects: '++id, name, lastModified, canvasDataId, editorMode, contentHash',
+      canvasData: 'id, projectId, lastModified, contentHash',
+      brandKit: '++id, colors, typography, logoAssets',
+      templates: '++id, name, updatedAt, category',
+      projectRecovery: 'projectId, quarantinedAt',
+    });
+    // Revision fields are ordinary values rather than indexes. Keeping this
+    // schema version explicit makes the durable conflict contract visible to
+    // recovery tooling without re-indexing or rewriting any large payload.
+    this.version(7).stores({
+      projects: '++id, name, lastModified, canvasDataId, editorMode, contentHash',
+      canvasData: 'id, projectId, lastModified, contentHash',
+      brandKit: '++id, colors, typography, logoAssets',
+      templates: '++id, name, updatedAt, category',
+      projectRecovery: 'projectId, quarantinedAt',
+    });
 
     // Create indexes
     this.projects = this.table('projects');
@@ -138,11 +272,26 @@ export class DesignSpaceDB extends Dexie {
     thumbnail?: string,
     editorMode: EditorMode = 'canvas'
   ): Promise<string> {
+    const result = await this.saveProjectWithRevision(name, jsonPayload, thumbnail, editorMode);
+    return result.projectId;
+  }
+
+  /**
+   * Allocate a new durable project and return its initial revision. The
+   * regular saveProject wrapper remains string-returning for old callers.
+   */
+  async saveProjectWithRevision(
+    name: string,
+    jsonPayload: string,
+    thumbnail?: string,
+    editorMode: EditorMode = 'canvas'
+  ): Promise<{ projectId: string; revision: number }> {
     assertIndexedDbStartupAllowed();
     this.validateProjectPayload(jsonPayload);
     const projectId = crypto.randomUUID();
     const canvasDataId = crypto.randomUUID();
-    const contentHash = fingerprintProjectPayload(jsonPayload);
+    const contentHash = fingerprintProjectContent(jsonPayload);
+    const revision = 1;
     
     // Create transaction to ensure both records are saved together
     return this.transaction('rw', this.projects, this.canvasData, async () => {
@@ -153,6 +302,7 @@ export class DesignSpaceDB extends Dexie {
         projectId,
         contentHash,
         payloadLength: jsonPayload.length,
+        revision,
       });
       
       // Save project
@@ -165,9 +315,15 @@ export class DesignSpaceDB extends Dexie {
         editorMode,
         contentHash,
         payloadLength: jsonPayload.length,
+        revision,
       });
+
+      // This remains inside the real Dexie transaction.  Tests may hold the
+      // commit here to prove session/revision fencing without replacing the
+      // persistence implementation with a fake table.
+      await waitForDurableWriteBoundary('create-project');
       
-      return projectId;
+      return { projectId, revision };
     });
   }
 
@@ -180,26 +336,35 @@ export class DesignSpaceDB extends Dexie {
   ): Promise<boolean> {
     assertIndexedDbStartupAllowed();
     this.validateProjectPayload(jsonPayload);
-    const contentHash = fingerprintProjectPayload(jsonPayload);
+    const contentHash = fingerprintProjectContent(jsonPayload);
     return this.transaction('rw', this.projects, this.canvasData, async () => {
       const project = await this.projects.get(projectId);
       if (!project) throw new Error('Project not found');
+      const currentRevision = normalizeProjectRevision(project.revision);
       const payloadChanged = project.contentHash !== contentHash
         || project.payloadLength !== jsonPayload.length;
+      const referenced = await this.canvasData.get(project.canvasDataId);
+      if (!referenced || referenced.projectId !== projectId) {
+        throw new Error('Project canvas data reference is missing or inconsistent.');
+      }
       if (payloadChanged) {
         // A legacy database may contain superseded rows with the same
         // projectId. Update only the row explicitly referenced by the project
         // record; rewriting the whole index was the source of unbounded
         // persistence growth during recovery.
-        const referenced = await this.canvasData.get(project.canvasDataId);
-        if (!referenced || referenced.projectId !== projectId) {
-          throw new Error('Project canvas data reference is missing or inconsistent.');
-        }
         await this.canvasData.update(project.canvasDataId, {
           jsonPayload,
           contentHash,
           payloadLength: jsonPayload.length,
           lastModified: new Date(),
+          revision: currentRevision + 1,
+        });
+      } else {
+        // Metadata-only saves still advance the durable identity. Mirror that
+        // revision on the referenced row without rewriting the large payload.
+        await this.canvasData.update(project.canvasDataId, {
+          lastModified: new Date(),
+          revision: currentRevision + 1,
         });
       }
       
@@ -210,9 +375,82 @@ export class DesignSpaceDB extends Dexie {
         thumbnail: this.normalizeThumbnail(thumbnail),
         contentHash,
         payloadLength: jsonPayload.length,
+        revision: currentRevision + 1,
         ...(editorMode ? { editorMode } : {}),
       });
+      await waitForDurableWriteBoundary('update-project');
       return payloadChanged;
+    });
+  }
+
+  /**
+   * Replace a project only when the caller still owns the revision it loaded.
+   * The check and both-row update occur in one IndexedDB transaction, so two
+   * browser contexts cannot silently last-write-wins the same project.
+   */
+  async updateProjectIfRevision(
+    projectId: string,
+    name: string,
+    jsonPayload: string,
+    thumbnail: string | undefined,
+    editorMode: EditorMode | undefined,
+    expectedRevision: number,
+  ): Promise<ProjectWriteResult> {
+    assertIndexedDbStartupAllowed();
+    this.validateProjectPayload(jsonPayload);
+    if (!Number.isFinite(expectedRevision) || expectedRevision < 1) {
+      throw new Error('A valid durable project revision is required for compare-and-swap writes.');
+    }
+    const contentHash = fingerprintProjectContent(jsonPayload);
+    return this.transaction('rw', this.projects, this.canvasData, async () => {
+      const project = await this.projects.get(projectId);
+      if (!project) throw new Error('Project not found');
+      const actualRevision = normalizeProjectRevision(project.revision);
+      if (actualRevision !== Math.trunc(expectedRevision)) {
+        return {
+          status: 'conflict' as const,
+          projectId,
+          expectedRevision: Math.trunc(expectedRevision),
+          actualRevision,
+        };
+      }
+
+      const nextRevision = actualRevision + 1;
+      const payloadChanged = project.contentHash !== contentHash
+        || project.payloadLength !== jsonPayload.length;
+      const referenced = await this.canvasData.get(project.canvasDataId);
+      if (!referenced || referenced.projectId !== projectId) {
+        throw new Error('Project canvas data reference is missing or inconsistent.');
+      }
+      if (payloadChanged) {
+        await this.canvasData.update(project.canvasDataId, {
+          jsonPayload,
+          contentHash,
+          payloadLength: jsonPayload.length,
+          lastModified: new Date(),
+          revision: nextRevision,
+        });
+      } else {
+        await this.canvasData.update(project.canvasDataId, {
+          lastModified: new Date(),
+          revision: nextRevision,
+        });
+      }
+      await this.projects.update(projectId, {
+        name,
+        lastModified: new Date(),
+        thumbnail: this.normalizeThumbnail(thumbnail),
+        contentHash,
+        payloadLength: jsonPayload.length,
+        revision: nextRevision,
+        ...(editorMode ? { editorMode } : {}),
+      });
+      await waitForDurableWriteBoundary('update-project');
+      return {
+        status: 'saved' as const,
+        projectId,
+        revision: nextRevision,
+      };
     });
   }
 
@@ -220,15 +458,18 @@ export class DesignSpaceDB extends Dexie {
     assertIndexedDbStartupAllowed();
     const project = await this.projects.get(projectId);
     if (!project) return null;
-    const rows = await this.canvasData.where('projectId').equals(projectId).toArray();
-    const referenced = rows.find((row) => row.id === project.canvasDataId);
+    // Only materialize the one referenced payload. `primaryKeys()` reads
+    // metadata/keys and avoids loading every potentially huge JSON row just
+    // to report duplicate IDs.
+    const rowIds = await this.canvasData.where('projectId').equals(projectId).primaryKeys();
+    const referenced = await this.canvasData.get(project.canvasDataId);
     return {
       projectId,
       referencedCanvasDataId: referenced?.id || null,
-      canvasDataRowCount: rows.length,
-      duplicateCanvasDataIds: rows
-        .filter((row) => row.id !== project.canvasDataId)
-        .map((row) => row.id),
+      canvasDataRowCount: rowIds.length,
+      duplicateCanvasDataIds: rowIds
+        .filter((id) => id !== project.canvasDataId)
+        .map((id) => String(id)),
       referencedPayloadLength: referenced?.jsonPayload.length || 0,
     };
   }
@@ -244,7 +485,10 @@ export class DesignSpaceDB extends Dexie {
       this.validateProjectPayload(canvasDataRecord.jsonPayload);
       
       return {
-        project,
+        project: {
+          ...project,
+          revision: normalizeProjectRevision(project.revision),
+        },
         canvasData: canvasDataRecord.jsonPayload
       };
     });
@@ -261,6 +505,7 @@ export class DesignSpaceDB extends Dexie {
       .toArray()
       .then((projects) => projects.map((project) => ({
         ...project,
+        revision: normalizeProjectRevision(project.revision),
         thumbnail: this.normalizeThumbnail(project.thumbnail),
       })))
       .finally(() => {
@@ -304,11 +549,12 @@ export class DesignSpaceDB extends Dexie {
       const canvasDataRecord = await this.canvasData.get(project.canvasDataId);
       if (!canvasDataRecord) throw new Error('Canvas data not found');
       this.validateProjectPayload(canvasDataRecord.jsonPayload);
-      const contentHash = project.contentHash || fingerprintProjectPayload(canvasDataRecord.jsonPayload);
+      const contentHash = project.contentHash || fingerprintProjectContent(canvasDataRecord.jsonPayload);
 
       // Create new IDs for the duplicated project
       const newProjectId = crypto.randomUUID();
       const newCanvasDataId = crypto.randomUUID();
+      const revision = 1;
 
       // Create new canvas data record
       await this.canvasData.add({
@@ -318,6 +564,7 @@ export class DesignSpaceDB extends Dexie {
         lastModified: new Date(),
         contentHash,
         payloadLength: canvasDataRecord.jsonPayload.length,
+        revision,
       });
 
       // Create new project record
@@ -330,6 +577,7 @@ export class DesignSpaceDB extends Dexie {
         editorMode: project.editorMode,
         contentHash,
         payloadLength: canvasDataRecord.jsonPayload.length,
+        revision,
       });
 
       return newProjectId;
@@ -338,9 +586,74 @@ export class DesignSpaceDB extends Dexie {
 
   async renameProject(projectId: string, newName: string): Promise<void> {
     assertIndexedDbStartupAllowed();
-    await this.projects.update(projectId, {
-      name: newName,
-      lastModified: new Date(),
+    await this.transaction('rw', this.projects, this.canvasData, async () => {
+      const project = await this.projects.get(projectId);
+      if (!project) throw new Error('Project not found');
+      const revision = normalizeProjectRevision(project.revision) + 1;
+      await this.projects.update(projectId, {
+        name: newName,
+        lastModified: new Date(),
+        revision,
+      });
+      const referenced = await this.canvasData.get(project.canvasDataId);
+      if (referenced && referenced.projectId === projectId) {
+        await this.canvasData.update(project.canvasDataId, {
+          lastModified: new Date(),
+          revision,
+        });
+      }
+    });
+  }
+
+  /**
+   * Rename a project only when the caller still owns the revision it loaded.
+   * Metadata changes participate in the same project/canvas revision stream
+   * as scene writes so a stale dashboard or second window cannot silently
+   * replace a newer project name.
+   */
+  async renameProjectIfRevision(
+    projectId: string,
+    newName: string,
+    expectedRevision: number,
+  ): Promise<ProjectWriteResult> {
+    assertIndexedDbStartupAllowed();
+    if (!Number.isFinite(expectedRevision) || expectedRevision < 1) {
+      throw new Error('A valid durable project revision is required for compare-and-swap renames.');
+    }
+    return this.transaction('rw', this.projects, this.canvasData, async () => {
+      const project = await this.projects.get(projectId);
+      if (!project) throw new Error('Project not found');
+      const actualRevision = normalizeProjectRevision(project.revision);
+      const normalizedExpectedRevision = Math.trunc(expectedRevision);
+      if (actualRevision !== normalizedExpectedRevision) {
+        return {
+          status: 'conflict' as const,
+          projectId,
+          expectedRevision: normalizedExpectedRevision,
+          actualRevision,
+        };
+      }
+      const referenced = await this.canvasData.get(project.canvasDataId);
+      if (!referenced || referenced.projectId !== projectId) {
+        throw new Error('Project canvas data reference is missing or inconsistent.');
+      }
+      const nextRevision = actualRevision + 1;
+      const now = new Date();
+      await this.projects.update(projectId, {
+        name: newName,
+        lastModified: now,
+        revision: nextRevision,
+      });
+      await this.canvasData.update(project.canvasDataId, {
+        lastModified: now,
+        revision: nextRevision,
+      });
+      await waitForDurableWriteBoundary('rename-project');
+      return {
+        status: 'saved' as const,
+        projectId,
+        revision: nextRevision,
+      };
     });
   }
 

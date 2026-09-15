@@ -5,6 +5,7 @@ import { useEditorStore } from '../state/editorStore';
 import { productRecipes } from '../recipes/recipeRegistry';
 import type { ProductRecipe } from '../recipes/productRecipeTypes';
 import { isUserObject } from '../utils/objectUtils';
+import { useProjectSessionStore } from '../state/projectSessionStore';
 
 type ProductStarterRecipeCard = {
   id: string;
@@ -80,6 +81,9 @@ export const ProductStarter: React.FC<ProductStarterProps> = ({
     }),
     shallow
   );
+  const prepareProjectReplacement = useProjectSessionStore(
+    (state) => state.commands?.prepareProjectReplacement
+  );
 
   const productStarterRecipes = buildProductStarterRecipeCards(recipes);
 
@@ -95,7 +99,12 @@ export const ProductStarter: React.FC<ProductStarterProps> = ({
       && page.canvasData.objects.some(isUserObject)
     );
 
-    if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
+    if (prepareProjectReplacement) {
+      if (!(await prepareProjectReplacement())) {
+        setToastMessage(`${recipe.name} cancelled.`);
+        return;
+      }
+    } else if (hasUserCanvasObjects || hasUserPageContent || isDirty) {
       const proceed = window.confirm(
         `Creating ${recipe.name} will clear your current design. Continue?`
       );

@@ -4,6 +4,8 @@ const tauriMocks = vi.hoisted(() => ({
   save: vi.fn(),
   open: vi.fn(),
   writeFile: vi.fn(),
+  rename: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -13,6 +15,8 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: tauriMocks.writeFile,
+  rename: tauriMocks.rename,
+  remove: tauriMocks.remove,
 }));
 
 import {
@@ -41,6 +45,8 @@ describe('file delivery service', () => {
     tauriMocks.save.mockReset();
     tauriMocks.open.mockReset();
     tauriMocks.writeFile.mockReset();
+    tauriMocks.rename.mockReset();
+    tauriMocks.remove.mockReset();
     document.body.innerHTML = '';
   });
 
@@ -63,7 +69,7 @@ describe('file delivery service', () => {
       extension: 'png',
     });
 
-    expect(result).toEqual({ status: 'saved', fileName: 'Browser Export.png' });
+    expect(result).toEqual({ status: 'initiated', fileName: 'Browser Export.png' });
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:browser-export');
@@ -75,6 +81,8 @@ describe('file delivery service', () => {
     setTauriRuntime(true);
     tauriMocks.save.mockResolvedValue('/exports/design-space.jpg');
     tauriMocks.writeFile.mockResolvedValue(undefined);
+    tauriMocks.rename.mockResolvedValue(undefined);
+    tauriMocks.remove.mockResolvedValue(undefined);
 
     const result = await deliverFile({
       content: new Uint8Array([1, 2, 3]),
@@ -89,10 +97,14 @@ describe('file delivery service', () => {
       filters: [{ name: 'PNG', extensions: ['png'] }],
     }));
     expect(tauriMocks.writeFile).toHaveBeenCalledWith(
-      '/exports/design-space.png',
+      expect.stringMatching(/^\/exports\/design-space\.png\.design-space-.+\.tmp$/),
       expect.any(Uint8Array)
     );
     expect(Array.from(tauriMocks.writeFile.mock.calls[0][1] as Uint8Array)).toEqual([1, 2, 3]);
+    expect(tauriMocks.rename).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/exports\/design-space\.png\.design-space-.+\.tmp$/),
+      '/exports/design-space.png'
+    );
     expect(result).toEqual({
       status: 'saved',
       fileName: 'design-space.png',
@@ -118,12 +130,34 @@ describe('file delivery service', () => {
     setTauriRuntime(true);
     tauriMocks.save.mockResolvedValue('/exports/project.zip');
     tauriMocks.writeFile.mockRejectedValue(new Error('permission denied'));
+    tauriMocks.rename.mockResolvedValue(undefined);
+    tauriMocks.remove.mockResolvedValue(undefined);
 
     await expect(deliverFile({
       content: new Blob(['zip']),
       fileName: 'project.zip',
       extension: 'zip',
     })).rejects.toThrow('Could not save project.zip: permission denied');
+    expect(tauriMocks.remove).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/exports\/project\.zip\.design-space-.+\.tmp$/)
+    );
+  });
+
+  it('cleans a staged native file when the atomic rename fails', async () => {
+    setTauriRuntime(true);
+    tauriMocks.save.mockResolvedValue('/exports/project.zip');
+    tauriMocks.writeFile.mockResolvedValue(undefined);
+    tauriMocks.rename.mockRejectedValue(new Error('destination is locked'));
+    tauriMocks.remove.mockResolvedValue(undefined);
+
+    await expect(deliverFile({
+      content: new Uint8Array([4, 5, 6]),
+      fileName: 'project.zip',
+      extension: 'zip',
+    })).rejects.toThrow('Could not save project.zip: destination is locked');
+    expect(tauriMocks.remove).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/exports\/project\.zip\.design-space-.+\.tmp$/)
+    );
   });
 
   it('uses one Tauri folder picker and writes numbered all-page files', async () => {
@@ -131,6 +165,7 @@ describe('file delivery service', () => {
     const createObjectURL = vi.spyOn(URL, 'createObjectURL');
     tauriMocks.open.mockResolvedValue('/exports/pages');
     tauriMocks.writeFile.mockResolvedValue(undefined);
+    tauriMocks.rename.mockResolvedValue(undefined);
 
     const result = await deliverFiles([
       { content: new Blob(['page 1']), fileName: 'book-page-01.png', extension: 'png' },
@@ -145,8 +180,15 @@ describe('file delivery service', () => {
     expect(tauriMocks.writeFile).toHaveBeenCalledTimes(2);
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(tauriMocks.writeFile.mock.calls.map(([path]) => path)).toEqual([
-      '/exports/pages/book-page-01.png',
-      '/exports/pages/book-page-02.png',
+      expect.stringMatching(/^\/exports\/pages\/book-page-01\.png\.design-space-.+\.tmp$/),
+      expect.stringMatching(/^\/exports\/pages\/book-page-02\.png\.design-space-.+\.tmp$/),
+    ]);
+    expect(tauriMocks.rename.mock.calls.map(([from, to]) => [
+      from,
+      to,
+    ])).toEqual([
+      [expect.stringMatching(/^\/exports\/pages\/book-page-01\.png\.design-space-.+\.tmp$/), '/exports/pages/book-page-01.png'],
+      [expect.stringMatching(/^\/exports\/pages\/book-page-02\.png\.design-space-.+\.tmp$/), '/exports/pages/book-page-02.png'],
     ]);
     expect(result).toMatchObject({
       status: 'saved',
@@ -156,6 +198,32 @@ describe('file delivery service', () => {
         { fileName: 'book-page-02.png', path: '/exports/pages/book-page-02.png' },
       ],
     });
+  });
+
+  it('reports a partial native batch when a later file cannot be staged', async () => {
+    setTauriRuntime(true);
+    tauriMocks.open.mockResolvedValue('/exports/pages');
+    tauriMocks.writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('disk full'));
+    tauriMocks.rename.mockResolvedValue(undefined);
+    tauriMocks.remove.mockResolvedValue(undefined);
+
+    const result = await deliverFiles([
+      { content: new Uint8Array([1]), fileName: 'page-01.png', extension: 'png' },
+      { content: new Uint8Array([2]), fileName: 'page-02.png', extension: 'png' },
+    ]);
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      directory: '/exports/pages',
+      failedFileName: 'page-02.png',
+      error: expect.stringMatching(/disk full/i),
+      files: [{ fileName: 'page-01.png', path: '/exports/pages/page-01.png' }],
+    });
+    expect(tauriMocks.remove).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/exports\/pages\/page-02\.png\.design-space-.+\.tmp$/)
+    );
   });
 
   it('replaces a user-selected mismatched extension without changing the basename', () => {

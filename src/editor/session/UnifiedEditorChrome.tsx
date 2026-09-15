@@ -603,21 +603,30 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     const init = async () => {
       if (!isTauriRecoveryAvailable()) return;
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+        const nextUnlisten = await getCurrentWindow().onCloseRequested(async (event) => {
           if (isProgrammaticCloseRef.current || !readDirty()) return;
           event.preventDefault();
           setShowCloseModal(true);
         });
+        if (disposed) {
+          nextUnlisten();
+        } else {
+          unlisten = nextUnlisten;
+        }
       } catch {
         // Native close protection is best effort when the browser bridge is unavailable.
       }
     };
     void init();
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [readDirty]);
 
   useEffect(() => {

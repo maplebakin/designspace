@@ -830,7 +830,7 @@ describe('document export', () => {
       blob: tinyPng,
       fileName: 'historical-pages-4952.pdf',
       delivery: {
-        status: 'saved',
+        status: 'initiated',
         fileName: 'historical-pages-4952.pdf',
       },
     });
@@ -860,7 +860,7 @@ describe('document export', () => {
       'historical-pages-4952-page-03.png',
     ]);
     expect(results.delivery).toEqual({
-      status: 'saved',
+      status: 'initiated',
       files: [
         { fileName: 'historical-pages-4952-page-01.png' },
         { fileName: 'historical-pages-4952-page-02.png' },

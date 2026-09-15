@@ -241,17 +241,14 @@ test.describe('historical book acceptance fixture', () => {
     const workspace = page.getByTestId('document-workspace');
     const sheet = page.getByTestId('document-workspace').getByTestId('document-page');
     const clearSelection = async () => {
-      // The active fragment viewport is the native pointer owner for its
-      // exact rectangle; use the page chrome to blur it before capturing the
-      // idle fixture instead of clicking through that bounded surface.
-      await page.locator('.document-sidebar__heading').click();
+      // Escape is the shared lifecycle path for clearing an active fragment;
+      // clicking the sidebar is not reliable when the contextual top bar
+      // owns the overlapping hit area after a page switch.
       await page.evaluate(() => {
-        window.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Escape',
-          bubbles: true,
-        }));
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) active.blur();
       });
-      await page.waitForTimeout(50);
+      await page.keyboard.press('Escape');
     };
     await clearSelection();
     await expect(sheet).toHaveScreenshot('historical-page-49.png', {

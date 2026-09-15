@@ -111,6 +111,25 @@ describe('Unified Editor shared authority handoff', () => {
     });
   });
 
+  it('marks a live authored draft before its semantic completion event', () => {
+    const { authority } = createRuntime();
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'canvas-session-a',
+      adapter: createAdapter(),
+    });
+
+    authority.markAuthoredMutation();
+
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 1,
+      persistedRevision: 0,
+      isDirty: true,
+      saveStatus: 'unsaved',
+      pendingAutosave: true,
+    });
+  });
+
   it('coalesces same-tick changes into one shared autosave and advances the watermark', async () => {
     vi.useFakeTimers();
     const autosave = vi.fn().mockResolvedValue(true);

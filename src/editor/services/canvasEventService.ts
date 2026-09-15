@@ -37,6 +37,8 @@ import {
 export interface CanvasEventCallbacks {
     onUpdate?: (canvas: fabric.Canvas, options?: { persist?: boolean }) => void;
     onHistoryDirty?: () => void;
+    /** Advance the renderer-owned authored revision immediately on mutation. */
+    onAuthoredMutation?: () => void;
     /**
      * A narrow adapter observation for committed user geometry changes. The
      * callback receives a stable object ID, never the Fabric object itself.
@@ -144,6 +146,7 @@ export function registerObjectEventHandlers(
     const {
         onUpdate,
         onHistoryDirty,
+        onAuthoredMutation,
         onSelectionChange,
         onCommittedMutation,
     } = callbacks;
@@ -158,6 +161,7 @@ export function registerObjectEventHandlers(
 
     type TextEditingSession = {
         initialText: string;
+        liveMutationEmitted: boolean;
     };
 
     // Fabric 7 emits text:editing:exited before the changed-text
@@ -165,6 +169,11 @@ export function registerObjectEventHandlers(
     // event so legacy synchronization and saveState remain first.
     const textEditingSessions = new Map<string, TextEditingSession>();
     const textCommitsAwaitingObjectModified = new Map<string, TextEditingSession>();
+    // Some integrations (and a few WebKit event paths) can emit text:changed
+    // without the paired editing:entered event. Keep that first live mutation
+    // visible to the lifecycle observer and suppress the later generic
+    // object:modified geometry notification for the same edit.
+    const textChangesAwaitingObjectModified = new Set<string>();
 
     const canObserveObjectLifecycle = (
         target?: fabric.Object
@@ -201,8 +210,12 @@ export function registerObjectEventHandlers(
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
         const target = event?.target as fabric.Object | undefined;
+        const isInternalMutation = !!(target as any)?.__layerSyncing
+            || !!useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas);
 
-        if (target && !(target as any).isGuide) {
+        if (target && !(target as any).isGuide && !isInternalMutation) {
+            onAuthoredMutation?.();
             onSelectionChange?.(canvas);
             onHistoryDirty?.();
             onUpdate?.(canvas, { persist: true });
@@ -212,10 +225,11 @@ export function registerObjectEventHandlers(
         if (typeof objectId === 'string') {
             textEditingSessions.delete(objectId);
             textCommitsAwaitingObjectModified.delete(objectId);
+            textChangesAwaitingObjectModified.delete(objectId);
         }
 
         // Clean up blob URLs for images
-        if (target?.type === 'image') {
+        if (target?.type === 'image' && !isInternalMutation) {
             const id = (target as any).id as string | undefined;
             if (id) {
                 const { decrementAssetRef } = useEditorStore.getState();
@@ -238,36 +252,55 @@ export function registerObjectEventHandlers(
     const handleObjectModified = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
-        if (useEditorStore.getState().syncLock?.isLocked) return;
+        if (
+            useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas)
+        ) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || (target as any).isGuide) return;
-
-        markDirtyObject(target);
-        onHistoryDirty?.();
-        onUpdate?.(canvas, { persist: true });
 
         const objectId = (target as any).id;
         const pendingTextSession = typeof objectId === 'string'
             ? textCommitsAwaitingObjectModified.get(objectId)
             : undefined;
+        const textChangeWithoutSession = typeof objectId === 'string'
+            ? textChangesAwaitingObjectModified.delete(objectId)
+            : false;
+        const finalText = String((target as any).text ?? '');
+        // A text:changed event has already marked the authored revision. The
+        // later Fabric completion event is bookkeeping, not another mutation.
+        // For integrations that omit text:changed, the changed value is still
+        // marked here as the fallback boundary. A no-session text change is
+        // likewise already marked by text:changed and is suppressed below.
+        if (
+            !textChangeWithoutSession
+            && (
+                !pendingTextSession
+                || (
+                    !pendingTextSession.liveMutationEmitted
+                    && pendingTextSession.initialText !== finalText
+                )
+            )
+        ) {
+            onAuthoredMutation?.();
+        }
+        markDirtyObject(target);
+        onHistoryDirty?.();
+        onUpdate?.(canvas, { persist: true });
+
         if (pendingTextSession) {
             textCommitsAwaitingObjectModified.delete(objectId);
 
             // Fabric's changed-text object:modified is the completion event
             // for the editing session. It must not be reinterpreted as a
             // geometry command as well.
-            const finalText = String((target as any).text ?? '');
-            const serializedObject = useEditorStore.getState().canvasObjects.find(
-                (object) => object.id === objectId
-            );
             if (
-                pendingTextSession.initialText !== finalText
+                !pendingTextSession.liveMutationEmitted
+                && pendingTextSession.initialText !== finalText
                 && canvas.getObjects().includes(target)
                 && isCanvasObjectObservationTarget(target)
                 && !isCanvasObjectMutationSuppressed(canvas)
                 && !useEditorStore.getState().syncLock?.isLocked
-                && serializedObject
-                && String((serializedObject as any).text ?? '') === finalText
             ) {
                 notifyCommittedMutation({
                     action: 'modify-freeform-text-content',
@@ -276,6 +309,7 @@ export function registerObjectEventHandlers(
             }
             return;
         }
+        if (textChangeWithoutSession) return;
 
         // Clear smart guides when object movement is complete
         if (canvas) {
@@ -298,7 +332,10 @@ export function registerObjectEventHandlers(
     const handleTextEditingEntered = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
-        if (useEditorStore.getState().syncLock?.isLocked) return;
+        if (
+            useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas)
+        ) return;
         const target = event?.target as fabric.Object | undefined;
         const objectId = (target as any)?.id;
         if (
@@ -311,13 +348,18 @@ export function registerObjectEventHandlers(
         ) return;
         textEditingSessions.set(objectId, {
             initialText: String((target as any).text ?? ''),
+            liveMutationEmitted: false,
         });
+        textChangesAwaitingObjectModified.delete(objectId);
     };
 
     const handleTextEditingExited = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
-        if (useEditorStore.getState().syncLock?.isLocked) return;
+        if (
+            useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas)
+        ) return;
         const target = event?.target as fabric.Object | undefined;
         const objectId = (target as any)?.id;
         if (
@@ -329,7 +371,15 @@ export function registerObjectEventHandlers(
         ) return;
         const session = textEditingSessions.get(objectId);
         textEditingSessions.delete(objectId);
+        textChangesAwaitingObjectModified.delete(objectId);
         if (!session || String((target as any).text ?? '') === session.initialText) {
+            return;
+        }
+        // A live text:changed event already advanced the authored/lifecycle
+        // revision for this editing session. Keep the exit event as the
+        // semantic completion boundary without counting the same edit twice.
+        if (session.liveMutationEmitted) {
+            textChangesAwaitingObjectModified.add(objectId);
             return;
         }
         textCommitsAwaitingObjectModified.set(objectId, session);
@@ -338,12 +388,54 @@ export function registerObjectEventHandlers(
     const handleTextChanged = (event?: { target?: fabric.Object }) => {
         if (checkAborted(abortSignal)) return;
         if (isCanvasHydrating(canvas)) return;
+        if (
+            useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas)
+        ) return;
         const target = event?.target as fabric.Object | undefined;
         if (!target || !isTextObject(target)) return;
 
+        onAuthoredMutation?.();
         markDirtyObject(target);
         onHistoryDirty?.();
         onUpdate?.(canvas, { persist: true });
+
+        // Fabric emits text:changed for each visible edit, before the blur /
+        // object:modified completion pair. Report the first changed value at
+        // that boundary so lifecycle dirty state cannot lag behind authored
+        // text while the editor remains focused. The completion callback
+        // remains a fallback for integrations that omit text:changed.
+        const objectId = (target as any).id;
+        const session = typeof objectId === 'string'
+            ? textEditingSessions.get(objectId)
+            : undefined;
+        if (
+            session
+            && !session.liveMutationEmitted
+            && String((target as any).text ?? '') !== session.initialText
+            && canObserveObjectLifecycle(target)
+        ) {
+            session.liveMutationEmitted = true;
+            notifyCommittedMutation({
+                action: 'modify-freeform-text-content',
+                objectId,
+            });
+        } else if (
+            typeof objectId === 'string'
+            && canObserveObjectLifecycle(target)
+            && !textChangesAwaitingObjectModified.has(objectId)
+        ) {
+            // Keep dirty/lifecycle state truthful even when the browser omits
+            // text:editing:entered. The set prevents the subsequent
+            // object:modified completion from being misclassified as
+            // geometry, while later visible edits remain coalesced until that
+            // completion boundary.
+            textChangesAwaitingObjectModified.add(objectId);
+            notifyCommittedMutation({
+                action: 'modify-freeform-text-content',
+                objectId,
+            });
+        }
     };
 
     const handleObjectScaling = (event: any) => {
@@ -380,6 +472,10 @@ export function registerObjectEventHandlers(
         if (!target) return;
         if ((target as any).isGuide) return;
         if ((target as any).__layerSyncing) return;
+        if (
+            useEditorStore.getState().syncLock?.isLocked
+            || isCanvasObjectMutationSuppressed(canvas)
+        ) return;
 
         ensureObjectId(target, canvas);
         if (target.type === 'image') {
@@ -395,6 +491,7 @@ export function registerObjectEventHandlers(
             onHistoryDirty?.();
         }
 
+        onAuthoredMutation?.();
         onUpdate?.(canvas, { persist: true });
 
         if (canObserveObjectLifecycle(target)) {
@@ -431,6 +528,7 @@ export function registerObjectEventHandlers(
             canvas.off('object:scaling', handleObjectScaling);
             textEditingSessions.clear();
             textCommitsAwaitingObjectModified.clear();
+            textChangesAwaitingObjectModified.clear();
         },
         type: 'canvas',
     };

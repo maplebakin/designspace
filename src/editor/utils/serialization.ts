@@ -30,6 +30,7 @@ const CUSTOM_PROPS = [
   'recipePageId',
   'slotId',
   'semanticRole',
+  'assetId',
   'isPageBorder',
   'borderSettings',
   'zIndex',
@@ -46,95 +47,276 @@ const CUSTOM_PROPS = [
   'lockSkewingY',
 ] as const;
 
-export const toSerializableObject = (obj: fabric.Object) => {
-  const base = obj.toObject([...CUSTOM_PROPS]);
-  const target = obj as any;
+/**
+ * Fabric uses lower-case type names on live objects and class names when an
+ * object is serialized (for example `image` -> `Image`).  Keep that versioned
+ * engine detail at the scene boundary instead of making every consumer guess
+ * which spelling it received.
+ */
+const SERIALIZED_TYPE_ALIASES: Record<string, string> = {
+  activeSelection: 'activeSelection',
+  ActiveSelection: 'activeSelection',
+  activeselection: 'activeSelection',
+  Circle: 'circle',
+  circle: 'circle',
+  Ellipse: 'ellipse',
+  ellipse: 'ellipse',
+  Group: 'group',
+  group: 'group',
+  Image: 'image',
+  image: 'image',
+  IText: 'i-text',
+  'i-text': 'i-text',
+  Line: 'line',
+  line: 'line',
+  Path: 'path',
+  path: 'path',
+  Polygon: 'polygon',
+  polygon: 'polygon',
+  Polyline: 'polyline',
+  polyline: 'polyline',
+  Rect: 'rect',
+  rect: 'rect',
+  Text: 'text',
+  text: 'text',
+  Textbox: 'textbox',
+  textbox: 'textbox',
+  Triangle: 'triangle',
+  triangle: 'triangle',
+};
 
-  // Handle shadow serialization
-  let shadowData = null;
-  if (target.shadow) {
-    if (typeof target.shadow === 'string') {
-      shadowData = target.shadow;
-    } else if (target.shadow && typeof target.shadow === 'object') {
-      shadowData = {
-        color: target.shadow.color,
-        blur: target.shadow.blur,
-        offsetX: target.shadow.offsetX,
-        offsetY: target.shadow.offsetY,
-      };
-    }
-  }
+export const normalizeSerializedObjectType = (type: unknown): string | null => {
+  if (typeof type !== 'string' || type.trim().length === 0) return null;
+  return SERIALIZED_TYPE_ALIASES[type] ?? type;
+};
 
-  // Handle image filters serialization
-  let filtersData: SerializedFilter[] | null = null;
-  if (obj.type === 'image' && target.filters && Array.isArray(target.filters)) {
-    filtersData = target.filters.map((filter: SerializedFilter) => {
-      // Convert filter to serializable format
-      if (filter.type === 'Brightness') {
-        return { type: 'Brightness', brightness: filter.brightness };
-      } else if (filter.type === 'Contrast') {
-        return { type: 'Contrast', contrast: filter.contrast };
-      } else if (filter.type === 'Saturation') {
-        return { type: 'Saturation', saturation: filter.saturation };
-      } else {
-        // For other filter types, serialize their properties
-        const filterData: SerializedFilter = { type: filter.type };
-        Object.keys(filter).forEach(key => {
-          if (key !== 'type' && typeof filter[key] !== 'function') {
-            filterData[key] = filter[key];
-          }
-        });
-        return filterData;
-      }
-    });
-  }
+export const isSerializedImageObject = (object: unknown): boolean =>
+  normalizeSerializedObjectType((object as any)?.type) === 'image';
 
-  // Handle image adjustments serialization
-  let adjustmentsData = null;
-  if (obj.type === 'image') {
-    // Extract adjustment values from filters if they exist
-    const brightnessFilter = target.filters?.find((f: SerializedFilter) => f.type === 'Brightness');
-    const contrastFilter = target.filters?.find((f: SerializedFilter) => f.type === 'Contrast');
-    const saturationFilter = target.filters?.find((f: SerializedFilter) => f.type === 'Saturation');
+export const isSerializedGroupObject = (object: unknown): boolean =>
+  normalizeSerializedObjectType((object as any)?.type) === 'group';
 
-    adjustmentsData = {
-      brightness: brightnessFilter?.brightness || 0,
-      contrast: contrastFilter?.contrast || 0,
-      saturation: saturationFilter?.saturation || 0,
+/**
+ * Convert a durable Fabric object tree back to the runtime registry's type
+ * discriminants before calling `fabric.util.enlivenObjects`. Fabric 7 emits
+ * class names such as `Image` in JSON, while the runtime registry is keyed by
+ * names such as `image`.
+ */
+export const normalizeSerializedObjectForFabric = (object: any): any => {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return object;
+  const normalizedType = normalizeSerializedObjectType(object.type);
+  return {
+    ...object,
+    ...(normalizedType ? { type: normalizedType } : {}),
+    ...(Array.isArray(object.objects)
+      ? { objects: object.objects.map(normalizeSerializedObjectForFabric) }
+      : {}),
+    ...(object.clipPath && typeof object.clipPath === 'object'
+      ? { clipPath: normalizeSerializedObjectForFabric(object.clipPath) }
+      : {}),
+  };
+};
+
+const serializeShadow = (target: any, fallback: any = null) => {
+  if (!target?.shadow) return fallback;
+  if (typeof target.shadow === 'string') return target.shadow;
+  if (typeof target.shadow === 'object') {
+    return {
+      color: target.shadow.color,
+      blur: target.shadow.blur,
+      offsetX: target.shadow.offsetX,
+      offsetY: target.shadow.offsetY,
     };
   }
+  return fallback;
+};
+
+const serializeFilters = (target: any, fallback: any = null): SerializedFilter[] | null => {
+  if (!Array.isArray(target?.filters)) return fallback;
+  return target.filters.map((filter: SerializedFilter) => {
+    if (filter.type === 'Brightness') {
+      return { type: 'Brightness', brightness: filter.brightness };
+    }
+    if (filter.type === 'Contrast') {
+      return { type: 'Contrast', contrast: filter.contrast };
+    }
+    if (filter.type === 'Saturation') {
+      return { type: 'Saturation', saturation: filter.saturation };
+    }
+    const filterData: SerializedFilter = { type: filter.type };
+    Object.keys(filter).forEach((key) => {
+      if (key !== 'type' && typeof filter[key] !== 'function') {
+        filterData[key] = filter[key];
+      }
+    });
+    return filterData;
+  });
+};
+
+const serializeObjectFields = (base: Record<string, any>, target?: any) => {
+  const objectType = target?.type ?? normalizeSerializedObjectType(base.type);
+  const isImage = objectType === 'image' || isSerializedImageObject(base);
+  const brightnessFilter = target?.filters?.find((f: SerializedFilter) => f.type === 'Brightness');
+  const contrastFilter = target?.filters?.find((f: SerializedFilter) => f.type === 'Contrast');
+  const saturationFilter = target?.filters?.find((f: SerializedFilter) => f.type === 'Saturation');
+  const adjustments = isImage
+    ? {
+      brightness: brightnessFilter?.brightness ?? base.adjustments?.brightness ?? 0,
+      contrast: contrastFilter?.contrast ?? base.adjustments?.contrast ?? 0,
+      saturation: saturationFilter?.saturation ?? base.adjustments?.saturation ?? 0,
+    }
+    : undefined;
 
   return {
     ...base,
-    id: target.id ?? null,
-    tokenRole: target.tokenRole ?? null,
-    colorLocked: target.colorLocked ?? false,
-    isPlaceholder: target.isPlaceholder ?? false,
-    __fixedWidth: target.__fixedWidth,
-    __fixedHeight: target.__fixedHeight,
-    originalFontSize: target.originalFontSize,
-    charSpacing: target.charSpacing ?? 0,
-    stroke: target.stroke ?? undefined,
-    strokeWidth: target.strokeWidth ?? 0,
-    name: target.name ?? undefined,
-    isPageBorder: target.isPageBorder ?? false,
-    borderSettings: target.borderSettings ?? undefined,
-    zIndex: target.zIndex ?? target.__zIndex ?? undefined,
-    __zIndex: target.__zIndex ?? target.zIndex ?? undefined,
-    selectable: target.selectable,
-    evented: target.evented,
-    hasControls: target.hasControls,
-    lockMovementX: target.lockMovementX ?? false,
-    lockMovementY: target.lockMovementY ?? false,
-    lockRotation: target.lockRotation ?? false,
-    lockScalingX: target.lockScalingX ?? false,
-    lockScalingY: target.lockScalingY ?? false,
-    lockSkewingX: target.lockSkewingX ?? false,
-    lockSkewingY: target.lockSkewingY ?? false,
-    shadow: shadowData,
-    filters: filtersData,
-    adjustments: obj.type === 'image' ? adjustmentsData : undefined,
+    id: target?.id ?? base.id ?? null,
+    tokenRole: target?.tokenRole ?? base.tokenRole ?? null,
+    colorLocked: target?.colorLocked ?? base.colorLocked ?? false,
+    isPlaceholder: target?.isPlaceholder ?? base.isPlaceholder ?? false,
+    __fixedWidth: target?.__fixedWidth ?? base.__fixedWidth,
+    __fixedHeight: target?.__fixedHeight ?? base.__fixedHeight,
+    originalFontSize: target?.originalFontSize ?? base.originalFontSize,
+    charSpacing: target?.charSpacing ?? base.charSpacing ?? 0,
+    stroke: target?.stroke ?? base.stroke ?? undefined,
+    strokeWidth: target?.strokeWidth ?? base.strokeWidth ?? 0,
+    name: target?.name ?? base.name ?? undefined,
+    isPageBorder: target?.isPageBorder ?? base.isPageBorder ?? false,
+    borderSettings: target?.borderSettings ?? base.borderSettings ?? undefined,
+    assetId: isImage
+      ? target?.assetId ?? base.assetId ?? target?.id ?? base.id ?? undefined
+      : target?.assetId ?? base.assetId ?? undefined,
+    zIndex: target?.zIndex ?? target?.__zIndex ?? base.zIndex ?? base.__zIndex ?? undefined,
+    __zIndex: target?.__zIndex ?? target?.zIndex ?? base.__zIndex ?? base.zIndex ?? undefined,
+    selectable: target?.selectable ?? base.selectable,
+    evented: target?.evented ?? base.evented,
+    hasControls: target?.hasControls ?? base.hasControls,
+    lockMovementX: target?.lockMovementX ?? base.lockMovementX ?? false,
+    lockMovementY: target?.lockMovementY ?? base.lockMovementY ?? false,
+    lockRotation: target?.lockRotation ?? base.lockRotation ?? false,
+    lockScalingX: target?.lockScalingX ?? base.lockScalingX ?? false,
+    lockScalingY: target?.lockScalingY ?? base.lockScalingY ?? false,
+    lockSkewingX: target?.lockSkewingX ?? base.lockSkewingX ?? false,
+    lockSkewingY: target?.lockSkewingY ?? base.lockSkewingY ?? false,
+    shadow: serializeShadow(target, base.shadow),
+    filters: serializeFilters(target, base.filters),
+    adjustments,
   };
+};
+
+const enrichSerializedTree = (base: any, target?: any): any => {
+  if (!base || typeof base !== 'object') return base;
+  const targetChildren = typeof target?.getObjects === 'function' ? target.getObjects() : [];
+  const children = Array.isArray(base.objects)
+    ? base.objects.map((child: any, index: number) => enrichSerializedTree(child, targetChildren[index]))
+    : base.objects;
+  return serializeObjectFields(
+    Array.isArray(base.objects) ? { ...base, objects: children } : base,
+    target,
+  );
+};
+
+const ACTIVE_SELECTION_TRANSFORM_PROPS = [
+  'left',
+  'top',
+  'scaleX',
+  'scaleY',
+  'angle',
+  'skewX',
+  'skewY',
+  'flipX',
+  'flipY',
+] as const;
+
+/**
+ * Fabric's Canvas serializer has a private ActiveSelection realization path,
+ * but StaticCanvas and object-list adapters do not.  Use Fabric's supported
+ * matrix helper explicitly for selected children so every caller observes the
+ * same page-space scene.  The live object is restored immediately; this is a
+ * serialization-only realization and never changes selection or authored
+ * state.
+ */
+const serializeActiveSelectionChild = (
+  object: fabric.Object,
+  activeSelection: fabric.ActiveSelection,
+) => {
+  const original = Object.fromEntries(
+    ACTIVE_SELECTION_TRANSFORM_PROPS.map((key) => [key, (object as any)[key]]),
+  );
+  try {
+    fabric.util.addTransformToObject(object, activeSelection.calcOwnMatrix());
+    return object.toObject([...CUSTOM_PROPS]);
+  } finally {
+    object.set(original as any);
+    object.setCoords();
+  }
+};
+
+const getActiveSelectionForCanvas = (
+  canvas: fabric.Canvas,
+  liveObjects: fabric.Object[],
+) => {
+  const activeObject = typeof (canvas as any).getActiveObject === 'function'
+    ? (canvas as any).getActiveObject() as fabric.Object | undefined
+    : undefined;
+  if (activeObject?.type === 'activeSelection') {
+    return activeObject as fabric.ActiveSelection;
+  }
+
+  // Lightweight/recovery canvases may not expose getActiveObject, while their
+  // objects can still carry an ActiveSelection parent.  Only infer that
+  // parent; ordinary Group parents must remain nested scene structure.
+  const parent = liveObjects.find((object) => (object as any).group?.type === 'activeSelection')
+    ?.group;
+  return parent?.type === 'activeSelection' ? parent as fabric.ActiveSelection : null;
+};
+
+export const toSerializableObject = (obj: fabric.Object) => {
+  return enrichSerializedTree(obj.toObject([...CUSTOM_PROPS]), obj);
+};
+
+/**
+ * Serialize a canvas through Fabric's canvas-level serializer.  Fabric's
+ * canvas serializer realizes an ActiveSelection transform while serializing;
+ * calling each selected object's `toObject` directly does not.  Keeping this
+ * as the only page-scene entry point makes selection state irrelevant to the
+ * durable geometry.
+ */
+export const serializeCanvasObjects = (
+  canvas: fabric.Canvas,
+  filter: (object: fabric.Object) => boolean = isPersistableCanvasObject,
+) => {
+  const liveObjects = canvas.getObjects();
+  const activeSelection = getActiveSelectionForCanvas(canvas, liveObjects);
+  const activeSelectionObjects = activeSelection
+    ? new Set(activeSelection.getObjects())
+    : new Set<fabric.Object>();
+  // Fabric's canvas serializer omits objects marked `excludeFromExport`.
+  // Pair against that same source list before applying Design Space's
+  // persistability filter; pairing by raw canvas index shifts every object
+  // after the first guide/paper layer.
+  const serializedLiveObjects = liveObjects.filter((object) => !(object as any).excludeFromExport);
+  // A real Fabric canvas is required for selection-aware page serialization,
+  // but a few lightweight callers (thumbnail/state harnesses and recovery
+  // tooling) intentionally provide only the object-list surface. Preserve
+  // that compatibility without weakening the real-canvas path above.
+  const serializedCanvas = typeof (canvas as any).toObject === 'function'
+    ? (canvas as any).toObject([...CUSTOM_PROPS]) as any
+    : {
+        objects: serializedLiveObjects.map((object) => object.toObject([...CUSTOM_PROPS])),
+      };
+  const serializedObjects = Array.isArray(serializedCanvas?.objects)
+    ? serializedCanvas.objects
+    : [];
+
+  return serializedLiveObjects
+    .map((object, index) => ({ object, serialized: serializedObjects[index] }))
+    .filter(({ object }) => filter(object))
+    .map(({ object, serialized }) => {
+      const pageSerialized = activeSelectionObjects.has(object) && activeSelection
+        ? serializeActiveSelectionChild(object, activeSelection)
+        : serialized ?? object.toObject([...CUSTOM_PROPS]);
+      return enrichSerializedTree(pageSerialized, object);
+    });
 };
 
 // --- CANVAS STATE CAPTURE ---
@@ -242,9 +424,10 @@ export const captureCanvasState = (
   }
 
   // Serialize all objects (excluding guides and temporary objects)
-  const objects = canvas.getObjects()
-    .filter(obj => isPersistableCanvasObject(obj) && !(obj as any).isTemporary)
-    .map(toSerializableObject);
+  const objects = serializeCanvasObjects(
+    canvas,
+    (obj) => isPersistableCanvasObject(obj) && !(obj as any).isTemporary,
+  );
 
   // Build full canvas data
   const canvasData = JSON.stringify({

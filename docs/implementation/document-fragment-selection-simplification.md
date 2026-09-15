@@ -26,13 +26,14 @@ decoration paths.
 
 Structured fragment IDs remain transient layout anchors. Their numeric PM
 ranges are now explicitly treated as frozen metadata, not live positions.
-`resolveLiveStructuredFragmentRange()` resolves a frozen fragment against the
-current PM block using the stable block index and fragment ordinal/span. The
-active edit target uses these resolved ranges after text changes instead of
-comparing current selection positions directly with stale layout numbers.
+`StructuredDocumentSpanLayout` accumulates the real ProseMirror transaction
+`Mapping` for the frozen model and `resolveLiveStructuredFragmentRange()` maps
+each authored boundary (including deletions) into the current block. The
+active edit target uses these mapped ranges after text changes instead of
+proportional estimates or direct comparisons against stale layout numbers.
 
 ```text
-frozen fragment ID + block/ordinal span
+frozen fragment ID + authored PM boundaries + transaction mapping
         │
         └── resolve against current PM block
                     │

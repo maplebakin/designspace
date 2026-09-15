@@ -138,6 +138,9 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
         <div
           className="document-page-sheet"
           data-testid="document-page"
+          data-document-reference-adjusting={
+            referenceAdjustMode && !isExportSurface ? 'true' : 'false'
+          }
           data-document-reference-diagnostic={referenceDiagnostic}
           lang={language}
           style={{
@@ -151,6 +154,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
           }}
         >
           <ScanReferenceLayer
+            pageId={page.id}
             reference={page.reference}
             source={page.reference ? assetSources[page.reference.assetId] : undefined}
             adjustMode={referenceAdjustMode}

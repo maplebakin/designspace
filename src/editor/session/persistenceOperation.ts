@@ -8,6 +8,8 @@ export type PersistenceOperationContext<Snapshot> = Readonly<{
   sessionIdentity: string;
   projectIdentity: string;
   targetIdentity: string | null;
+  /** Revision acknowledged by the durable target at capture time, if any. */
+  durableRevision?: number | null;
   pageId?: string;
   capturedRevision: number;
   snapshot: Snapshot;

@@ -39,6 +39,7 @@ import { recordDocumentTypingLatencyCounter } from '../../document/services/docu
 export type LegacyRendererAdapterProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent: (event: SelectionEvent) => void;
+  onAuthoredMutation?: () => void;
   changeCoordinator?: ProjectChangeCoordinator;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
@@ -119,6 +120,26 @@ const createDocumentSessionDescriptor = (
   return createProjectSessionDescriptor(state.project, { source });
 };
 
+const prepareProjectReplacement = async (
+  lifecycleAuthority: ProjectLifecycleAuthority,
+  defaultName: string,
+) => {
+  if (!lifecycleAuthority.getSnapshot().isDirty) return true;
+  if (typeof window === 'undefined' || typeof window.confirm !== 'function') return false;
+
+  // Keep the replacement decision at the same lifecycle boundary as close:
+  // save (and verify clean), or explicitly discard, with a second negative
+  // response acting as cancel.
+  const shouldSave = window.confirm(
+    `Save changes to ${defaultName || 'this project'} before opening another project?`
+  );
+  if (shouldSave) {
+    const saved = await lifecycleAuthority.save(defaultName);
+    return saved && !lifecycleAuthority.getSnapshot().isDirty;
+  }
+  return window.confirm('Discard the unsaved changes and open the selected project?');
+};
+
 const createCanvasCommands = (
   changeCoordinator: ProjectChangeCoordinator,
   lifecycleAuthority: ProjectLifecycleAuthority
@@ -147,6 +168,10 @@ const createCanvasCommands = (
     });
   },
   isDirty: () => lifecycleAuthority.getSnapshot().isDirty,
+  prepareProjectReplacement: () => prepareProjectReplacement(
+    lifecycleAuthority,
+    useEditorStore.getState().projectName
+  ),
   renameProject: (name) => useEditorStore.getState().renameCurrentProject(name),
   mutatePage: (command) => executeObservedPageMutation({
     command,
@@ -182,8 +207,20 @@ const createDocumentCommands = (
   },
   notify: (message) => useDocumentStore.getState().setToastMessage(message),
   isDirty: () => lifecycleAuthority.getSnapshot().isDirty,
+  prepareProjectReplacement: () => prepareProjectReplacement(
+    lifecycleAuthority,
+    useDocumentStore.getState().project?.projectName || 'this document'
+  ),
   renameProject: async (name) => {
-    useDocumentStore.getState().renameProject(name);
+    const store = useDocumentStore.getState();
+    const previousName = store.project?.projectName;
+    store.renameProject(name);
+    if (useDocumentStore.getState().project?.projectName !== previousName) {
+      // The shared header has no document-shell commit callback. Bridge its
+      // authored metadata edit into the same lifecycle watermark used by
+      // canvas/document mutations so rename cannot bypass dirty guards.
+      lifecycleAuthority.markAuthoredMutation();
+    }
   },
   mutatePage: (command) => executeObservedPageMutation({
     command,
@@ -403,6 +440,7 @@ export const useLegacyProjectSessionBridge = (
 const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  onAuthoredMutation,
   changeCoordinator,
   useSharedChrome,
   onRegisterFitPage,
@@ -815,6 +853,7 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
       onBackToDashboard={onBackToDashboard}
       useSharedChrome={useSharedChrome}
       sharedPageStrip={sharedPageStrip}
+      onAuthoredMutation={onAuthoredMutation}
       onCommittedCanvasMutation={onCommittedCanvasMutation}
     />
   );
@@ -823,6 +862,7 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
 const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   onBackToDashboard,
   onSelectionEvent,
+  onAuthoredMutation,
   changeCoordinator,
   useSharedChrome,
   onRegisterFitPage,
@@ -949,6 +989,7 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
     <DocumentEditorShell
       onBackToDashboard={onBackToDashboard}
       onSelectionEvent={onSelectionEvent}
+      onAuthoredMutation={onAuthoredMutation}
       useSharedChrome={useSharedChrome}
       onRegisterFitPage={onRegisterFitPage}
       onCommittedMutation={onCommittedDocumentMutation}

@@ -70,6 +70,8 @@ export type DocumentLegacyDirtyReason =
 type DocumentStoreState = {
   project: DocumentProjectPayload | null;
   currentLibraryProjectId: string | null;
+  /** Revision last acknowledged by the browser-library project record. */
+  currentLibraryProjectRevision: number | null;
   /** Runtime identity used to distinguish project replacement from page edits. */
   sessionIdentity: string;
   /**
@@ -95,7 +97,11 @@ type DocumentStoreState = {
   isOverflowing: boolean;
   toastMessage: string | null;
   createBlankProject: (name?: string) => DocumentProjectPayload;
-  hydrateProject: (payload: unknown, libraryProjectId?: string | null) => DocumentProjectPayload;
+  hydrateProject: (
+    payload: unknown,
+    libraryProjectId?: string | null,
+    libraryProjectRevision?: number | null
+  ) => DocumentProjectPayload;
   loadLibraryProject: (projectId: string) => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   saveProject: (name?: string) => Promise<boolean>;
@@ -136,6 +142,7 @@ type DocumentStoreState = {
     bodyContent: DocumentContentJson,
     imageGroups?: unknown
   ) => void;
+  restoreDocumentHistoryProject: (project: DocumentProjectPayload) => void;
   updateImageGroups: (pageId: string, imageGroups: unknown) => void;
   updatePageLanguage: (language?: string, pageId?: string) => void;
   updateDropCap: (
@@ -421,7 +428,91 @@ const repairDocumentImageGroupsMeasured = (
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let navigationPersistenceTimer: ReturnType<typeof setTimeout> | null = null;
 let projectSessionToken = 0;
+let documentLoadRequestToken = 0;
 let documentPersistenceWriteQueue: Promise<void> = Promise.resolve();
+
+type DocumentLibraryDb = {
+  updateProject: (...args: unknown[]) => Promise<boolean>;
+  saveProject: (...args: unknown[]) => Promise<string>;
+  updateProjectIfRevision?: (...args: unknown[]) => Promise<{
+    status: 'saved' | 'conflict';
+    projectId: string;
+    revision?: number;
+    expectedRevision?: number;
+    actualRevision?: number;
+  }>;
+  saveProjectWithRevision?: (...args: unknown[]) => Promise<{
+    projectId: string;
+    revision: number;
+  }>;
+};
+
+const isDurableRevisionConflict = (error: unknown): error is {
+  name: 'ProjectRevisionConflictError';
+  projectId: string;
+  expectedRevision: number;
+  actualRevision: number;
+} => {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as Record<string, unknown>;
+  return candidate.name === 'ProjectRevisionConflictError'
+    && typeof candidate.projectId === 'string'
+    && typeof candidate.expectedRevision === 'number'
+    && typeof candidate.actualRevision === 'number';
+};
+
+const saveDocumentLibraryProject = async (
+  db: DocumentLibraryDb,
+  name: string,
+  jsonPayload: string,
+  editorMode: 'document',
+): Promise<{ projectId: string; revision: number }> => {
+  if (typeof db.saveProjectWithRevision === 'function') {
+    return db.saveProjectWithRevision(name, jsonPayload, undefined, editorMode);
+  }
+  return {
+    projectId: await db.saveProject(name, jsonPayload, undefined, editorMode),
+    revision: 1,
+  };
+};
+
+const updateDocumentLibraryProject = async (
+  db: DocumentLibraryDb,
+  projectId: string,
+  name: string,
+  jsonPayload: string,
+  editorMode: 'document',
+  expectedRevision: number,
+): Promise<number> => {
+  if (typeof db.updateProjectIfRevision === 'function') {
+    const result = await db.updateProjectIfRevision(
+      projectId,
+      name,
+      jsonPayload,
+      undefined,
+      editorMode,
+      expectedRevision,
+    );
+    if (result.status === 'conflict') {
+      const error = new Error(
+        `Project ${projectId} changed in another context (expected revision ${result.expectedRevision}, found ${result.actualRevision}).`
+      ) as Error & {
+        name: 'ProjectRevisionConflictError';
+        projectId: string;
+        expectedRevision: number;
+        actualRevision: number;
+      };
+      error.name = 'ProjectRevisionConflictError';
+      error.projectId = projectId;
+      error.expectedRevision = result.expectedRevision ?? expectedRevision;
+      error.actualRevision = result.actualRevision ?? expectedRevision + 1;
+      throw error;
+    }
+    return result.revision ?? expectedRevision + 1;
+  }
+  await db.updateProject(projectId, name, jsonPayload, undefined, editorMode);
+  return expectedRevision + 1;
+};
 
 /** Serialize every whole-project Document write to the library row. */
 const enqueueDocumentPersistenceWrite = <T>(
@@ -462,6 +553,7 @@ const queueAutosave = () => {
 const persistNavigationState = async (): Promise<boolean> => {
   const {
     currentLibraryProjectId,
+    currentLibraryProjectRevision,
     isDirty,
     lastDirtyReason,
     project,
@@ -475,26 +567,41 @@ const persistNavigationState = async (): Promise<boolean> => {
   ) return false;
 
   const sessionAtStart = projectSessionToken;
-  const payload = updateProjectTimestamp(project);
+  let durableRevision = currentLibraryProjectRevision ?? 1;
+  const payload = updateProjectTimestamp(
+    compactDocumentProjectForPersistence(project)
+  );
   useDocumentStore.setState({ saveStatus: 'saving' });
   try {
     await enqueueDocumentPersistenceWrite(async () => {
+      if (projectSessionToken !== sessionAtStart) return false;
       const { db } = await import('../../editor/db');
-      await db.updateProject(
+      durableRevision = await updateDocumentLibraryProject(
+        db as DocumentLibraryDb,
         currentLibraryProjectId,
         payload.projectName,
         JSON.stringify(payload),
-        undefined,
-        'document'
+        'document',
+        durableRevision,
       );
     });
     if (projectSessionToken !== sessionAtStart) return false;
     const current = useDocumentStore.getState();
     const hasNewerChanges = current.revision !== revision;
     useDocumentStore.setState({
-      ...(hasNewerChanges ? {} : { project: payload }),
+      ...(hasNewerChanges ? {} : {
+        project: {
+          ...payload,
+          // Compaction is for the durable snapshot. Keep the live asset map
+          // intact so an undo/history or a still-mounted editor can recover a
+          // source that is no longer reachable from the saved page graph.
+          assets: current.project?.assets ?? payload.assets,
+          assetMetadata: current.project?.assetMetadata ?? payload.assetMetadata,
+        },
+      }),
       isDirty: hasNewerChanges,
       saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
+      currentLibraryProjectRevision: durableRevision,
       ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
     });
     if (hasNewerChanges) {
@@ -511,7 +618,9 @@ const persistNavigationState = async (): Promise<boolean> => {
     useDocumentStore.setState({
       isDirty: true,
       saveStatus: 'error',
-      toastMessage: 'Could not persist the active document page.',
+      toastMessage: isDurableRevisionConflict(error)
+        ? 'This document changed in another window. Reload it before saving again so neither version is lost.'
+        : 'Could not persist the active document page.',
     });
     return false;
   }
@@ -651,6 +760,7 @@ const safeProjectFileName = (name: string) => {
 const initialState = {
   project: null,
   currentLibraryProjectId: null,
+  currentLibraryProjectRevision: null,
   sessionIdentity: uuidv4(),
   isDirty: false,
   saveStatus: 'saved' as DocumentSaveStatus,
@@ -673,6 +783,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
+    documentLoadRequestToken += 1;
     const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = createBlankDocumentProject(name);
     set({
@@ -684,17 +795,21 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     return project;
   },
 
-  hydrateProject: (payload, libraryProjectId = null) => {
+  hydrateProject: (payload, libraryProjectId = null, libraryProjectRevision = null) => {
     flushDocumentLiveDrafts();
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
+    documentLoadRequestToken += 1;
     const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = normalizeDocumentPayload(payload);
     set({
       ...initialState,
       project,
       currentLibraryProjectId: libraryProjectId,
+      currentLibraryProjectRevision: libraryProjectId
+        ? libraryProjectRevision ?? null
+        : null,
       lifecycleAuthorityMode,
       sessionIdentity: uuidv4(),
     });
@@ -703,9 +818,13 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
 
   loadLibraryProject: async (projectId) => {
     flushDocumentLiveDrafts();
+    const requestToken = ++documentLoadRequestToken;
+    await documentPersistenceWriteQueue;
+    if (requestToken !== documentLoadRequestToken) return;
     const { db } = await import('../../editor/db');
     const result = await db.loadProject(projectId);
     if (!result) throw new Error('Project not found.');
+    if (requestToken !== documentLoadRequestToken) return;
     const parsed = JSON.parse(result.canvasData);
     const namedPayload = {
       ...parsed,
@@ -715,12 +834,13 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         name: result.project.name,
       },
     };
-    get().hydrateProject(namedPayload, projectId);
+    get().hydrateProject(namedPayload, projectId, result.project.revision ?? 1);
     set({ toastMessage: `Loaded document: ${result.project.name}` });
   },
 
   loadProjectFile: async (file) => {
     flushDocumentLiveDrafts();
+    const requestToken = ++documentLoadRequestToken;
     if (file.size > 100 * 1024 * 1024) {
       throw new Error('Project file exceeds the 100 MB import limit.');
     }
@@ -729,6 +849,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       .replace(/\.apocaproject\.json$/i, '')
       .replace(/\.json$/i, '');
     const project = normalizeDocumentPayload(parsed, fallbackName);
+    if (requestToken !== documentLoadRequestToken) return;
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
@@ -754,10 +875,12 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const sessionAtStart = projectSessionToken;
     const sessionIdentityAtStart = get().sessionIdentity;
     const libraryIdAtStart = get().currentLibraryProjectId;
+    const durableRevisionAtStart = get().currentLibraryProjectRevision;
     const operation: PersistenceOperationContext<DocumentProjectPayload> = {
       sessionIdentity: sessionIdentityAtStart,
       projectIdentity: project.projectId,
       targetIdentity: libraryIdAtStart,
+      durableRevision: durableRevisionAtStart,
       capturedRevision: revisionAtStart,
       snapshot: updateProjectTimestamp(
         compactDocumentProjectForPersistence(project),
@@ -771,27 +894,97 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     set({ saveStatus: 'saving' });
     try {
       let libraryId = libraryIdAtStart;
+      let libraryRevision = durableRevisionAtStart
+        ?? (libraryIdAtStart ? 1 : null);
       await enqueueDocumentPersistenceWrite(async () => {
+        if (projectSessionToken !== sessionAtStart) return;
         const { db } = await import('../../editor/db');
-        if (libraryId && await db.loadProject(libraryId)) {
-          await db.updateProject(libraryId, safeName, JSON.stringify(payload), undefined, 'document');
-        } else {
-          libraryId = await db.saveProject(safeName, JSON.stringify(payload), undefined, 'document');
+        // A later manual save/autosave may have queued behind this first-save
+        // allocation.  Reuse the target adopted by the earlier completion
+        // instead of allocating a second project for the same session.
+        libraryId = libraryId || get().currentLibraryProjectId;
+        if (libraryId) {
+          const existing = await db.loadProject(libraryId);
+          if (existing) {
+            libraryRevision = libraryRevision
+              ?? existing.project.revision
+              ?? 1;
+            libraryRevision = await updateDocumentLibraryProject(
+              db as DocumentLibraryDb,
+              libraryId,
+              safeName,
+              JSON.stringify(payload),
+              'document',
+              libraryRevision,
+            );
+          } else {
+            libraryId = null;
+            libraryRevision = null;
+          }
+        }
+        if (!libraryId) {
+          const allocated = await saveDocumentLibraryProject(
+            db as DocumentLibraryDb,
+            safeName,
+            JSON.stringify(payload),
+            'document',
+          );
+          libraryId = allocated.projectId;
+          libraryRevision = allocated.revision;
+        }
+        if (
+          libraryId
+          && libraryRevision !== null
+          && projectSessionToken === sessionAtStart
+          && (
+            get().currentLibraryProjectId === null
+            || get().currentLibraryProjectId === libraryId
+          )
+        ) {
+          set({ currentLibraryProjectRevision: libraryRevision });
+        }
+        // Publish a newly allocated target before releasing the queue latch so
+        // a save already queued behind this one can update the same record.
+        // This is target adoption only; the outer completion still decides
+        // whether this snapshot may be installed or marked clean.
+        if (
+          !operation.targetIdentity
+          && libraryId
+          && projectSessionToken === sessionAtStart
+          && get().currentLibraryProjectId === null
+        ) {
+          set({
+            currentLibraryProjectId: libraryId,
+            currentLibraryProjectRevision: libraryRevision,
+          });
         }
       });
       if (projectSessionToken !== sessionAtStart) return false;
       const current = get();
-      const ownsCurrentState = persistenceOperationStillOwnsCurrentState(
-        operation,
-        {
-          sessionIdentity: current.sessionIdentity,
-          projectIdentity: current.project?.projectId || operation.projectIdentity,
-          targetIdentity: current.currentLibraryProjectId,
-          revision: current.revision,
-        }
-      );
+      const sameSession = current.sessionIdentity === operation.sessionIdentity;
+      const targetStillOwned = operation.targetIdentity
+        ? current.currentLibraryProjectId === operation.targetIdentity
+        : current.currentLibraryProjectId === null
+          || current.currentLibraryProjectId === libraryId;
+      const ownsCurrentState = sameSession
+        && targetStillOwned
+        && current.revision === revisionAtStart;
       const hasNewerChanges = current.revision !== revisionAtStart;
-      if (!ownsCurrentState) return true;
+      if (!sameSession || !targetStillOwned) return true;
+      if (!ownsCurrentState) {
+        // A first save establishes the durable target even when the user
+        // edits while the allocation is pending. Do not install the older
+        // snapshot or clear the newer dirty state.
+        if (!operation.targetIdentity && current.currentLibraryProjectId === null) {
+          set({
+            currentLibraryProjectId: libraryId,
+            currentLibraryProjectRevision: libraryRevision,
+            isDirty: true,
+            saveStatus: 'unsaved',
+          });
+        }
+        return true;
+      }
       set({
         ...(!hasNewerChanges && current.project
           ? {
@@ -805,7 +998,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
               },
             }
           : {}),
-        ...(ownsCurrentState ? { currentLibraryProjectId: libraryId } : {}),
+        ...(ownsCurrentState ? {
+          currentLibraryProjectId: libraryId,
+          currentLibraryProjectRevision: libraryRevision,
+        } : {}),
         isDirty: hasNewerChanges,
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
         ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
@@ -819,6 +1015,14 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     } catch (error) {
       console.error('Failed to save document project:', error);
       if (projectSessionToken !== sessionAtStart) return false;
+      if (isDurableRevisionConflict(error)) {
+        set({
+          saveStatus: 'error',
+          isDirty: true,
+          toastMessage: 'This project changed in another window. Reload it before saving again so neither version is lost.',
+        });
+        return false;
+      }
       set({
         saveStatus: 'error',
         isDirty: true,
@@ -873,14 +1077,21 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     })) {
       return delivery;
     }
-    set({
-      isDirty: false,
-      saveStatus: 'saved',
-      lastDirtyReason: null,
-      toastMessage: delivery.path
-        ? `Downloaded project to ${delivery.path}`
-        : `Downloaded project: ${payload.projectName}`,
-    });
+    if (delivery.status === 'saved') {
+      set({
+        isDirty: false,
+        saveStatus: 'saved',
+        lastDirtyReason: null,
+        toastMessage: delivery.path
+          ? `Downloaded project to ${delivery.path}`
+          : `Downloaded project: ${payload.projectName}`,
+      });
+    } else {
+      set({
+        saveStatus: 'unsaved',
+        toastMessage: 'Project download started. Keep the editor open until the browser finishes saving it.',
+      });
+    }
     return delivery;
   },
 
@@ -1242,6 +1453,21 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       repairImageGroups: true,
     });
   },
+  restoreDocumentHistoryProject: (project) => {
+    cancelAutosave();
+    cancelNavigationPersistence();
+    set((state) => ({
+      project,
+      isDirty: true,
+      saveStatus: 'unsaved',
+      lastDirtyReason: 'authored-content',
+      revision: state.revision + 1,
+      isReferenceAdjustMode: false,
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isOverflowing: false,
+    }));
+  },
   updateImageGroups: (pageId, imageGroups) => {
     const project = get().project;
     if (!project) return;
@@ -1475,6 +1701,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     cancelNavigationPersistence();
     const {
       currentLibraryProjectId,
+      currentLibraryProjectRevision,
       isDirty,
       project,
       revision,
@@ -1487,25 +1714,40 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       || !project
     ) return false;
     const sessionAtStart = projectSessionToken;
-    const payload = updateProjectTimestamp(project);
-    set({ project: payload, saveStatus: 'saving' });
+    let durableRevision = currentLibraryProjectRevision ?? 1;
+    const payload = updateProjectTimestamp(
+      compactDocumentProjectForPersistence(project)
+    );
+    set({ saveStatus: 'saving' });
     try {
       await enqueueDocumentPersistenceWrite(async () => {
+        if (projectSessionToken !== sessionAtStart) return;
         const { db } = await import('../../editor/db');
-        await db.updateProject(
+        durableRevision = await updateDocumentLibraryProject(
+          db as DocumentLibraryDb,
           currentLibraryProjectId,
           payload.projectName,
           JSON.stringify(payload),
-          undefined,
-          'document'
+          'document',
+          durableRevision,
         );
       });
       if (projectSessionToken !== sessionAtStart) return false;
       const hasNewerChanges = get().revision !== revision;
+      const current = get();
       set({
-        ...(hasNewerChanges ? {} : { project: payload }),
+        ...(hasNewerChanges ? {} : {
+          project: {
+            ...payload,
+            // Keep live bytes for the mounted session; only the durable
+            // payload is compacted.
+            assets: current.project?.assets ?? payload.assets,
+            assetMetadata: current.project?.assetMetadata ?? payload.assetMetadata,
+          },
+        }),
         isDirty: hasNewerChanges,
         saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
+        currentLibraryProjectRevision: durableRevision,
         ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
       });
       if (hasNewerChanges && get().lifecycleAuthorityMode === 'legacy') {
@@ -1518,7 +1760,9 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       set({
         isDirty: true,
         saveStatus: 'error',
-        toastMessage: 'Autosave failed. Your changes remain in this editor.',
+        toastMessage: isDurableRevisionConflict(error)
+          ? 'This document changed in another window. Reload it before saving again so neither version is lost.'
+          : 'Autosave failed. Your changes remain in this editor.',
       });
       return false;
     }
@@ -1534,6 +1778,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     cancelAutosave();
     cancelNavigationPersistence();
     projectSessionToken += 1;
+    documentLoadRequestToken += 1;
     set({ ...initialState, sessionIdentity: uuidv4() });
   },
 }));

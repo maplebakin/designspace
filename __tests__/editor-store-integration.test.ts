@@ -69,6 +69,7 @@ vi.mock('../src/editor/components/Inserter', () => ({
 
 vi.mock('../src/editor/db', () => ({
   MAX_LIBRARY_PROJECT_CHARS: 100 * 1024 * 1024,
+  setDurableWriteBarrierForTests: vi.fn(),
   db: {
     renameProject: vi.fn().mockResolvedValue(undefined),
     getAllProjects: vi.fn().mockResolvedValue([]),
@@ -177,7 +178,9 @@ const installLayerSyncHandler = (canvas: fabric.Canvas) => {
     const requestedSelectionIds = [...(pendingSelectionIds ?? state.pendingLayerSyncSelectionIds ?? state.selectedLayerIds)];
     void syncCanvasLayers(state.canvasObjects, canvas, {
       selectedObjectId: state.selectedObjectId,
-    }).then(({ layersById, selectOnInsertIds }) => {
+    }).then((result) => {
+      if (!result) return;
+      const { layersById, selectOnInsertIds } = result;
       const resolvedSelectionIds = selectOnInsertIds.length > 0 ? selectOnInsertIds : requestedSelectionIds;
       const strippedCanvasObjects = selectOnInsertIds.length > 0
         ? useEditorStore.getState().canvasObjects.map((object) => {
@@ -228,6 +231,8 @@ const createHarness = () => {
     layersById: {},
     imageAssets: {},
     assetRefCount: new Map(),
+    currentLibraryProjectId: null,
+    sessionIdentity: crypto.randomUUID(),
     pages: [{
       id: 'page-1',
       name: 'Page 1',
@@ -240,6 +245,11 @@ const createHarness = () => {
     dirtyObjectsRef: new Set(),
     syncLock: { isLocked: false, reason: null, queuedSync: false },
     isDirty: false,
+    changeRevision: 0,
+    autoSaveStatus: 'idle',
+    saveStatus: 'saved',
+    autoSaveTimer: null,
+    lifecycleAuthorityMode: 'legacy',
     projectName: 'Integration Test',
     productProjectFields: null,
   });
@@ -270,6 +280,9 @@ describe('mounted store editor integration', () => {
     harness = createHarness();
     productForgeMocks.generateProductForgeArtifacts.mockReset();
     productForgeMocks.packageProductForgeZip.mockReset();
+    vi.mocked(db.loadProject).mockReset().mockResolvedValue(null);
+    vi.mocked(db.saveProject).mockReset().mockResolvedValue('new-id');
+    vi.mocked(db.updateProject).mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -440,6 +453,49 @@ describe('mounted store editor integration', () => {
     expect(remainingPage.id).toBe('page-2');
     expect(remainingPage.canvasData.objects.map((object: SerializedFabricObject) => object.id)).toEqual(['page-two-shape']);
     expect(objectIds(harness.canvas)).toEqual(['page-two-shape']);
+  });
+
+  it('keeps unsynchronized active-page edits when deleting a different page', async () => {
+    const activePageObject = rectObject('active-page-edit', { left: 120, top: 80 });
+    const otherPageObject = rectObject('other-page-object', { left: 260, top: 140 });
+    useEditorStore.setState({
+      pages: [
+        {
+          id: 'active-page',
+          name: 'Active',
+          canvasData: { objects: [activePageObject], background: '#ffffff' },
+          canvasSize: { width: 800, height: 600 },
+        },
+        {
+          id: 'other-page',
+          name: 'Other',
+          canvasData: { objects: [otherPageObject], background: '#eeeeee' },
+          canvasSize: { width: 800, height: 600 },
+        },
+      ],
+      activePageIndex: 0,
+      canvasObjects: [activePageObject],
+    });
+    useEditorStore.getState().requestLayerSync({ force: true });
+    await flushLayerAndHistory();
+
+    const liveObject = objectById(harness.canvas, 'active-page-edit');
+    expect(liveObject).toBeTruthy();
+    liveObject?.set({ left: 432, top: 246 });
+    liveObject?.setCoords();
+
+    await useEditorStore.getState().deletePage(1);
+    await flushLayerAndHistory();
+
+    const surviving = objectById(harness.canvas, 'active-page-edit');
+    expect(surviving?.left).toBeCloseTo(432, 4);
+    expect(surviving?.top).toBeCloseTo(246, 4);
+    expect(useEditorStore.getState().pages).toHaveLength(1);
+    expect(useEditorStore.getState().pages[0].canvasData.objects[0]).toMatchObject({
+      id: 'active-page-edit',
+      left: 432,
+      top: 246,
+    });
   });
 
   it('serializes rapid page switches so the active index and Fabric content cannot diverge', async () => {
@@ -1635,6 +1691,22 @@ describe('mounted store editor integration', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps ExportModal open when a canvas delivery is cancelled', async () => {
+    const exportSpy = vi.spyOn(advancedExportManager, 'export').mockResolvedValue({
+      status: 'cancelled',
+      fileName: 'cancelled.png',
+    });
+    const onClose = vi.fn();
+
+    render(React.createElement(ExportModal, { isOpen: true, onClose }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download PNG (300 DPI)' }));
+    await act(async () => { await flushPromises(); });
+
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
   it('downloads Product Forge ZIP from the current editor project', async () => {
     const artifactResult = {
       productTitle: 'Integration Product',
@@ -2229,6 +2301,92 @@ describe('core persistence regressions', () => {
     });
   });
 
+  it('adopts a first-save canvas target while preserving a newer scene revision', async () => {
+    let finishWrite: ((id: string) => void) | undefined;
+    vi.mocked(db.saveProject).mockReturnValueOnce(new Promise<string>((resolve) => {
+      finishWrite = resolve;
+    }));
+    const object = new fabric.Rect({
+      id: 'first-save-canvas-shape',
+      width: 40,
+      height: 40,
+      left: 20,
+      top: 20,
+    } as any);
+    harness.canvas.add(object);
+    useEditorStore.getState().syncCanvasToStore(harness.canvas);
+
+    const save = useEditorStore.getState().saveProject('First canvas save');
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    expect(db.saveProject).toHaveBeenCalled();
+
+    object.set('left', 140);
+    useEditorStore.getState().saveState({ force: true });
+    const newerRevision = useEditorStore.getState().changeRevision;
+    finishWrite?.('first-canvas-library-id');
+    await save;
+
+    expect(useEditorStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'first-canvas-library-id',
+      isDirty: true,
+      saveStatus: 'unsaved',
+      autoSaveStatus: 'dirty',
+    });
+    expect(useEditorStore.getState().changeRevision).toBe(newerRevision);
+
+    await useEditorStore.getState().updateCurrentProject();
+    expect(db.updateProject).toHaveBeenCalledWith(
+      'first-canvas-library-id',
+      expect.any(String),
+      expect.any(String),
+      expect.any(String)
+    );
+  });
+
+  it('reuses a first-save canvas target when another save queues before allocation completes', async () => {
+    let finishFirstWrite: ((id: string) => void) | undefined;
+    vi.mocked(db.saveProject).mockReset();
+    vi.mocked(db.saveProject).mockImplementationOnce(() => new Promise<string>((resolve) => {
+      finishFirstWrite = resolve;
+    }));
+    vi.mocked(db.saveProject).mockResolvedValue('unexpected-duplicate-id');
+    vi.mocked(db.updateProject).mockReset();
+    vi.mocked(db.updateProject).mockResolvedValue(undefined);
+
+    useEditorStore.getState().addObject(rectObject('queued-canvas-save-shape'), { save: false, select: false });
+    await flushLayerAndHistory();
+
+    const firstSave = useEditorStore.getState().saveProject('Queued canvas first save');
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    expect(db.saveProject).toHaveBeenCalledTimes(1);
+
+    vi.mocked(db.loadProject).mockResolvedValue({
+      project: { id: 'queued-canvas-first-save-id', name: 'Queued canvas first save' },
+      canvasData: '{}',
+    } as any);
+    const secondSave = useEditorStore.getState().saveProject('Queued canvas second save');
+    finishFirstWrite?.('queued-canvas-first-save-id');
+    await Promise.all([firstSave, secondSave]);
+
+    expect(db.saveProject).toHaveBeenCalledTimes(1);
+    expect(db.updateProject).toHaveBeenCalledWith(
+      'queued-canvas-first-save-id',
+      'Queued canvas second save',
+      expect.any(String),
+      expect.any(String)
+    );
+    expect(useEditorStore.getState()).toMatchObject({
+      currentLibraryProjectId: 'queued-canvas-first-save-id',
+      projectName: 'Queued canvas second save',
+      isDirty: false,
+      saveStatus: 'saved',
+    });
+    vi.mocked(db.saveProject).mockResolvedValue('new-id');
+    vi.mocked(db.updateProject).mockResolvedValue(undefined);
+  });
+
   it('keeps existing canvas work intact when project import structure is malformed', async () => {
     useEditorStore.getState().addObject(rectObject('keep-me'), { save: false, select: false });
     await flushLayerAndHistory();
@@ -2293,9 +2451,10 @@ describe('core persistence regressions', () => {
     harness.canvas.add(text);
     const onUpdate = vi.fn();
     const onHistoryDirty = vi.fn();
+    const onAuthoredMutation = vi.fn();
     const registration = registerObjectEventHandlers({
       canvas: harness.canvas,
-      callbacks: { onUpdate, onHistoryDirty },
+      callbacks: { onUpdate, onHistoryDirty, onAuthoredMutation },
     });
 
     text.set({ text: 'Final' });
@@ -2303,6 +2462,63 @@ describe('core persistence regressions', () => {
 
     expect(onHistoryDirty).toHaveBeenCalled();
     expect(onUpdate).toHaveBeenCalledWith(harness.canvas, { persist: true });
+    expect(onAuthoredMutation).toHaveBeenCalledTimes(1);
+    registration.cleanup();
+  });
+
+  it('advances the canvas persistence revision for live text before a delayed save completes', async () => {
+    vi.useRealTimers();
+    let finishWrite: (() => void) | undefined;
+    let writeStartedResolve: (() => void) | undefined;
+    const writeStarted = new Promise<void>((resolve) => {
+      writeStartedResolve = resolve;
+    });
+    vi.mocked(db.updateProject).mockImplementationOnce(() => {
+      writeStartedResolve?.();
+      return new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+    });
+    useEditorStore.setState({
+      currentLibraryProjectId: 'delayed-canvas-save-id',
+      lifecycleAuthorityMode: 'shared',
+      isDirty: false,
+      changeRevision: 0,
+      saveStatus: 'saved',
+    });
+    const text = new fabric.IText('Draft', { id: 'delayed-text' } as any);
+    harness.canvas.add(text);
+    useEditorStore.getState().syncCanvasToStore(harness.canvas);
+    const registration = registerObjectEventHandlers({
+      canvas: harness.canvas,
+      callbacks: {
+        onUpdate: vi.fn(),
+        onHistoryDirty: vi.fn(),
+        onAuthoredMutation: () => useEditorStore.getState().markProjectDirty(),
+      },
+    });
+
+    const pendingSave = useEditorStore.getState().updateCurrentProject();
+    await writeStarted;
+    expect(db.updateProject).toHaveBeenCalledWith(
+      'delayed-canvas-save-id',
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+
+    text.set({ text: 'Edited while saving' });
+    harness.canvas.fire('text:changed', { target: text } as any);
+    expect(useEditorStore.getState().changeRevision).toBe(1);
+    expect(useEditorStore.getState().isDirty).toBe(true);
+
+    finishWrite?.();
+    await pendingSave;
+    expect(useEditorStore.getState()).toMatchObject({
+      isDirty: true,
+      saveStatus: 'unsaved',
+      changeRevision: 1,
+    });
     registration.cleanup();
   });
 
