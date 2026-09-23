@@ -1392,6 +1392,23 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     ) / page.columnCount;
   }, [page, physicalMargins]);
 
+  const focusBodyAtPoint = useCallback((clientX: number, clientY: number) => {
+    const editor = bodyEditorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    const coords = editor.view.posAtCoords({ left: clientX, top: clientY });
+    if (coords) {
+      try {
+        const selection = TextSelection.near(
+          editor.state.doc.resolve(coords.pos)
+        );
+        editor.view.dispatch(editor.state.tr.setSelection(selection));
+      } catch {
+        // Fall through to plain focus below.
+      }
+    }
+    editor.commands.focus();
+  }, []);
+
   const insertAssetIntoBody = useCallback((
     asset: DocumentAsset,
     operation: DocumentImageOperationContext,
@@ -4349,6 +4366,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 if (!editor || editor.isDestroyed) return;
                 editor.commands.focus('start');
               }}
+              onFocusBody={focusBodyAtPoint}
               bodyEditor={(
                 <FlowEditor
                   key={`body-${page.id}`}

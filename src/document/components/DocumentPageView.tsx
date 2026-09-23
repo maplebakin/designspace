@@ -49,6 +49,7 @@ type DocumentPageViewProps = {
   titleEditor: React.ReactNode;
   onFocusTitle?: () => void;
   bodyEditor: React.ReactNode;
+  onFocusBody?: (clientX: number, clientY: number) => void;
   exportRootRef: React.RefObject<HTMLDivElement | null>;
   referenceAdjustMode: boolean;
   selectedOverlayId: string | null;
@@ -74,6 +75,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   titleEditor,
   onFocusTitle,
   bodyEditor,
+  onFocusBody,
   exportRootRef,
   referenceAdjustMode,
   selectedOverlayId,
@@ -111,6 +113,18 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   );
   const hasTitle = hasMeaningfulDocumentContent(page.titleContent);
   const renderTitleRegion = hasTitle || (!isExportSurface && !page.suppressTitle);
+
+  // Clicks on the empty body region (outside the ProseMirror editor's own
+  // sliver of DOM) forward focus into the body editor so typing starts
+  // wherever the user clicked on the page.
+  const handleBodyRegionClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!onFocusBody || isExportSurface) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('.ProseMirror')) return;
+    if (target.closest('button, a, input, select, textarea, [role="button"]')) return;
+    onFocusBody(event.clientX, event.clientY);
+  };
   const emptyTitleRegionStyle = !hasTitle
     ? {
       top: `${physicalMargins.topIn * DOCUMENT_CSS_PIXELS_PER_INCH}px`,
@@ -226,6 +240,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
                 }
                 data-drop-cap-line-span={page.dropCap.lineSpan}
                 data-testid="document-body-region"
+                onClick={handleBodyRegionClick}
                 style={{
                   '--document-column-count': page.columnCount,
                   '--document-column-gap': `${page.columnGapPx}px`,
