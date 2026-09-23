@@ -4,7 +4,7 @@ import {
   mergeAttributes,
   type Editor,
 } from '@tiptap/core';
-import { Fragment, type DOMOutputSpec } from '@tiptap/pm/model';
+import { Fragment, type DOMOutputSpec, type Node as PMNode } from '@tiptap/pm/model';
 import {
   NodeSelection,
   type EditorState,
@@ -1227,6 +1227,7 @@ declare module '@tiptap/core' {
       moveSelectedDocumentImage: (
         direction: DocumentImageMoveDirection
       ) => ReturnType;
+      moveDocumentImageTo: (imageId: string, targetPos: number) => ReturnType;
     };
   }
 }
@@ -1434,6 +1435,64 @@ export const DocumentImageCommandsExtension = Extension.create({
             );
           }
           dispatch?.(transaction.scrollIntoView());
+          return true;
+        },
+      moveDocumentImageTo:
+        (imageId, targetPos) =>
+        ({ dispatch, state }) => {
+          const locateImageIn = (
+            doc: PMNode
+          ): { pos: number; node: PMNode } | null => {
+            let located: { pos: number; node: PMNode } | null = null;
+            doc.descendants((child, pos) => {
+              if (located) return false;
+              if (
+                DOCUMENT_IMAGE_NODE_NAMES.includes(
+                  child.type.name as DocumentImageNodeName
+                )
+                && child.attrs.id === imageId
+              ) {
+                located = { pos, node: child };
+                return false;
+              }
+              return true;
+            });
+            return located;
+          };
+          const selectAt = (doc: PMNode, pos: number) => {
+            try {
+              return NodeSelection.create(doc, pos);
+            } catch {
+              return null;
+            }
+          };
+          const located = locateImageIn(state.doc);
+          if (!located) return false;
+          const { pos: from, node: imageNode } = located;
+          const nodeSize = imageNode.nodeSize;
+          // Dropping back onto (or inside) itself is a no-op that keeps the
+          // image selected instead of deleting and re-inserting it.
+          if (targetPos >= from && targetPos <= from + nodeSize) {
+            if (!dispatch) return true;
+            const selection = selectAt(state.doc, from);
+            dispatch(selection ? state.tr.setSelection(selection) : state.tr);
+            return true;
+          }
+          if (!dispatch) return true;
+          const transaction = state.tr;
+          transaction.delete(from, from + nodeSize);
+          const adjusted = targetPos > from ? targetPos - nodeSize : targetPos;
+          const clamped = Math.max(
+            0,
+            Math.min(adjusted, transaction.doc.content.size)
+          );
+          transaction.replaceRangeWith(clamped, clamped, imageNode);
+          const relocated = locateImageIn(transaction.doc);
+          if (relocated !== null) {
+            const selection = selectAt(transaction.doc, relocated.pos);
+            if (selection) transaction.setSelection(selection);
+          }
+          dispatch(transaction.scrollIntoView());
           return true;
         },
     };

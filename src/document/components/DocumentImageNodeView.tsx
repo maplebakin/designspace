@@ -32,6 +32,15 @@ type ResizeSession = {
   moved: boolean;
 };
 
+/** Pointer-driven repositioning of a flow-anchored image within the body text. */
+type ImageMoveDragSession = {
+  pointerId: number;
+  ghost: HTMLElement;
+  indicator: HTMLElement;
+};
+
+const IMAGE_MOVE_DRAG_THRESHOLD_PX = 6;
+
 export const DocumentImageNodeView = ({
   node,
   editor,
@@ -51,7 +60,11 @@ export const DocumentImageNodeView = ({
   const pointerSelectionPendingRef = useRef<{
     pointerId: number;
     phase: 'pressed' | 'released';
+    startClientX: number;
+    startClientY: number;
   } | null>(null);
+  const wrapperRef = useRef<HTMLElement | null>(null);
+  const moveDragSessionRef = useRef<ImageMoveDragSession | null>(null);
   const previewWidthRef = useRef<number | null>(null);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
   const [sourceFailed, setSourceFailed] = useState(false);
@@ -233,6 +246,8 @@ export const DocumentImageNodeView = ({
     pointerSelectionPendingRef.current = {
       pointerId: event.pointerId,
       phase: 'pressed',
+      startClientX: event.clientX,
+      startClientY: event.clientY,
     };
     selectImageForPointer(event);
   };
@@ -261,6 +276,160 @@ export const DocumentImageNodeView = ({
       pointerSelectionPendingRef.current = null;
     }
   };
+
+  // Flow-anchored images (float/inline/top-bottom) move by dragging them to a
+  // new anchor point in the body text. Page-positioned span images keep their
+  // own positioning controls instead.
+  const isMoveDraggable = attributes.verticalAnchor === 'flow';
+
+  const resolveMoveDropPos = (
+    clientX: number,
+    clientY: number
+  ): number | null => {
+    if (editor.isDestroyed) return null;
+    try {
+      const direct = editor.view.posAtCoords({ left: clientX, top: clientY });
+      if (direct) return direct.pos;
+      // The pointer is over empty page area outside the rendered text: snap
+      // to the nearest document edge so dropping below/above the content
+      // still lands the image at a sensible anchor.
+      const docSize = editor.state.doc.content.size;
+      const endCoords = editor.view.coordsAtPos(docSize);
+      if (clientY >= endCoords.bottom) return docSize;
+      const startCoords = editor.view.coordsAtPos(0);
+      if (clientY <= startCoords.top) return 0;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const updateMoveDragIndicator = (
+    session: ImageMoveDragSession,
+    clientX: number,
+    clientY: number
+  ) => {
+    const indicator = session.indicator;
+    const pos = resolveMoveDropPos(clientX, clientY);
+    if (pos === null || editor.isDestroyed) {
+      indicator.style.display = 'none';
+      return;
+    }
+    try {
+      const coords = editor.view.coordsAtPos(pos);
+      const contentRect = editor.view.dom.getBoundingClientRect();
+      indicator.style.display = 'block';
+      indicator.style.left = `${contentRect.left}px`;
+      indicator.style.width = `${Math.max(0, contentRect.right - contentRect.left)}px`;
+      indicator.style.top = `${coords.top - 2}px`;
+    } catch {
+      indicator.style.display = 'none';
+    }
+  };
+
+  const startImageMoveDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper || editor.isDestroyed) return;
+    const ghost = wrapper.cloneNode(true) as HTMLElement;
+    ghost.style.position = 'fixed';
+    ghost.style.left = '0';
+    ghost.style.top = '0';
+    ghost.style.margin = '0';
+    ghost.style.pointerEvents = 'none';
+    ghost.style.opacity = '0.75';
+    ghost.style.zIndex = '9999';
+    const rect = wrapper.getBoundingClientRect();
+    const grabOffsetX = event.clientX - rect.left;
+    const grabOffsetY = event.clientY - rect.top;
+    ghost.style.width = `${rect.width}px`;
+    document.body.appendChild(ghost);
+    const indicator = document.createElement('div');
+    indicator.className = 'document-image-drop-indicator';
+    indicator.style.display = 'none';
+    document.body.appendChild(indicator);
+    wrapper.classList.add('document-image--dragging');
+
+    const moveGhost = (clientX: number, clientY: number) => {
+      ghost.style.transform =
+        `translate(${clientX - grabOffsetX}px, ${clientY - grabOffsetY}px)`;
+    };
+    moveGhost(event.clientX, event.clientY);
+
+    const session: ImageMoveDragSession = {
+      pointerId: event.pointerId,
+      ghost,
+      indicator,
+    };
+    const teardown = () => {
+      window.removeEventListener('pointermove', onDragMove);
+      window.removeEventListener('pointerup', onDragUp);
+      window.removeEventListener('pointercancel', onDragCancel);
+      if (moveDragSessionRef.current === session) {
+        moveDragSessionRef.current = null;
+      }
+      ghost.remove();
+      indicator.remove();
+      wrapper.classList.remove('document-image--dragging');
+    };
+    const onDragMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== session.pointerId) return;
+      moveGhost(moveEvent.clientX, moveEvent.clientY);
+      updateMoveDragIndicator(session, moveEvent.clientX, moveEvent.clientY);
+    };
+    const onDragUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== session.pointerId) return;
+      const dropPos = resolveMoveDropPos(upEvent.clientX, upEvent.clientY);
+      teardown();
+      if (dropPos !== null && !editor.isDestroyed) {
+        if (editor.commands.moveDocumentImageTo(attributes.id, dropPos)) {
+          editor.commands.focus();
+        }
+      }
+    };
+    const onDragCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== session.pointerId) return;
+      teardown();
+    };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragUp);
+    window.addEventListener('pointercancel', onDragCancel);
+    moveDragSessionRef.current = session;
+    updateMoveDragIndicator(session, event.clientX, event.clientY);
+  };
+
+  const handleImagePointerMove = (
+    event: ReactPointerEvent<HTMLElement>
+  ) => {
+    if (!isMoveDraggable || moveDragSessionRef.current) return;
+    const pending = pointerSelectionPendingRef.current;
+    if (
+      !pending
+      || pending.phase !== 'pressed'
+      || pending.pointerId !== event.pointerId
+    ) {
+      return;
+    }
+    const deltaX = event.clientX - pending.startClientX;
+    const deltaY = event.clientY - pending.startClientY;
+    if (Math.hypot(deltaX, deltaY) < IMAGE_MOVE_DRAG_THRESHOLD_PX) return;
+    // The resize handle owns its own pointer-capture gesture.
+    const target = event.target;
+    if (
+      target instanceof Element
+      && target.closest('.document-image__resize-handle')
+    ) {
+      return;
+    }
+    startImageMoveDrag(event);
+  };
+
+  // Abandon a move-drag if the node view unmounts mid-gesture.
+  useEffect(() => () => {
+    const session = moveDragSessionRef.current;
+    moveDragSessionRef.current = null;
+    session?.ghost.remove();
+    session?.indicator.remove();
+  }, []);
 
   const media = source && !sourceFailed ? (
     <img
@@ -354,6 +523,7 @@ export const DocumentImageNodeView = ({
 
   return (
     <NodeViewWrapper
+      ref={wrapperRef}
       as={nodeType === 'documentInlineImage' ? 'span' : 'figure'}
       className={[
         'document-image',
@@ -365,6 +535,7 @@ export const DocumentImageNodeView = ({
       ].filter(Boolean).join(' ')}
       contentEditable={false}
       onPointerDown={handleImagePointerDown}
+      onPointerMove={handleImagePointerMove}
       onPointerUp={handleImagePointerUp}
       onPointerCancel={handleImagePointerCancel}
       onLostPointerCapture={handleImageLostPointerCapture}

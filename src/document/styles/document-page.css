@@ -2143,6 +2143,21 @@
   outline-offset: 0;
 }
 
+.document-image--dragging {
+  opacity: 0.35;
+}
+
+.document-image-drop-indicator {
+  position: fixed;
+  height: 3px;
+  margin-top: -1px;
+  background: #5267d8;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(82, 103, 216, 0.35);
+  pointer-events: none;
+  z-index: 10000;
+}
+
 .document-image--multi-selected .document-image__frame {
   outline: 2px solid #5267d8;
   outline-offset: 0;
