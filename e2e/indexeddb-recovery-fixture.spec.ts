@@ -1,4 +1,4 @@
-import { expect, test, chromium } from '@playwright/test';
+import { expect, test, chromium } from './test-fixtures';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,6 +40,14 @@ test('forensic reader recovers a real Chromium IndexedDB copy without modifying 
   const backup = join(root, 'verified-backup');
   const exports = join(root, 'exports');
   const context = await chromium.launchPersistentContext(profile, { headless: true });
+  // Same Google Fonts stub as e2e/test-fixtures.ts; this spec owns its context
+  // so the shared page fixture does not apply.
+  await context.route('https://fonts.googleapis.com/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '/* e2e: Google Fonts stylesheet stubbed */' }),
+  );
+  await context.route('https://fonts.gstatic.com/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'font/woff2', body: '' }),
+  );
   try {
     const page = context.pages()[0] ?? await context.newPage();
     await page.goto('/');

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './test-fixtures';
 import { PDFDocument } from 'pdf-lib';
 
 const PHOTO_PNG_BASE64 =

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './test-fixtures';
 import { createHistoricalBookFixtureProject } from '../src/document/fixtures/historicalBookFixtures';
 
 const loadHistoricalFixture = async (page: Page) => {

@@ -16,9 +16,22 @@ if (typeof window !== 'undefined' && window.location.hostname === 'localhost' &&
 const rootElement = document.getElementById('root')!
 const root = ReactDOM.createRoot(rootElement)
 
+const loadAppModule = async (retries: number): Promise<typeof import('./App.tsx')> => {
+  try {
+    return await import('./App.tsx')
+  } catch (error) {
+    if (retries <= 0) throw error
+    // Repeated reloads can exhaust Chromium's resources, rejecting the dynamic
+    // import with net::ERR_INSUFFICIENT_RESOURCES. Pause briefly and retry once
+    // before giving up.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    return loadAppModule(retries - 1)
+  }
+}
+
 const start = async () => {
   await prepareStartupStorage()
-  const { default: App } = await import('./App.tsx')
+  const { default: App } = await loadAppModule(1)
   root.render(
     <React.StrictMode>
       <App />

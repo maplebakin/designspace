@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './test-fixtures';
 
 test.describe('startup crash recovery', () => {
   test('opens responsively without touching an abnormally large IndexedDB library', async ({ page }) => {

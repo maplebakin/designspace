@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './test-fixtures';
 import { createScannedReferenceFixture } from './fixtures/scanned-reference-page';
 
 const PHOTO_PNG_BASE64 =

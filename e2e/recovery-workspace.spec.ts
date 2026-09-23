@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './test-fixtures';
 
 test('desktop recovery workspace requires verified backup, recovery report, and exact destructive confirmation', async ({ page }) => {
   await page.addInitScript(() => {

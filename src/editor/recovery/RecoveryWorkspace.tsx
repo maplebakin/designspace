@@ -73,6 +73,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
   const [busy, setBusy] = useState<'detect' | 'resume' | 'backup' | 'extract' | 'delete' | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detectRan, setDetectRan] = useState(false);
   const recoveryInFlight = useRef(false);
 
   const selected = useMemo(
@@ -168,6 +169,7 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
       setError(caught instanceof Error ? caught.message : 'Browser storage detection failed.');
     } finally {
       setBusy(null);
+      setDetectRan(true);
     }
   };
 
@@ -368,6 +370,21 @@ export const RecoveryWorkspace: React.FC<RecoveryWorkspaceProps> = ({ startupBlo
     );
   }
 
+  // Guard 1: never return null before the first async detection has completed.
+  // detect() populates candidates after mount; returning null here would unmount
+  // the workspace (and every recovery testid) mid-detection.
+  if (!detectRan) {
+    return (
+      <div className="mt-4 rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-4" data-testid="recovery-workspace">
+        <p className="text-sm font-semibold text-[color:var(--ui-text)]" role="status" data-testid="recovery-detection-loading">
+          {busy === 'detect' ? 'Inspecting supported Chrome and Chromium profiles…' : 'Preparing browser storage detection…'}
+        </p>
+      </div>
+    );
+  }
+
+  // Guard 2: only hide the workspace after a completed detection confirmed
+  // there is nothing to recover.
   if (!startupBlocked && busy !== 'detect' && candidates.length === 0 && !cleanup) return null;
 
   return (

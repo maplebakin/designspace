@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './test-fixtures';
 
 test.describe('document semantic typography', () => {
   test.use({ viewport: { width: 1920, height: 1080 } });

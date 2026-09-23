@@ -125,14 +125,31 @@ const insertFabricObject = (
 
   if (options.enterEditing && typeof (obj as any).enterEditing === 'function') {
     const objectId = (serialized as any).id;
-    frameScheduler.scheduleTask(() => {
+    // The store sync enlarges objects asynchronously, so the live instance may
+    // not be on the canvas on the very next frame. Retry briefly (mirroring
+    // finalizeInsertionSelection) so inserted text reliably lands in editing mode.
+    let attempts = 0;
+    const tryEnterEditing = (): void => {
       const activeCanvas = useEditorStore.getState().canvas;
       const syncedObject = activeCanvas?.getObjects().find((candidate) => (candidate as any).id === objectId) as any;
       if (syncedObject && typeof syncedObject.enterEditing === 'function') {
-        syncedObject.enterEditing();
-        activeCanvas?.requestRenderAll();
+        // Don't steal focus if the user has already moved on to another object.
+        const activeObject = activeCanvas?.getActiveObject() as any;
+        const stillSelected = activeObject && ((activeObject as any).id === objectId
+          || (typeof activeObject.getObjects === 'function'
+            && activeObject.getObjects().some((child: any) => child?.id === objectId)));
+        if (!syncedObject.isEditing && stillSelected) {
+          syncedObject.enterEditing();
+          activeCanvas?.requestRenderAll();
+        }
+        return;
       }
-    }, TaskPriority.High);
+      attempts += 1;
+      if (attempts < 40) {
+        globalThis.setTimeout(tryEnterEditing, 16);
+      }
+    };
+    frameScheduler.scheduleTask(tryEnterEditing, TaskPriority.High);
   }
 
   return obj;
