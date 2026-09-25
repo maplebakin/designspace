@@ -12,6 +12,7 @@ import {
     isCanvasObjectObservationTarget,
 } from './canvasMutationObservation';
 import type { CanvasCommittedMutation } from './canvasMutationObservation';
+import type { AuthoredRevisionEvent } from '../session/authoredRevision';
 import {
     handleTextboxMouseDown,
     handleTextboxMouseMove,
@@ -38,11 +39,12 @@ export interface CanvasEventCallbacks {
     onUpdate?: (canvas: fabric.Canvas, options?: { persist?: boolean }) => void;
     onHistoryDirty?: () => void;
     /** Advance the renderer-owned authored revision immediately on mutation. */
-    onAuthoredMutation?: () => void;
+    onAuthoredMutation?: (event?: AuthoredRevisionEvent) => void;
     /**
      * A narrow adapter observation for committed user geometry changes. The
      * callback receives a stable object ID, never the Fabric object itself.
      */
+    /** Optional for standalone legacy mounts; required by the routed lifecycle adapter. */
     onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
     onSelectedObjectId?: (id: string | null) => void;
     onSelectedLayerIds?: (ids: string[]) => void;
@@ -152,10 +154,17 @@ export function registerObjectEventHandlers(
     } = callbacks;
 
     const notifyCommittedMutation = (mutation: CanvasCommittedMutation) => {
+        if (!onCommittedMutation) return;
         try {
-            onCommittedMutation?.(mutation);
-        } catch {
-            // Optional diagnostics must never interrupt the legacy event path.
+            onCommittedMutation(mutation);
+        } catch (error) {
+            // A committed observation is required by the shared lifecycle
+            // route. Keep the engine mutation committed, but make a delivery
+            // failure visible instead of misclassifying it as diagnostics.
+            console.error(
+                '[project-lifecycle] Canvas committed observation callback failed.',
+                error,
+            );
         }
     };
 
@@ -215,7 +224,10 @@ export function registerObjectEventHandlers(
             || isCanvasObjectMutationSuppressed(canvas);
 
         if (target && !(target as any).isGuide && !isInternalMutation) {
-            onAuthoredMutation?.();
+            // The Fabric event is the early visibility edge. The paired
+            // committed observer below owns the semantic commit, so the
+            // shared lifecycle sees a draft followed by one commit.
+            onAuthoredMutation?.({ kind: 'draft-start', source: 'canvas' });
             onSelectionChange?.(canvas);
             onHistoryDirty?.();
             onUpdate?.(canvas, { persist: true });
@@ -282,7 +294,10 @@ export function registerObjectEventHandlers(
                 )
             )
         ) {
-            onAuthoredMutation?.();
+            // A changed-text event can precede Fabric's semantic completion.
+            // Treat it as a draft start; the completion observer below is the
+            // single committed authored boundary.
+            onAuthoredMutation?.({ kind: 'draft-start', source: 'canvas' });
         }
         markDirtyObject(target);
         onHistoryDirty?.();
@@ -395,6 +410,12 @@ export function registerObjectEventHandlers(
         const target = event?.target as fabric.Object | undefined;
         if (!target || !isTextObject(target)) return;
 
+        const session = typeof (target as any).id === 'string'
+            ? textEditingSessions.get((target as any).id)
+            : undefined;
+        const hasPendingTextChange = typeof (target as any).id === 'string'
+            && textChangesAwaitingObjectModified.has((target as any).id);
+
         // Mark the authored mutation once per dirty period instead of on
         // every keystroke. The first change flips isDirty, bumps the
         // revision, and schedules the debounced autosave; later keystrokes
@@ -405,7 +426,12 @@ export function registerObjectEventHandlers(
         if (useEditorStore.getState().isDirty) {
             useEditorStore.getState().triggerAutoSave();
         } else {
-            onAuthoredMutation?.();
+            onAuthoredMutation?.({
+                kind: session?.liveMutationEmitted || hasPendingTextChange
+                    ? 'draft-update'
+                    : 'draft-start',
+                source: 'canvas',
+            });
         }
         markDirtyObject(target);
         onHistoryDirty?.();
@@ -424,9 +450,6 @@ export function registerObjectEventHandlers(
         // text while the editor remains focused. The completion callback
         // remains a fallback for integrations that omit text:changed.
         const objectId = (target as any).id;
-        const session = typeof objectId === 'string'
-            ? textEditingSessions.get(objectId)
-            : undefined;
         if (
             session
             && !session.liveMutationEmitted
@@ -509,7 +532,7 @@ export function registerObjectEventHandlers(
             onHistoryDirty?.();
         }
 
-        onAuthoredMutation?.();
+            onAuthoredMutation?.({ kind: 'draft-start', source: 'canvas' });
         onUpdate?.(canvas, { persist: true });
 
         if (canObserveObjectLifecycle(target)) {
