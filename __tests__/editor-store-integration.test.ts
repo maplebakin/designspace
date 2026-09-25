@@ -2446,7 +2446,7 @@ describe('core persistence regressions', () => {
     expect(objectById(harness.canvas, 'nudge-me')?.left).toBe(before + 1);
   });
 
-  it('records Fabric text editing events as persistent document mutations', () => {
+  it('keeps live Fabric text edits off the store sync path until completion', () => {
     const text = new fabric.IText('Draft', { id: 'editable-text' } as any);
     harness.canvas.add(text);
     const onUpdate = vi.fn();
@@ -2457,13 +2457,43 @@ describe('core persistence regressions', () => {
       callbacks: { onUpdate, onHistoryDirty, onAuthoredMutation },
     });
 
+    useEditorStore.setState({ isDirty: false, changeRevision: 0 });
     text.set({ text: 'Final' });
     harness.canvas.fire('text:changed', { target: text } as any);
 
+    // Fabric owns the live text and repaint; the store sync + persist
+    // happens once at the object:modified completion boundary, so typing
+    // does not pay for a full serialize + broadcast per keystroke.
+    expect(onUpdate).not.toHaveBeenCalled();
     expect(onHistoryDirty).toHaveBeenCalled();
-    expect(onUpdate).toHaveBeenCalledWith(harness.canvas, { persist: true });
     expect(onAuthoredMutation).toHaveBeenCalledTimes(1);
     registration.cleanup();
+  });
+
+  it('refreshes only the autosave timer for keystrokes while already dirty', () => {
+    const text = new fabric.IText('Draft', { id: 'editable-text' } as any);
+    harness.canvas.add(text);
+    const onUpdate = vi.fn();
+    const onHistoryDirty = vi.fn();
+    const onAuthoredMutation = vi.fn();
+    const registration = registerObjectEventHandlers({
+      canvas: harness.canvas,
+      callbacks: { onUpdate, onHistoryDirty, onAuthoredMutation },
+    });
+
+    useEditorStore.setState({ isDirty: true, changeRevision: 7 });
+    text.set({ text: 'Final' });
+    harness.canvas.fire('text:changed', { target: text } as any);
+
+    // Already dirty: no redundant store broadcast or lifecycle mark, and no
+    // store sync. The debounced autosave timer is refreshed instead so the
+    // keystroke is still persisted after typing pauses.
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onAuthoredMutation).not.toHaveBeenCalled();
+    expect(onHistoryDirty).toHaveBeenCalled();
+    expect(useEditorStore.getState().changeRevision).toBe(7);
+    registration.cleanup();
+    useEditorStore.setState({ isDirty: false, changeRevision: 0 });
   });
 
   it('advances the canvas persistence revision for live text before a delayed save completes', async () => {

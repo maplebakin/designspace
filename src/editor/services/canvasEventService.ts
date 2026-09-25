@@ -395,10 +395,28 @@ export function registerObjectEventHandlers(
         const target = event?.target as fabric.Object | undefined;
         if (!target || !isTextObject(target)) return;
 
-        onAuthoredMutation?.();
+        // Mark the authored mutation once per dirty period instead of on
+        // every keystroke. The first change flips isDirty, bumps the
+        // revision, and schedules the debounced autosave; later keystrokes
+        // only refresh that timer. Broadcasting the full editor store (plus
+        // the lifecycle snapshot) on every keystroke is what made canvas
+        // text input lag. Durability is unchanged: the timer still fires
+        // after typing pauses, and completion persists explicitly.
+        if (useEditorStore.getState().isDirty) {
+            useEditorStore.getState().triggerAutoSave();
+        } else {
+            onAuthoredMutation?.();
+        }
         markDirtyObject(target);
         onHistoryDirty?.();
-        onUpdate?.(canvas, { persist: true });
+        // Live keystrokes do not touch the store sync path at all. Fabric
+        // owns the live text and repaints itself on every keydown; the
+        // object:modified completion handler (blur/Escape) performs the
+        // single store sync + persist for the whole session, and the
+        // debounced autosave covers durability in between. Syncing the full
+        // canvas (serialize + layer rebuild + layout suggestions + store
+        // broadcast to every subscriber) on every keystroke is what made
+        // canvas text input lag.
 
         // Fabric emits text:changed for each visible edit, before the blur /
         // object:modified completion pair. Report the first changed value at
