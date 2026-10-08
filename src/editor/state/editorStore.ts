@@ -87,8 +87,42 @@ import { generateProjectFromRecipe } from '../recipes/generateProjectFromRecipe'
 import type { ProductRecipeId } from '../recipes/recipeRegistry';
 import {
     persistenceOperationStillOwnsCurrentState,
+    createPersistenceOperationContext,
     type PersistenceOperationContext,
 } from '../session/persistenceOperation';
+import {
+    acknowledgeConflict,
+    acknowledgeDurableWrite,
+    acknowledgeFailure,
+    acknowledgeFileDelivery,
+    acknowledgeStaleCompletion,
+    acknowledgementAllowsDirtyClear,
+    type PersistenceAcknowledgement,
+} from '../session/persistenceAcknowledgement';
+import type {
+    CanonicalSerializedObject,
+    CanonicalSerializedScene,
+    AuthoredCanvasPageSnapshot,
+} from '../scene/sceneSnapshot';
+import {
+    assertCanonicalSerializedScene,
+    createAuthoredCanvasPageSnapshot,
+    createDurableSceneSnapshot,
+    createExportSceneSnapshot,
+    createPageSceneSnapshot,
+    DEFAULT_CANVAS_BACKGROUND,
+} from '../scene/sceneSnapshot';
+import {
+    advanceAuthoredRevision,
+    createInitialAuthoredRevision,
+    type AuthoredRevision,
+    type AuthoredRevisionEvent,
+} from '../session/authoredRevision';
+import {
+    createCanvasEditingMode,
+    transitionInteractionMode,
+    type InteractionMode,
+} from '../session/interactionMode';
 
 // Re-export BrandCollection for backward compatibility
 export type { BrandCollection } from './useThemeStore';
@@ -97,8 +131,7 @@ export { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 
 // --- CONSTANTS ---
 
-// Default canvas background color (cream)
-export const DEFAULT_CANVAS_BACKGROUND = '#FAF8F5';
+export { DEFAULT_CANVAS_BACKGROUND } from '../scene/sceneSnapshot';
 
 const MAX_PROJECT_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_PAGES = 250;
@@ -230,9 +263,15 @@ export interface Template {
 export interface ProjectPage {
   id: string;
   name: string;
-  canvasData?: any;
+  /**
+   * Durable page snapshot in canonical page space; live Fabric objects never
+   * cross this field. The active `useCanvasStore` geometry is projected here
+   * at the save/history/page-operation boundary.
+   */
+  canvasData?: CanonicalSerializedScene;
   pages?: ProjectPage[];
   activePageIndex?: number;
+  /** Durable page dimensions in logical canvas pixels, not viewport pixels. */
   canvasSize: { width: number; height: number };
   thumbnail?: string;
 }
@@ -248,6 +287,7 @@ export interface Layer {
 }
 
 export interface StickerData {
+    /** Session-only inserter collection; inserted project images are persisted separately. */
     id: string;
     url: string;
     tags: string[];
@@ -262,91 +302,14 @@ export type EditorTool = 'select' | 'draw' | 'pan' | 'erase' | 'textbox';
 
 export type CanvasReadyState = 'uninitialized' | 'initializing' | 'ready' | 'disposing' | 'disposed';
 
-/**
- * PHASE 2.1: Serialized representation of a Fabric.js object.
- * This is the PRIMARY source of truth for canvas objects.
- * Fabric.js canvas acts as a RENDER DELEGATE.
- */
-export interface SerializedFabricObject {
-  // Fabric.js base properties
-  type: string;
-  version?: string;
-  originX?: string;
-  originY?: string;
-  left?: number;
-  top?: number;
-  width?: number;
-  height?: number;
-  fill?: string | object;
-  stroke?: string;
-  strokeWidth?: number;
-  strokeDashArray?: number[];
-  strokeLineCap?: string;
-  strokeDashOffset?: number;
-  strokeLineJoin?: string;
-  strokeUniform?: boolean;
-  strokeMiterLimit?: number;
-  scaleX?: number;
-  scaleY?: number;
-  angle?: number;
-  flipX?: boolean;
-  flipY?: boolean;
-  opacity?: number;
-  shadow?: object | string | null;
-  visible?: boolean;
-  backgroundColor?: string;
-  fillRule?: string;
-  paintFirst?: string;
-  globalCompositeOperation?: string;
-  skewX?: number;
-  skewY?: number;
-
-  // Custom properties
-  id: string | null;
-  tokenRole?: string | null;
-  colorLocked?: boolean;
-  isPlaceholder?: boolean;
-  isGuide?: boolean;
-  isFrame?: boolean;
-  frameType?: 'circle' | 'star' | 'hexagon' | 'badge';
-
-  // Type-specific properties (partial - extend as needed)
-  text?: string; // for text objects
-  fontSize?: number;
-  fontFamily?: string;
-  fontWeight?: string | number;
-  fontStyle?: string;
-  textAlign?: string;
-  charSpacing?: number; // for text letter spacing
-  radius?: number; // for circles
-  rx?: number; // for rectangles
-  ry?: number;
-  points?: Array<{ x: number; y: number }>; // for polygons
-  src?: string; // for images
-  /** Stable durable media identity; falls back to id for legacy scenes. */
-  assetId?: string;
-  crossOrigin?: string;
-  filters?: any[];
-
-  // Image adjustment properties
-  adjustments?: {
-    brightness?: number;
-    contrast?: number;
-    saturation?: number;
-  };
-
-  // Group/ActiveSelection
-  objects?: SerializedFabricObject[];
-
-  // Any other properties
-  [key: string]: any;
-}
+/** Backward-compatible name for the explicitly non-live scene object type. */
+export type SerializedFabricObject = CanonicalSerializedObject;
 
 export type ProjectFilePayload = Partial<ProductAwareProjectPayload<ProjectPage>> & {
   projectName: string;
   pages?: ProjectPage[];
   activePageIndex?: number;
-  canvasData?: any;
+  canvasData?: CanonicalSerializedScene;
   assets?: Record<string, string>;
   activeTheme?: ApocapaletteTheme | null;
   lastUpdated: string;
@@ -371,7 +334,7 @@ const buildLayerFromSerializedObject = (obj: SerializedFabricObject): Layer => (
   id: obj.id || '',
   name: (obj as any).name || formatObjectType(obj.type),
   type: obj.type || 'object',
-  visible: obj.visible ?? true,
+  visible: typeof obj.visible === 'boolean' ? obj.visible : true,
   movementLocked: !!obj.lockMovementX,
   colorLocked: !!obj.colorLocked,
 });
@@ -661,6 +624,7 @@ const replaceImageSources = (objects: any[], assets: Record<string, string>): an
     return obj;
 });
 
+/** Read the active Fabric page geometry; viewport dimensions never enter it. */
 const getDocumentCanvasSize = () => {
     const { width, height } = useCanvasStore.getState();
     return {
@@ -669,6 +633,11 @@ const getDocumentCanvasSize = () => {
     };
 };
 
+/**
+ * Resolve the one authored canvas background source. Fabric's paper object is
+ * a render-only projection, while page JSON receives this value at snapshot
+ * capture and is the durable/history/export mirror.
+ */
 const getPageBackgroundColor = () => {
     const themeBackground = useThemeStore.getState().canvasBackgroundColor;
     if (themeBackground && themeBackground.toLowerCase() !== 'transparent') {
@@ -691,11 +660,25 @@ const parseCanvasData = (canvasData: unknown) => {
     return canvasData;
 };
 
-const normalizePageCanvasData = (canvasData: unknown) => {
-    const parsed = parseCanvasData(canvasData);
-    return parsed && typeof parsed === 'object'
-        ? parsed
-        : { objects: [], background: getSerializedPageBackground() };
+const normalizePageCanvasData = (canvasData: unknown): CanonicalSerializedScene => {
+    let parsed: unknown;
+    try {
+        parsed = parseCanvasData(canvasData);
+    } catch {
+        parsed = null;
+    }
+    if (
+        parsed
+        && typeof parsed === 'object'
+        && !Array.isArray(parsed)
+        && Array.isArray((parsed as { objects?: unknown }).objects)
+    ) {
+        return assertCanonicalSerializedScene(parsed);
+    }
+    return {
+        objects: [],
+        background: getSerializedPageBackground(),
+    };
 };
 
 const normalizePageSize = (
@@ -727,7 +710,22 @@ const getInitialPageLoadData = (
     return normalizePageCanvasData(fallbackCanvasData || { objects: [], background: getSerializedPageBackground() });
 };
 
-const buildExportCanvasData = async (canvas: fabric.Canvas) => {
+type CanvasSnapshotBuildOptions = Readonly<{
+    pageId?: string;
+    canvasSize?: { width: number; height: number };
+    unitMode?: UnitMode;
+    sourceDpi?: number;
+}>;
+
+const buildExportCanvasData = async (
+    canvas: fabric.Canvas,
+    options: CanvasSnapshotBuildOptions = {},
+): Promise<{
+    snapshot: AuthoredCanvasPageSnapshot;
+    canvasData: CanonicalSerializedScene;
+    assets: Readonly<Record<string, string>>;
+    failedAssetIds: string[];
+}> => {
     const imageObjects = collectImageObjects(canvas.getObjects());
     imageObjects.forEach((image) => ensureObjectId(image, canvas));
 
@@ -755,12 +753,25 @@ const buildExportCanvasData = async (canvas: fabric.Canvas) => {
 
     const serializedObjects = serializeCanvasObjects(canvas);
     const objectsWithAssets = replaceImageSources(serializedObjects, assets);
-    return {
-        canvasData: {
+    const currentState = useEditorStore.getState();
+    const authoredSnapshot = createAuthoredCanvasPageSnapshot({
+        pageId: options.pageId
+            || currentState.pages[currentState.activePageIndex]?.id
+            || 'active-page',
+        canvasSize: options.canvasSize || getDocumentCanvasSize(),
+        unitMode: options.unitMode || currentState.unitMode,
+        sourceDpi: options.sourceDpi,
+        backgroundColor: getSerializedPageBackground(),
+        resourceScope: 'portable',
+        scene: {
             objects: objectsWithAssets,
-            background: getSerializedPageBackground(),
         },
         assets,
+    });
+    return {
+        snapshot: authoredSnapshot,
+        canvasData: authoredSnapshot.scene,
+        assets: authoredSnapshot.assets,
         failedAssetIds: failedIds,
     };
 };
@@ -829,30 +840,78 @@ const serializeProjectImageAssets = async (
     return { assets, failedAssetIds };
 };
 
+type CanvasPersistenceSnapshotContext = Readonly<{
+    projectId: string;
+    sessionIdentity: string;
+    authoredRevision: AuthoredRevision;
+    unitMode: UnitMode;
+    sourceDpi?: number;
+}>;
+
 const buildProjectPersistenceData = async (
     canvas: fabric.Canvas,
     pages: ProjectPage[],
     imageAssets: Record<string, string>,
-    activePageIndex: number
+    activePageIndex: number,
+    context: CanvasPersistenceSnapshotContext,
 ) => {
-    const activeExport = await buildExportCanvasData(canvas);
+    const activePage = pages[activePageIndex];
+    const activeExport = await buildExportCanvasData(canvas, {
+        pageId: activePage?.id,
+        // The live Fabric page is authoritative while this operation is
+        // being captured. The resulting authored snapshot updates the
+        // durable ProjectPage mirror below.
+        canvasSize: getDocumentCanvasSize(),
+        unitMode: context.unitMode,
+        sourceDpi: context.sourceDpi,
+    });
     const prepared = prepareProjectPagesForPersistence(pages, imageAssets);
     const combinedAssetSources = {
         ...prepared.imageAssets,
         ...activeExport.assets,
     };
-    const referencedIds = prepared.pages.reduce(
+    const pagesWithLiveActiveScene = prepared.pages.map((page, index) => (
+        index === activePageIndex
+            ? {
+                ...page,
+                canvasData: activeExport.canvasData,
+                canvasSize: activeExport.snapshot.dimensions.canvasSize,
+            }
+            : page
+    ));
+    const referencedIds = pagesWithLiveActiveScene.reduce(
         (ids, page) => collectReferencedImageAssetIds(page.canvasData, ids),
         new Set<string>()
     );
     const serializedAssets = await serializeProjectImageAssets(combinedAssetSources, referencedIds);
-    const activePageCanvasData = prepared.pages[activePageIndex]?.canvasData ?? activeExport.canvasData;
+    const pageSnapshots = pagesWithLiveActiveScene.map((page) => createPageSceneSnapshot({
+        pageId: page.id,
+        canvasSize: page.canvasSize,
+        scene: page.canvasData,
+        thumbnail: page.thumbnail,
+    }));
+    const durableSnapshot = createDurableSceneSnapshot({
+        projectId: context.projectId,
+        sessionIdentity: context.sessionIdentity,
+        authoredRevision: context.authoredRevision,
+        activePageId: activePage?.id || null,
+        pages: pageSnapshots,
+        assets: serializedAssets.assets,
+    });
+    const persistedPages = pagesWithLiveActiveScene.map((page, index) => ({
+        ...page,
+        canvasData: durableSnapshot.pages[index].scene,
+        canvasSize: durableSnapshot.pages[index].canvasSize,
+    }));
+    const activePageCanvasData = durableSnapshot.pages[activePageIndex]?.scene
+        || activeExport.canvasData;
 
     return {
-        pages: prepared.pages,
+        snapshot: durableSnapshot,
+        pages: persistedPages,
         runtimeImageAssets: prepared.imageAssets,
         canvasData: activePageCanvasData,
-        assets: serializedAssets.assets,
+        assets: durableSnapshot.assets,
         failedAssetIds: Array.from(new Set([
             ...activeExport.failedAssetIds,
             ...serializedAssets.failedAssetIds,
@@ -870,23 +929,68 @@ export const buildPortableCanvasSnapshot = async (
     canvas: fabric.Canvas,
     imageAssets: Record<string, string> = {},
 ) => {
-    const exported = await buildExportCanvasData(canvas);
+    const state = useEditorStore.getState();
+    const exported = await buildExportCanvasData(canvas, {
+        pageId: state.pages[state.activePageIndex]?.id,
+        canvasSize: getDocumentCanvasSize(),
+        unitMode: state.unitMode,
+        sourceDpi: state.productProjectFields?.document.pageSize.dpi,
+    });
     const referencedIds = collectReferencedImageAssetIds(exported.canvasData);
     const serializedAssets = await serializeProjectImageAssets(
         { ...imageAssets, ...exported.assets },
         referencedIds,
     );
-    return {
-        canvasData: {
+    const snapshot = createAuthoredCanvasPageSnapshot({
+        pageId: exported.snapshot.pageId,
+        canvasSize: exported.snapshot.dimensions.canvasSize,
+        unitMode: exported.snapshot.dimensions.unitMode,
+        sourceDpi: exported.snapshot.dimensions.sourceDpi,
+        backgroundColor: exported.snapshot.backgroundColor,
+        resourceScope: 'portable',
+        scene: {
             ...exported.canvasData,
             objects: replaceImageSources(exported.canvasData.objects, serializedAssets.assets),
         },
+        assets: serializedAssets.assets,
+    });
+    return {
+        snapshot,
+        canvasData: snapshot.scene,
         assets: serializedAssets.assets,
         failedAssetIds: Array.from(new Set([
             ...exported.failedAssetIds,
             ...serializedAssets.failedAssetIds,
         ])),
     };
+};
+
+/**
+ * Capture the current authored canvas page for the canonical canvas export
+ * manager. The live Fabric canvas is read only by the existing serializer;
+ * the manager receives the resulting typed snapshot instead of recapturing a
+ * renderer projection after an async boundary.
+ */
+export const buildCanvasExportSnapshot = async (
+    canvas: fabric.Canvas,
+    options: Omit<CanvasSnapshotBuildOptions, 'canvasSize'> = {},
+) => {
+    const state = useEditorStore.getState();
+    const exported = await buildExportCanvasData(canvas, {
+        pageId: options.pageId || state.pages[state.activePageIndex]?.id,
+        // Current-page export always captures the active live page geometry;
+        // a stale ProjectPage mirror cannot override the live authored page.
+        canvasSize: getDocumentCanvasSize(),
+        unitMode: options.unitMode || state.unitMode,
+        sourceDpi: options.sourceDpi || state.productProjectFields?.document.pageSize.dpi,
+    });
+    return createExportSceneSnapshot({
+        pageId: exported.snapshot.pageId,
+        canvasSize: exported.snapshot.dimensions.canvasSize,
+        sourceDpi: exported.snapshot.dimensions.sourceDpi,
+        scene: exported.snapshot.scene,
+        assets: exported.snapshot.assets,
+    });
 };
 
 const parseProjectCanvasData = (value: unknown, label: string) => {
@@ -926,7 +1030,7 @@ const parseProjectCanvasData = (value: unknown, label: string) => {
         }
     };
     objects.forEach((object: any) => validateObject(object, 1));
-    return parsed as Record<string, any>;
+    return assertCanonicalSerializedScene(parsed, { allowBlobUrls: true });
 };
 
 const validateProjectPayloadStructure = (raw: unknown) => {
@@ -1005,7 +1109,7 @@ const validateProjectPayloadStructure = (raw: unknown) => {
     }
 };
 
-const stageCanvasDataLoad = async (canvasData: any) => {
+const stageCanvasDataLoad = async (canvasData: CanonicalSerializedScene) => {
     if (typeof document === 'undefined') return;
     const element = document.createElement('canvas');
     const stagingCanvas = new fabric.StaticCanvas(element, { width: 1, height: 1 });
@@ -1025,8 +1129,8 @@ const stageCanvasDataLoad = async (canvasData: any) => {
  * scope fence still holds.
  */
 const loadHistoryCanvasState = async (
-    canvas: fabric.Canvas,
-    canvasData: any,
+  canvas: fabric.Canvas,
+  canvasData: CanonicalSerializedScene,
     reviver: any,
     isCurrent: () => boolean,
 ) => {
@@ -1243,8 +1347,11 @@ interface EditorState {
   canvasOffset: { x: number; y: number };
   snapEnabled: boolean;
   gridEnabled: boolean;
+  /** Session-only sticker/upload collection; project image assets have a separate durable owner. */
   assets: StickerData[];
+  /** @deprecated Compatibility state only; active template records live in templateService/Dexie. */
   templates: Template[];
+  /** @deprecated Legacy localStorage migration source; never an active template owner. */
   userTemplates: Template[];
   imageAssets: Record<string, string>;
   assetRefCount: Map<string, number>;
@@ -1265,7 +1372,10 @@ interface EditorState {
   showOnboarding: boolean;
   layerSyncHandler: (() => void) | null;
   hasLayerSyncHandler: boolean;
-  /** Runtime-only observation callback; it is never a persistence source. */
+  /**
+   * Shared route observation callback; null is permitted only for standalone
+   * legacy mounts and is never a persistence source.
+   */
   committedMutationObserver: CanvasCommittedMutationObserver | null;
   batchDepth: number;
   batchNeedsSync: boolean;
@@ -1274,6 +1384,10 @@ interface EditorState {
   saveStatus: SaveStatus;
   autoSaveTimer: ReturnType<typeof setTimeout> | null;
   lifecycleAuthorityMode: LifecycleAuthorityMode;
+  /** Typed authored-state contract; changeRevision is its legacy projection. */
+  authoredRevision: AuthoredRevision;
+  /** Explicit pointer/keyboard owner for the canvas renderer. */
+  interactionMode: InteractionMode;
   changeRevision: number;
 
   // PHASE 2.2: Sync Lock Mechanism
@@ -1387,7 +1501,10 @@ interface EditorState {
   markHistoryDirty: () => void;
   consumeHistoryDirty: () => boolean;
   /** Mark a renderer-observed authored mutation before a frame is flushed. */
-  markProjectDirty: (options?: { scheduleAutosave?: boolean }) => void;
+  markProjectDirty: (options?: {
+    scheduleAutosave?: boolean;
+    event?: AuthoredRevisionEvent;
+  }) => void;
   toggleShowGuides: () => void;
   saveState: (options?: { force?: boolean }) => void;
   triggerAutoSave: () => void;
@@ -1415,6 +1532,7 @@ interface EditorState {
   resetViewCanvas: () => void;
   addAssetToLibrary: (asset: StickerData) => void;
   removeAssetFromLibrary: (id: string) => void;
+  /** @deprecated Compatibility setter; use templateService for active records. */
   setTemplates: (templates: Template[]) => void;
   addImageAsset: (id: string, url: string) => void;
   removeImageAsset: (id: string) => void;
@@ -1435,6 +1553,7 @@ interface EditorState {
   syncActivePageFromCanvas: () => void;
   setDirty: (dirty: boolean) => void;
   downloadProjectFile: () => Promise<FileDeliveryResult | null>;
+  downloadProjectFileWithAcknowledgement: () => Promise<PersistenceAcknowledgement | null>;
   loadProjectFile: (file: File) => Promise<void>;
   setProjectPresetsOpen: (open: boolean) => void;
   setProjectQuickOpenOpen: (open: boolean) => void;
@@ -1442,6 +1561,7 @@ interface EditorState {
   setProductProjectFields: (fields: ProductProjectFields | null) => void;
   renameCurrentProject: (newName: string) => Promise<void>;
   setActiveTool: (tool: EditorTool) => void;
+  setInteractionMode: (mode: InteractionMode) => boolean;
   setBrushSize: (size: number) => void;
   setBrushColor: (color: string) => void;
   
@@ -1474,12 +1594,14 @@ interface EditorState {
 
   // Project Persistence Actions
   saveProject: (name: string) => Promise<boolean>;
+  saveProjectWithAcknowledgement: (name: string) => Promise<PersistenceAcknowledgement>;
   loadProject: (projectId: string) => Promise<void>;
   deleteProject: (projectId: string) => Promise<void>;
   duplicateProject: (projectId: string, newName: string) => Promise<void>;
   renameProject: (projectId: string, newName: string, expectedRevision?: number) => Promise<void>;
   getAllProjects: () => Promise<any[]>;
   updateCurrentProject: () => Promise<void>;
+  updateCurrentProjectWithAcknowledgement: () => Promise<PersistenceAcknowledgement>;
   setAutoSaveStatus: (status: AutoSaveStatus) => void;
   setLifecycleAuthorityMode: (mode: LifecycleAuthorityMode) => void;
 
@@ -1799,11 +1921,43 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             history.takeSnapshot();
         };
 
-        const markProjectDirty = (options: { scheduleAutosave?: boolean } = {}) => {
-            set((state) => ({
-                isDirty: true,
-                changeRevision: state.changeRevision + 1,
-            }));
+        const markProjectDirty = (options: {
+            scheduleAutosave?: boolean;
+            event?: AuthoredRevisionEvent;
+        } = {}) => {
+            set((state) => {
+                const currentRevision = state.authoredRevision
+                    ?? createInitialAuthoredRevision({
+                        sessionIdentity: state.sessionIdentity,
+                        projectIdentity: state.productProjectFields?.projectId
+                            || state.currentLibraryProjectId
+                            || 'canvas-session',
+                    });
+                // `changeRevision` is the legacy persistence/write epoch and
+                // remains the numeric projection of the authored sequence.
+                // Normalize partial legacy/test state before advancing so a
+                // stale typed projection cannot invalidate a current save.
+                const alignedRevision = currentRevision.sequence === state.changeRevision
+                    ? currentRevision
+                    : {
+                        ...currentRevision,
+                        sequence: state.changeRevision,
+                        phase: 'committed' as const,
+                    };
+                const nextRevision = advanceAuthoredRevision(
+                    alignedRevision,
+                    options.event ?? {
+                        kind: 'mutation',
+                        source: 'canvas',
+                        pageId: state.pages[state.activePageIndex]?.id ?? null,
+                    },
+                );
+                return {
+                    isDirty: true,
+                    authoredRevision: nextRevision,
+                    changeRevision: nextRevision.sequence,
+                };
+            });
             get().setAutoSaveStatus('dirty');
             if (
                 options.scheduleAutosave !== false
@@ -1836,8 +1990,13 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     objectId: object.id,
                     assetEffect: getCanvasObjectAssetEffect(action, object),
                 });
-            } catch {
-                // Runtime observation must never affect the legacy mutation path.
+            } catch (error) {
+                // Runtime observation must never affect the legacy mutation
+                // path, but a shared lifecycle delivery failure is visible.
+                console.error(
+                    '[project-lifecycle] Canvas object observation callback failed.',
+                    error,
+                );
             }
         };
 
@@ -1854,10 +2013,18 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
             try {
                 state.committedMutationObserver(mutation);
-            } catch {
-                // Runtime observation must never affect the legacy mutation path.
+            } catch (error) {
+                // Runtime observation must never affect the legacy mutation
+                // path, but a shared lifecycle delivery failure is visible.
+                console.error(
+                    '[project-lifecycle] Canvas semantic observation callback failed.',
+                    error,
+                );
             }
         };
+
+        const initialSessionIdentity = uuidv4();
+        const initialProjectIdentity = 'canvas-session';
 
         return ({
             canvas: null,
@@ -1897,7 +2064,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         productProjectFields: null,
         currentLibraryProjectId: null,
         currentLibraryProjectRevision: null,
-        sessionIdentity: uuidv4(),
+        sessionIdentity: initialSessionIdentity,
         pages: [{ id: uuidv4(), name: 'Page 1', canvasData: { objects: [], background: DEFAULT_CANVAS_BACKGROUND }, canvasSize: { ...DEFAULT_CANVAS_SIZE }, thumbnail: undefined }],
         activePageIndex: 0,
         isDirty: false,
@@ -1916,6 +2083,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         saveStatus: 'saved',
         autoSaveTimer: null,
         lifecycleAuthorityMode: 'legacy',
+        authoredRevision: createInitialAuthoredRevision({
+            sessionIdentity: initialSessionIdentity,
+            projectIdentity: initialProjectIdentity,
+        }),
+        interactionMode: createCanvasEditingMode(
+            initialSessionIdentity,
+            null,
+            'select',
+        ),
         changeRevision: 0,
         showHelpModal: false,
         showExportModal: false,
@@ -2950,7 +3126,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
         }
     },
-    setActiveTool: (tool) => set({ activeTool: tool }),
+    setInteractionMode: (mode) => {
+        const state = get();
+        const activePageId = state.pages[state.activePageIndex]?.id ?? null;
+        const currentMode = state.interactionMode
+            ?? createCanvasEditingMode(state.sessionIdentity, activePageId, state.activeTool);
+        const transition = transitionInteractionMode(currentMode, mode, {
+            sessionIdentity: state.sessionIdentity,
+            activePageId,
+        });
+        if (!transition.accepted) {
+            set({ toastMessage: transition.reason });
+            return false;
+        }
+        set({ interactionMode: transition.mode });
+        return true;
+    },
+    setActiveTool: (tool) => {
+        const state = get();
+        const pageId = state.pages[state.activePageIndex]?.id ?? null;
+        set({
+            activeTool: tool,
+            interactionMode: createCanvasEditingMode(state.sessionIdentity, pageId, tool),
+        });
+    },
     setBrushSize: (size) => set({ brushSize: size }),
     setBrushColor: (color) => useThemeStore.getState().setBrushColor(color),
     loadTemplate: (template) => {
@@ -3070,7 +3269,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         })();
     },
     saveCurrentAsTemplate: async () => {
-        const { canvas, userTemplates, unitMode } = get();
+        const { canvas, unitMode } = get();
         const { activeBrandCollectionId } = useThemeStore.getState();
         if (!canvas) return;
         let portable: Awaited<ReturnType<typeof buildPortableCanvasSnapshot>>;
@@ -3085,25 +3284,30 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             return;
         }
         const documentSize = getDocumentCanvasSize();
-        const json = {
-            ...portable.canvasData,
-            assets: portable.assets,
-        };
-        const thumbnail = canvas.toDataURL({ multiplier: 0.1 });
-        const newTemplate: Template = {
-            id: uuidv4(),
-            name: `Template ${new Date().toISOString()}`,
-            canvasData: JSON.stringify(json),
-            defaultThemeId: activeBrandCollectionId || '',
-            thumbnail,
-            canvasSize: {
-                width: documentSize.width,
-                height: documentSize.height,
-            },
-            unitMode,
-        };
-        const nextTemplates = [newTemplate, ...userTemplates];
-        set({ userTemplates: nextTemplates, toastMessage: `Saved template: ${newTemplate.name}` });
+        const templateName = `Template ${new Date().toISOString()}`;
+        try {
+            const { saveTemplate } = await import('../services/templateService');
+            await saveTemplate(
+                templateName,
+                {
+                    ...portable.canvasData,
+                    assets: portable.assets,
+                },
+                documentSize,
+                canvas.toDataURL({ multiplier: 0.1 }),
+                {
+                    unitMode,
+                    defaultThemeId: activeBrandCollectionId || undefined,
+                },
+            );
+            set({ toastMessage: `Saved template: ${templateName}` });
+        } catch (error) {
+            set({
+                toastMessage: error instanceof Error
+                    ? error.message
+                    : 'Unable to save the template.',
+            });
+        }
     },
 
     createProject: (options) => {
@@ -3171,12 +3375,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         // Reset canvas background in theme store
         useThemeStore.getState().setCanvasBackgroundColor(null);
 
+        const replacementSessionIdentity = uuidv4();
+        const replacementProjectIdentity = 'canvas-session';
         set({
             projectName: nextProjectName,
             productProjectFields: null,
             currentLibraryProjectId: null,
             currentLibraryProjectRevision: null,
-            sessionIdentity: uuidv4(),
+            sessionIdentity: replacementSessionIdentity,
+            authoredRevision: createInitialAuthoredRevision({
+                sessionIdentity: replacementSessionIdentity,
+                projectIdentity: replacementProjectIdentity,
+            }),
+            interactionMode: createCanvasEditingMode(
+                replacementSessionIdentity,
+                null,
+                'select',
+            ),
             pages: [{
                 id: uuidv4(),
                 name: 'Page 1',
@@ -3233,7 +3448,15 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             // asynchronous recipe scene is loaded. Keep this identity for the
             // replacement so late completions cannot mutate the new session.
             const replacementSessionIdentity = uuidv4();
-            set({ sessionIdentity: replacementSessionIdentity });
+            const replacementProjectIdentity = generatedProject.projectId;
+            set({
+                sessionIdentity: replacementSessionIdentity,
+                authoredRevision: createInitialAuthoredRevision({
+                    sessionIdentity: replacementSessionIdentity,
+                    projectIdentity: replacementProjectIdentity,
+                }),
+                changeRevision: 0,
+            });
 
             releaseCanvasAssetResources(get().imageAssets);
             clearSelection();
@@ -3273,6 +3496,11 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 currentLibraryProjectId: null,
                 currentLibraryProjectRevision: null,
                 sessionIdentity: replacementSessionIdentity,
+                interactionMode: createCanvasEditingMode(
+                    replacementSessionIdentity,
+                    firstPage.id,
+                    'select',
+                ),
                 imageAssets: {},
                 assetRefCount: new Map(),
                 pages: generatedProject.pages as ProjectPage[],
@@ -3341,7 +3569,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
             const page = get().pages[index];
             if (!page) return;
-            const hydrated = hydrateCanvasDataWithAssets(page.canvasData, get().imageAssets);
+            const hydrated = hydrateCanvasDataWithAssets(
+                page.canvasData ?? { objects: [] },
+                get().imageAssets
+            );
             await loadCanvasFromJsonSafely(canvas, hydrated, reviveCustomFabricProps);
             if (
                 get().sessionIdentity !== requestedSessionIdentity
@@ -3363,7 +3594,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             canvas.backgroundColor = 'transparent';
             get().clearSelection();
             get().syncCanvasToStore(canvas);
-            set({ activePageIndex: index });
+            set({
+                activePageIndex: index,
+                interactionMode: createCanvasEditingMode(
+                    requestedSessionIdentity,
+                    requestedPageId,
+                    get().activeTool,
+                ),
+            });
             get().requestLayerSync({ force: true });
             canvas.requestRenderAll();
             resetHistoryToCurrentCanvas();
@@ -3436,10 +3674,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             activePageIndex: number;
             canvasSize: { width: number; height: number };
         }> = {
+            operationId: uuidv4(),
+            operationKind: 'project-download',
+            revisionDomain: 'canvas-change',
             sessionIdentity: stateAtStart.sessionIdentity,
             projectIdentity: projectIdentityAtStart,
             targetIdentity: stateAtStart.currentLibraryProjectId,
             capturedRevision: stateAtStart.changeRevision,
+            authoredRevision: stateAtStart.authoredRevision,
             snapshot: {
                 pages: stateAtStart.pages,
                 imageAssets: stateAtStart.imageAssets,
@@ -3459,7 +3701,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas,
                 operation.snapshot.pages,
                 operation.snapshot.imageAssets,
-                operation.snapshot.activePageIndex
+                operation.snapshot.activePageIndex,
+                {
+                    projectId: operation.projectIdentity,
+                    sessionIdentity: operation.sessionIdentity,
+                    authoredRevision: operation.authoredRevision,
+                    unitMode,
+                    sourceDpi: stateAtStart.productProjectFields?.document.pageSize.dpi,
+                },
             );
         } catch (error) {
             const message = error instanceof Error && error.message
@@ -3509,11 +3758,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 || current.currentLibraryProjectId
                 || 'canvas-session',
             targetIdentity: current.currentLibraryProjectId,
+            revisionDomain: 'canvas-change',
             revision: current.changeRevision,
+            authoredRevision: current.authoredRevision,
         })) {
             return delivery;
         }
-        if (delivery.status === 'saved') {
+        const acknowledgement = acknowledgeFileDelivery(operation, delivery);
+        if (acknowledgementAllowsDirtyClear(acknowledgement)) {
             set({
                 productProjectFields: extractProductProjectFields(payload),
                 pages: exportData.pages,
@@ -3536,6 +3788,44 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 : `Saved project: ${payload.projectName}`);
         }
         return delivery;
+    },
+
+    downloadProjectFileWithAcknowledgement: async () => {
+        const stateAtStart = get();
+        const context = createPersistenceOperationContext({
+            operationKind: 'project-download',
+            revisionDomain: 'canvas-change',
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: stateAtStart.productProjectFields?.projectId
+                || stateAtStart.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: stateAtStart.currentLibraryProjectId,
+            durableRevision: stateAtStart.currentLibraryProjectRevision,
+            authoredRevision: stateAtStart.authoredRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+            },
+        });
+        const delivery = await get().downloadProjectFile();
+        if (!delivery) {
+            return acknowledgeFailure(context, 'The project is not ready to download.');
+        }
+        const current = get();
+        if (!persistenceOperationStillOwnsCurrentState(context, {
+            sessionIdentity: current.sessionIdentity,
+            projectIdentity: current.productProjectFields?.projectId
+                || current.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: current.currentLibraryProjectId,
+            revisionDomain: 'canvas-change',
+            revision: current.changeRevision,
+            authoredRevision: current.authoredRevision,
+        })) {
+            return acknowledgeStaleCompletion(context, 'The project changed while delivery was running.');
+        }
+        return acknowledgeFileDelivery(context, delivery);
     },
 
     loadProjectFile: async (file) => {
@@ -3668,9 +3958,20 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const normalizedPages = preparedProjectPages?.pages?.length
                 ? preparedProjectPages.pages
                 : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
+            const loadedSessionIdentity = get().sessionIdentity;
             set({
                 projectName,
                 productProjectFields: extractProductProjectFields(normalizedPayload),
+                authoredRevision: createInitialAuthoredRevision({
+                    sessionIdentity: loadedSessionIdentity,
+                    projectIdentity: normalizedPayload.projectId,
+                }),
+                interactionMode: createCanvasEditingMode(
+                    loadedSessionIdentity,
+                    normalizedPages[safeActivePageIndex]?.id ?? null,
+                    'select',
+                ),
+                changeRevision: 0,
                 isProjectPresetsOpen: false,
                 imageAssets: nextAssets,
                 pages: normalizedPages as any,
@@ -3736,7 +4037,26 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
         const replayed = await history.undo();
         if (!replayed) return;
-        set((state) => ({ isDirty: true, changeRevision: state.changeRevision + 1 }));
+        const pageId = get().pages[get().activePageIndex]?.id ?? null;
+        set((state) => {
+            const currentRevision = state.authoredRevision
+                ?? createInitialAuthoredRevision({
+                    sessionIdentity: state.sessionIdentity,
+                    projectIdentity: state.productProjectFields?.projectId
+                        || state.currentLibraryProjectId
+                        || 'canvas-session',
+                });
+            const nextRevision = advanceAuthoredRevision(currentRevision, {
+                kind: 'undo',
+                source: 'canvas',
+                pageId,
+            });
+            return {
+                isDirty: true,
+                authoredRevision: nextRevision,
+                changeRevision: nextRevision.sequence,
+            };
+        });
         get().setAutoSaveStatus('dirty');
         observeSemanticMutation({ action: 'undo-freeform', pageScope: true });
     },
@@ -3749,7 +4069,26 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
         const replayed = await history.redo();
         if (!replayed) return;
-        set((state) => ({ isDirty: true, changeRevision: state.changeRevision + 1 }));
+        const pageId = get().pages[get().activePageIndex]?.id ?? null;
+        set((state) => {
+            const currentRevision = state.authoredRevision
+                ?? createInitialAuthoredRevision({
+                    sessionIdentity: state.sessionIdentity,
+                    projectIdentity: state.productProjectFields?.projectId
+                        || state.currentLibraryProjectId
+                        || 'canvas-session',
+                });
+            const nextRevision = advanceAuthoredRevision(currentRevision, {
+                kind: 'redo',
+                source: 'canvas',
+                pageId,
+            });
+            return {
+                isDirty: true,
+                authoredRevision: nextRevision,
+                changeRevision: nextRevision.sequence,
+            };
+        });
         get().setAutoSaveStatus('dirty');
         observeSemanticMutation({ action: 'redo-freeform', pageScope: true });
     },
@@ -4153,12 +4492,19 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             useHistoryStore.getState().flushPendingSave();
             get().syncActivePageFromCanvas();
             if (options.format === 'png' || options.format === 'svg' || options.format === 'jpeg') {
+                const exportSnapshot = await buildCanvasExportSnapshot(canvas, {
+                    pageId: get().pages[get().activePageIndex]?.id,
+                    unitMode: get().unitMode,
+                    sourceDpi: get().productProjectFields?.document.pageSize.dpi,
+                });
                 await advancedExportManager.export(canvas, options.format, {
                     includeBackground: true,
-                    backgroundColor: getPageBackgroundColor(),
+                    backgroundColor: exportSnapshot.scene.background || getPageBackgroundColor(),
                     dpi: Math.max(150, options.multiplier * 150),
+                    sourceDpi: exportSnapshot.sourceDpi,
                     quality: options.quality,
                     fileName: get().projectName || 'design',
+                    authoredSnapshot: exportSnapshot,
                 });
                 showInfo(`${options.format.toUpperCase()} exported successfully`);
             }
@@ -4186,6 +4532,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             activePageIndex: number;
             canvasSize: { width: number; height: number };
         }> = {
+            operationId: uuidv4(),
+            operationKind: 'project-save',
+            revisionDomain: 'canvas-change',
             sessionIdentity: stateAtStart.sessionIdentity,
             projectIdentity: stateAtStart.productProjectFields?.projectId
                 || currentLibraryProjectId
@@ -4193,6 +4542,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             targetIdentity: currentLibraryProjectId,
             durableRevision: stateAtStart.currentLibraryProjectRevision,
             capturedRevision: stateAtStart.changeRevision,
+            authoredRevision: stateAtStart.authoredRevision,
             snapshot: {
                 pages: stateAtStart.pages,
                 imageAssets: stateAtStart.imageAssets,
@@ -4210,7 +4560,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas,
                 operation.snapshot.pages,
                 operation.snapshot.imageAssets,
-                operation.snapshot.activePageIndex
+                operation.snapshot.activePageIndex,
+                {
+                    projectId: operation.projectIdentity,
+                    sessionIdentity: operation.sessionIdentity,
+                    authoredRevision: operation.authoredRevision,
+                    unitMode,
+                    sourceDpi: stateAtStart.productProjectFields?.document.pageSize.dpi,
+                },
             );
 
             const savedAt = new Date().toISOString();
@@ -4373,6 +4730,59 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
 
+    saveProjectWithAcknowledgement: async (name) => {
+        const stateAtStart = get();
+        const context = createPersistenceOperationContext({
+            operationKind: 'project-save',
+            revisionDomain: 'canvas-change',
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: stateAtStart.productProjectFields?.projectId
+                || stateAtStart.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: stateAtStart.currentLibraryProjectId,
+            durableRevision: stateAtStart.currentLibraryProjectRevision,
+            authoredRevision: stateAtStart.authoredRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+            },
+        });
+        let succeeded = false;
+        try {
+            succeeded = await get().saveProject(name);
+        } catch (error) {
+            return acknowledgeFailure(
+                context,
+                error instanceof Error ? error.message : 'The project could not be saved.',
+            );
+        }
+        const current = get();
+        if (!persistenceOperationStillOwnsCurrentState(context, {
+            sessionIdentity: current.sessionIdentity,
+            projectIdentity: current.productProjectFields?.projectId
+                || current.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: current.currentLibraryProjectId,
+            revisionDomain: 'canvas-change',
+            revision: current.changeRevision,
+            authoredRevision: current.authoredRevision,
+        })) {
+            return acknowledgeStaleCompletion(context, 'The project changed while the save was running.');
+        }
+        if (!succeeded) {
+            const conflict = current.toastMessage?.includes('another window');
+            return conflict
+                ? acknowledgeConflict(context)
+                : acknowledgeFailure(context, 'The project save was not confirmed.');
+        }
+        return acknowledgeDurableWrite(
+            context,
+            current.currentLibraryProjectId || context.targetIdentity || context.projectIdentity,
+            current.currentLibraryProjectRevision ?? context.authoredRevision.sequence,
+        );
+    },
+
     loadProject: async (projectId) => {
         const requestToken = ++canvasLoadRequestToken;
         let stagedAssets: Record<string, string> = {};
@@ -4528,12 +4938,23 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const normalizedPages = preparedProjectPages?.pages?.length
                 ? preparedProjectPages.pages
                 : [{ id: uuidv4(), name: 'Page 1', canvasData: migratedCanvasData, canvasSize: { width: normalizedWidth, height: normalizedHeight } }];
+            const loadedSessionIdentity = get().sessionIdentity;
             set({
                 currentLibraryProjectId: projectId,
                 currentLibraryProjectRevision: result.project.revision ?? 1,
                 imageAssets: nextAssets,
                 projectName: result.project.name,
                 productProjectFields: extractProductProjectFields(normalizedPayload),
+                authoredRevision: createInitialAuthoredRevision({
+                    sessionIdentity: loadedSessionIdentity,
+                    projectIdentity: normalizedPayload.projectId,
+                }),
+                interactionMode: createCanvasEditingMode(
+                    loadedSessionIdentity,
+                    normalizedPages[safeActivePageIndex]?.id ?? null,
+                    'select',
+                ),
+                changeRevision: 0,
                 isProjectPresetsOpen: false,
                 pages: normalizedPages as any,
                 activePageIndex: safeActivePageIndex,
@@ -4648,12 +5069,16 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             activePageIndex: number;
             canvasSize: { width: number; height: number };
         }> = {
+            operationId: uuidv4(),
+            operationKind: 'autosave',
+            revisionDomain: 'canvas-change',
             sessionIdentity: stateAtStart.sessionIdentity,
             projectIdentity: stateAtStart.productProjectFields?.projectId
                 || currentLibraryProjectId,
             targetIdentity: currentLibraryProjectId,
             durableRevision: stateAtStart.currentLibraryProjectRevision,
             capturedRevision: stateAtStart.changeRevision,
+            authoredRevision: stateAtStart.authoredRevision,
             snapshot: {
                 pages: stateAtStart.pages,
                 imageAssets: stateAtStart.imageAssets,
@@ -4668,7 +5093,14 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 canvas,
                 operation.snapshot.pages,
                 operation.snapshot.imageAssets,
-                operation.snapshot.activePageIndex
+                operation.snapshot.activePageIndex,
+                {
+                    projectId: operation.projectIdentity,
+                    sessionIdentity: operation.sessionIdentity,
+                    authoredRevision: operation.authoredRevision,
+                    unitMode: stateAtStart.unitMode,
+                    sourceDpi: stateAtStart.productProjectFields?.document.pageSize.dpi,
+                },
             );
             const { db } = await import('../db');
             const targetProjectId = currentLibraryProjectId;
@@ -4723,7 +5155,9 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                     || current.currentLibraryProjectId
                     || 'canvas-session',
                 targetIdentity: current.currentLibraryProjectId,
+                revisionDomain: 'canvas-change',
                 revision: current.changeRevision,
+                authoredRevision: current.authoredRevision,
             })) return;
             set({
                 currentLibraryProjectId: targetProjectId,
@@ -4745,6 +5179,59 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             }
             throw error;
         }
+    },
+
+    updateCurrentProjectWithAcknowledgement: async () => {
+        const stateAtStart = get();
+        const context = createPersistenceOperationContext({
+            operationKind: 'autosave',
+            revisionDomain: 'canvas-change',
+            sessionIdentity: stateAtStart.sessionIdentity,
+            projectIdentity: stateAtStart.productProjectFields?.projectId
+                || stateAtStart.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: stateAtStart.currentLibraryProjectId,
+            durableRevision: stateAtStart.currentLibraryProjectRevision,
+            authoredRevision: stateAtStart.authoredRevision,
+            snapshot: {
+                pages: stateAtStart.pages,
+                imageAssets: stateAtStart.imageAssets,
+                activePageIndex: stateAtStart.activePageIndex,
+            },
+        });
+        if (!stateAtStart.canvas || !stateAtStart.currentLibraryProjectId) {
+            return acknowledgeFailure(context, 'The project is not eligible for autosave.');
+        }
+        try {
+            await get().updateCurrentProject();
+        } catch (error) {
+            const current = get();
+            if (current.toastMessage?.includes('another window')) {
+                return acknowledgeConflict(context);
+            }
+            return acknowledgeFailure(
+                context,
+                error instanceof Error ? error.message : 'The autosave was not confirmed.',
+            );
+        }
+        const current = get();
+        if (!persistenceOperationStillOwnsCurrentState(context, {
+            sessionIdentity: current.sessionIdentity,
+            projectIdentity: current.productProjectFields?.projectId
+                || current.currentLibraryProjectId
+                || 'canvas-session',
+            targetIdentity: current.currentLibraryProjectId,
+            revisionDomain: 'canvas-change',
+            revision: current.changeRevision,
+            authoredRevision: current.authoredRevision,
+        })) {
+            return acknowledgeStaleCompletion(context, 'The project changed while autosave was running.');
+        }
+        return acknowledgeDurableWrite(
+            context,
+            current.currentLibraryProjectId || context.projectIdentity,
+            current.currentLibraryProjectRevision ?? context.authoredRevision.sequence,
+        );
     },
 
     setAutoSaveStatus: (status) => set({ autoSaveStatus: status, saveStatus: deriveSaveStatus(status) }),
@@ -4847,7 +5334,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         const {
             currentLibraryProjectId,
             lifecycleAuthorityMode,
-            updateCurrentProject,
+            updateCurrentProjectWithAcknowledgement,
             setAutoSaveStatus,
         } = get();
         if (!currentLibraryProjectId || lifecycleAuthorityMode === 'shared') return;
@@ -4866,7 +5353,7 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             const sessionAtStart = get().sessionIdentity;
             const targetAtStart = get().currentLibraryProjectId;
             try {
-                await updateCurrentProject();
+                const acknowledgement = await updateCurrentProjectWithAcknowledgement();
                 if (get().lifecycleAuthorityMode === 'shared') return;
                 const current = get();
                 if (
@@ -4878,6 +5365,10 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
                 if (current.changeRevision !== revisionAtStart) {
                     setAutoSaveStatus('dirty');
                     get().triggerAutoSave();
+                    return;
+                }
+                if (!acknowledgementAllowsDirtyClear(acknowledgement)) {
+                    setAutoSaveStatus('error');
                     return;
                 }
                 set({ isDirty: false });

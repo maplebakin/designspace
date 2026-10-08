@@ -238,6 +238,16 @@ const defaultCreateTransactionId = (() => {
   };
 })();
 
+const reportDefaultSubscriberError = (
+  error: unknown,
+  channel: 'event' | 'transaction',
+) => {
+  console.error(
+    `[project-lifecycle] ${channel} subscriber failed while delivering a change.`,
+    error,
+  );
+};
+
 const noOp = () => undefined;
 
 /**
@@ -251,7 +261,7 @@ export const createProjectChangeCoordinator = (
   const now = options.now ?? (() => Date.now());
   const createTransactionId = options.createTransactionId
     ?? defaultCreateTransactionId;
-  const onSubscriberError = options.onSubscriberError ?? noOp;
+  const onSubscriberError = options.onSubscriberError ?? reportDefaultSubscriberError;
   const active = new Map<string, ActiveChange>();
   const eventListeners = new Set<ProjectChangeEventListener>();
   const transactionListeners = new Set<ProjectChangeTransactionListener>();
@@ -263,8 +273,13 @@ export const createProjectChangeCoordinator = (
   ) => {
     try {
       onSubscriberError(error, channel);
-    } catch {
-      // Diagnostics must never become part of the editor mutation path.
+    } catch (reportingError) {
+      // Error reporting must never become part of the editor mutation path,
+      // but a broken custom reporter is still visible to the host.
+      console.error(
+        '[project-lifecycle] Unable to report a change subscriber failure.',
+        reportingError,
+      );
     }
   };
 

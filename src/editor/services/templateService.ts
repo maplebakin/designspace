@@ -1,7 +1,11 @@
 import type { TemplateRecord } from '../db';
 import { assertIndexedDbStartupAllowed } from '../persistence/startupStorageRecovery';
+import {
+  assertPortableScene,
+  type CanonicalSerializedScene,
+} from '../scene/sceneSnapshot';
 
-export type TemplateCanvasSize = { width: number; height: number };
+export type TemplateCanvasSize = Readonly<{ width: number; height: number }>;
 
 export type SaveTemplateOptions = {
   unitMode?: string;
@@ -30,21 +34,20 @@ const toIsoTimestamp = (value: unknown, fallback: string) => {
   return date.toISOString();
 };
 
-const normalizeCanvasData = (canvasData: unknown): object => {
-  if (isObject(canvasData)) {
-    return canvasData;
-  }
+const normalizeCanvasData = (canvasData: unknown): CanonicalSerializedScene => {
+  let candidate: unknown = canvasData;
   if (typeof canvasData === 'string') {
     try {
-      const parsed = JSON.parse(canvasData) as unknown;
-      if (isObject(parsed)) {
-        return parsed;
-      }
+      candidate = JSON.parse(canvasData) as unknown;
     } catch {
-      // Ignore invalid JSON and fall through to default.
+      candidate = null;
     }
   }
-  return { objects: [] };
+  if (
+    !isObject(candidate)
+    || !Array.isArray(candidate.objects)
+  ) return { objects: [] };
+  return assertPortableScene(candidate);
 };
 
 const normalizeCanvasSize = (canvasSize: unknown): TemplateCanvasSize => {

@@ -55,6 +55,7 @@ import {
 import {
   normalizeDocumentAssetMetadata,
 } from '../../document/model/documentAssets';
+import type { CanonicalSerializedScene } from '../scene/sceneSnapshot';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
@@ -77,7 +78,8 @@ export type ExistingProjectPage = {
   kind?: 'canvas';
   id: string;
   name: string;
-  canvasData?: any;
+  /** Canonical page-space JSON, never a live Fabric instance. */
+  canvasData?: CanonicalSerializedScene;
   pages?: ExistingProjectPage[];
   activePageIndex?: number;
   canvasSize: { width: number; height: number };
@@ -189,7 +191,7 @@ export type ProductAwareProjectPayload<TPage = ExistingProjectPage> = ProductPro
   // Legacy editor payload fields kept for existing save/load compatibility.
   projectName: string;
   activePageIndex?: number;
-  canvasData?: any;
+  canvasData?: CanonicalSerializedScene;
   assets?: Record<string, string>;
   assetMetadata?: Record<string, DocumentAssetMetadata>;
   activeTheme?: unknown;

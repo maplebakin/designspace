@@ -3,6 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { SAFE_MARGIN_PX } from '../utils/units';
 import { normalizeSerializedObjectForFabric } from '../utils/serialization';
+import {
+  assertCanonicalSerializedScene,
+  type CanonicalSerializedScene,
+} from '../scene/sceneSnapshot';
 
 export const initFabricSerialization = () => {
   // Intentionally no-op: custom serialization handled via helpers.
@@ -17,7 +21,7 @@ export const isCanvasHydrating = (canvas: fabric.StaticCanvas) =>
 
 export const loadCanvasFromJsonSafely = async (
   canvas: fabric.StaticCanvas,
-  canvasData: string | Record<string, any>,
+  canvasData: string | CanonicalSerializedScene | Record<string, unknown>,
   reviver?: FabricReviver
 ) => {
   hydrationDepth.set(canvas, (hydrationDepth.get(canvas) ?? 0) + 1);
@@ -28,7 +32,11 @@ export const loadCanvasFromJsonSafely = async (
     // here so every load path -- project reopen, history replay, auxiliary
     // snapshots, and page switching -- accepts both representations.
     const parsed = typeof canvasData === 'string' ? JSON.parse(canvasData) : canvasData;
-    const normalized = normalizeSerializedObjectForFabric(parsed);
+    const canonical = assertCanonicalSerializedScene(parsed);
+    // Validation happens before the canonical Fabric revival adapter. A live
+    // object accidentally passed as JSON therefore fails at the boundary
+    // instead of being handed to a constructor as if it were plain data.
+    const normalized = normalizeSerializedObjectForFabric(canonical);
     await canvas.loadFromJSON(normalized, reviver);
   } finally {
     const nextDepth = (hydrationDepth.get(canvas) ?? 1) - 1;

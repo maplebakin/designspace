@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
-import { useThemeStore } from '../state/useThemeStore';
+import { buildCanvasExportSnapshot, DEFAULT_CANVAS_BACKGROUND, useEditorStore } from '../state/editorStore';
 import { advancedExportManager, type AdvancedExportFormat } from '../export/advancedExportManager';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 import { deliverFile, type FileBatchDeliveryResult, type FileDeliveryResult } from '../services/fileDeliveryService';
 import { useHistoryStore } from '../state/useHistoryStore';
+import { resolveCanvasSourceDpi } from '../scene/sceneSnapshot';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -25,11 +25,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     }),
     shallow
   );
-  const { canvasBackgroundColor } = useThemeStore(
-    (state) => ({ canvasBackgroundColor: state.canvasBackgroundColor }),
-    shallow
-  );
-
   const [includeBackground, setIncludeBackground] = useState(true);
   const [isExportLoading, setIsExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -38,8 +33,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const exportInFlightRef = useRef(false);
   const productZipInFlightRef = useRef(false);
   const fileName = projectName;
-  const sourceDpi = productProjectFields?.document?.pageSize?.dpi
-    || (unitMode === 'px' ? 96 : 300);
+  const sourceDpi = resolveCanvasSourceDpi(
+    unitMode,
+    productProjectFields?.document?.pageSize?.dpi,
+  );
   const canPackageProductZip = INTERNAL_PRODUCT_FORGE_ENABLED
     && !!canvas
     && pages.length > 0
@@ -95,14 +92,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     // before handing the canvas to the canonical export manager.
     useHistoryStore.getState().flushPendingSave();
     syncActivePageFromCanvas();
-    const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
     await runExport(async () => {
+      const state = useEditorStore.getState();
+      const activePage = state.pages[state.activePageIndex];
+      const authoredSnapshot = await buildCanvasExportSnapshot(canvas, {
+        pageId: activePage?.id,
+        unitMode: state.unitMode,
+        sourceDpi: state.productProjectFields?.document?.pageSize?.dpi,
+      });
       return advancedExportManager.export(canvas, format, {
         includeBackground,
-        backgroundColor: background,
+        backgroundColor: authoredSnapshot.scene.background || DEFAULT_CANVAS_BACKGROUND,
         dpi: unitMode === 'px' ? sourceDpi * 2 : 300,
-        sourceDpi,
+        sourceDpi: authoredSnapshot.sourceDpi,
         fileName,
+        authoredSnapshot,
       });
     });
   };
@@ -178,7 +182,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     syncActivePageFromCanvas();
     const nextPages = useEditorStore.getState().pages;
     const nextImageAssets = useEditorStore.getState().imageAssets;
-    const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
+    // Each durable page snapshot owns its background. This is only a legacy
+    // fallback for pages created before page JSON carried that field.
+    const background = DEFAULT_CANVAS_BACKGROUND;
     await runExport(async () => {
       return advancedExportManager.exportPagesPdf(nextPages.length > 0 ? nextPages : pages, {
         includeBackground,
@@ -196,7 +202,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     syncActivePageFromCanvas();
     const nextPages = useEditorStore.getState().pages;
     const nextImageAssets = useEditorStore.getState().imageAssets;
-    const background = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
+    // Each durable page snapshot owns its background. This is only a legacy
+    // fallback for pages created before page JSON carried that field.
+    const background = DEFAULT_CANVAS_BACKGROUND;
     const pagesForExport = nextPages.length > 0 ? nextPages : pages;
     await runExport(async () => {
       return advancedExportManager.exportPages(pagesForExport, format, {

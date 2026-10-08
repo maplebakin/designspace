@@ -306,6 +306,27 @@ describe('Unified Editor Phase 1D ProjectChangeCoordinator', () => {
     ]));
   });
 
+  it('makes required observation loss visible after the lifecycle coordinator is disposed', () => {
+    const coordinator = createProjectChangeCoordinator();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    coordinator.dispose();
+
+    const delivery = observeCommittedEngineChange(coordinator, pageObservation);
+
+    expect(delivery).toMatchObject({
+      status: 'not-delivered',
+      reason: 'coordinator-not-active',
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[project-lifecycle] Required committed mutation observation was not delivered.',
+      expect.objectContaining({
+        action: pageObservation.action,
+        reason: 'coordinator-not-active',
+      }),
+    );
+    errorSpy.mockRestore();
+  });
+
   it('does not change legacy dirty or revision state while observing', () => {
     useDocumentStore.getState().createBlankProject('Read-only observation');
     const before = useDocumentStore.getState();

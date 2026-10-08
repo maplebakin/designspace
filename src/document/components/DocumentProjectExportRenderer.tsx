@@ -17,6 +17,10 @@ import {
 import { DocumentPageView } from './DocumentPageView';
 import { TitleEditor } from './TitleEditor';
 import { FlowEditor } from './FlowEditor';
+import {
+  createDocumentExportSceneSnapshot,
+  type DocumentExportSceneSnapshot,
+} from '../../editor/scene/sceneSnapshot';
 
 type ExportPageSurfaceProps = {
   page: DocumentPage;
@@ -146,6 +150,9 @@ const CommittedDocumentPages = ({
 );
 
 export type MountedDocumentExportPages = {
+  /** Renderer-neutral authored snapshot captured before DOM/font awaits. */
+  snapshot: DocumentExportSceneSnapshot<DocumentProjectPayload>;
+  /** Compatibility projection for existing document export service callers. */
   project: DocumentProjectPayload;
   sources: DocumentExportPageSource[];
   cleanup: () => void;
@@ -179,7 +186,11 @@ export const mountCommittedDocumentExportPages = async (
   if (typeof document === 'undefined') {
     throw new Error('Document export rendering is unavailable.');
   }
-  const snapshot = cloneCommittedProject(project);
+  const committedProject = cloneCommittedProject(project);
+  const snapshot = createDocumentExportSceneSnapshot(
+    committedProject,
+    committedProject.pages.map((page) => page.id),
+  );
   const host = document.createElement('div');
   host.setAttribute('data-document-committed-export-host', 'true');
   host.setAttribute('aria-hidden', 'true');
@@ -197,7 +208,7 @@ export const mountCommittedDocumentExportPages = async (
 
   let reactRoot: Root | null = createRoot(host);
   const pageRoots: Array<HTMLDivElement | undefined> = Array.from({
-    length: snapshot.pages.length,
+    length: snapshot.project.pages.length,
   });
   let resolveRoots: (() => void) | null = null;
   const rootsReady = new Promise<void>((resolve) => {
@@ -216,7 +227,7 @@ export const mountCommittedDocumentExportPages = async (
 
   reactRoot.render(
     <CommittedDocumentPages
-      project={snapshot}
+      project={snapshot.project}
       onRootReady={onRootReady}
     />
   );
@@ -238,17 +249,18 @@ export const mountCommittedDocumentExportPages = async (
     await nextAnimationFrame();
 
     return {
-      project: snapshot,
-      sources: snapshot.pages.map((page, pageIndex) => ({
+      snapshot,
+      project: snapshot.project,
+      sources: snapshot.project.pages.map((page, pageIndex) => ({
         pageId: page.id,
         element: pageRoots[pageIndex] as HTMLDivElement,
         options: {
           widthIn: page.size.widthIn,
           heightIn: page.size.heightIn,
           dpi: page.size.dpi,
-          fileName: snapshot.projectName,
+          fileName: snapshot.project.projectName,
           backgroundColor:
-            snapshot.document.background?.value || DEFAULT_DOCUMENT_PAPER_COLOR,
+            snapshot.project.document.background?.value || DEFAULT_DOCUMENT_PAPER_COLOR,
         },
       })),
       cleanup,

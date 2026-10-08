@@ -2,6 +2,7 @@ import * as fabric from 'fabric';
 import { frameScheduler, TaskPriority } from './frameScheduler';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { isPersistableCanvasObject } from './objectUtils';
+import type { CanonicalSerializedObject } from '../scene/sceneSnapshot';
 
 // Filter interface for serialization
 interface SerializedFilter {
@@ -270,8 +271,8 @@ const getActiveSelectionForCanvas = (
   return parent?.type === 'activeSelection' ? parent as fabric.ActiveSelection : null;
 };
 
-export const toSerializableObject = (obj: fabric.Object) => {
-  return enrichSerializedTree(obj.toObject([...CUSTOM_PROPS]), obj);
+export const toSerializableObject = (obj: fabric.Object): CanonicalSerializedObject => {
+  return enrichSerializedTree(obj.toObject([...CUSTOM_PROPS]), obj) as CanonicalSerializedObject;
 };
 
 /**
@@ -284,7 +285,7 @@ export const toSerializableObject = (obj: fabric.Object) => {
 export const serializeCanvasObjects = (
   canvas: fabric.Canvas,
   filter: (object: fabric.Object) => boolean = isPersistableCanvasObject,
-) => {
+): CanonicalSerializedObject[] => {
   const liveObjects = canvas.getObjects();
   const activeSelection = getActiveSelectionForCanvas(canvas, liveObjects);
   const activeSelectionObjects = activeSelection
@@ -315,7 +316,7 @@ export const serializeCanvasObjects = (
       const pageSerialized = activeSelectionObjects.has(object) && activeSelection
         ? serializeActiveSelectionChild(object, activeSelection)
         : serialized ?? object.toObject([...CUSTOM_PROPS]);
-      return enrichSerializedTree(pageSerialized, object);
+      return enrichSerializedTree(pageSerialized, object) as CanonicalSerializedObject;
     });
 };
 

@@ -1293,3 +1293,313 @@ claimed here.
 
 B03 is complete for the browser/app contract. Native/platform acceptance and
 the remaining unstarted P1 clusters remain separate work.
+
+## P1 closure inventory and verdict (2026-09-15)
+
+This inventory supersedes the older planning language that described the
+clusters as unstarted. It is based on the verified remediation addenda above
+and the current browser/app scope; native/WebKitGTK acceptance remains a
+separate milestone.
+
+| Finding | Current P1 status | Closure basis |
+| --- | --- | --- |
+| A04 | **Verified closed** | Canonical page-space image serialization, recursive identity preservation, and Chromium durable/reopen evidence. |
+| A09 | **Verified closed** | Ordered layer synchronization and no-op identity preservation are covered by the Cluster 1 fix and its browser evidence. |
+| C01 | **Verified closed** | The Cluster 1 synchronization fix removes unnecessary Fabric replacement/churn while preserving object identity. |
+| A10 | **Verified closed** | Structured-fragment range mapping and masking are verified for the exercised browser contract. |
+| A11 | **Verified closed** | Reference-adjust pointer ownership is verified for the exercised browser contract. |
+| A12 | **Verified closed** | Page-size changes participate in the existing canvas history and pass Undo/Redo evidence. |
+| F01 | **Verified closed** | The three scoped Chromium failures (scanned-PDF reopen raster, fixed-photo reopen offset, and historical page-49 viewport baseline) are closed; native rendering remains platform work. |
+| B03 | **Verified closed** | The project-wide document authored-action journal and mixed-action Undo/Redo workflows are verified for the exercised Chromium/Fabric contract. |
+| B05 | **Verified closed** | The explicit interaction-mode contract prevents conflicting canvas/document/reference/overlay ownership for the exercised Chromium/Fabric workflows; native pointer cancellation remains platform work. |
+| A14 | **Superseded by another verified fix** | The browser/app P0 trust gate now covers the verified delivery/capture behavior. Native save/cancel/overlap and filesystem proof are explicitly tracked as the separate native/platform milestone, not open P1 implementation work. |
+
+### P1 verdict
+
+**P1 complete for the browser/app implementation contract.** No actual P1
+implementation item remains open. The native/platform acceptance milestone is
+still pending by design and is not reclassified as P1 implementation work.
+
+## P2 Cluster 1 — explicit state-boundary contracts (2026-09-15)
+
+This addendum records the first P2 stabilization pass after the browser/app
+P0 trust gate and P1 implementation closure. It is limited to scene snapshots,
+authored revisions, persistence acknowledgements, and interaction modes. It
+does not claim native/WebKitGTK acceptance.
+
+### Scene snapshot boundary
+
+`src/editor/scene/sceneSnapshot.ts` defines separate live-runtime,
+canonical-serialized, page, durable, template, and export snapshot types.
+Existing `serializeCanvasObjects` remains the sole live-to-serialized adapter;
+Fabric revival continues through `normalizeSerializedObjectForFabric` and
+`loadCanvasFromJsonSafely`. Boundary assertions reject live Fabric methods,
+non-page-space scenes, malformed nested objects, invalid dimensions, and
+session-only `blob:` resources at durable/template edges. Export snapshots are
+explicitly ephemeral and may retain a blob URL until the export adapter reads
+it, while their discriminant prevents them from being treated as durable data.
+
+Evidence: `scene-snapshot-contract.test.ts` covers live/serialized separation,
+coordinate-space validation, portable asset rejection, snapshot labeling, and
+ephemeral export behavior; the full durable-scene and Fabric/browser suites
+remain green.
+
+Remaining uncertainty: unsupported third-party Fabric classes and native
+revival behavior remain outside the browser contract.
+
+### Authored revision contract
+
+`src/editor/session/authoredRevision.ts` defines the session/project/page
+identity, sequence, draft/committed phase, source, and event contract. Canvas
+mutations, canvas Undo/Redo, the document authored-action journal, live text
+draft start/commit, page/layout/image/reference actions, and project
+replacement boundaries now advance through typed events. Repeated live draft
+updates do not advance the committed watermark; commit, mutation, Undo, Redo,
+and replacement boundaries do. Canvas and document numeric clocks remain
+engine-specific, with explicit `canvas-change`, `document-change`, and
+`shared-authored` revision domains rather than ambiguous duplicate versions.
+
+Evidence: `authored-revision-contract.test.ts`, the document chronology and
+live-typing browser workflows, the canvas history/reopen workflows, and the
+full 69-file Vitest suite pass.
+
+Remaining uncertainty: IME-specific native event ordering and native close
+behavior are not claimed here.
+
+### Persistence acknowledgement contract
+
+`src/editor/session/persistenceAcknowledgement.ts` and
+`persistenceOperation.ts` define discriminated operation/acknowledgement
+results for initiation, target allocation, durable commit, stale completion,
+conflict, browser download initiation, native confirmation, failure, and
+cancellation. Each result carries operation, revision-domain, session,
+project, target, page, authored revision, and captured revision context.
+Dirty clearing and lifecycle close/navigation now require an acknowledgement
+whose `canClearDirty` and durability are confirmed; browser download
+initiation is explicitly unconfirmed. Existing boolean adapters are bridged
+without changing their call sites' behavior until migrated.
+
+Evidence: `persistence-acknowledgement-contract.test.ts`, the first-save,
+stale-save, CAS/two-tab, failed-guard, browser-delivery, autosave, and close
+browser workflows pass. The full Vitest, Chromium, Python recovery, and Rust
+recovery suites pass.
+
+Remaining uncertainty: native save-dialog confirmation and native filesystem
+failure/cancellation evidence remain part of the separate platform milestone.
+
+### Interaction mode contract
+
+`src/editor/session/interactionMode.ts` defines discriminated canvas-editing,
+document-idle, text-editing (including structured fragments),
+photo-manipulation, overlay-manipulation, reference-adjustment, and modal
+modes with explicit
+surface, keyboard scope, selection authority, Escape behavior, and
+session/page identity. Transitions validate identity and page ownership.
+Document/Fabric native selection ownership remains intact; existing local
+selection projections are retained as one-way compatibility projections where
+needed, while delayed text/photo cleanup and competing overlay/reference
+selection paths now respect the mode owner.
+
+Evidence: `interaction-mode-contract.test.ts`,
+`unified-editor-authority-handoff.test.ts`, structured hit-testing, reference
+ownership, secondary-photo, document Undo chronology, and Fabric acceptance
+browser suites pass.
+
+Remaining uncertainty: the contract does not replace native ProseMirror/Fabric
+selection internals or provide the separate D01/D02 accessibility milestone.
+
+### P2 Cluster 1 validation
+
+* Boundary contract suite: **5 files, 30 tests passed**.
+* Full Vitest: **69 files, 699 tests passed**.
+* Required Chromium regression matrix (the P0 durable-boundary, P1 editing
+  integrity, Fabric, structured hit-testing, photo/reference ownership,
+  document Undo/autosave/live typing, reconstruction, and historical-layout
+  files): **100/100 passed** with serial workers.
+* `npm run lint`: passed with zero warnings.
+* `npx tsc --noEmit --pretty false`: passed.
+* `npm run build`: passed; Vite transformed **2,292 modules**.
+* `npm run test:recovery`: **3 Python tests passed**.
+* `cargo test --manifest-path src-tauri/Cargo.toml --locked`: **20 Rust tests
+  passed**.
+* `git diff --check`: passed before this ledger addendum; rerun after the
+  addendum also passes.
+
+### P2 Cluster 1 verdict
+
+**Cluster complete; proceed to next P2 work.**
+
+## P2 Cluster 2 — ownership, storage, lifecycle, and documentation reconciliation (2026-09-15)
+
+This addendum records the scoped B02/G01/G02/E06/H01 pass after P2 Cluster 1.
+It does not begin P3 performance work and does not claim native/WebKitGTK
+acceptance.
+
+### B02 — page, background, and export ownership
+
+The active canvas path now has one explicit ownership contract rather than
+several indistinguishable mutable copies:
+
+* `useCanvasStore` owns the active Fabric page's logical dimensions at runtime;
+  `ProjectPage.canvasSize`, `PageSceneSnapshot.canvasSize`, and history
+  checkpoints are durable/replay mirrors of that page-space geometry.
+* `useThemeStore.canvasBackgroundColor` owns authored canvas background state.
+  The Fabric paper and transparent Fabric canvas background are rendering
+  projections; page JSON/history snapshots receive the authored background at
+  their capture boundary.
+* `createAuthoredCanvasPageSnapshot` is the shared canvas persistence/export
+  boundary. Current-page capture reads live geometry once. All-page export uses
+  `createProjectPageExportSnapshot` and derives dimensions/background from each
+  durable `ProjectPage` mirror, with the explicit default only for legacy pages
+  that have no background field.
+* `resolveCanvasSourceDpi` is the shared unit/DPI conversion source. The
+  `AdvancedExportManager` remains the canonical Fabric export renderer, while
+  document export remains intentionally DOM/Tiptap-based; both consume typed
+  authored snapshots and typed delivery results.
+
+Evidence: `scene-snapshot-contract.test.ts`, `advanced-export-dpi.test.ts`,
+`editor-store-integration.test.ts`, the P0 durable-boundary export/reopen
+tests, page-size history tests, and the full browser matrix pass. The export
+contract test proves a page's serialized background wins over a mutable export
+fallback and that page dimensions/coordinate space are carried into the
+renderer-neutral snapshot.
+
+Remaining uncertainty: legacy pages without serialized background continue to
+use the documented default, and physical/native rendering remains part of the
+separate platform milestone.
+
+### G01 — obsolete single-span compositor
+
+`buildDocumentSpanLayoutModel`, `DocumentColumnSegment`, and the unused
+single-span segment helper were retired from
+`src/document/components/StructuredDocumentSpanLayout.tsx`. The six direct
+tests in `__tests__/document-editor.test.ts` were moved to
+`buildMultiDocumentSpanLayoutModel`, preserving allocation, image placement,
+and typography behavior coverage through the production compositor.
+
+Evidence: the old builder and helper names have no active source/test
+references; the document editor suite and full Vitest suite pass. Production
+browser reconstruction, structured hit-testing, photo selection, and
+historical layout tests all exercise the multi-span path.
+
+Remaining uncertainty: historical audit documents still mention the retired
+builder as context; they are not current production/API documentation.
+
+### G02 / E06 — auxiliary persistence ownership
+
+Current owners are explicit in
+`docs/architecture/state-boundary-contracts.md`:
+
+* templates: `templateService` and `DesignSpaceDB.templates`, with legacy
+  `designspace-editor.userTemplates` as a transactional migration source;
+* Brand Vault: persisted `designspace-theme` state;
+* Brand Kit: `DesignSpaceDB.brandKit` through `useThemeStore` actions;
+* palette vault/recent colours: persisted `designspace-theme` state;
+* Vision Board: bounded `designspace-vision-board` state for board items and
+  board size; design-state items carry portable scene/assets;
+* uploaded sticker/inserter items: mounted `useEditorStore.assets` session
+  state only; inserted artwork is a project-owned asset;
+* `witchclick_assets_db`: no active product owner. Its old rows and deprecated
+  inspection/migration/recovery APIs remain compatibility-readable, but the
+  application no longer writes the template/Brand Vault mirror path.
+
+The Brand Vault mirror writes were removed. Store-level template saving now
+routes through `templateService`; Vision Board persistence filters
+session-only `blob:` source/thumbnail capabilities without mutating live state
+or deleting historical rows. The UI now calls sticker uploads “Session
+Assets” and states that only inserted artwork is saved with the project.
+
+Evidence: `rg` finds no production imports of the old `utils/indexedDb.ts`
+APIs; the only remaining definitions are explicitly deprecated compatibility
+functions. The P0 template/Vision Board durable tests and real IndexedDB
+migration/recovery tests pass, as do the Vision Board persistence contract and
+full Vitest suites.
+
+Remaining uncertainty: old auxiliary rows are retained for inspection and are
+not silently represented as standard project-recovery output; a future,
+explicit migration/recovery tool would need its own acceptance evidence.
+
+### Observer/lifecycle contract
+
+Routed renderer adapters now require a `ProjectChangeCoordinator`. Committed
+observation delivery returns a discriminated `delivered` or `not-delivered`
+result, with coordinator disposal/errors logged as required lifecycle
+failures. Page mutation adapters preserve terminal transaction handling and
+report failures instead of silently treating required observations as
+diagnostics. Standalone legacy mounts remain an explicit compatibility case;
+the optional diagnostic shadow stream is not used for dirty state or
+persistence. Subscriber/reporting failures are visible at the coordinator
+boundary.
+
+Evidence: `projectChangeAdapters.ts`, `projectChangeCoordinator.ts`, the
+legacy renderer adapters, `unified-editor-phase-1d.test.ts`, authority tests,
+the full Vitest suite, and the unified browser workflows pass.
+
+### H01 — current architecture truth
+
+Updated current documentation:
+
+* new `docs/architecture/state-boundary-contracts.md` for scene, revision,
+  acknowledgement, interaction, page/export, auxiliary-storage, lifecycle,
+  and recovery contracts;
+* `docs/architecture/document-persistence-and-assets.md` for actual compaction
+  boundaries, runtime asset retention, and recovery scope;
+* `docs/architecture/document-export.md` for frozen typed snapshots and the
+  browser/native delivery distinction;
+* `docs/implementation/unified-editor-authority-handoff.md` to label the
+  handoff as historical and supersede its broad coverage interpretation.
+
+The docs now distinguish current verified browser/app guarantees from
+historical counts/findings, engine-specific Canvas/Document history, native
+acceptance gaps, session-only resources, and compatibility rows. Asset
+compaction is described as a durable-payload boundary rather than live-store
+eviction; lifecycle observation is required on routed paths; authored revision
+and persistence acknowledgement semantics are explicit; recovery does not
+claim to reconstruct session blob capabilities or silently recover the old
+auxiliary database as active product data.
+
+Remaining uncertainty: the native milestone, dependency advisories, and other
+out-of-scope historical findings remain open and are intentionally not
+reclassified by this pass.
+
+### Recovery and migration safety
+
+No historical auxiliary rows, forensic duplicate project rows, or legacy
+payloads were deleted. The legacy localStorage template source is removed only
+after a complete Dexie transaction commits; failed migration leaves its source
+and migration flag recoverable. Production schema migration continues to
+remove only the obsolete large indexes while preserving row values and
+duplicate evidence. Vision Board rehydration ignores unusable blob URLs but
+does not rewrite/delete old storage solely because the current UI cannot use
+them.
+
+Evidence: P0 real IndexedDB tests for schema upgrade, failed index migration,
+legacy template migration rollback, and two-tab revision conflict all pass;
+Python recovery is 3/3 and Rust recovery is 20/20.
+
+### P2 Cluster 2 validation
+
+* Focused state-boundary/persistence/history/export/lifecycle set: **22 files,
+  238 tests passed**.
+* Full Vitest: **70 files, 706 tests passed**.
+* Required serial Chromium matrix: **100/100 passed** in the clean run, with
+  P0 durable boundary **17/17**, P1 editing integrity **3/3**, Fabric
+  acceptance **31/31**, structured hit-testing **6/6**, secondary photo
+  selection **8/8**, photo-transform alignment **1/1**, document Undo
+  chronology **8/8**, autosave/live typing **4/4**, live typing performance
+  **2/2**, reconstruction page-space **13/13**, and historical layout **7/7**.
+  A later repeat observed one timing-sensitive width-zero reopen failure
+  (**99/100**); the isolated case passed **1/1**, and the complete
+  reconstruction file passed **13/13** immediately afterward. No
+  implementation change was made for that non-reproducible repeat.
+* `npm run lint`: passed with zero warnings.
+* `npx tsc --noEmit --pretty false`: passed.
+* `npm run build`: passed; Vite transformed **2,290 modules**.
+* `npm run test:recovery`: **3 Python tests passed**.
+* `cargo test --manifest-path src-tauri/Cargo.toml --locked`: **20 Rust tests
+  passed**; doc tests had no cases.
+* `git diff --check`: passed.
+
+### P2 Cluster 2 verdict
+
+**Cluster complete; proceed to next P2 work.**

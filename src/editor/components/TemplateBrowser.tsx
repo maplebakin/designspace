@@ -2,12 +2,10 @@
 import React from 'react';
 import { shallow } from 'zustand/shallow';
 import {
-    DEFAULT_CANVAS_BACKGROUND,
     buildPortableCanvasSnapshot,
     useEditorStore,
     Template,
 } from '../state/editorStore';
-import { useCanvasStore } from '../state/useCanvasStore';
 import { useThemeStore } from '../state/useThemeStore';
 import type { ApocapaletteTheme } from '../types/apocapalette';
 import { PRINT_DPI } from '../utils/units';
@@ -223,11 +221,10 @@ export const TemplateBrowser: React.FC = () => {
         }),
         shallow
     );
-    const { themeData, activeBrandCollectionId, canvasBackgroundColor } = useThemeStore(
+    const { themeData, activeBrandCollectionId } = useThemeStore(
         (state) => ({
             themeData: state.themeData,
             activeBrandCollectionId: state.activeBrandCollectionId,
-            canvasBackgroundColor: state.canvasBackgroundColor,
         }),
         shallow
     );
@@ -473,7 +470,6 @@ export const TemplateBrowser: React.FC = () => {
             return;
         }
 
-        const pageBackground = canvasBackgroundColor || DEFAULT_CANVAS_BACKGROUND;
         let portable: Awaited<ReturnType<typeof buildPortableCanvasSnapshot>>;
         try {
             portable = await buildPortableCanvasSnapshot(
@@ -488,9 +484,10 @@ export const TemplateBrowser: React.FC = () => {
             );
             return;
         }
+        const pageBackground = portable.snapshot.backgroundColor;
+        const pageSize = portable.snapshot.dimensions.canvasSize;
         const canvasData = {
-            ...portable.canvasData,
-            background: pageBackground,
+            ...portable.snapshot.scene,
             assets: portable.assets,
         };
         const templateName = `Template ${new Date().toISOString()}`;
@@ -502,14 +499,10 @@ export const TemplateBrowser: React.FC = () => {
                 backgroundColor: pageBackground,
             });
             const thumbnail = await blobToDataUrl(thumbnailBlob);
-            const { width, height } = useCanvasStore.getState();
             await saveTemplate(
                 templateName,
                 canvasData,
-                {
-                    width: Math.max(1, Math.round(width)),
-                    height: Math.max(1, Math.round(height)),
-                },
+                pageSize,
                 thumbnail,
                 {
                     unitMode,
@@ -521,14 +514,10 @@ export const TemplateBrowser: React.FC = () => {
         } catch {
             try {
                 const fallbackThumbnail = canvas.toDataURL({ multiplier: 0.1 });
-                const { width, height } = useCanvasStore.getState();
                 await saveTemplate(
                     templateName,
                     canvasData,
-                    {
-                        width: Math.max(1, Math.round(width)),
-                        height: Math.max(1, Math.round(height)),
-                    },
+                    pageSize,
                     fallbackThumbnail,
                     {
                         unitMode,

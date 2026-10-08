@@ -70,6 +70,7 @@ import {
   setDurableWriteBarrierForTests,
   type DurableWriteBoundary,
 } from '../db';
+import type { AuthoredRevisionEvent } from '../session/authoredRevision';
 
 const ICON_SMALL = 'icon-muted w-4 h-4 stroke-[1.5]';
 const CHROME_BUTTON = 'ui-button-soft group flex items-center gap-2 px-4 py-2 rounded-full text-[11px] uppercase tracking-widest';
@@ -82,7 +83,7 @@ interface EditorShellProps {
   onBackToDashboard?: () => void;
   useSharedChrome?: boolean;
   sharedPageStrip?: React.ReactNode;
-  onAuthoredMutation?: () => void;
+  onAuthoredMutation?: (event?: AuthoredRevisionEvent) => void;
   onCommittedCanvasMutation?: (mutation: CanvasCommittedMutation) => void;
 }
 
@@ -121,7 +122,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
     redo,
     projectName,
     renameCurrentProject,
-    downloadProjectFile,
+    downloadProjectFileWithAcknowledgement,
     productProjectFields,
     pages,
     activePageIndex,
@@ -153,7 +154,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
     redo: state.redo,
     projectName: state.projectName,
     renameCurrentProject: state.renameCurrentProject,
-    downloadProjectFile: state.downloadProjectFile,
+    downloadProjectFileWithAcknowledgement: state.downloadProjectFileWithAcknowledgement,
     productProjectFields: state.productProjectFields,
     pages: state.pages,
     activePageIndex: state.activePageIndex,
@@ -1042,7 +1043,7 @@ export const EditorShell: React.FC<EditorShellProps> = ({
         <div className="design-space-narrow-recovery-actions">
           <button
             type="button"
-            onClick={() => void downloadProjectFile()}
+            onClick={() => void downloadProjectFileWithAcknowledgement()}
             className="ui-button-soft"
           >
             <Download className={ICON_SMALL} aria-hidden="true" />

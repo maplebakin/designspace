@@ -55,7 +55,8 @@ export const StickerTab: React.FC = () => {
             return;
         }
 
-        // Extract metadata and add to library
+        // Extract metadata and add to the current session collection. Inserted
+        // project images are persisted with the project; this collection is not.
         const metadata = extractFileMetadata(file);
         const stickerData: StickerData = {
             id: result.id,
@@ -78,7 +79,7 @@ export const StickerTab: React.FC = () => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 stroke-[1.5] text-[color:var(--ui-panel-text)] opacity-70" />
                 <input
                     type="text"
-                    placeholder="Search assets..."
+                    placeholder="Search session assets..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 text-sm bg-white/10 border border-white/10 rounded-lg text-[color:var(--ui-panel-text)] placeholder:text-[color:var(--ui-panel-text)] placeholder:opacity-60 focus:outline-none focus:ring-1 focus:ring-[color:var(--brand-primary)]"
@@ -88,7 +89,7 @@ export const StickerTab: React.FC = () => {
             <div className="flex-1 overflow-y-auto">
                 {filteredAssets.length === 0 ? (
                     <div className="rounded-2xl border border-[color:var(--ui-border)] p-6 text-center text-sm text-[color:var(--ui-panel-text)] shadow-[0_16px_30px_rgba(0,0,0,0.25)]" style={{ backgroundColor: panelSurface, backdropFilter: `blur(${glassBlur})` }}>
-                        No items in your library yet. Upload transparent PNGs to begin your collection.
+                        No session assets yet. Upload transparent PNGs to use during this editing session.
                     </div>
                 ) : (
                     <div className="grid grid-cols-2 gap-3">
@@ -120,6 +121,9 @@ export const StickerTab: React.FC = () => {
             </div>
 
             <div className="mt-6 border-t border-white/10 pt-4">
+                <p className="mb-3 text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]/60">
+                    Session-only uploads; inserted artwork is saved with the project.
+                </p>
                 <input
                     type="file"
                     accept="image/png"
@@ -132,7 +136,7 @@ export const StickerTab: React.FC = () => {
                     className="group w-full flex items-center justify-center gap-2 px-4 py-2 bg-white/5 text-[color:var(--ui-panel-text)] rounded-lg hover:bg-white/10 transition-all duration-300 ease-in-out text-xs uppercase tracking-widest"
                 >
                     <Upload className="w-5 h-5 stroke-[1.5] text-[color:var(--muted-icon)] group-hover:text-[color:var(--brand-primary)] transition-all duration-300 ease-in-out" />
-                    Add Asset
+                    Add Session Asset
                 </button>
             </div>
         </div>

@@ -58,8 +58,31 @@ import {
 import { flushDocumentLiveDrafts } from '../services/documentLiveDraft';
 import {
   persistenceOperationStillOwnsCurrentState,
+  createPersistenceOperationContext,
   type PersistenceOperationContext,
 } from '../../editor/session/persistenceOperation';
+import {
+  acknowledgeConflict,
+  acknowledgeDurableWrite,
+  acknowledgeFailure,
+  acknowledgeFileDelivery,
+  acknowledgeStaleCompletion,
+  acknowledgementAllowsDirtyClear,
+  type PersistenceAcknowledgement,
+} from '../../editor/session/persistenceAcknowledgement';
+import {
+  createDocumentIdleMode,
+  createOverlayManipulationMode,
+  createPhotoManipulationMode,
+  createReferenceAdjustmentMode,
+  transitionInteractionMode,
+  type InteractionMode,
+} from '../../editor/session/interactionMode';
+import {
+  advanceAuthoredRevision,
+  createInitialAuthoredRevision,
+  type AuthoredRevision,
+} from '../../editor/session/authoredRevision';
 
 export type DocumentSaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 export type DocumentLifecycleAuthorityMode = 'legacy' | 'shared';
@@ -84,8 +107,12 @@ type DocumentStoreState = {
   lifecycleAuthorityMode: DocumentLifecycleAuthorityMode;
   /** Runtime-only explanation for the latest legacy dirty transition. */
   lastDirtyReason: DocumentLegacyDirtyReason | null;
+  /** Typed authored-state contract; revision remains a legacy persistence fence. */
+  authoredRevision: AuthoredRevision;
   revision: number;
   zoom: number;
+  /** One discriminated owner for document pointer/keyboard interaction. */
+  interactionMode: InteractionMode;
   isReferenceAdjustMode: boolean;
   /**
    * Compatibility mirrors for legacy adapters. Document UI selection is
@@ -105,7 +132,9 @@ type DocumentStoreState = {
   loadLibraryProject: (projectId: string) => Promise<void>;
   loadProjectFile: (file: File) => Promise<void>;
   saveProject: (name?: string) => Promise<boolean>;
+  saveProjectWithAcknowledgement: (name?: string) => Promise<PersistenceAcknowledgement>;
   downloadProjectFile: () => Promise<FileDeliveryResult | null>;
+  downloadProjectFileWithAcknowledgement: () => Promise<PersistenceAcknowledgement | null>;
   renameProject: (name: string) => void;
   updateDocumentBackground: (value: string) => void;
   updateDocumentLanguage: (language: string) => void;
@@ -180,12 +209,16 @@ type DocumentStoreState = {
   removeOverlay: (id: string, pageId?: string) => boolean;
   setReference: (reference?: ScanReference, pageId?: string) => void;
   setZoom: (zoom: number) => void;
+  setInteractionMode: (mode: InteractionMode) => boolean;
   setReferenceAdjustMode: (enabled: boolean) => void;
   setSelectedOverlayId: (id: string | null) => void;
   setSelectedFlowImageId: (id: string | null) => void;
   setOverflowing: (overflowing: boolean) => void;
   setToastMessage: (message: string | null) => void;
   flushAutosave: (options?: { allowSharedAuthority?: boolean }) => Promise<boolean>;
+  flushAutosaveWithAcknowledgement: (
+    options?: { allowSharedAuthority?: boolean }
+  ) => Promise<PersistenceAcknowledgement>;
   setLifecycleAuthorityMode: (mode: DocumentLifecycleAuthorityMode) => void;
   reset: () => void;
 };
@@ -546,11 +579,12 @@ const queueAutosave = () => {
   autosaveTimer = setTimeout(() => {
     autosaveTimer = null;
     if (useDocumentStore.getState().lifecycleAuthorityMode === 'shared') return;
-    void useDocumentStore.getState().flushAutosave();
+    void useDocumentStore.getState().flushAutosaveWithAcknowledgement();
   }, 900);
 };
 
-const persistNavigationState = async (): Promise<boolean> => {
+const persistNavigationState = async (): Promise<PersistenceAcknowledgement> => {
+  const stateAtStart = useDocumentStore.getState();
   const {
     currentLibraryProjectId,
     currentLibraryProjectRevision,
@@ -558,13 +592,29 @@ const persistNavigationState = async (): Promise<boolean> => {
     lastDirtyReason,
     project,
     revision,
-  } = useDocumentStore.getState();
+    authoredRevision,
+    sessionIdentity,
+  } = stateAtStart;
+  const operation = createPersistenceOperationContext({
+    operationKind: 'autosave',
+    revisionDomain: 'document-change',
+    sessionIdentity,
+    projectIdentity: project?.projectId || 'document-session',
+    targetIdentity: currentLibraryProjectId,
+    durableRevision: currentLibraryProjectRevision,
+    capturedRevision: revision,
+    authoredRevision,
+    snapshot: project,
+  });
   if (
     !currentLibraryProjectId
     || !isDirty
     || lastDirtyReason !== 'navigation-persistence'
     || !project
-  ) return false;
+  ) return acknowledgeFailure(
+    operation,
+    'The document is not eligible for navigation persistence.',
+  );
 
   const sessionAtStart = projectSessionToken;
   let durableRevision = currentLibraryProjectRevision ?? 1;
@@ -574,7 +624,7 @@ const persistNavigationState = async (): Promise<boolean> => {
   useDocumentStore.setState({ saveStatus: 'saving' });
   try {
     await enqueueDocumentPersistenceWrite(async () => {
-      if (projectSessionToken !== sessionAtStart) return false;
+      if (projectSessionToken !== sessionAtStart) return;
       const { db } = await import('../../editor/db');
       durableRevision = await updateDocumentLibraryProject(
         db as DocumentLibraryDb,
@@ -585,36 +635,66 @@ const persistNavigationState = async (): Promise<boolean> => {
         durableRevision,
       );
     });
-    if (projectSessionToken !== sessionAtStart) return false;
+    if (projectSessionToken !== sessionAtStart) {
+      return acknowledgeStaleCompletion(
+        operation,
+        'The document session changed while navigation persistence was running.',
+      );
+    }
     const current = useDocumentStore.getState();
-    const hasNewerChanges = current.revision !== revision;
-    useDocumentStore.setState({
-      ...(hasNewerChanges ? {} : {
-        project: {
-          ...payload,
-          // Compaction is for the durable snapshot. Keep the live asset map
-          // intact so an undo/history or a still-mounted editor can recover a
-          // source that is no longer reachable from the saved page graph.
-          assets: current.project?.assets ?? payload.assets,
-          assetMetadata: current.project?.assetMetadata ?? payload.assetMetadata,
-        },
-      }),
-      isDirty: hasNewerChanges,
-      saveStatus: hasNewerChanges ? 'unsaved' : 'saved',
-      currentLibraryProjectRevision: durableRevision,
-      ...(hasNewerChanges ? {} : { lastDirtyReason: null }),
+    const ownsCurrentState = persistenceOperationStillOwnsCurrentState(operation, {
+      sessionIdentity: current.sessionIdentity,
+      projectIdentity: current.project?.projectId || 'document-session',
+      targetIdentity: current.currentLibraryProjectId,
+      revisionDomain: 'document-change',
+      revision: current.revision,
+      authoredRevision: current.authoredRevision,
     });
-    if (hasNewerChanges) {
+    if (!ownsCurrentState) {
+      useDocumentStore.setState({
+        currentLibraryProjectRevision: durableRevision,
+      });
       if (current.lastDirtyReason === 'navigation-persistence') {
         queueNavigationPersistence();
       } else if (current.lifecycleAuthorityMode === 'legacy') {
         queueAutosave();
       }
+      return acknowledgeStaleCompletion(
+        operation,
+        'The document changed while navigation persistence was running.',
+      );
     }
-    return true;
+    const acknowledgement = acknowledgeDurableWrite(
+      operation,
+      currentLibraryProjectId,
+      durableRevision,
+    );
+    if (!acknowledgementAllowsDirtyClear(acknowledgement)) {
+      return acknowledgement;
+    }
+    useDocumentStore.setState({
+      project: {
+        ...payload,
+        // Compaction is for the durable snapshot. Keep the live asset map
+        // intact so an undo/history or a still-mounted editor can recover a
+        // source that is no longer reachable from the saved page graph.
+        assets: current.project?.assets ?? payload.assets,
+        assetMetadata: current.project?.assetMetadata ?? payload.assetMetadata,
+      },
+      isDirty: false,
+      saveStatus: 'saved',
+      currentLibraryProjectRevision: durableRevision,
+      lastDirtyReason: null,
+    });
+    return acknowledgement;
   } catch (error) {
     console.error('Document navigation persistence failed:', error);
-    if (projectSessionToken !== sessionAtStart) return false;
+    if (projectSessionToken !== sessionAtStart) {
+      return acknowledgeStaleCompletion(
+        operation,
+        'The document session changed while navigation persistence was running.',
+      );
+    }
     useDocumentStore.setState({
       isDirty: true,
       saveStatus: 'error',
@@ -622,7 +702,14 @@ const persistNavigationState = async (): Promise<boolean> => {
         ? 'This document changed in another window. Reload it before saving again so neither version is lost.'
         : 'Could not persist the active document page.',
     });
-    return false;
+    return isDurableRevisionConflict(error)
+      ? acknowledgeConflict(operation)
+      : acknowledgeFailure(
+          operation,
+          error instanceof Error
+            ? error.message
+            : 'Could not persist the active document page.',
+        );
   }
 };
 
@@ -643,12 +730,27 @@ const markDirty = (
   const hadAuthoredDirtyState = before.isDirty
     && before.lastDirtyReason === 'authored-content';
   if (reason === 'authored-content') cancelNavigationPersistence();
-  set((state) => ({
-    isDirty: true,
-    saveStatus: 'unsaved',
-    lastDirtyReason: reason,
-    revision: state.revision + 1,
-  }));
+  set((state) => {
+    const currentAuthoredRevision = state.authoredRevision
+      ?? createInitialAuthoredRevision({
+        sessionIdentity: state.sessionIdentity,
+        projectIdentity: state.project?.projectId || 'document-session',
+      });
+    const nextAuthoredRevision = reason === 'authored-content'
+      ? advanceAuthoredRevision(currentAuthoredRevision, {
+          kind: 'mutation',
+          source: 'document',
+          pageId: state.project?.pages[getActivePageIndex(state.project)]?.id ?? null,
+        })
+      : currentAuthoredRevision;
+    return {
+      isDirty: true,
+      saveStatus: 'unsaved',
+      lastDirtyReason: reason,
+      authoredRevision: nextAuthoredRevision,
+      revision: state.revision + 1,
+    };
+  });
   const current = useDocumentStore.getState();
   if (!current.currentLibraryProjectId) return;
   if (reason === 'navigation-persistence') {
@@ -757,17 +859,24 @@ const safeProjectFileName = (name: string) => {
   return `${safe || 'Untitled Document'}.apocaproject.json`;
 };
 
+const initialSessionIdentity = uuidv4();
+
 const initialState = {
   project: null,
   currentLibraryProjectId: null,
   currentLibraryProjectRevision: null,
-  sessionIdentity: uuidv4(),
+  sessionIdentity: initialSessionIdentity,
   isDirty: false,
   saveStatus: 'saved' as DocumentSaveStatus,
   lifecycleAuthorityMode: 'legacy' as DocumentLifecycleAuthorityMode,
   lastDirtyReason: null as DocumentLegacyDirtyReason | null,
+  authoredRevision: createInitialAuthoredRevision({
+    sessionIdentity: initialSessionIdentity,
+    projectIdentity: 'document-session',
+  }),
   revision: 0,
   zoom: 0.75,
+  interactionMode: createDocumentIdleMode(initialSessionIdentity, null),
   isReferenceAdjustMode: false,
   selectedOverlayId: null,
   selectedFlowImageId: null,
@@ -786,11 +895,17 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     documentLoadRequestToken += 1;
     const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = createBlankDocumentProject(name);
+    const sessionIdentity = uuidv4();
     set({
       ...initialState,
       project,
       lifecycleAuthorityMode,
-      sessionIdentity: uuidv4(),
+      sessionIdentity,
+      authoredRevision: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: project.projectId,
+      }),
+      interactionMode: createDocumentIdleMode(sessionIdentity, project.pages[0]?.id ?? null),
     });
     return project;
   },
@@ -803,6 +918,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     documentLoadRequestToken += 1;
     const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
     const project = normalizeDocumentPayload(payload);
+    const sessionIdentity = uuidv4();
     set({
       ...initialState,
       project,
@@ -811,7 +927,12 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         ? libraryProjectRevision ?? null
         : null,
       lifecycleAuthorityMode,
-      sessionIdentity: uuidv4(),
+      sessionIdentity,
+      authoredRevision: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: project.projectId,
+      }),
+      interactionMode: createDocumentIdleMode(sessionIdentity, project.pages[0]?.id ?? null),
     });
     return project;
   },
@@ -854,12 +975,18 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     cancelNavigationPersistence();
     projectSessionToken += 1;
     const lifecycleAuthorityMode = get().lifecycleAuthorityMode;
+    const sessionIdentity = uuidv4();
     set({
       ...initialState,
       project,
       currentLibraryProjectId: null,
       lifecycleAuthorityMode,
-      sessionIdentity: uuidv4(),
+      sessionIdentity,
+      authoredRevision: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: project.projectId,
+      }),
+      interactionMode: createDocumentIdleMode(sessionIdentity, project.pages[0]?.id ?? null),
       toastMessage: `Opened document: ${project.projectName}`,
     });
   },
@@ -877,11 +1004,15 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     const libraryIdAtStart = get().currentLibraryProjectId;
     const durableRevisionAtStart = get().currentLibraryProjectRevision;
     const operation: PersistenceOperationContext<DocumentProjectPayload> = {
+      operationId: uuidv4(),
+      operationKind: 'project-save',
+      revisionDomain: 'document-change',
       sessionIdentity: sessionIdentityAtStart,
       projectIdentity: project.projectId,
       targetIdentity: libraryIdAtStart,
       durableRevision: durableRevisionAtStart,
       capturedRevision: revisionAtStart,
+      authoredRevision: get().authoredRevision,
       snapshot: updateProjectTimestamp(
         compactDocumentProjectForPersistence(project),
         safeName
@@ -1032,15 +1163,65 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     }
   },
 
+  saveProjectWithAcknowledgement: async (name) => {
+    flushDocumentLiveDrafts();
+    const stateAtStart = get();
+    const context = createPersistenceOperationContext({
+      operationKind: 'project-save',
+      revisionDomain: 'document-change',
+      sessionIdentity: stateAtStart.sessionIdentity,
+      projectIdentity: stateAtStart.project?.projectId || 'document-session',
+      targetIdentity: stateAtStart.currentLibraryProjectId,
+      durableRevision: stateAtStart.currentLibraryProjectRevision,
+      capturedRevision: stateAtStart.revision,
+      authoredRevision: stateAtStart.authoredRevision,
+      snapshot: stateAtStart.project,
+    });
+    let succeeded = false;
+    try {
+      succeeded = await get().saveProject(name);
+    } catch (error) {
+      return acknowledgeFailure(
+        context,
+        error instanceof Error ? error.message : 'The document could not be saved.',
+      );
+    }
+    const current = get();
+    const sameAuthoredState = current.sessionIdentity === context.sessionIdentity
+      && current.project?.projectId === context.projectIdentity
+      && current.revision === context.capturedRevision
+      && current.authoredRevision.sequence === context.authoredRevision.sequence;
+    const targetStillOwned = context.targetIdentity === null
+      || current.currentLibraryProjectId === context.targetIdentity;
+    if (!sameAuthoredState || !targetStillOwned) {
+      return acknowledgeStaleCompletion(context, 'The document changed while the save was running.');
+    }
+    if (!succeeded) {
+      const conflict = current.toastMessage?.includes('another window');
+      return conflict
+        ? acknowledgeConflict(context)
+        : acknowledgeFailure(context, 'The document save was not confirmed.');
+    }
+    return acknowledgeDurableWrite(
+      context,
+      current.currentLibraryProjectId || context.targetIdentity || context.projectIdentity,
+      current.currentLibraryProjectRevision ?? context.authoredRevision.sequence,
+    );
+  },
+
   downloadProjectFile: async () => {
     flushDocumentLiveDrafts();
     const project = get().project;
     if (!project) return null;
     const operation: PersistenceOperationContext<DocumentProjectPayload> = {
+      operationId: uuidv4(),
+      operationKind: 'project-download',
+      revisionDomain: 'document-change',
       sessionIdentity: get().sessionIdentity,
       projectIdentity: project.projectId,
       targetIdentity: get().currentLibraryProjectId,
       capturedRevision: get().revision,
+      authoredRevision: get().authoredRevision,
       snapshot: project,
     };
     const payload = updateProjectTimestamp(
@@ -1073,16 +1254,19 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       sessionIdentity: current.sessionIdentity,
       projectIdentity: current.project?.projectId || '',
       targetIdentity: current.currentLibraryProjectId,
+      revisionDomain: 'document-change',
       revision: current.revision,
+      authoredRevision: current.authoredRevision,
     })) {
       return delivery;
     }
-    if (delivery.status === 'saved') {
+    const acknowledgement = acknowledgeFileDelivery(operation, delivery);
+    if (acknowledgementAllowsDirtyClear(acknowledgement)) {
       set({
         isDirty: false,
         saveStatus: 'saved',
         lastDirtyReason: null,
-        toastMessage: delivery.path
+        toastMessage: delivery.status === 'saved' && delivery.path
           ? `Downloaded project to ${delivery.path}`
           : `Downloaded project: ${payload.projectName}`,
       });
@@ -1093,6 +1277,37 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       });
     }
     return delivery;
+  },
+
+  downloadProjectFileWithAcknowledgement: async () => {
+    const stateAtStart = get();
+    const context = createPersistenceOperationContext({
+      operationKind: 'project-download',
+      revisionDomain: 'document-change',
+      sessionIdentity: stateAtStart.sessionIdentity,
+      projectIdentity: stateAtStart.project?.projectId || 'document-session',
+      targetIdentity: stateAtStart.currentLibraryProjectId,
+      durableRevision: stateAtStart.currentLibraryProjectRevision,
+      capturedRevision: stateAtStart.revision,
+      authoredRevision: stateAtStart.authoredRevision,
+      snapshot: stateAtStart.project,
+    });
+    const delivery = await get().downloadProjectFile();
+    if (!delivery) {
+      return acknowledgeFailure(context, 'The document is not ready to download.');
+    }
+    const current = get();
+    if (!persistenceOperationStillOwnsCurrentState(context, {
+      sessionIdentity: current.sessionIdentity,
+      projectIdentity: current.project?.projectId || 'document-session',
+      targetIdentity: current.currentLibraryProjectId,
+      revisionDomain: 'document-change',
+      revision: current.revision,
+      authoredRevision: current.authoredRevision,
+    })) {
+      return acknowledgeStaleCompletion(context, 'The document changed while delivery was running.');
+    }
+    return acknowledgeFileDelivery(context, delivery);
   },
 
   renameProject: (name) => {
@@ -1222,6 +1437,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         ...project,
         activePageIndex: nextIndex,
       },
+      interactionMode: createDocumentIdleMode(
+        get().sessionIdentity,
+        project.pages[nextIndex]?.id ?? null,
+      ),
       isReferenceAdjustMode: false,
       selectedOverlayId: null,
       selectedFlowImageId: null,
@@ -1252,6 +1471,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         pages,
         activePageIndex: insertIndex,
       }),
+      interactionMode: createDocumentIdleMode(get().sessionIdentity, nextPage.id),
       isReferenceAdjustMode: false,
       selectedOverlayId: null,
       selectedFlowImageId: null,
@@ -1284,6 +1504,7 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         pages,
         activePageIndex: insertIndex,
       }),
+      interactionMode: createDocumentIdleMode(get().sessionIdentity, nextPage.id),
       isReferenceAdjustMode: false,
       selectedOverlayId: null,
       selectedFlowImageId: null,
@@ -1319,6 +1540,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         pages,
         activePageIndex: nextActiveIndex,
       }),
+      interactionMode: createDocumentIdleMode(
+        get().sessionIdentity,
+        pages[nextActiveIndex]?.id ?? null,
+      ),
       isReferenceAdjustMode: false,
       selectedOverlayId: null,
       selectedFlowImageId: null,
@@ -1350,6 +1575,10 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
         pages,
         activePageIndex: nextActiveIndex,
       }),
+      interactionMode: createDocumentIdleMode(
+        get().sessionIdentity,
+        pages[nextActiveIndex]?.id ?? null,
+      ),
     });
     markDirty(set);
   },
@@ -1456,17 +1685,37 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
   restoreDocumentHistoryProject: (project) => {
     cancelAutosave();
     cancelNavigationPersistence();
-    set((state) => ({
-      project,
-      isDirty: true,
-      saveStatus: 'unsaved',
-      lastDirtyReason: 'authored-content',
-      revision: state.revision + 1,
-      isReferenceAdjustMode: false,
-      selectedOverlayId: null,
-      selectedFlowImageId: null,
-      isOverflowing: false,
-    }));
+    set((state) => {
+      const currentAuthoredRevision = state.authoredRevision
+        ?? createInitialAuthoredRevision({
+          sessionIdentity: state.sessionIdentity,
+          projectIdentity: project.projectId,
+        });
+      const nextAuthoredRevision = advanceAuthoredRevision(
+        currentAuthoredRevision,
+        {
+          kind: 'undo',
+          source: 'document',
+          pageId: project.pages[getActivePageIndex(project)]?.id ?? null,
+        },
+      );
+      return {
+        project,
+        isDirty: true,
+        saveStatus: 'unsaved',
+        lastDirtyReason: 'authored-content',
+        authoredRevision: nextAuthoredRevision,
+        revision: state.revision + 1,
+        interactionMode: createDocumentIdleMode(
+          state.sessionIdentity,
+          project.pages[getActivePageIndex(project)]?.id ?? null,
+        ),
+        isReferenceAdjustMode: false,
+        selectedOverlayId: null,
+        selectedFlowImageId: null,
+        isOverflowing: false,
+      };
+    });
   },
   updateImageGroups: (pageId, imageGroups) => {
     const project = get().project;
@@ -1681,18 +1930,84 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
 
   setReference: (reference, pageId) => get().updatePage({ reference }, pageId),
   setZoom: (zoom) => set({ zoom: Math.max(0.25, Math.min(2, zoom)) }),
-  setReferenceAdjustMode: (enabled) => set({
-    isReferenceAdjustMode: enabled,
-    selectedOverlayId: enabled ? null : get().selectedOverlayId,
-  }),
-  setSelectedOverlayId: (id) => set({
-    selectedOverlayId: id,
-    selectedFlowImageId: id ? null : get().selectedFlowImageId,
-  }),
-  setSelectedFlowImageId: (id) => set({
-    selectedFlowImageId: id,
-    selectedOverlayId: id ? null : get().selectedOverlayId,
-  }),
+  setInteractionMode: (mode) => {
+    const state = get();
+    const activePageId = state.project?.pages[getActivePageIndex(state.project)]?.id ?? null;
+    const currentMode = state.interactionMode
+      ?? createDocumentIdleMode(state.sessionIdentity, activePageId);
+    const transition = transitionInteractionMode(currentMode, mode, {
+      sessionIdentity: state.sessionIdentity,
+      activePageId,
+    });
+    if (!transition.accepted) {
+      set({ toastMessage: transition.reason });
+      return false;
+    }
+    const next = transition.mode;
+    const selection = next.kind === 'reference-adjustment'
+      ? { selectedOverlayId: null, selectedFlowImageId: null }
+      : next.kind === 'overlay-manipulation'
+        ? { selectedOverlayId: next.overlayId, selectedFlowImageId: null }
+        : next.kind === 'photo-manipulation'
+          ? { selectedOverlayId: null, selectedFlowImageId: next.primaryImageId }
+          : { selectedOverlayId: null, selectedFlowImageId: null };
+    set({
+      interactionMode: next,
+      isReferenceAdjustMode: next.kind === 'reference-adjustment',
+      ...selection,
+    });
+    return true;
+  },
+  setReferenceAdjustMode: (enabled) => {
+    const state = get();
+    const page = state.project?.pages[getActivePageIndex(state.project)];
+    if (enabled && page?.reference?.assetId) {
+      get().setInteractionMode(createReferenceAdjustmentMode(
+        state.sessionIdentity,
+        page.id,
+        page.reference.assetId,
+      ));
+      return;
+    }
+    get().setInteractionMode(createDocumentIdleMode(
+      state.sessionIdentity,
+      page?.id ?? null,
+    ));
+  },
+  setSelectedOverlayId: (id) => {
+    const state = get();
+    const pageId = state.project?.pages[getActivePageIndex(state.project)]?.id ?? null;
+    if (id && pageId) {
+      get().setInteractionMode(createOverlayManipulationMode(
+        state.sessionIdentity,
+        pageId,
+        id,
+      ));
+      return;
+    }
+    if (state.interactionMode.kind === 'overlay-manipulation') {
+      get().setInteractionMode(createDocumentIdleMode(state.sessionIdentity, pageId));
+      return;
+    }
+    set({ selectedOverlayId: null });
+  },
+  setSelectedFlowImageId: (id) => {
+    const state = get();
+    const pageId = state.project?.pages[getActivePageIndex(state.project)]?.id ?? null;
+    if (id && pageId) {
+      get().setInteractionMode(createPhotoManipulationMode(
+        state.sessionIdentity,
+        pageId,
+        { imageIds: [id], primaryImageId: id },
+      ));
+      return;
+    }
+    if (state.interactionMode.kind === 'photo-manipulation') {
+      get().setInteractionMode(createDocumentIdleMode(state.sessionIdentity, pageId));
+      return;
+    }
+    set({ selectedFlowImageId: null });
+  },
   setOverflowing: (isOverflowing) => set({ isOverflowing }),
   setToastMessage: (toastMessage) => set({ toastMessage }),
 
@@ -1768,6 +2083,53 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     }
   },
 
+  flushAutosaveWithAcknowledgement: async (options) => {
+    flushDocumentLiveDrafts();
+    const stateAtStart = get();
+    const context = createPersistenceOperationContext({
+      operationKind: 'autosave',
+      revisionDomain: 'document-change',
+      sessionIdentity: stateAtStart.sessionIdentity,
+      projectIdentity: stateAtStart.project?.projectId || 'document-session',
+      targetIdentity: stateAtStart.currentLibraryProjectId,
+      durableRevision: stateAtStart.currentLibraryProjectRevision,
+      capturedRevision: stateAtStart.revision,
+      authoredRevision: stateAtStart.authoredRevision,
+      snapshot: stateAtStart.project,
+    });
+    let succeeded = false;
+    try {
+      succeeded = await get().flushAutosave(options);
+    } catch (error) {
+      return acknowledgeFailure(
+        context,
+        error instanceof Error ? error.message : 'The document autosave was not confirmed.',
+      );
+    }
+    const current = get();
+    if (!persistenceOperationStillOwnsCurrentState(context, {
+      sessionIdentity: current.sessionIdentity,
+      projectIdentity: current.project?.projectId || 'document-session',
+      targetIdentity: current.currentLibraryProjectId,
+      revisionDomain: 'document-change',
+      revision: current.revision,
+      authoredRevision: current.authoredRevision,
+    })) {
+      return acknowledgeStaleCompletion(context, 'The document changed while autosave was running.');
+    }
+    if (!succeeded) {
+      const conflict = current.toastMessage?.includes('another window');
+      return conflict
+        ? acknowledgeConflict(context)
+        : acknowledgeFailure(context, 'The document autosave was not confirmed.');
+    }
+    return acknowledgeDurableWrite(
+      context,
+      current.currentLibraryProjectId || context.projectIdentity,
+      current.currentLibraryProjectRevision ?? context.authoredRevision.sequence,
+    );
+  },
+
   setLifecycleAuthorityMode: (mode) => {
     if (mode === 'shared') cancelAutosave();
     set({ lifecycleAuthorityMode: mode });
@@ -1779,6 +2141,15 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     cancelNavigationPersistence();
     projectSessionToken += 1;
     documentLoadRequestToken += 1;
-    set({ ...initialState, sessionIdentity: uuidv4() });
+    const sessionIdentity = uuidv4();
+    set({
+      ...initialState,
+      sessionIdentity,
+      authoredRevision: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: 'document-session',
+      }),
+      interactionMode: createDocumentIdleMode(sessionIdentity, null),
+    });
   },
 }));

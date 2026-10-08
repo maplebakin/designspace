@@ -1,18 +1,39 @@
 # Unified Editor — Authority Handoff & Consolidation
 
-Status: complete
+Status: historical handoff record; implementation complete for its stated
+milestone
 
 Verdict: **UNIFIED DIRTY/AUTOSAVE AUTHORITY HANDOFF COMPLETE**
+
+This document records the handoff milestone and its validation snapshot. It is
+not the complete current architecture contract. The current typed scene,
+authored-revision, persistence-acknowledgement, interaction-mode, export, and
+auxiliary-storage boundaries are maintained in
+[`docs/architecture/state-boundary-contracts.md`](../architecture/state-boundary-contracts.md).
+
+## Current contract supersession
+
+The handoff's `completeAuthoredCoverage` flag means only that the normalized
+committed ProjectChange stream was sufficient for the handoff's dirty/autosave
+decision. It is not a claim that one numeric counter replaces the
+engine-specific Canvas and Document clocks, nor that it covers history,
+durability, recovery, or asset ownership.
+
+The current implementation additionally requires every routed renderer adapter
+to deliver committed observations to the shared coordinator. Standalone legacy
+mounts may omit that seam for compatibility; routed observation loss returns a
+discriminated failure and is logged at the lifecycle boundary. The optional
+diagnostic shadow observer remains a diagnostic projection only.
 
 This package transfers unified authored dirty state, autosave scheduling, and
 shared save status to a renderer-neutral lifecycle authority. Canvas and
 Document still own their existing serialization and database writes. Native
 history, recovery, and canonical asset ownership remain engine-owned.
 
-`completeAuthoredCoverage` remains `true`. In this package that means the
-normalized committed ProjectChange stream is complete enough to drive authored
-dirty and autosave decisions. It does not claim shared history, persistence,
-recovery, or asset authority.
+At the time of this handoff, `completeAuthoredCoverage` was `true`. In this
+package that meant the normalized committed ProjectChange stream was complete
+enough to drive authored dirty and autosave decisions. It did not claim shared
+history, persistence, recovery, or asset authority.
 
 ## Before and after
 
@@ -86,8 +107,9 @@ the generation, and starts clean. Late promises from an old generation cannot
 change the new session.
 
 The authority subscribes to the coordinator exactly once. Subscriber and
-adapter errors are contained at the lifecycle boundary and do not affect the
-legacy mutation that produced the observation.
+adapter errors do not affect the legacy mutation that produced the observation,
+but required observation delivery failures are surfaced through the typed
+adapter result and lifecycle error reporting.
 
 ## Autosave scheduling and eligibility
 
@@ -186,9 +208,10 @@ booleans to infer authored changes.
 
 ## Parity diagnostics
 
-The diagnostic observer continues to receive legacy lifecycle values only as a
-migration guardrail. It does not mutate shared lifecycle state and is not the
-source of truth. Expected parity exceptions remain explicit:
+The optional diagnostic observer continues to receive legacy lifecycle values
+only as a migration guardrail. It does not mutate shared lifecycle state and is
+not the source of truth. Required committed observations are a separate routed
+contract; they are not diagnostics. Expected parity exceptions remain explicit:
 
 - Document navigation persistence can make the legacy store dirty while the
   shared authored revision remains unchanged;
@@ -224,8 +247,10 @@ That is future history work, not a dirty/autosave blocker.
 
 Canvas continues to serialize through its existing project payload, asset
 preparation, thumbnail, and IndexedDB paths. Document continues to serialize
-through its existing project payload and IndexedDB paths. No schema, database,
-snapshot, or migration layer was introduced.
+through its existing project payload and IndexedDB paths. This handoff did not
+introduce a persistence schema migration. Later stabilization added typed
+scene snapshots and persistence acknowledgements around these existing
+adapters; those current guarantees are recorded in the architecture contract.
 
 ### Recovery — unchanged
 
@@ -234,11 +259,12 @@ backup, extraction, verification, and cleanup. Recovery/hydration paths remain
 clean and silent unless existing product behavior explicitly marks restored
 work dirty; this handoff does not reinterpret recovery data.
 
-### Assets — unchanged
+### Assets — unchanged at handoff time
 
 Canonical asset ingestion, reference counting, persistence, and recovery remain
 owned by the existing engine systems. The lifecycle authority carries no asset
-data and does not become an asset database.
+data and does not become an asset database. Current auxiliary ownership and
+session-only URL rules are documented in the architecture contract.
 
 ## Authority matrix
 

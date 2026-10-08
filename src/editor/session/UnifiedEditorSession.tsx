@@ -15,17 +15,19 @@ import {
 } from './projectChangeDiagnostic';
 import { flushDocumentLiveDrafts } from '../../document/services/documentLiveDraft';
 import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
+import type { AuthoredRevisionEvent } from './authoredRevision';
 
 export type UnifiedEditorSessionProps = {
   onBackToDashboard?: () => void;
-  /** Enables the runtime-only diagnostic shadow model without adding UI. */
+  /** Enables an optional runtime-only diagnostic shadow model; it is not lifecycle authority. */
   enableChangeDiagnostics?: boolean;
 };
 
 /**
  * One product-level route for both legacy renderer families. The selected
- * adapter owns the existing engine shell; this component owns only the
- * read-only session/page viewport observation boundary.
+ * adapter owns the existing engine shell; this component owns the shared
+ * session coordinator, lifecycle authority, and page viewport boundary.
+ * Diagnostic shadow observation is a separate opt-in projection.
  */
 export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
   onBackToDashboard,
@@ -75,8 +77,8 @@ export const UnifiedEditorSession: React.FC<UnifiedEditorSessionProps> = ({
     fitPageRef.current = fitPage;
   }, []);
 
-  const markAuthoredMutation = useCallback(() => {
-    lifecycleAuthority.markAuthoredMutation();
+  const markAuthoredMutation = useCallback((event?: AuthoredRevisionEvent) => {
+    lifecycleAuthority.markAuthoredMutation(event);
   }, [lifecycleAuthority]);
 
   const sharedCommands = useMemo(() => {

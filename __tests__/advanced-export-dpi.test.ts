@@ -5,6 +5,7 @@ import {
   AdvancedExportManager,
   calculatePdfPageSizeInches,
   calculateRasterExportScale,
+  createProjectPageExportSnapshot,
 } from '../src/editor/export/advancedExportManager';
 import { renderCanvasToPngBlob } from '../src/editor/utils/renderToPng';
 
@@ -94,6 +95,33 @@ describe('advanced export DPI semantics', () => {
     expect(pageSize.width).toBeCloseTo(8.5 * 72, 4);
     expect(pageSize.height).toBeCloseTo(11 * 72, 4);
     expect(renderSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('derives an all-page export snapshot from the durable page mirror', () => {
+    const snapshot = createProjectPageExportSnapshot({
+      id: 'page-2',
+      name: 'A4 page',
+      canvasData: {
+        objects: [],
+        background: '#123456',
+      },
+      canvasSize: { width: 2480, height: 3508 },
+    }, {
+      sourceDpi: 300,
+      backgroundColor: '#abcdef',
+    });
+
+    expect(snapshot).toMatchObject({
+      kind: 'export-scene-snapshot',
+      pageId: 'page-2',
+      canvasSize: { width: 2480, height: 3508 },
+      sourceDpi: 300,
+      scene: {
+        canvasSize: { width: 2480, height: 3508 },
+        coordinateSpace: 'page-space',
+        background: '#123456',
+      },
+    });
   });
 
   it('restores temporary raster state before async blob conversion resumes', async () => {

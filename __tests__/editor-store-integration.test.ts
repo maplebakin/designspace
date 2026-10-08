@@ -1683,7 +1683,7 @@ describe('mounted store editor integration', () => {
     await act(async () => { await flushPromises(); });
     expect(exportPagesSpy).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
       includeBackground: true,
-      backgroundColor: '#FFEECC',
+      backgroundColor: DEFAULT_CANVAS_BACKGROUND,
       dpi: 300,
       fileName: 'Integration Test',
       imageAssets: {},

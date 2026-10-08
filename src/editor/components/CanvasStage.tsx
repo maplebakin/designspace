@@ -29,6 +29,7 @@ import { syncCanvasLayers } from '../state/layerSyncHandler';
 import { CanvasSizePicker, CanvasStagePanels, CanvasSyncErrorOverlay } from './CanvasStageOverlays';
 import { useCanvasStageInteractions } from '../hooks/useCanvasStageInteractions';
 import { isUserObject } from '../utils/objectUtils';
+import type { AuthoredRevisionEvent } from '../session/authoredRevision';
 
 initFabricSerialization();
 
@@ -36,7 +37,7 @@ type CanvasNavKey = 'insert' | 'layers';
 
 type CanvasStageProps = {
   onSelectNav?: (nav: CanvasNavKey) => void;
-  onAuthoredMutation?: () => void;
+  onAuthoredMutation?: (event?: AuthoredRevisionEvent) => void;
   onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
 };
 
@@ -864,9 +865,17 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       callbacks: {
         onUpdate: scheduleUpdate,
         onHistoryDirty: markHistoryDirty,
-        onAuthoredMutation: () => {
-          useEditorStore.getState().markProjectDirty();
-          onAuthoredMutation?.();
+        onAuthoredMutation: (event) => {
+          // The Canvas store's changeRevision is its local persistence epoch.
+          // It advances for every visible Fabric mutation, including draft
+          // signals, while the shared lifecycle receives the richer draft /
+          // commit protocol unchanged.
+          const storeEvent = event?.kind === 'draft-start'
+            || event?.kind === 'draft-update'
+            ? { ...event, kind: 'mutation' as const }
+            : event;
+          useEditorStore.getState().markProjectDirty({ event: storeEvent });
+          onAuthoredMutation?.(event);
         },
         onCommittedMutation,
         onSelectedObjectId: setSelectedObjectId,
@@ -1134,7 +1143,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       <CanvasSyncErrorOverlay
         syncError={syncError}
         onDownloadProject={() => {
-          useEditorStore.getState().downloadProjectFile();
+          useEditorStore.getState().downloadProjectFileWithAcknowledgement();
         }}
         onReload={() => window.location.reload()}
         onDismiss={() => {

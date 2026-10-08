@@ -22,6 +22,7 @@ import type {
 } from './projectSession';
 import type { PageMutationCommand } from './projectMutation';
 import { isTauriRecoveryAvailable } from '../recovery/recoveryClient';
+import { acknowledgementAllowsDirtyClear } from './persistenceAcknowledgement';
 
 type UnifiedPageNavigationProps = {
   session: ProjectSessionSnapshot;
@@ -654,9 +655,12 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   };
 
   const handleSaveAndClose = async () => {
-    const delivery = await commands?.download();
-    if (!delivery || delivery.status === 'cancelled') return;
-    if (readDirty()) {
+    const acknowledgement = await commands?.download();
+    if (!acknowledgement || acknowledgement.status === 'save-cancelled') return;
+    if (
+      !acknowledgementAllowsDirtyClear(acknowledgement)
+      || readDirty()
+    ) {
       showActiveError('Project could not be downloaded. The window will stay open.');
       return;
     }
@@ -678,14 +682,21 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   };
 
   const handleSaveToLibraryAndReturn = async () => {
-    await commands?.save(projectName);
-    if (!readDirty()) returnToDashboard();
+    const acknowledgement = await commands?.save(projectName);
+    if (
+      acknowledgement
+      && acknowledgementAllowsDirtyClear(acknowledgement)
+      && !readDirty()
+    ) returnToDashboard();
   };
 
   const handleDownloadAndReturn = async () => {
-    const delivery = await commands?.download();
-    if (!delivery || delivery.status === 'cancelled') return;
-    if (!readDirty()) returnToDashboard();
+    const acknowledgement = await commands?.download();
+    if (
+      acknowledgement
+      && acknowledgementAllowsDirtyClear(acknowledgement)
+      && !readDirty()
+    ) returnToDashboard();
   };
 
   return (

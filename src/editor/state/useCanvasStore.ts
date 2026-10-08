@@ -1,6 +1,13 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 import { DEFAULT_CANVAS_SIZE } from './canvasDefaults';
 
+/**
+ * Runtime page geometry for the active Fabric canvas. `width` and `height`
+ * are authored logical page pixels, not viewport CSS dimensions. The active
+ * ProjectPage/page snapshot is the durable mirror; persistence, history, and
+ * export cross that boundary through a typed scene snapshot rather than
+ * treating this store as a second durable record.
+ */
 interface CanvasState {
     width: number;
     height: number;

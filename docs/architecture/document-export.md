@@ -1,5 +1,13 @@
 # Document export architecture
 
+Document export consumes a typed committed document scene snapshot. Canvas
+export has a separate Fabric snapshot contract because its renderer and page
+geometry are different; both paths use the shared persistence acknowledgement
+vocabulary for file delivery. Browser download initiation is not reported as
+durable filesystem confirmation. See
+[`state-boundary-contracts.md`](./state-boundary-contracts.md) for the current
+cross-editor ownership map.
+
 Document export starts from a frozen `DocumentProjectPayload` snapshot. The
 live editor is never used as an export root. `mountCommittedDocumentExportPages`
 clones the normalized project, mounts every page offscreen at one CSS pixel per

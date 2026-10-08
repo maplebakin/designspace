@@ -1,5 +1,5 @@
 import type { EditorMode } from '../project/projectSchema';
-import type { FileDeliveryResult } from '../services/fileDeliveryService';
+import type { PersistenceAcknowledgement } from './persistenceAcknowledgement';
 import type {
   PageAssetReferenceResult,
 } from './assetReference';
@@ -134,8 +134,10 @@ export type SelectionEvent = Readonly<{
 }>;
 
 export type ProjectSessionCommands = Readonly<{
-  save: (name?: string) => Promise<void>;
-  download: () => Promise<FileDeliveryResult | null>;
+  /** A save command is complete only when its acknowledgement permits it. */
+  save: (name?: string) => Promise<PersistenceAcknowledgement | null>;
+  /** Browser delivery remains unconfirmed; callers must inspect the status. */
+  download: () => Promise<PersistenceAcknowledgement | null>;
   /** Product-level close is supplied by UnifiedEditorSession when routed. */
   close?: () => Promise<void>;
   notify: (message: string) => void;
@@ -147,7 +149,11 @@ export type ProjectSessionCommands = Readonly<{
   mutatePage: (command: PageMutationCommand) => Promise<PageMutationResult>;
   /** Read-only adapter description; this is not a shared asset store. */
   describePageAssets?: (pageId: string) => Promise<PageAssetReferenceResult>;
-  /** Runtime-only observation seam; it does not own mutation or persistence. */
+  /**
+   * Shared-session lifecycle observation seam. It is optional only for legacy
+   * standalone mounts; the routed adapter contract requires it and reports a
+   * delivery failure instead of treating it as diagnostics.
+   */
   changeCoordinator?: ProjectChangeCoordinator;
   /** Opt-in runtime shadow view; it does not own dirty state or persistence. */
   changeDiagnostic?: ProjectChangeDiagnosticView;

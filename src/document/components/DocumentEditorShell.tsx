@@ -10,6 +10,12 @@ import type { Editor, JSONContent } from '@tiptap/core';
 import { NodeSelection, TextSelection } from 'prosemirror-state';
 import { v4 as uuidv4 } from 'uuid';
 import { useDocumentStore } from '../state/documentStore';
+import {
+  createDocumentIdleMode,
+  createTextEditingMode,
+  createPhotoManipulationMode,
+} from '../../editor/session/interactionMode';
+import type { AuthoredRevisionEvent } from '../../editor/session/authoredRevision';
 import type {
   DocumentImageGroup,
   DocumentFlowImageWrap,
@@ -158,9 +164,10 @@ type DocumentEditorShellProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent?: (event: SelectionEvent) => void;
   /** Records history replay as an authored lifecycle revision. */
-  onAuthoredMutation?: () => void;
+  onAuthoredMutation?: (event?: AuthoredRevisionEvent) => void;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
+  /** Optional for standalone legacy mounts; required by the routed lifecycle adapter. */
   onCommittedMutation?: (mutation: DocumentCommittedMutation) => void;
 };
 
@@ -230,10 +237,16 @@ const notifyCommittedMutation = (
   mutation: DocumentCommittedMutation
 ) => {
   recordDocumentProjectChangeNotification();
+  if (!callback) return;
   try {
-    callback?.(mutation);
-  } catch {
-    // Optional diagnostics must never interrupt the legacy document action.
+    callback(mutation);
+  } catch (error) {
+    // The shared route depends on this committed observation. Preserve the
+    // engine action while exposing a delivery failure to the host console.
+    console.error(
+      '[project-lifecycle] Document committed observation callback failed.',
+      error,
+    );
   }
 };
 
@@ -564,9 +577,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   recordDocumentShellRender();
   recordDocumentTypingLatencyCounter('documentShellRenders');
   const project = useDocumentStore((state) => state.project);
+  const sessionIdentity = useDocumentStore((state) => state.sessionIdentity);
   const saveStatus = useDocumentStore((state) => state.saveStatus);
   const zoom = useDocumentStore((state) => state.zoom);
-  const isReferenceAdjustMode = useDocumentStore((state) => state.isReferenceAdjustMode);
+  const interactionMode = useDocumentStore((state) => state.interactionMode);
+  const isReferenceAdjustMode = interactionMode.kind === 'reference-adjustment';
   // Store selection fields remain compatibility state for older adapters. The
   // render tree below consumes the editor selection projection instead.
   const selectedOverlayStoreId = useDocumentStore(
@@ -619,6 +634,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const removeOverlay = useDocumentStore((state) => state.removeOverlay);
   const setReference = useDocumentStore((state) => state.setReference);
   const setZoom = useDocumentStore((state) => state.setZoom);
+  const setInteractionMode = useDocumentStore((state) => state.setInteractionMode);
   const setReferenceAdjustMode = useDocumentStore((state) => state.setReferenceAdjustMode);
   const setSelectedOverlayStoreId = useDocumentStore(
     (state) => state.setSelectedOverlayId
@@ -627,8 +643,10 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const setOverflowing = useDocumentStore((state) => state.setOverflowing);
   const setToastMessage = useDocumentStore((state) => state.setToastMessage);
   const renameProject = useDocumentStore((state) => state.renameProject);
-  const saveProject = useDocumentStore((state) => state.saveProject);
-  const downloadProjectFile = useDocumentStore((state) => state.downloadProjectFile);
+  const saveProject = useDocumentStore((state) => state.saveProjectWithAcknowledgement);
+  const downloadProjectFile = useDocumentStore(
+    (state) => state.downloadProjectFileWithAcknowledgement
+  );
 
   const titleEditorRef = useRef<Editor | null>(null);
   const bodyEditorRef = useRef<Editor | null>(null);
@@ -650,7 +668,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     {
       pageId: string;
       region: DocumentEditorRegion;
-      content: JSONContent;
+      content: JSONContent | null;
     }
   >());
   const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -792,6 +810,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     primaryImageId: string,
     groupId: string | null = null
   ) => {
+    if (page?.id) {
+      setInteractionMode(createPhotoManipulationMode(
+        sessionIdentity,
+        page.id,
+        { imageIds, primaryImageId, groupId },
+      ));
+    }
     setSelectionProjectionIfChanged(
       projectDocumentImageSelection({
         pageId: page?.id || '',
@@ -800,45 +825,75 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         groupId,
       })
     );
-  }, [page?.id, setSelectionProjectionIfChanged]);
+  }, [page?.id, sessionIdentity, setInteractionMode, setSelectionProjectionIfChanged]);
 
   const setSelectedFlowImage = useCallback((
     selection: SelectedDocumentImage | null
   ) => {
-    setSelectionProjectionIfChanged((current) => {
-      if (!selection) {
-        return {
-          ...current,
-          mode: current.textRegion
-            ? 'text'
-            : current.overlayId ? 'overlay' : 'none',
-          imageIds: [],
-          primaryImageId: null,
-          groupId: null,
-        };
+    if (!selection) {
+      // Keep store transitions outside the React state updater. React may
+      // evaluate an updater more than once in development; a mode transition
+      // inside it could replay a stale cleanup after a newer mode wins.
+      // Only the photo owner may be cleared by this compatibility helper. A
+      // delayed image cleanup must not steal ownership from an overlay,
+      // reference, or text interaction that has already won the transition.
+      if (useDocumentStore.getState().interactionMode.kind === 'photo-manipulation') {
+        setInteractionMode(createDocumentIdleMode(sessionIdentity, page?.id || null));
       }
-      const imageId = selection.attributes.id;
-      const imageIds = current.imageIds.length > 1
-        && current.imageIds.includes(imageId)
-        ? current.imageIds
-        : [imageId];
-      const groupId = imageIds.length > 1 ? current.groupId : null;
-      return {
+      setSelectionProjectionIfChanged((current) => ({
         ...current,
-        mode: groupId ? 'image-group' : 'image',
-        pageId: page?.id || current.pageId,
-        textRegion: null,
-        imageIds,
-        primaryImageId: imageId,
-        groupId,
-        overlayId: null,
-      };
-    });
-  }, [page?.id, setSelectionProjectionIfChanged]);
+        mode: current.textRegion
+          ? 'text'
+          : current.overlayId ? 'overlay' : 'none',
+        imageIds: [],
+        primaryImageId: null,
+        groupId: null,
+      }));
+      return;
+    }
+
+    const imageId = selection.attributes.id;
+    const imageIds = selectionProjection.imageIds.length > 1
+      && selectionProjection.imageIds.includes(imageId)
+      ? selectionProjection.imageIds
+      : [imageId];
+    const groupId = imageIds.length > 1 ? selectionProjection.groupId : null;
+    if (page?.id) {
+      setInteractionMode(createPhotoManipulationMode(
+        sessionIdentity,
+        page.id,
+        { imageIds, primaryImageId: imageId, groupId },
+      ));
+    }
+    setSelectionProjectionIfChanged((current) => ({
+      ...current,
+      mode: groupId ? 'image-group' : 'image',
+      pageId: page?.id || current.pageId,
+      textRegion: null,
+      imageIds,
+      primaryImageId: imageId,
+      groupId,
+      overlayId: null,
+    }));
+  }, [
+    page?.id,
+    selectionProjection.groupId,
+    selectionProjection.imageIds,
+    sessionIdentity,
+    setInteractionMode,
+    setSelectionProjectionIfChanged,
+  ]);
 
   const setTextSelectionRegion = useCallback((
     region: DocumentEditorRegion | null
   ) => {
+    if (region && page?.id) {
+      setInteractionMode(createTextEditingMode(sessionIdentity, page.id, region));
+    } else if (useDocumentStore.getState().interactionMode.kind === 'text-editing') {
+      // Blur cleanup only releases text ownership. It must not overwrite a
+      // newer overlay/reference/photo transition caused by the same pointer.
+      setInteractionMode(createDocumentIdleMode(sessionIdentity, page?.id || null));
+    }
     setSelectionProjectionIfChanged((current) => ({
       ...current,
       mode: region ? 'text' : 'none',
@@ -849,7 +904,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       groupId: null,
       overlayId: null,
     }));
-  }, [page?.id, setSelectionProjectionIfChanged]);
+  }, [page?.id, sessionIdentity, setInteractionMode, setSelectionProjectionIfChanged]);
 
   const setSelectedOverlayId = useCallback((overlayId: string | null) => {
     setSelectedOverlayStoreId(overlayId);
@@ -1745,16 +1800,28 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const undoDocument = useCallback(() => {
     flushDocumentLiveDrafts();
     const applied = documentHistory.undo(applyDocumentHistoryProject);
-    if (applied) onAuthoredMutation?.();
+    if (applied) {
+      onAuthoredMutation?.({
+        kind: 'undo',
+        source: 'document',
+        pageId: page?.id ?? null,
+      });
+    }
     return applied;
-  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation]);
+  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation, page?.id]);
 
   const redoDocument = useCallback(() => {
     flushDocumentLiveDrafts();
     const applied = documentHistory.redo(applyDocumentHistoryProject);
-    if (applied) onAuthoredMutation?.();
+    if (applied) {
+      onAuthoredMutation?.({
+        kind: 'redo',
+        source: 'document',
+        pageId: page?.id ?? null,
+      });
+    }
     return applied;
-  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation]);
+  }, [applyDocumentHistoryProject, documentHistory, onAuthoredMutation, page?.id]);
 
   useEffect(() => {
     const handleDocumentHistoryKeyDown = (event: KeyboardEvent) => {
@@ -1894,15 +1961,38 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     }
     const drafts = [...pendingTextDraftsRef.current.values()];
     pendingTextDraftsRef.current.clear();
+    let flushedDraftCount = 0;
     drafts.forEach((draft) => {
-      if (draft.region === 'title') {
-        commitTitleContentSnapshot(draft.pageId, draft.content);
-      } else {
-        commitBodyContentSnapshot(draft.pageId, draft.content);
+      const bodyEditor = draft.region === 'body'
+        ? bodyEditorRef.current
+        : null;
+      const editorPageId = bodyEditor && !bodyEditor.isDestroyed
+        ? bodyEditor.view.dom.closest<HTMLElement>('[data-page-id]')
+          ?.dataset.pageId
+        : undefined;
+      const content = draft.content ?? (
+        bodyEditor
+        && !bodyEditor.isDestroyed
+        && editorPageId === draft.pageId
+          ? bodyEditor.getJSON()
+          : null
+      );
+      if (!content) {
+        pendingTextDraftsRef.current.set(
+          draft.pageId + ':' + draft.region,
+          draft
+        );
+        return;
       }
+      if (draft.region === 'title') {
+        commitTitleContentSnapshot(draft.pageId, content);
+      } else {
+        commitBodyContentSnapshot(draft.pageId, content);
+      }
+      flushedDraftCount += 1;
     });
-    if (drafts.length > 0) recordDocumentDraftFlush(drafts.length);
-    return drafts.length;
+    if (flushedDraftCount > 0) recordDocumentDraftFlush(flushedDraftCount);
+    return flushedDraftCount;
   }, [commitBodyContentSnapshot, commitTitleContentSnapshot]);
 
   const schedulePendingTextDraftFlush = useCallback(() => {
@@ -1918,15 +2008,24 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const queuePendingTextDraft = useCallback((
     pageId: string,
     region: DocumentEditorRegion,
-    content: JSONContent
+    content: JSONContent | null
   ) => {
-    pendingTextDraftsRef.current.set(pageId + ':' + region, {
+    const key = pageId + ':' + region;
+    const isNewDraft = !pendingTextDraftsRef.current.has(key);
+    pendingTextDraftsRef.current.set(key, {
       pageId,
       region,
       content,
     });
+    if (isNewDraft) {
+      onAuthoredMutation?.({
+        kind: 'draft-start',
+        source: 'document',
+        pageId,
+      });
+    }
     schedulePendingTextDraftFlush();
-  }, [schedulePendingTextDraftFlush]);
+  }, [onAuthoredMutation, schedulePendingTextDraftFlush]);
 
   useEffect(() => {
     const scope = liveDraftScopeRef.current;
@@ -1948,7 +2047,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   const handleStructuredEditorUpdate = useCallback((
     region: DocumentEditorRegion,
     pageId: string,
-    content: JSONContent,
+    content: JSONContent | null,
     transaction: import('@tiptap/pm/state').Transaction,
   ) => measureDocumentLiveTextMetric(
     'documentEditorShellUpdate',
@@ -1966,6 +2065,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           || transaction.getMeta(DOCUMENT_IMAGE_CONTENT_TRANSACTION_META) !== undefined
           || selectedImageNode
         );
+      const immediateContent = content ?? (
+        imageStateTransaction
+          ? bodyEditorRef.current?.getJSON() ?? null
+          : null
+      );
 
       if (!imageStateTransaction) {
         queuePendingTextDraft(pageId, region, content);
@@ -1979,8 +2083,9 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         return;
       }
 
+      if (!immediateContent) return;
       flushPendingTextDrafts();
-      commitPageImageState(pageId, content, imageGroupsMeta);
+      commitPageImageState(pageId, immediateContent, imageGroupsMeta);
       return;
     }
   ), [
@@ -2837,10 +2942,12 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       ?.overlayObjects.find((candidate) => candidate.id === overlayId);
     if (!committedOverlay) return;
     notifyCommittedStructuredImageLayout(onCommittedMutation, page.id, overlayId);
-    setSelectedOverlayId(overlayId);
     setSelectedFlowImage(null);
     setSelectedStructuredImageIds([]);
     setSelectedFlowImageId(null);
+    // Establish the overlay owner last. Clearing a previous photo selection
+    // intentionally returns the interaction mode to document-idle.
+    setSelectedOverlayId(overlayId);
   }, [
     addOverlay,
     onCommittedMutation,
@@ -4298,16 +4405,17 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                 ) {
                   notifyCommittedDocumentReference(onCommittedMutation, page.id);
                 }
-              }}
-              onSelectOverlay={(id) => {
-                setSelectedOverlayId(id);
-                if (id) {
-                  setSelectedFlowImage(null);
-                  setSelectedStructuredImageIds([]);
-                  setSelectedImageGroupId(null);
-                  setSelectedFlowImageId(null);
-                }
-              }}
+          }}
+          onSelectOverlay={(id) => {
+            if (id) {
+              setSelectedFlowImage(null);
+              setSelectedStructuredImageIds([]);
+              setSelectedImageGroupId(null);
+              setSelectedFlowImageId(null);
+            }
+            // Establish the overlay owner after clearing competing owners.
+            setSelectedOverlayId(id);
+          }}
               onUpdateOverlay={(id, geometry) => {
                 const committed = commitOverlayGeometry(page.id, id, geometry);
                 if (committed) {
@@ -4384,6 +4492,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                     + page.columnGapPx * (page.columnCount - 1)
                   }
                   imageGroups={page.imageGroups}
+                  deferTextSerialization
                   selectedStructuredImageIds={selectedStructuredImageIds}
                   resolveAssetSource={(assetId) => assetSources[assetId]}
                   onEditorReady={(editor) => {

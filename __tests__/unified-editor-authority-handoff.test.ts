@@ -130,6 +130,29 @@ describe('Unified Editor shared authority handoff', () => {
     });
   });
 
+  it('does not count a Canvas visibility signal and its commit twice', () => {
+    const { coordinator, authority } = createRuntime();
+    authority.startSession({
+      projectId: 'project-a',
+      sessionIdentity: 'canvas-session-a',
+      adapter: createAdapter(),
+    });
+
+    authority.markAuthoredMutation({ kind: 'draft-start', source: 'canvas', pageId: 'page-1' });
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 1,
+      authoredRevisionContext: { sequence: 1, phase: 'draft' },
+    });
+    projectChange(coordinator);
+    expect(authority.getSnapshot()).toMatchObject({
+      authoredRevision: 1,
+      authoredRevisionContext: { sequence: 1, phase: 'committed' },
+    });
+
+    authority.markAuthoredMutation({ kind: 'draft-update', source: 'canvas', pageId: 'page-1' });
+    expect(authority.getSnapshot().authoredRevision).toBe(1);
+  });
+
   it('coalesces same-tick changes into one shared autosave and advances the watermark', async () => {
     vi.useFakeTimers();
     const autosave = vi.fn().mockResolvedValue(true);

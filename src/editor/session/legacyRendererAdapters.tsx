@@ -35,12 +35,15 @@ import {
 import { useEditorStore } from '../state/editorStore';
 import { useProjectSessionStore } from '../state/projectSessionStore';
 import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
+import type { AuthoredRevisionEvent } from './authoredRevision';
+import { acknowledgementAllowsDirtyClear } from './persistenceAcknowledgement';
 
 export type LegacyRendererAdapterProps = {
   onBackToDashboard?: () => void;
   onSelectionEvent: (event: SelectionEvent) => void;
-  onAuthoredMutation?: () => void;
-  changeCoordinator?: ProjectChangeCoordinator;
+  onAuthoredMutation?: (event?: AuthoredRevisionEvent) => void;
+  /** Required by the routed session; standalone renderer mounts do not use this adapter. */
+  changeCoordinator: ProjectChangeCoordinator;
   useSharedChrome?: boolean;
   onRegisterFitPage?: (fitPage: (() => void) | null) => void;
   /** Shared chrome may provide a page strip to the embedded engine surface. */
@@ -134,8 +137,12 @@ const prepareProjectReplacement = async (
     `Save changes to ${defaultName || 'this project'} before opening another project?`
   );
   if (shouldSave) {
-    const saved = await lifecycleAuthority.save(defaultName);
-    return saved && !lifecycleAuthority.getSnapshot().isDirty;
+    const acknowledgement = await lifecycleAuthority.saveWithAcknowledgement(defaultName);
+    return Boolean(
+      acknowledgement
+      && acknowledgementAllowsDirtyClear(acknowledgement)
+      && !lifecycleAuthority.getSnapshot().isDirty
+    );
   }
   return window.confirm('Discard the unsaved changes and open the selected project?');
 };
@@ -144,22 +151,26 @@ const createCanvasCommands = (
   changeCoordinator: ProjectChangeCoordinator,
   lifecycleAuthority: ProjectLifecycleAuthority
 ): ProjectSessionCommands => ({
-  save: async (name) => {
+  save: (name) => {
     const state = useEditorStore.getState();
-    await lifecycleAuthority.save(name?.trim() || state.projectName || 'Untitled Project');
+    return lifecycleAuthority.saveWithAcknowledgement(
+      name?.trim() || state.projectName || 'Untitled Project'
+    );
   },
   download: async () => {
     const revision = lifecycleAuthority.getSnapshot().authoredRevision;
     const sessionIdentity = useEditorStore.getState().sessionIdentity;
-    const result = await useEditorStore.getState().downloadProjectFile();
+    const acknowledgement = await useEditorStore.getState()
+      .downloadProjectFileWithAcknowledgement();
     if (
-      result?.status === 'saved'
+      acknowledgement
+      && acknowledgementAllowsDirtyClear(acknowledgement)
       && useEditorStore.getState().sessionIdentity === sessionIdentity
       && lifecycleAuthority.getSnapshot().authoredRevision === revision
     ) {
       lifecycleAuthority.markPersistedRevision(revision);
     }
-    return result;
+    return acknowledgement;
   },
   notify: (message) => {
     useEditorStore.getState().setToast({
@@ -189,21 +200,21 @@ const createDocumentCommands = (
   changeCoordinator: ProjectChangeCoordinator,
   lifecycleAuthority: ProjectLifecycleAuthority
 ): ProjectSessionCommands => ({
-  save: async (name) => {
-    await lifecycleAuthority.save(name);
-  },
+  save: (name) => lifecycleAuthority.saveWithAcknowledgement(name),
   download: async () => {
     const revision = lifecycleAuthority.getSnapshot().authoredRevision;
     const sessionIdentity = useDocumentStore.getState().sessionIdentity;
-    const result = await useDocumentStore.getState().downloadProjectFile();
+    const acknowledgement = await useDocumentStore.getState()
+      .downloadProjectFileWithAcknowledgement();
     if (
-      result?.status === 'saved'
+      acknowledgement
+      && acknowledgementAllowsDirtyClear(acknowledgement)
       && useDocumentStore.getState().sessionIdentity === sessionIdentity
       && lifecycleAuthority.getSnapshot().authoredRevision === revision
     ) {
       lifecycleAuthority.markPersistedRevision(revision);
     }
-    return result;
+    return acknowledgement;
   },
   notify: (message) => useDocumentStore.getState().setToastMessage(message),
   isDirty: () => lifecycleAuthority.getSnapshot().isDirty,
@@ -311,8 +322,8 @@ export const useLegacyProjectSessionBridge = (
             return Boolean(state.currentLibraryProjectId && state.project);
           },
           autosaveDelayMs: 900,
-          save: async (name) => useDocumentStore.getState().saveProject(name),
-          autosave: async () => useDocumentStore.getState().flushAutosave({
+          save: async (name) => useDocumentStore.getState().saveProjectWithAcknowledgement(name),
+          autosave: async () => useDocumentStore.getState().flushAutosaveWithAcknowledgement({
             allowSharedAuthority: true,
           }),
         }
@@ -325,14 +336,11 @@ export const useLegacyProjectSessionBridge = (
           autosaveDelayMs: 2000,
           save: async (name) => {
             const state = useEditorStore.getState();
-            return state.saveProject(
+            return state.saveProjectWithAcknowledgement(
               name?.trim() || state.projectName || 'Untitled Project'
             );
           },
-          autosave: async () => {
-            await useEditorStore.getState().updateCurrentProject();
-            return true;
-          },
+          autosave: async () => useEditorStore.getState().updateCurrentProjectWithAcknowledgement(),
         }
   ), [mode]);
 
@@ -485,7 +493,7 @@ const CanvasLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   ) => {
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
-    if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    if (!currentSession?.projectId || !currentPageId) return;
     if ('groupId' in mutation) {
       observeCommittedEngineChange(changeCoordinator, {
         projectId: currentSession.projectId,
@@ -872,7 +880,7 @@ const DocumentLegacyRendererAdapter: React.FC<LegacyRendererAdapterProps> = ({
   ) => {
     const currentSession = useProjectSessionStore.getState().session;
     const currentPageId = currentSession?.activePageId;
-    if (!changeCoordinator || !currentSession?.projectId || !currentPageId) return;
+    if (!currentSession?.projectId || !currentPageId) return;
     const observe = (
       action: DocumentCommittedMutation['action'],
       pageId: string,

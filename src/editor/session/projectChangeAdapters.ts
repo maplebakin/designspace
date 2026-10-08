@@ -8,8 +8,10 @@ import type {
   ProjectChangeCompletion,
   ProjectChangeCoordinator,
   ProjectChangeDomain,
+  ProjectChangeHandle,
   ProjectChangeObservation,
   ProjectChangeSource,
+  ProjectChangeTransaction,
 } from './projectChangeCoordinator';
 
 type PageMutationExecutor = (
@@ -36,14 +38,36 @@ const isAuthoredPageMutation = (
   command.kind !== 'select-page'
 );
 
-const safely = <T>(operation: () => T): T | undefined => {
-  try {
-    return operation();
-  } catch {
-    // Observability must not turn a successful legacy mutation into a failed
-    // product command. The legacy result remains authoritative.
-    return undefined;
-  }
+export type ProjectChangeObservationFailureReason =
+  'coordinator-error' | 'coordinator-not-active';
+
+export type ProjectChangeObservationDelivery =
+  | Readonly<{
+      status: 'delivered';
+      transaction: ProjectChangeTransaction;
+    }>
+  | Readonly<{
+      status: 'not-delivered';
+      reason: ProjectChangeObservationFailureReason;
+      error?: unknown;
+    }>;
+
+const reportRequiredObservationFailure = (
+  observation: ProjectChangeObservation,
+  reason: ProjectChangeObservationFailureReason,
+  error?: unknown,
+) => {
+  console.error(
+    '[project-lifecycle] Required committed mutation observation was not delivered.',
+    {
+      projectId: observation.projectId,
+      source: observation.source,
+      action: observation.action,
+      pageIds: observation.pageIds,
+      reason,
+      error,
+    },
+  );
 };
 
 const createPageObservation = (
@@ -103,29 +127,45 @@ export const executeObservedPageMutation = async ({
 }): Promise<PageMutationResult> => {
   if (!isAuthoredPageMutation(command)) return execute(command);
 
-  const handle = safely(() => coordinator.begin(
-    createPageObservation(source, command)
-  ));
+  const observation = createPageObservation(source, command);
+  let handle: ProjectChangeHandle | null = null;
+  try {
+    handle = coordinator.begin(observation);
+  } catch (error) {
+    reportRequiredObservationFailure(observation, 'coordinator-error', error);
+  }
 
   try {
     const result = await execute(command);
     if (!handle) return result;
 
     const completion = completionFromResult(result);
-    if (result.ok) {
-      safely(() => coordinator.complete(handle, completion));
-    } else if (result.status === 'rejected') {
-      safely(() => coordinator.reject(handle, result.error, completion));
-    } else {
-      safely(() => coordinator.fail(handle, result.error, completion));
+    try {
+      const transaction = result.ok
+        ? coordinator.complete(handle, completion)
+        : result.status === 'rejected'
+          ? coordinator.reject(handle, result.error, completion)
+          : coordinator.fail(handle, result.error, completion);
+      if (!transaction) {
+        reportRequiredObservationFailure(observation, 'coordinator-not-active');
+      }
+    } catch (error) {
+      reportRequiredObservationFailure(observation, 'coordinator-error', error);
     }
     return result;
   } catch (error) {
     if (handle) {
-      safely(() => coordinator.fail(handle, {
-        code: 'engine-error',
-        message: error instanceof Error ? error.message : 'Page mutation failed.',
-      }));
+      try {
+        const transaction = coordinator.fail(handle, {
+          code: 'engine-error',
+          message: error instanceof Error ? error.message : 'Page mutation failed.',
+        });
+        if (!transaction) {
+          reportRequiredObservationFailure(observation, 'coordinator-not-active');
+        }
+      } catch (observationError) {
+        reportRequiredObservationFailure(observation, 'coordinator-error', observationError);
+      }
     }
     throw error;
   }
@@ -135,4 +175,23 @@ export const observeCommittedEngineChange = (
   coordinator: ProjectChangeCoordinator,
   observation: ProjectChangeObservation,
   completion?: ProjectChangeCompletion
-) => safely(() => coordinator.observeCommitted(observation, completion));
+): ProjectChangeObservationDelivery => {
+  try {
+    const transaction = coordinator.observeCommitted(observation, completion);
+    if (!transaction) {
+      reportRequiredObservationFailure(observation, 'coordinator-not-active');
+      return {
+        status: 'not-delivered',
+        reason: 'coordinator-not-active',
+      };
+    }
+    return { status: 'delivered', transaction };
+  } catch (error) {
+    reportRequiredObservationFailure(observation, 'coordinator-error', error);
+    return {
+      status: 'not-delivered',
+      reason: 'coordinator-error',
+      error,
+    };
+  }
+};

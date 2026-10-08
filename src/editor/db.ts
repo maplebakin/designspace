@@ -1,5 +1,6 @@
 import Dexie, { Table } from 'dexie';
 import type { EditorMode } from './project/projectSchema';
+import type { CanonicalSerializedScene } from './scene/sceneSnapshot';
 import { assertIndexedDbStartupAllowed } from './persistence/startupStorageRecovery';
 
 export const MAX_LIBRARY_PROJECT_CHARS = 100 * 1024 * 1024;
@@ -189,7 +190,8 @@ export interface TemplateRecord {
   id?: number;
   name: string;
   thumbnail?: string;
-  canvasData: object;
+  /** Portable page-space scene; never a live Fabric object graph. */
+  canvasData: CanonicalSerializedScene;
   canvasSize: { width: number; height: number };
   unitMode?: string;
   defaultThemeId?: string;

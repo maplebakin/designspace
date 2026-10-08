@@ -41,7 +41,6 @@ import {
   documentPointsToPixels,
 } from '../src/document/extensions/DocumentTextStyleExtension';
 import {
-  buildDocumentSpanLayoutModel,
   buildMultiDocumentSpanLayoutModel,
   moveRectangleWithoutCollisions,
   rectanglesOverlap,
@@ -320,11 +319,39 @@ const normalizeBodyWithoutSpanImage = (content: JSONContent): JSONContent => {
 const countTextOccurrences = (value: string, search: string) =>
   value.split(search).length - 1;
 
-const readColumnMajorModelHtml = (
-  model: NonNullable<ReturnType<typeof buildDocumentSpanLayoutModel>>
-) => model.columns
-  .flatMap((column) => [column.topHtml, column.bottomHtml])
+type ProductionSpanLayoutModel = NonNullable<
+  ReturnType<typeof buildMultiDocumentSpanLayoutModel>
+>;
+
+const readColumnMajorModelHtml = (model: ProductionSpanLayoutModel) => model.textBands
+  .slice()
+  .sort((left, right) => left.column - right.column || left.topPx - right.topPx)
+  .map((band) => band.html)
   .join('');
+
+const readColumnHtml = (model: ProductionSpanLayoutModel, column: number) => model.textBands
+  .filter((band) => band.column === column)
+  .sort((left, right) => left.topPx - right.topPx)
+  .map((band) => band.html)
+  .join('');
+
+const readPrimarySpanImage = (model: ProductionSpanLayoutModel) => {
+  const image = model.images[0];
+  if (!image) throw new Error('The production compositor did not lay out the span image.');
+  return image;
+};
+
+const readContinuingColumn = (
+  model: ProductionSpanLayoutModel,
+  columnCount = 3,
+) => {
+  const image = readPrimarySpanImage(model);
+  return image.attributes.spanCount < columnCount
+    ? (image.attributes.spanStartColumn === 1
+      ? image.attributes.spanCount + 1
+      : 1)
+    : null;
+};
 
 const renderShell = async () => {
   const result = render(React.createElement(DocumentEditorShell));
@@ -2317,20 +2344,21 @@ describe('live document editor UI', () => {
       }));
       await waitFor(() => expect(editor).not.toBeNull());
 
-      const model = buildDocumentSpanLayoutModel(
+      const model = buildMultiDocumentSpanLayoutModel(
         editor!,
         3,
         24,
         720,
         720
       )!;
-      expect(model.attributes).toMatchObject({
+      const imageLayout = readPrimarySpanImage(model);
+      expect(imageLayout.attributes).toMatchObject({
         verticalAnchor: 'page-position',
         yPx: 180,
         spanStartColumn,
         spanCount,
       });
-      expect(model.imageTopPx).toBe(180);
+      expect(imageLayout.imageTopPx).toBe(180);
       const renderedHtml = readColumnMajorModelHtml(model);
       for (let index = 1; index <= 16; index += 1) {
         expect(countTextOccurrences(
@@ -2346,17 +2374,29 @@ describe('live document editor UI', () => {
       ));
       expect(renderedHtml).toContain('data-font-size-px="18"');
       expect(model.overflowing).toBe(false);
-      expect(model.columns.some(
-        (column) =>
-          column.occupied
-          && column.topHtml.length > 0
-          && column.bottomHtml.length > 0
-      )).toBe(true);
+      expect(model.textBands.some((band) => (
+        band.html.length > 0 && band.topPx < imageLayout.imageTopPx
+      ))).toBe(true);
+      expect(model.textBands.some((band) => (
+        band.html.length > 0
+        && band.topPx >= imageLayout.imageTopPx + imageLayout.imageRegionHeightPx
+      ))).toBe(true);
       if (spanStartColumn === 2) {
-        expect(model.columns[0].topHtml.length).toBeGreaterThan(0);
-        expect(model.columns[0].bottomHtml).toBe('');
-        expect(model.columns[1].topHtml.length).toBeGreaterThan(0);
-        expect(model.columns[1].bottomHtml.length).toBeGreaterThan(0);
+        expect(readColumnHtml(model, 1).length).toBeGreaterThan(0);
+        expect(model.textBands
+          .filter((band) => band.column === 1)
+          .every((band) => band.topPx < imageLayout.imageTopPx))
+          .toBe(true);
+        expect(model.textBands.some((band) => (
+          band.column === 2
+          && band.html.length > 0
+          && band.topPx < imageLayout.imageTopPx
+        ))).toBe(true);
+        expect(model.textBands.some((band) => (
+          band.column === 2
+          && band.html.length > 0
+          && band.topPx >= imageLayout.imageTopPx + imageLayout.imageRegionHeightPx
+        ))).toBe(true);
       }
     }
   );
@@ -2431,21 +2471,22 @@ describe('live document editor UI', () => {
         expect(container.querySelector('[data-document-span-layout]')).not.toBeNull();
       });
 
-      const model = buildDocumentSpanLayoutModel(
+      const model = buildMultiDocumentSpanLayoutModel(
         editor!,
         columnCount,
         24,
         720
       );
-      expect(model).toMatchObject({
-        attributes: { spanCount, spanStartColumn },
-        sideColumn: continuingColumn,
-      });
-      expect(model?.beforeColumnHtml).toHaveLength(columnCount);
-      expect(model?.afterColumnHtml).toHaveLength(columnCount);
+      expect(model).not.toBeNull();
+      const imageLayout = readPrimarySpanImage(model!);
+      expect(imageLayout.attributes).toMatchObject({ spanCount, spanStartColumn });
+      expect(readContinuingColumn(model!, columnCount)).toBe(continuingColumn);
+      expect(model!.textBands.every((band) => (
+        band.column >= 1 && band.column <= columnCount
+      ))).toBe(true);
       expect(model!.columnWidthPx).toBeGreaterThan(150);
-      expect(model!.renderedImageWidthPx).toBeLessThanOrEqual(
-        model!.spanWidthPx
+      expect(imageLayout.renderedImageWidthPx).toBeLessThanOrEqual(
+        imageLayout.spanWidthPx
       );
       const layout = container.querySelector('[data-document-span-layout]')!;
       expect(layout.classList.contains('document-flow-prosemirror')).toBe(false);
@@ -2535,10 +2576,10 @@ describe('live document editor UI', () => {
       }));
       await waitFor(() => expect(editor).not.toBeNull());
 
-      const model = buildDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
-      expect(model.sideColumn).toBe(continuingColumn);
-      expect(model.beforeColumnHtml).toHaveLength(3);
-      expect(model.afterColumnHtml).toHaveLength(3);
+      const model = buildMultiDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
+      const imageLayout = readPrimarySpanImage(model);
+      expect(readContinuingColumn(model)).toBe(continuingColumn);
+      expect(model.textBands.some((band) => band.html.length > 0)).toBe(true);
       const renderedHtml = readColumnMajorModelHtml(model);
       expect(countTextOccurrences(renderedHtml, 'UPPER')).toBe(1);
       for (let index = 1; index <= 9; index += 1) {
@@ -2551,12 +2592,17 @@ describe('live document editor UI', () => {
         (left, right) => left - right
       ));
       expect(renderedHtml).toContain('data-font-size-px="18"');
-      expect(model.columns[continuingColumn - 1].bottomHtml).toBe('');
+      expect(model.textBands
+        .filter((band) => band.column === continuingColumn)
+        .every((band) => (
+          band.topPx < imageLayout.imageTopPx + imageLayout.imageRegionHeightPx
+        )))
+        .toBe(true);
       if (continuingColumn === 1) {
-        expect(model.columns[0].topHtml).toContain('UPPER');
-        expect(model.columns[0].topHtml).not.toContain('REGION-9');
+        expect(readColumnHtml(model, 1)).toContain('UPPER');
+        expect(readColumnHtml(model, 1)).not.toContain('REGION-9');
       } else {
-        expect(model.columns[2].topHtml).toContain(
+        expect(readColumnHtml(model, 3)).toContain(
           'formatted archive introduction'
         );
       }
@@ -2609,23 +2655,27 @@ describe('live document editor UI', () => {
     }));
     await waitFor(() => expect(editor).not.toBeNull());
 
-    const model = buildDocumentSpanLayoutModel(
+    const model = buildMultiDocumentSpanLayoutModel(
       editor!,
       3,
       24,
       720,
       360
     )!;
-    const columnOne = model.columns[0].topHtml;
-    const columnTwoAbove = model.columns[1].topHtml;
-    const columnThreeAbove = model.columns[2].topHtml;
+    const columnOne = readColumnHtml(model, 1);
+    const columnTwoAbove = readColumnHtml(model, 2);
+    const columnThreeAbove = readColumnHtml(model, 3);
     expect(columnOne).toContain('ARTICLE-1');
     expect(columnTwoAbove.length).toBeGreaterThan(0);
     expect(columnThreeAbove.length).toBeGreaterThan(0);
     expect(columnOne).not.toContain('ARTICLE-12');
-    expect(model.columns[0].bottomHtml).toBe('');
-    expect(model.imageTopPx).toBeGreaterThan(0);
-    expect(model.attributes).toMatchObject({
+    const imageLayout = readPrimarySpanImage(model);
+    expect(model.textBands
+      .filter((band) => band.column === 1)
+      .every((band) => band.topPx < imageLayout.imageTopPx))
+      .toBe(true);
+    expect(imageLayout.imageTopPx).toBeGreaterThan(0);
+    expect(imageLayout.attributes).toMatchObject({
       spanCount: 2,
       spanStartColumn: 2,
     });
@@ -2674,12 +2724,15 @@ describe('live document editor UI', () => {
     }));
     await waitFor(() => expect(editor).not.toBeNull());
 
-    const model = buildDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
-    expect(model.sideColumn).toBeNull();
-    expect(model.sideHtml).toBe('');
+    const model = buildMultiDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
+    const imageLayout = readPrimarySpanImage(model);
+    expect(readContinuingColumn(model)).toBeNull();
+    expect(imageLayout.attributes.spanCount).toBe(3);
     const renderedHtml = readColumnMajorModelHtml(model);
-    expect(model.beforeColumnHtml.some((column) => column.length > 0)).toBe(true);
-    expect(model.afterColumnHtml.some((column) => column.length > 0)).toBe(true);
+    expect(model.textBands.some((band) => band.html.includes('SPAN3-UPPER')))
+      .toBe(true);
+    expect(model.textBands.some((band) => band.html.includes('SPAN3-LOWER-9')))
+      .toBe(true);
     for (let index = 1; index <= 9; index += 1) {
       expect(countTextOccurrences(
         renderedHtml,
@@ -2765,8 +2818,8 @@ describe('live document editor UI', () => {
     expect(normalizeBodyWithoutSpanImage(editor!.getJSON()))
       .toEqual(originalTextDocument);
     await waitFor(() => {
-      const model = buildDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
-      expect(model.imagePosition).toBeLessThan(imagePosition);
+      const model = buildMultiDocumentSpanLayoutModel(editor!, 3, 24, 720)!;
+      expect(readPrimarySpanImage(model).imagePosition).toBeLessThan(imagePosition);
       const renderedText = readColumnMajorModelHtml(model);
       expect(countTextOccurrences(renderedText, 'First paragraph.')).toBe(1);
       expect(countTextOccurrences(renderedText, 'Second paragraph.')).toBe(1);

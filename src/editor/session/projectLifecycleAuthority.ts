@@ -4,13 +4,27 @@ import type {
 } from './projectChangeCoordinator';
 import type { SessionSaveStatus } from './projectSession';
 import { recordDocumentTypingLatencyCounter } from '../../document/services/documentTypingLatencyDiagnostics';
+import {
+  advanceAuthoredRevision,
+  createInitialAuthoredRevision,
+  type AuthoredRevision,
+  type AuthoredRevisionEvent,
+} from './authoredRevision';
+import {
+  acknowledgeFailure,
+  acknowledgeLegacyBoolean,
+  acknowledgementAllowsDirtyClear,
+  type PersistenceAcknowledgement,
+} from './persistenceAcknowledgement';
+import { createPersistenceOperationContext } from './persistenceOperation';
 
+export type ProjectLifecycleSaveResult = boolean | PersistenceAcknowledgement;
 export type ProjectLifecycleSaveAdapter = Readonly<{
   canSave: () => boolean;
   canAutosave: () => boolean;
   autosaveDelayMs: number;
-  save: (name?: string) => Promise<boolean>;
-  autosave: () => Promise<boolean>;
+  save: (name?: string) => Promise<ProjectLifecycleSaveResult>;
+  autosave: () => Promise<ProjectLifecycleSaveResult>;
 }>;
 
 export type ProjectLifecycleSnapshot = Readonly<{
@@ -18,8 +32,12 @@ export type ProjectLifecycleSnapshot = Readonly<{
   sessionIdentity: string | null;
   generation: number;
   authoredRevision: number;
+  /** Typed identity/phase projection for the numeric authored watermark. */
+  authoredRevisionContext: AuthoredRevision | null;
   persistedRevision: number;
+  persistedRevisionContext: AuthoredRevision | null;
   saveInFlightRevision: number | null;
+  saveInFlightAuthoredRevision: AuthoredRevision | null;
   isDirty: boolean;
   saveStatus: SessionSaveStatus;
   autosaveEligible: boolean;
@@ -62,8 +80,11 @@ export type ProjectLifecycleAuthority = Readonly<{
   }) => void;
   endSession: () => void;
   save: (name?: string) => Promise<boolean>;
+  saveWithAcknowledgement: (
+    name?: string
+  ) => Promise<PersistenceAcknowledgement | null>;
   /** Record a visible authored mutation before its semantic completion event. */
-  markAuthoredMutation: () => void;
+  markAuthoredMutation: (event?: AuthoredRevisionEvent) => void;
   markPersistedRevision: (revision: number) => void;
   dispose: () => void;
 }>;
@@ -82,7 +103,8 @@ type ActiveSession = {
 type InFlightSave = {
   generation: number;
   revision: number;
-  promise: Promise<boolean>;
+  authoredRevisionContext: AuthoredRevision;
+  promise: Promise<PersistenceAcknowledgement | null>;
 };
 
 const EMPTY_SNAPSHOT: ProjectLifecycleSnapshot = Object.freeze({
@@ -90,8 +112,11 @@ const EMPTY_SNAPSHOT: ProjectLifecycleSnapshot = Object.freeze({
   sessionIdentity: null,
   generation: 0,
   authoredRevision: 0,
+  authoredRevisionContext: null,
   persistedRevision: 0,
+  persistedRevisionContext: null,
   saveInFlightRevision: null,
+  saveInFlightAuthoredRevision: null,
   isDirty: false,
   saveStatus: 'saved',
   autosaveEligible: false,
@@ -271,7 +296,11 @@ export const createProjectLifecycleAuthority = (
     }, delay);
   };
 
-  const completeSuccessfulSave = (generation: number, revision: number) => {
+  const completeSuccessfulSave = (
+    generation: number,
+    revision: number,
+    authoredRevisionContext: AuthoredRevision,
+  ) => {
     if (!isCurrentGeneration(generation)) return;
     const persistedRevision = Math.max(snapshot.persistedRevision, revision);
     const newerChanges = snapshot.authoredRevision > persistedRevision;
@@ -279,7 +308,9 @@ export const createProjectLifecycleAuthority = (
     setSnapshot({
       ...snapshot,
       persistedRevision,
+      persistedRevisionContext: authoredRevisionContext,
       saveInFlightRevision: null,
+      saveInFlightAuthoredRevision: null,
       saveStatus: newerChanges ? 'unsaved' : 'saved',
       autosaveEligible: adapter
         ? safeCapability(adapter.canAutosave)
@@ -289,12 +320,29 @@ export const createProjectLifecycleAuthority = (
     if (newerChanges) scheduleAutosave(generation);
   };
 
+  const completeSupersededSave = (generation: number) => {
+    if (!isCurrentGeneration(generation)) return;
+    const adapter = activeSession?.adapter;
+    setSnapshot({
+      ...snapshot,
+      saveInFlightRevision: null,
+      saveInFlightAuthoredRevision: null,
+      saveStatus: 'unsaved',
+      autosaveEligible: adapter
+        ? safeCapability(adapter.canAutosave)
+        : false,
+      pendingAutosave: false,
+    });
+    scheduleAutosave(generation);
+  };
+
   const completeFailedSave = (generation: number) => {
     if (!isCurrentGeneration(generation)) return;
     const adapter = activeSession?.adapter;
     setSnapshot({
       ...snapshot,
       saveInFlightRevision: null,
+      saveInFlightAuthoredRevision: null,
       saveStatus: 'error',
       autosaveEligible: adapter
         ? safeCapability(adapter.canAutosave)
@@ -307,49 +355,80 @@ export const createProjectLifecycleAuthority = (
     kind: 'manual' | 'autosave',
     name: string | undefined,
     generation: number
-  ): Promise<boolean> => {
+  ): Promise<PersistenceAcknowledgement | null> => {
     const session = activeSession;
-    if (!session || session.generation !== generation) return Promise.resolve(false);
+    if (!session || session.generation !== generation) return Promise.resolve(null);
     if (inFlightSave?.generation === generation) return inFlightSave.promise;
     if (kind === 'autosave' && !safeCapability(session.adapter.canAutosave)) {
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
     if (kind === 'manual' && !safeCapability(session.adapter.canSave)) {
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
 
     cancelAutosave();
     const revision = snapshot.authoredRevision;
+    const authoredRevisionContext = snapshot.authoredRevisionContext
+      ?? createInitialAuthoredRevision({
+        sessionIdentity: session.sessionIdentity,
+        projectIdentity: session.projectId,
+      });
     setSnapshot({
       ...snapshot,
       saveStatus: 'saving',
       saveInFlightRevision: revision,
+      saveInFlightAuthoredRevision: authoredRevisionContext,
       pendingAutosave: false,
       autosaveInvocationCount: kind === 'autosave'
         ? snapshot.autosaveInvocationCount + 1
         : snapshot.autosaveInvocationCount,
     });
 
-    const promise = (async () => {
-      let succeeded = false;
+    const operationContext = createPersistenceOperationContext({
+      operationKind: kind === 'manual' ? 'project-save' : 'autosave',
+      revisionDomain: 'shared-authored',
+      sessionIdentity: session.sessionIdentity,
+      projectIdentity: session.projectId,
+      targetIdentity: null,
+      authoredRevision: authoredRevisionContext,
+      snapshot: null,
+    });
+
+    const promise = (async (): Promise<PersistenceAcknowledgement | null> => {
+      let acknowledgement: PersistenceAcknowledgement;
       try {
-        succeeded = kind === 'manual'
+        const result = kind === 'manual'
           ? await session.adapter.save(name)
           : await session.adapter.autosave();
+        acknowledgement = typeof result === 'boolean'
+          ? acknowledgeLegacyBoolean(operationContext, result)
+          : result;
       } catch {
-        succeeded = false;
+        acknowledgement = acknowledgeFailure(
+          operationContext,
+          'The durable write was not confirmed.',
+        );
       }
 
       if (isCurrentGeneration(generation)) {
         if (inFlightSave?.generation === generation) {
           inFlightSave = null;
         }
-        if (succeeded) completeSuccessfulSave(generation, revision);
-        else completeFailedSave(generation);
+        if (acknowledgementAllowsDirtyClear(acknowledgement)) {
+          completeSuccessfulSave(
+            generation,
+            revision,
+            authoredRevisionContext,
+          );
+        } else if (acknowledgement.status === 'stale-completion-rejected') {
+          completeSupersededSave(generation);
+        } else {
+          completeFailedSave(generation);
+        }
       }
-      return succeeded;
+      return acknowledgement;
     })();
-    inFlightSave = { generation, revision, promise };
+    inFlightSave = { generation, revision, authoredRevisionContext, promise };
     void promise.finally(() => {
       if (inFlightSave?.promise === promise) inFlightSave = null;
     });
@@ -365,12 +444,23 @@ export const createProjectLifecycleAuthority = (
     ) {
       return;
     }
+    const currentRevision = snapshot.authoredRevisionContext
+      ?? createInitialAuthoredRevision({
+        sessionIdentity: activeSession.sessionIdentity,
+        projectIdentity: activeSession.projectId,
+      });
+    const nextRevision = advanceAuthoredRevision(currentRevision, {
+      kind: 'commit',
+      source: transaction.source,
+      pageId: transaction.pageIds[0] ?? null,
+    });
     setSnapshot({
       ...snapshot,
       projectId: activeSession.projectId,
       sessionIdentity: activeSession.sessionIdentity,
       generation: activeSession.generation,
-      authoredRevision: snapshot.authoredRevision + 1,
+      authoredRevision: nextRevision.sequence,
+      authoredRevisionContext: nextRevision,
       saveInFlightRevision: snapshot.saveInFlightRevision,
       saveStatus: 'unsaved',
       autosaveEligible: safeCapability(activeSession.adapter.canAutosave),
@@ -421,8 +511,17 @@ export const createProjectLifecycleAuthority = (
       sessionIdentity,
       generation,
       authoredRevision: 0,
+      authoredRevisionContext: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: projectId,
+      }),
       persistedRevision: 0,
+      persistedRevisionContext: createInitialAuthoredRevision({
+        sessionIdentity,
+        projectIdentity: projectId,
+      }),
       saveInFlightRevision: null,
+      saveInFlightAuthoredRevision: null,
       saveStatus: 'saved',
       autosaveEligible: safeCapability(adapter.canAutosave),
       pendingAutosave: false,
@@ -441,9 +540,9 @@ export const createProjectLifecycleAuthority = (
     });
   };
 
-  const save = async (name?: string) => {
+  const saveWithAcknowledgement = async (name?: string) => {
     const session = activeSession;
-    if (!session || !safeCapability(session.adapter.canSave)) return false;
+    if (!session || !safeCapability(session.adapter.canSave)) return null;
 
     cancelAutosave();
     const pending = inFlightSave?.generation === session.generation
@@ -451,17 +550,25 @@ export const createProjectLifecycleAuthority = (
       : null;
     if (pending) {
       const pendingResult = await pending.promise;
-      if (!isCurrentGeneration(session.generation)) return false;
+      if (!isCurrentGeneration(session.generation)) return null;
       if (
         pendingResult
+        && acknowledgementAllowsDirtyClear(pendingResult)
         && snapshot.authoredRevision <= snapshot.persistedRevision
       ) {
-        return true;
+        return pendingResult;
       }
       cancelAutosave();
     }
 
     return runSave('manual', name, session.generation);
+  };
+
+  const save = async (name?: string) => {
+    const acknowledgement = await saveWithAcknowledgement(name);
+    return Boolean(
+      acknowledgement && acknowledgementAllowsDirtyClear(acknowledgement)
+    );
   };
 
   const markPersistedRevision = (revision: number) => {
@@ -471,10 +578,14 @@ export const createProjectLifecycleAuthority = (
       Math.min(Math.trunc(revision), snapshot.authoredRevision)
     );
     const newerChanges = snapshot.authoredRevision > persistedRevision;
+    const persistedRevisionContext = persistedRevision === snapshot.authoredRevision
+      ? snapshot.authoredRevisionContext
+      : snapshot.persistedRevisionContext;
     cancelAutosave();
     setSnapshot({
       ...snapshot,
       persistedRevision,
+      persistedRevisionContext,
       saveStatus: newerChanges ? 'unsaved' : 'saved',
       autosaveEligible: safeCapability(activeSession.adapter.canAutosave),
       pendingAutosave: false,
@@ -482,13 +593,23 @@ export const createProjectLifecycleAuthority = (
     if (newerChanges) scheduleAutosave(activeSession.generation);
   };
 
-  const markAuthoredMutation = () => {
+  const markAuthoredMutation = (event?: AuthoredRevisionEvent) => {
     if (disposed || !activeSession) return;
     const generation = activeSession.generation;
     const adapter = activeSession.adapter;
+    const currentRevision = snapshot.authoredRevisionContext
+      ?? createInitialAuthoredRevision({
+        sessionIdentity: activeSession.sessionIdentity,
+        projectIdentity: activeSession.projectId,
+      });
+    const nextRevision = advanceAuthoredRevision(
+      currentRevision,
+      event ?? { kind: 'mutation', source: 'shared' },
+    );
     setSnapshot({
       ...snapshot,
-      authoredRevision: snapshot.authoredRevision + 1,
+      authoredRevision: nextRevision.sequence,
+      authoredRevisionContext: nextRevision,
       saveStatus: 'unsaved',
       autosaveEligible: safeCapability(adapter.canAutosave),
       pendingAutosave: (
@@ -515,6 +636,7 @@ export const createProjectLifecycleAuthority = (
     startSession,
     endSession,
     save,
+    saveWithAcknowledgement,
     markAuthoredMutation,
     markPersistedRevision,
     dispose: () => {

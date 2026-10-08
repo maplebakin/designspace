@@ -21,7 +21,7 @@ import { UnifiedEditorShell } from '../src/editor/session/UnifiedEditorChrome';
 import { useProjectSessionStore } from '../src/editor/state/projectSessionStore';
 
 const createCommands = (dirty = false): ProjectSessionCommands => ({
-  save: vi.fn(async () => undefined),
+  save: vi.fn(async () => null),
   download: vi.fn(async () => null),
   notify: vi.fn(),
   isDirty: vi.fn(() => dirty),

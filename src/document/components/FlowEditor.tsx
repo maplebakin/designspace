@@ -17,6 +17,7 @@ import {
   type Transaction,
 } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { ReplaceStep } from '@tiptap/pm/transform';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -94,6 +95,32 @@ const documentHasStructuredSpan = (editor: Editor) => {
     return !hasSpan;
   });
   return hasSpan;
+};
+
+const isTextOnlyFragment = (fragment: ProseMirrorNode['content']) => {
+  let textOnly = true;
+  fragment.forEach((node) => {
+    if (!node.isText) textOnly = false;
+  });
+  return textOnly;
+};
+
+const isPureTextInputTransaction = (transaction: Transaction) => {
+  if (
+    !transaction.docChanged
+    || transaction.getMeta('uiEvent') !== 'input'
+    || transaction.steps.length !== 1
+  ) return false;
+
+  const [step] = transaction.steps;
+  if (!(step instanceof ReplaceStep)) return false;
+
+  const start = transaction.before.resolve(step.from);
+  const end = transaction.before.resolve(step.to);
+  if (start.parent !== end.parent || !start.parent.isTextblock) return false;
+
+  return isTextOnlyFragment(transaction.before.slice(step.from, step.to).content)
+    && isTextOnlyFragment(step.slice.content);
 };
 
 const documentImageIdentitySignature = (doc: ProseMirrorNode) => {
@@ -441,8 +468,9 @@ export interface FlowEditorProps {
   maxSpanImageWidthPx?: number;
   imageGroups?: readonly DocumentImageGroup[];
   resolveAssetSource: (assetId: string) => string | undefined;
+  deferTextSerialization?: boolean;
   onUpdate?: (
-    content: JSONContent,
+    content: JSONContent | null,
     editor: Editor,
     transaction: Transaction
   ) => void;
@@ -572,6 +600,7 @@ export const FlowEditor = ({
   maxSpanImageWidthPx = 720,
   imageGroups = [],
   resolveAssetSource,
+  deferTextSerialization = false,
   onUpdate,
   onEditorReady,
   onFocusChange,
@@ -608,8 +637,12 @@ export const FlowEditor = ({
   const typingLastInputToVisibleMsRef = useRef(0);
   const typingVisibilityFramesRef = useRef<number[]>([]);
   const hasStructuredSpanRef = useRef(false);
+  const structuredSpanByDocumentRef = useRef(
+    new WeakMap<ProseMirrorNode, boolean>()
+  );
   const imageIdentitySignatureRef = useRef('');
   const blockStructureSignatureRef = useRef('');
+  const blockStructureDocumentRef = useRef<ProseMirrorNode | null>(null);
   const editingStructuredTextRef = useRef(false);
   const overflowMeasurePendingRef = useRef(false);
   const structuredLayoutDirtyRef = useRef(false);
@@ -927,12 +960,20 @@ export const FlowEditor = ({
       },
       onCreate: ({ editor: createdEditor }) => {
         editorInstanceRef.current = createdEditor;
+        const createdDocument = createdEditor.state.doc;
+        const hasStructuredSpan = documentHasStructuredSpan(createdEditor);
+        structuredSpanByDocumentRef.current.set(
+          createdDocument,
+          hasStructuredSpan
+        );
+        hasStructuredSpanRef.current = hasStructuredSpan;
         imageIdentitySignatureRef.current = documentImageIdentitySignature(
-          createdEditor.state.doc
+          createdDocument
         );
         blockStructureSignatureRef.current = documentBlockStructureSignature(
-          createdEditor.state.doc
+          createdDocument
         );
+        blockStructureDocumentRef.current = createdDocument;
       },
       onUpdate: ({ editor: updatedEditor, transaction }) => {
         const transactionStartedAt = typeof performance === 'undefined'
@@ -957,11 +998,14 @@ export const FlowEditor = ({
               imageIdentitySignatureRef.current = nextImageIdentitySignature;
             }
             if (transaction.docChanged) recordTypingInput();
-            const nextHasStructuredSpan = documentHasStructuredSpan(updatedEditor);
-            const selectedDocumentImage = getSelectedDocumentImage(updatedEditor);
-            const hasLiveTextSelection = (
-              updatedEditor.state.selection instanceof TextSelection
-              && selectedDocumentImage === null
+            const hasLiveTextSelection = updatedEditor.state.selection
+              instanceof TextSelection;
+            const isPureTextUpdate = (
+              hasLiveTextSelection
+              && (editingStructuredTextRef.current || updatedEditor.isFocused)
+              && isPureTextInputTransaction(transaction)
+              && structuredSpanByDocumentRef.current.has(transaction.before)
+              && blockStructureDocumentRef.current === transaction.before
             );
             // A WebKit text transaction can arrive before the focus callback's
             // React state has committed. The transaction itself is authoritative
@@ -971,18 +1015,37 @@ export const FlowEditor = ({
               editingStructuredTextRef.current = true;
               setEditingStructuredText(true);
             }
+            const selectedDocumentImage = isPureTextUpdate
+              ? null
+              : getSelectedDocumentImage(updatedEditor);
+            const previousHasStructuredSpan = hasStructuredSpanRef.current;
+            const nextHasStructuredSpan = isPureTextUpdate
+              ? previousHasStructuredSpan
+              : transaction.docChanged
+                ? documentHasStructuredSpan(updatedEditor)
+                : structuredSpanByDocumentRef.current.get(
+                    updatedEditor.state.doc
+                  ) ?? previousHasStructuredSpan;
             const structuredImageStructureChanged = (
-              nextHasStructuredSpan !== hasStructuredSpanRef.current
+              nextHasStructuredSpan !== previousHasStructuredSpan
               || selectedDocumentImage !== null
             );
-            const nextBlockStructureSignature = documentBlockStructureSignature(
-              updatedEditor.state.doc
-            );
+            const nextBlockStructureSignature = transaction.docChanged
+              && !isPureTextUpdate
+              ? documentBlockStructureSignature(updatedEditor.state.doc)
+              : blockStructureSignatureRef.current;
             const blockStructureChanged = (
               nextBlockStructureSignature !== blockStructureSignatureRef.current
             );
             hasStructuredSpanRef.current = nextHasStructuredSpan;
-            blockStructureSignatureRef.current = nextBlockStructureSignature;
+            structuredSpanByDocumentRef.current.set(
+              updatedEditor.state.doc,
+              nextHasStructuredSpan
+            );
+            if (transaction.docChanged) {
+              blockStructureSignatureRef.current = nextBlockStructureSignature;
+              blockStructureDocumentRef.current = updatedEditor.state.doc;
+            }
             if (
               transaction.docChanged
               && (
@@ -999,12 +1062,14 @@ export const FlowEditor = ({
               scheduleStructuredLayoutReconcile();
             }
             callbacksRef.current.onUpdate?.(
-              updatedEditor.getJSON(),
+              deferTextSerialization && isPureTextUpdate
+                ? null
+                : updatedEditor.getJSON(),
               updatedEditor,
               callbackTransaction
             );
             callbacksRef.current.onImageSelectionChange?.(
-              getSelectedDocumentImage(updatedEditor),
+              selectedDocumentImage,
               updatedEditor
             );
             scheduleOverflowMeasure();
@@ -1061,6 +1126,7 @@ export const FlowEditor = ({
         editorInstanceRef.current = null;
         imageIdentitySignatureRef.current = '';
         blockStructureSignatureRef.current = '';
+        blockStructureDocumentRef.current = null;
         setActiveTextFragmentId(null);
       },
     },
@@ -1307,10 +1373,17 @@ export const FlowEditor = ({
     '--document-column-count': columnCount,
     '--document-column-gap': `${Math.max(0, columnGapPx)}px`,
   } as CSSProperties;
-  const hasStructuredSpan = editor
-    ? documentHasStructuredSpan(editor)
+  const editorDocument = editor?.state.doc;
+  const cachedStructuredSpan = editorDocument
+    ? structuredSpanByDocumentRef.current.get(editorDocument)
+    : undefined;
+  const hasStructuredSpan = editor && editorDocument
+    ? cachedStructuredSpan ?? documentHasStructuredSpan(editor)
     : false;
-  hasStructuredSpanRef.current = hasStructuredSpan;
+  if (editorDocument && cachedStructuredSpan === undefined) {
+    structuredSpanByDocumentRef.current.set(editorDocument, hasStructuredSpan);
+    hasStructuredSpanRef.current = hasStructuredSpan;
+  }
   const presentationState = hasStructuredSpan
     ? editingStructuredText ? 'structured-text-editing' : 'structured-idle'
     : editingStructuredText ? 'ordinary-text-editing' : 'ordinary';

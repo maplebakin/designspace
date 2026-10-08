@@ -2,7 +2,6 @@ import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import * as fabric from 'fabric';
-import { saveBrandVaultToDb } from '../utils/indexedDb';
 import { resolveThemeValue } from '../utils/themeResolver';
 import { commitCanvasMutation, type CommitCanvasMutationCallbacks } from '../utils/commitCanvasMutation';
 import type { ApocapaletteTheme } from '../types/apocapalette';
@@ -123,6 +122,7 @@ const findDefaultTheme = (vault: BrandCollection[]) => {
 
 interface ThemeState {
     // Theme Data
+    /** Persisted Brand Vault owner; legacy auxiliary DB rows are compatibility-only. */
     brandVault: BrandCollection[];
     activeBrandCollectionId: string | null;
     themeData: ApocapaletteTheme | null;
@@ -131,7 +131,7 @@ interface ThemeState {
     activePaletteId: string | null;
     importedPalette: IngestedPalette | null;
 
-    // Canvas Background
+    // Canvas Background: authored theme state; canvas paper/page snapshots are projections.
     canvasBackgroundColor: string | null;
 
     // Drawing Colors
@@ -364,7 +364,6 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                             activeBrandCollectionId: newCollection.id,
                             themeData: json
                         });
-                        saveBrandVaultToDb(newVault);
 
                         // Sync with UI theme if enabled
                         const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();
@@ -386,7 +385,6 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                         activeBrandCollectionId: importResult.collection.id,
                         themeData: importResult.collection.themeData
                     });
-                    saveBrandVaultToDb(newVault);
 
                     // Sync with UI theme if enabled
                     const { projectSyncEnabled, applyThemeFromTokens } = useUiThemeStore.getState();

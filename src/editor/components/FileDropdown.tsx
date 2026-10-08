@@ -16,18 +16,18 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
   const [isOpen, setIsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const {
-    downloadProjectFile,
+    downloadProjectFileWithAcknowledgement,
     loadProjectFile,
     projectName,
-    saveProject,
+    saveProjectWithAcknowledgement,
     setProjectPresetsOpen,
     setToastMessage,
   } = useEditorStore(
     (state) => ({
-      downloadProjectFile: state.downloadProjectFile,
+      downloadProjectFileWithAcknowledgement: state.downloadProjectFileWithAcknowledgement,
       loadProjectFile: state.loadProjectFile,
       projectName: state.projectName,
-      saveProject: state.saveProject,
+      saveProjectWithAcknowledgement: state.saveProjectWithAcknowledgement,
       setProjectPresetsOpen: state.setProjectPresetsOpen,
       setToastMessage: state.setToastMessage,
     }),
@@ -69,7 +69,7 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
 
   const handleSaveToLibrary = async () => {
     const safeName = projectName?.trim() || 'Untitled Project';
-    await saveProject(safeName);
+    await saveProjectWithAcknowledgement(safeName);
     setIsOpen(false);
   };
 
@@ -119,7 +119,10 @@ export const FileDropdown: React.FC<FileDropdownProps> = ({ onImportDesignSpace 
             </li>
             <li>
               <button
-                onClick={() => { downloadProjectFile(); setIsOpen(false); }}
+                onClick={() => {
+                  void downloadProjectFileWithAcknowledgement();
+                  setIsOpen(false);
+                }}
                 className="ui-menu-item text-left text-xs uppercase tracking-widest"
               >
                 Download Project File

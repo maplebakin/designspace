@@ -3,7 +3,6 @@ import * as fabric from 'fabric';
 import { renderCanvasToPngBlob } from '../utils/renderToPng';
 import { serializeToSVG } from '../utils/serializeToSVG';
 import { pluginManager } from '../utils/pluginArchitecture';
-import { useCanvasStore } from '../state/useCanvasStore';
 import { sanitizeExportBaseName } from '../utils/exportFileName';
 import {
   deliverFile,
@@ -15,6 +14,12 @@ import { loadCanvasFromJsonSafely, reviveCustomFabricProps } from '../fabric/ini
 import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
 import type { ProjectPage } from '../state/editorStore';
 import { serializeCanvasObjects } from '../utils/serialization';
+import {
+  DEFAULT_CANVAS_BACKGROUND,
+  createExportSceneSnapshot,
+  createPageSceneSnapshot,
+  type ExportSceneSnapshot,
+} from '../scene/sceneSnapshot';
 
 export type AdvancedExportFormat = 'png' | 'jpeg' | 'svg' | 'pdf';
 
@@ -27,6 +32,8 @@ export type AdvancedExportOptions = {
   pageSize?: { width: number; height: number };
   fileName?: string;
   quality?: number;
+  /** Authored page snapshot captured before an async renderer boundary. */
+  authoredSnapshot?: ExportSceneSnapshot;
 };
 
 export type ExportPagesPdfOptions = AdvancedExportOptions & {
@@ -42,13 +49,6 @@ export type ExportedPageBlob = {
   pageNumber: number;
   fileName: string;
   blob: Blob;
-};
-
-type ExportSceneSnapshot = {
-  objects: any[];
-  width: number;
-  height: number;
-  backgroundColor: string | null;
 };
 
 const normalizeDpi = (value: number | undefined, fallback: number) =>
@@ -82,12 +82,59 @@ const waitForDocumentFonts = async () => {
 };
 
 /** Capture authored scene data before export awaits fonts or image revival. */
-const captureExportScene = (canvas: fabric.Canvas): ExportSceneSnapshot => ({
-  objects: serializeCanvasObjects(canvas),
-  width: Math.max(1, Math.round(canvas.getWidth())),
-  height: Math.max(1, Math.round(canvas.getHeight())),
-  backgroundColor: canvas.backgroundColor ? String(canvas.backgroundColor) : null,
+const captureExportScene = (
+  canvas: fabric.Canvas,
+  authoredSnapshot?: ExportSceneSnapshot,
+): ExportSceneSnapshot => {
+  if (authoredSnapshot) return authoredSnapshot;
+  const backgroundColor = canvas.backgroundColor ? String(canvas.backgroundColor) : null;
+  return createExportSceneSnapshot({
+    canvasSize: {
+      width: Math.max(1, Math.round(canvas.getWidth())),
+      height: Math.max(1, Math.round(canvas.getHeight())),
+    },
+    scene: {
+      objects: serializeCanvasObjects(canvas),
+      ...(backgroundColor ? { background: backgroundColor } : {}),
+    },
+  });
+};
+
+const getProjectPageExportSize = (page: ProjectPage) => ({
+  width: Math.max(1, Math.round(Number(page.canvasSize?.width) || 1)),
+  height: Math.max(1, Math.round(Number(page.canvasSize?.height) || 1)),
 });
+
+/**
+ * Adapt a durable canvas page mirror into the renderer-neutral export
+ * snapshot. Page size and background come from that page snapshot; the
+ * current live canvas store is intentionally not consulted here.
+ */
+export const createProjectPageExportSnapshot = (
+  page: ProjectPage,
+  options: Pick<ExportPagesPdfOptions, 'backgroundColor' | 'imageAssets' | 'sourceDpi'> = {},
+): ExportSceneSnapshot => {
+  const scene = page.canvasData || { objects: [] };
+  const background = typeof scene.background === 'string'
+    ? scene.background
+    : options.backgroundColor ?? DEFAULT_CANVAS_BACKGROUND;
+  const pageSnapshot = createPageSceneSnapshot({
+    pageId: page.id,
+    canvasSize: getProjectPageExportSize(page),
+    scene: {
+      ...scene,
+      background,
+    },
+    thumbnail: page.thumbnail,
+  });
+  return createExportSceneSnapshot({
+    pageId: page.id,
+    canvasSize: pageSnapshot.canvasSize,
+    sourceDpi: options.sourceDpi,
+    scene: pageSnapshot.scene,
+    assets: options.imageAssets || {},
+  });
+};
 
 export class AdvancedExportManager {
   async export(
@@ -97,7 +144,7 @@ export class AdvancedExportManager {
   ): Promise<FileDeliveryResult> {
     pluginManager.emitHook('onExport', { format, options });
     const fileName = sanitizeExportBaseName(options.fileName);
-    const scene = captureExportScene(canvas);
+    const scene = captureExportScene(canvas, options.authoredSnapshot);
 
     if (format === 'png') {
       const blob = await this.exportPng(canvas, options, scene);
@@ -147,7 +194,10 @@ export class AdvancedExportManager {
     options: AdvancedExportOptions = {},
     scene?: ExportSceneSnapshot,
   ): Promise<Blob> {
-    return this.exportSnapshotPng(scene ?? captureExportScene(canvas), options);
+    return this.exportSnapshotPng(
+      scene ?? captureExportScene(canvas, options.authoredSnapshot),
+      options,
+    );
   }
 
   private async exportSnapshotPng(
@@ -157,8 +207,11 @@ export class AdvancedExportManager {
     await waitForDocumentFonts();
     const { canvas, element } = await this.createSnapshotCanvas(scene);
     try {
-      const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
-      const background = options.backgroundColor ?? scene.backgroundColor;
+      const scaleFactor = calculateRasterExportScale(
+        options.dpi ?? 300,
+        options.sourceDpi ?? scene.sourceDpi,
+      );
+      const background = options.backgroundColor ?? scene.scene.background ?? null;
       return await renderCanvasToPngBlob(canvas, {
         scale: scaleFactor,
         includeBackground: options.includeBackground ?? true,
@@ -175,7 +228,10 @@ export class AdvancedExportManager {
     options: AdvancedExportOptions = {},
     scene?: ExportSceneSnapshot,
   ): Promise<Blob> {
-    return this.exportSnapshotJpeg(scene ?? captureExportScene(canvas), options);
+    return this.exportSnapshotJpeg(
+      scene ?? captureExportScene(canvas, options.authoredSnapshot),
+      options,
+    );
   }
 
   private async exportSnapshotJpeg(
@@ -185,8 +241,11 @@ export class AdvancedExportManager {
     await waitForDocumentFonts();
     const { canvas, element } = await this.createSnapshotCanvas(scene);
     try {
-      const scaleFactor = calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi);
-      const background = options.backgroundColor ?? scene.backgroundColor ?? '#ffffff';
+      const scaleFactor = calculateRasterExportScale(
+        options.dpi ?? 300,
+        options.sourceDpi ?? scene.sourceDpi,
+      );
+      const background = options.backgroundColor ?? scene.scene.background ?? '#ffffff';
       return await renderCanvasToPngBlob(canvas, {
         scale: scaleFactor,
         includeBackground: true,
@@ -201,11 +260,18 @@ export class AdvancedExportManager {
   }
 
   exportSvg(canvas: fabric.Canvas, options: AdvancedExportOptions = {}): Blob {
-    const background = options.backgroundColor ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
-    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
+    const authoredSnapshot = options.authoredSnapshot;
+    const background = options.backgroundColor
+      ?? authoredSnapshot?.scene.background
+      ?? (canvas.backgroundColor ? String(canvas.backgroundColor) : null);
+    const { width: documentWidth, height: documentHeight } = authoredSnapshot?.canvasSize
+      ?? {
+        width: Math.max(1, Math.round(canvas.getWidth())),
+        height: Math.max(1, Math.round(canvas.getHeight())),
+      };
     const svg = serializeToSVG(canvas, {
-      width: options.pageSize?.width ?? documentWidth,
-      height: options.pageSize?.height ?? documentHeight,
+      width: options.pageSize?.width ?? authoredSnapshot?.canvasSize.width ?? documentWidth,
+      height: options.pageSize?.height ?? authoredSnapshot?.canvasSize.height ?? documentHeight,
       includeBackground: options.includeBackground ?? true,
       backgroundColor: background,
     });
@@ -217,16 +283,18 @@ export class AdvancedExportManager {
     options: AdvancedExportOptions = {},
     scene?: ExportSceneSnapshot,
   ): Promise<Blob> {
-    const captured = scene ?? captureExportScene(canvas);
-    const blob = await this.exportSnapshotPng(captured, options);
+    const captured = scene ?? captureExportScene(canvas, options.authoredSnapshot);
+    const blob = await this.exportSnapshotPng(captured, {
+      ...options,
+      sourceDpi: options.sourceDpi ?? captured.sourceDpi,
+    });
     const imageUrl = URL.createObjectURL(blob);
-    const { width: documentWidth, height: documentHeight } = useCanvasStore.getState();
-    const pageWidth = options.pageSize?.width ?? captured.width ?? documentWidth;
-    const pageHeight = options.pageSize?.height ?? captured.height ?? documentHeight;
+    const pageWidth = options.pageSize?.width ?? captured.canvasSize.width;
+    const pageHeight = options.pageSize?.height ?? captured.canvasSize.height;
     const { width: widthInches, height: heightInches } = calculatePdfPageSizeInches(
       pageWidth,
       pageHeight,
-      options.sourceDpi
+      options.sourceDpi ?? captured.sourceDpi
     );
     const doc = new jsPDF({
       orientation: widthInches >= heightInches ? 'landscape' : 'portrait',
@@ -249,18 +317,19 @@ export class AdvancedExportManager {
   private async createSnapshotCanvas(scene: ExportSceneSnapshot) {
     const element = document.createElement('canvas');
     const canvas = new fabric.Canvas(element, {
-      width: scene.width,
-      height: scene.height,
+      width: scene.canvasSize.width,
+      height: scene.canvasSize.height,
       enableRetinaScaling: false,
       renderOnAddRemove: false,
     });
     try {
-      await loadCanvasFromJsonSafely(canvas, {
-        objects: scene.objects,
-        background: scene.backgroundColor,
-      }, reviveCustomFabricProps);
-      canvas.setDimensions({ width: scene.width, height: scene.height });
-      canvas.backgroundColor = scene.backgroundColor ?? 'transparent';
+      await loadCanvasFromJsonSafely(
+        canvas,
+        hydrateCanvasDataWithAssets(scene.scene, scene.assets),
+        reviveCustomFabricProps,
+      );
+      canvas.setDimensions(scene.canvasSize);
+      canvas.backgroundColor = scene.scene.background ?? 'transparent';
       canvas.renderAll();
       return { canvas, element };
     } catch (error) {
@@ -279,8 +348,8 @@ export class AdvancedExportManager {
     try {
       return this.exportSvg(canvas, {
         ...options,
-        backgroundColor: options.backgroundColor ?? scene.backgroundColor,
-        pageSize: options.pageSize ?? { width: scene.width, height: scene.height },
+        backgroundColor: options.backgroundColor ?? scene.scene.background,
+        pageSize: options.pageSize ?? scene.canvasSize,
       });
     } finally {
       canvas.dispose();
@@ -315,8 +384,9 @@ export class AdvancedExportManager {
 
     for (let index = 0; index < pages.length; index += 1) {
       const page = pages[index];
-      const pageWidth = Math.max(1, Math.round(page.canvasSize?.width ?? useCanvasStore.getState().width));
-      const pageHeight = Math.max(1, Math.round(page.canvasSize?.height ?? useCanvasStore.getState().height));
+      const pageSnapshot = createProjectPageExportSnapshot(page, options);
+      const pageWidth = pageSnapshot.canvasSize.width;
+      const pageHeight = pageSnapshot.canvasSize.height;
       const blob = await this.renderPageToPngBlob(page, {
         ...options,
         dpi: pdfImageDpi,
@@ -328,7 +398,7 @@ export class AdvancedExportManager {
       const { width: widthInches, height: heightInches } = calculatePdfPageSizeInches(
         pageWidth,
         pageHeight,
-        options.sourceDpi
+        options.sourceDpi ?? pageSnapshot.sourceDpi
       );
 
       pdf.addPage(
@@ -382,8 +452,9 @@ export class AdvancedExportManager {
     for (let index = 0; index < pages.length; index += 1) {
       const page = pages[index];
       const pageNumber = String(index + 1).padStart(2, '0');
-      const pageWidth = Math.max(1, Math.round(page.canvasSize?.width ?? useCanvasStore.getState().width));
-      const pageHeight = Math.max(1, Math.round(page.canvasSize?.height ?? useCanvasStore.getState().height));
+      const pageSize = getProjectPageExportSize(page);
+      const pageWidth = pageSize.width;
+      const pageHeight = pageSize.height;
       const pageOptions = {
         ...options,
         pageSize: { width: pageWidth, height: pageHeight },
@@ -418,8 +489,9 @@ export class AdvancedExportManager {
     options: ExportPagesPdfOptions
   ): Promise<Blob> {
     await waitForDocumentFonts();
-    const pageWidth = Math.max(1, Math.round(options.pageSize?.width ?? page.canvasSize?.width ?? useCanvasStore.getState().width));
-    const pageHeight = Math.max(1, Math.round(options.pageSize?.height ?? page.canvasSize?.height ?? useCanvasStore.getState().height));
+    const scene = createProjectPageExportSnapshot(page, options);
+    const pageWidth = scene.canvasSize.width;
+    const pageHeight = scene.canvasSize.height;
     const canvasElement = document.createElement('canvas');
     const exportCanvas = new fabric.Canvas(canvasElement, {
       width: pageWidth,
@@ -428,17 +500,10 @@ export class AdvancedExportManager {
     });
 
     try {
-      const hydrated = hydrateCanvasDataWithAssets(
-        page.canvasData || { objects: [] },
-        options.imageAssets || {}
-      );
+      const hydrated = hydrateCanvasDataWithAssets(scene.scene, scene.assets);
       await exportCanvas.loadFromJSON(hydrated, reviveCustomFabricProps);
       exportCanvas.setDimensions({ width: pageWidth, height: pageHeight });
-      const pageBackground = typeof (page.canvasData as any)?.background === 'string'
-        ? (page.canvasData as any).background
-        : null;
-      const background = pageBackground
-        ?? options.backgroundColor
+      const background = scene.scene.background
         ?? (exportCanvas.backgroundColor ? String(exportCanvas.backgroundColor) : null);
       const originalBackgroundColor = exportCanvas.backgroundColor;
       const hiddenObjects = exportCanvas.getObjects()
@@ -455,7 +520,10 @@ export class AdvancedExportManager {
 
       const dataUrl = exportCanvas.toDataURL({
         format: options.format === 'jpeg' ? 'jpeg' : 'png',
-        multiplier: calculateRasterExportScale(options.dpi ?? 300, options.sourceDpi),
+        multiplier: calculateRasterExportScale(
+          options.dpi ?? 300,
+          options.sourceDpi ?? scene.sourceDpi,
+        ),
         left: 0,
         top: 0,
         width: pageWidth,
@@ -475,8 +543,9 @@ export class AdvancedExportManager {
     options: ExportPagesPdfOptions
   ): Promise<Blob> {
     await waitForDocumentFonts();
-    const pageWidth = Math.max(1, Math.round(options.pageSize?.width ?? page.canvasSize?.width ?? useCanvasStore.getState().width));
-    const pageHeight = Math.max(1, Math.round(options.pageSize?.height ?? page.canvasSize?.height ?? useCanvasStore.getState().height));
+    const scene = createProjectPageExportSnapshot(page, options);
+    const pageWidth = scene.canvasSize.width;
+    const pageHeight = scene.canvasSize.height;
     const canvasElement = document.createElement('canvas');
     const exportCanvas = new fabric.Canvas(canvasElement, {
       width: pageWidth,
@@ -485,23 +554,15 @@ export class AdvancedExportManager {
     });
 
     try {
-      const hydrated = hydrateCanvasDataWithAssets(
-        page.canvasData || { objects: [] },
-        options.imageAssets || {}
-      );
+      const hydrated = hydrateCanvasDataWithAssets(scene.scene, scene.assets);
       await exportCanvas.loadFromJSON(hydrated, reviveCustomFabricProps);
       exportCanvas.setDimensions({ width: pageWidth, height: pageHeight });
-      const pageBackground = typeof (page.canvasData as any)?.background === 'string'
-        ? (page.canvasData as any).background
-        : null;
-      const background = pageBackground
-        ?? options.backgroundColor
-        ?? (exportCanvas.backgroundColor ? String(exportCanvas.backgroundColor) : null);
       return this.exportSvg(exportCanvas, {
         ...options,
         includeBackground: options.includeBackground,
-        backgroundColor: background,
+        backgroundColor: scene.scene.background,
         pageSize: { width: pageWidth, height: pageHeight },
+        authoredSnapshot: scene,
       });
     } finally {
       exportCanvas.dispose();

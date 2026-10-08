@@ -4,6 +4,7 @@ import {
   type ProjectProductMetadata,
 } from '../project/projectSchema';
 import type { ApocapaletteTheme } from '../types/apocapalette';
+import type { CanonicalSerializedObject } from '../scene/sceneSnapshot';
 import type {
   GenerateProjectFromRecipeOptions,
   GeneratedRecipeProject,
@@ -996,7 +997,7 @@ const buildPages = (
     canvasData: {
       version: '5.0.0',
       background: colors.background,
-      objects: buildPageObjects(recipe, page, index, colors, productTitle),
+      objects: buildPageObjects(recipe, page, index, colors, productTitle) as CanonicalSerializedObject[],
     },
   }));
 

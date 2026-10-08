@@ -21,14 +21,17 @@ export interface VisionItemPosition {
 }
 
 /**
- * Image item - supports blob URLs and regular URLs
+ * Image item - external/data URLs may be persisted; blob URLs are session
+ * capabilities and are intentionally excluded from the persisted board.
+ * Uploaded images inserted into a project are owned by the project asset map,
+ * not by this auxiliary board collection.
  */
 export interface ImageVisionItem {
     type: 'image';
     id: string;
     position: VisionItemPosition;
-    src: string;              // blob: URL or https: URL
-    thumbnail?: string;       // Optional smaller preview
+    src: string;              // data:/https: may persist; blob: is session-only
+    thumbnail?: string;       // Optional smaller preview; blob: is session-only
     label?: string;
     extractedColors?: string[]; // Colors extracted from the image
     createdAt: number;
@@ -50,8 +53,9 @@ export interface ColorVisionItem {
 }
 
 /**
- * Design state item - serialized canvas state from serialization.ts
- * This allows saving canvas snapshots to the vision board
+ * Design state item - the JSON form of a portable TemplateSceneSnapshot.
+ * This allows saving canvas snapshots to the Vision Board without making the
+ * board an owner of the project's image asset table.
  */
 export interface DesignStateVisionItem {
     type: 'design-state';
@@ -81,6 +85,28 @@ export type AddImageInput = Omit<ImageVisionItem, 'id' | 'createdAt' | 'updatedA
 export type AddColorInput = Omit<ColorVisionItem, 'id' | 'createdAt' | 'updatedAt'> & { id?: string };
 export type AddDesignStateInput = Omit<DesignStateVisionItem, 'id' | 'createdAt' | 'updatedAt'> & { id?: string };
 export type AddVisionItemInput = AddImageInput | AddColorInput | AddDesignStateInput;
+
+const isSessionOnlyUrl = (value: unknown): value is string => (
+    typeof value === 'string' && value.startsWith('blob:')
+);
+
+/**
+ * Return the subset of board items that can be reconstructed after a new
+ * browser session. This is the persistence adapter for the session-only
+ * uploaded-image collection; it does not mutate the live board state.
+ */
+export const prepareVisionBoardItemsForPersistence = (
+    items: readonly VisionItem[],
+): VisionItem[] => items.flatMap((item): VisionItem[] => {
+    if (item.type !== 'image') return [item];
+    if (isSessionOnlyUrl(item.src)) return [];
+    if (isSessionOnlyUrl(item.thumbnail)) {
+        const persistedItem: ImageVisionItem = { ...item };
+        delete persistedItem.thumbnail;
+        return [persistedItem];
+    }
+    return [item];
+});
 
 // --- UTILITY FUNCTIONS ---
 
@@ -590,10 +616,26 @@ export const useVisionBoardStore = createWithEqualityFn<VisionBoardState>()(
             name: 'designspace-vision-board',
             storage: createBoundedPersistStorage({ maxBytes: 8 * 1024 * 1024 }),
             partialize: (state) => ({
-                items: state.items,
+                // Design states are portable snapshots. Image board items
+                // remain only when their source is reconstructible after a
+                // restart; project image bytes have their own durable owner.
+                items: prepareVisionBoardItemsForPersistence(state.items),
                 boardSize: state.boardSize,
                 // Don't persist view state (zoom, pan, selection)
             }),
+            merge: (persistedState, currentState) => {
+                if (!persistedState || typeof persistedState !== 'object') return currentState;
+                const persisted = persistedState as Partial<Pick<VisionBoardState, 'items' | 'boardSize'>>;
+                return {
+                    ...currentState,
+                    ...persisted,
+                    // Ignore legacy session-only blob entries on rehydrate;
+                    // their historical storage rows are not deleted here.
+                    items: Array.isArray(persisted.items)
+                        ? prepareVisionBoardItemsForPersistence(persisted.items)
+                        : currentState.items,
+                };
+            },
         }
     )
 );

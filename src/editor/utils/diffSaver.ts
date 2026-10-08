@@ -1,7 +1,7 @@
-import * as fabric from 'fabric';
+import type { CanonicalSerializedObject } from '../scene/sceneSnapshot';
 
-// A simplified representation of what toSerializableObject produces.
-export type SerializedObject = fabric.Object & {
+/** Serialized scene data; this is never a live Fabric object. */
+export type SerializedObject = CanonicalSerializedObject & {
   id: string;
 };
 

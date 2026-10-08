@@ -15,6 +15,7 @@ import {
 } from '../utils/serialization';
 import { recordDiff, ObjectDiff, SerializedObject } from '../utils/diffSaver';
 import { isPersistableCanvasObject } from '../utils/objectUtils';
+import type { CanonicalSerializedScene } from '../scene/sceneSnapshot';
 
 // --- CONSTANTS ---
 const MAX_HISTORY_SIZE = 50;
@@ -23,7 +24,7 @@ const SAVE_STATE_DEBOUNCE_MS = 300;
 // --- TYPES ---
 export type HistorySnapshot = {
   type: 'full';
-  data: any;
+  data: CanonicalSerializedScene;
 } | {
   type: 'diff';
   data: ObjectDiff;
@@ -86,7 +87,7 @@ type HistoryContext = {
   /** Stage a full checkpoint off-canvas before committing it to the live view. */
   loadCanvasState?: (
     canvas: fabric.Canvas,
-    canvasData: any,
+    canvasData: CanonicalSerializedScene,
     reviver: any,
     isCurrent: () => boolean,
   ) => Promise<boolean>;
@@ -212,9 +213,9 @@ const mapSerializedObjectTree = (
 });
 
 export const prepareCanvasDataForPersistence = (
-  canvasData: any,
+  canvasData: CanonicalSerializedScene,
   imageAssets: Record<string, string>
-) => {
+): { canvasData: CanonicalSerializedScene; imageAssets: Record<string, string> } => {
   const objects = getCanvasObjects(canvasData);
   if (!Array.isArray(objects)) {
     return { canvasData, imageAssets };
@@ -268,9 +269,9 @@ export const prepareCanvasDataForPersistence = (
 };
 
 export const hydrateCanvasDataWithAssets = (
-  canvasData: any,
+  canvasData: CanonicalSerializedScene,
   imageAssets: Record<string, string>
-) => {
+): CanonicalSerializedScene => {
   const objects = getCanvasObjects(canvasData);
   if (!Array.isArray(objects)) {
     return canvasData;
@@ -654,7 +655,9 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
       });
 
       const rawObjects = serializeCanvasObjects(canvas) as SerializedObject[];
-      const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
+      const background = _context.getBackground?.() ?? (
+        typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : undefined
+      );
       const canvasSize = normalizeHistoryCanvasSize(_context.getCanvasSize?.());
       const { canvasData: historyCanvasData, imageAssets: nextAssets } =
         prepareCanvasDataForPersistence({
@@ -930,7 +933,9 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         });
 
         const rawObjects = serializeCanvasObjects(canvas) as SerializedObject[];
-        const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
+        const background = _context.getBackground?.() ?? (
+          typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : undefined
+        );
         const canvasSize = normalizeHistoryCanvasSize(_context.getCanvasSize?.());
         const { canvasData: historyCanvasData, imageAssets: nextAssets } =
           prepareCanvasDataForPersistence({
@@ -1119,7 +1124,9 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
             reorderCanvasObjects(canvas, diff.order?.before);
 
             const rawObjects = serializeCanvasObjects(canvas) as SerializedObject[];
-            const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
+            const background = _context.getBackground?.() ?? (
+              typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : undefined
+            );
             const canvasSize = normalizeHistoryCanvasSize(_context.getCanvasSize?.());
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({
@@ -1259,7 +1266,9 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
             reorderCanvasObjects(canvas, diff.order?.after);
 
             const rawObjects = serializeCanvasObjects(canvas) as SerializedObject[];
-            const background = _context.getBackground?.() ?? (canvas.backgroundColor || undefined);
+            const background = _context.getBackground?.() ?? (
+              typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : undefined
+            );
             const canvasSize = normalizeHistoryCanvasSize(_context.getCanvasSize?.());
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({

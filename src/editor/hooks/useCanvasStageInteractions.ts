@@ -26,6 +26,7 @@ type UseCanvasStageInteractionsArgs = {
   ) => void;
   setShowOnboarding: (show: boolean) => void;
   trackPromise: <T>(promise: Promise<T>, abortSignal?: AbortSignal) => Promise<T>;
+  /** Optional only for standalone mounts; the routed lifecycle supplies this required observation. */
   onCommittedMutation?: (mutation: CanvasCommittedMutation) => void;
 };
 
@@ -366,8 +367,13 @@ export const useCanvasStageInteractions = ({
         objectId: replacementId,
         assetEffect: 'unknown-engine-owned',
       });
-    } catch {
-      // Optional diagnostics must not affect the image replacement.
+    } catch (error) {
+      // Preserve the committed engine action, but do not hide a required
+      // lifecycle observation failure from the host.
+      console.error(
+        '[project-lifecycle] Canvas image replacement observation failed.',
+        error,
+      );
     }
   }, [addObjectToCanvas, onCommittedMutation, scheduleUpdate]);
 
@@ -514,8 +520,13 @@ export const useCanvasStageInteractions = ({
               objectId: replacementId,
               assetEffect: 'unknown-engine-owned',
             });
-          } catch {
-            // Optional diagnostics must not affect the image replacement.
+          } catch (error) {
+            // Preserve the committed engine action, but do not hide a required
+            // lifecycle observation failure from the host.
+            console.error(
+              '[project-lifecycle] Canvas image replacement observation failed.',
+              error,
+            );
           }
         } else {
           const maxWidth = isSticker ? 150 : 200;

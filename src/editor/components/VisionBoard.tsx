@@ -25,6 +25,10 @@ import { resizeCanvas } from '../fabric/canvasUtils';
 import { hydrateCanvasDataWithAssets } from '../state/useHistoryStore';
 import { withCanvasObjectMutationSuppressed } from '../services/canvasMutationObservation';
 import { useProjectSessionStore } from '../state/projectSessionStore';
+import {
+  createTemplateSceneSnapshot,
+  type TemplateSceneSnapshot,
+} from '../scene/sceneSnapshot';
 
 interface VisionBoardProps {
   onClose?: () => void;
@@ -35,15 +39,19 @@ interface VisionBoardProps {
  * Vision Board records are durable user content, so a malformed or stale
  * record must not clear the currently authored canvas before it fails.
  */
-const stageDesignState = async (canvasData: Record<string, any>) => {
-  if (!Array.isArray(canvasData.objects)) {
+const stageDesignState = async (snapshot: TemplateSceneSnapshot) => {
+  if (!Array.isArray(snapshot.scene.objects)) {
     throw new Error('The saved design state has no valid object list.');
   }
   if (typeof document === 'undefined') return;
   const element = document.createElement('canvas');
   const stagingCanvas = new fabric.StaticCanvas(element, { width: 1, height: 1 });
   try {
-    await loadCanvasFromJsonSafely(stagingCanvas, canvasData, reviveCustomFabricProps);
+    await loadCanvasFromJsonSafely(
+      stagingCanvas,
+      snapshot.scene,
+      reviveCustomFabricProps,
+    );
   } finally {
     await Promise.resolve(stagingCanvas.dispose());
     element.remove();
@@ -122,13 +130,39 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           ) return;
           if (generation !== designLoadGenerationRef.current) return;
 
-          const data = JSON.parse(item.canvasData);
+          const data = JSON.parse(item.canvasData) as unknown;
+          const scene = Array.isArray(data)
+            ? { objects: data }
+            : data;
+          const record = scene && typeof scene === 'object' && !Array.isArray(scene)
+            ? scene as Record<string, unknown>
+            : {};
           const assets: Record<string, string> = Object.fromEntries(
-            Object.entries(data.assets ?? {})
+            Object.entries(
+              record.assets && typeof record.assets === 'object'
+                ? record.assets
+                : {}
+            )
               .filter(([, source]) => typeof source === 'string' && source.length > 0)
           ) as Record<string, string>;
-          const hydratedData = hydrateCanvasDataWithAssets(data, assets);
-          await stageDesignState(hydratedData);
+          const rawCanvasSize = record.canvasSize && typeof record.canvasSize === 'object'
+            ? record.canvasSize as { width?: unknown; height?: unknown }
+            : item.canvasSize;
+          const canvasSize = {
+            width: Number.isFinite(Number(rawCanvasSize?.width))
+              ? Math.max(1, Math.round(Number(rawCanvasSize?.width)))
+              : 1,
+            height: Number.isFinite(Number(rawCanvasSize?.height))
+              ? Math.max(1, Math.round(Number(rawCanvasSize?.height)))
+              : 1,
+          };
+          const snapshot = createTemplateSceneSnapshot({
+            canvasSize,
+            scene,
+            assets,
+          });
+          const hydratedData = hydrateCanvasDataWithAssets(snapshot.scene, snapshot.assets);
+          await stageDesignState(snapshot);
           if (generation !== designLoadGenerationRef.current) return;
           const objects = hydratedData.objects || [];
 
@@ -148,8 +182,8 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
           setCanvasBackgroundColor(typeof hydratedData.background === 'string' ? hydratedData.background : DEFAULT_CANVAS_BACKGROUND, { save: false });
           canvas.backgroundColor = 'transparent';
 
-          const savedWidth = Number(data.canvasSize?.width ?? item.canvasSize?.width);
-          const savedHeight = Number(data.canvasSize?.height ?? item.canvasSize?.height);
+          const savedWidth = snapshot.canvasSize.width;
+          const savedHeight = snapshot.canvasSize.height;
           if (
             Number.isFinite(savedWidth)
             && savedWidth > 0
@@ -226,21 +260,26 @@ export const VisionBoard: React.FC<VisionBoardProps> = ({ onClose }) => {
         canvas,
         useEditorStore.getState().imageAssets,
       );
+      const snapshot = createTemplateSceneSnapshot({
+        canvasSize: portable.snapshot.dimensions.canvasSize,
+        scene: portable.snapshot.scene,
+        assets: portable.assets,
+      });
       addItem({
         type: 'design-state',
         canvasData: JSON.stringify({
-          ...portable.canvasData,
-          canvasSize: state.canvasSize,
-          assets: portable.assets,
+          ...snapshot.scene,
+          canvasSize: snapshot.canvasSize,
+          assets: snapshot.assets,
         }),
         thumbnail: state.thumbnail,
-        canvasSize: state.canvasSize,
+        canvasSize: snapshot.canvasSize,
         label: `Iteration ${new Date().toLocaleTimeString()}`,
         position: {
           x: Math.random() * 200 + 50,
           y: Math.random() * 200 + 50,
           width: 200,
-          height: (200 * state.canvasSize.height) / state.canvasSize.width,
+          height: (200 * snapshot.canvasSize.height) / snapshot.canvasSize.width,
         },
       });
     } catch (error) {
