@@ -1,5 +1,9 @@
 # Design Space — Orientation Briefing (WitchClick)
 
+> **Historical orientation only (written before the October 2026 unified-editor work).**
+> This document's startup, dashboard, export gating, versions, and state ownership descriptions may be obsolete. For the current project start with [README.md](README.md), [AGENTS.md](AGENTS.md), [state-boundary contracts](docs/architecture/state-boundary-contracts.md), and the [October 8 workflow audit](docs/audits/2026-10-08-vesper-workflow-reliability-audit.md). Verify current code before acting on any diagnosis below.
+
+
 Generated: 2026-04-12
 
 This document is a cold-start orientation for future LLM sessions working on the **Design Space** feature in this repository.
