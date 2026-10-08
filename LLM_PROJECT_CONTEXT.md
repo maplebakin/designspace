@@ -1,5 +1,9 @@
 # Design Space — Comprehensive LLM Project Context
 
+> **Historical orientation only (written before the October 2026 unified-editor work).**
+> This document's startup, dashboard, export gating, versions, and state ownership descriptions may be obsolete. For the current project start with [README.md](README.md), [AGENTS.md](AGENTS.md), [state-boundary contracts](docs/architecture/state-boundary-contracts.md), and the [October 8 workflow audit](docs/audits/2026-10-08-vesper-workflow-reliability-audit.md). Verify current code before acting on any diagnosis below.
+
+
 This document is a high-signal project briefing for coding agents (Codex/Claude/OpenCode) so they can quickly understand what Design Space does, how it is structured, and how to safely contribute.
 
 ---
