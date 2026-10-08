@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { Search, FileText } from 'lucide-react';
+import { Search, FileText, X } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
 import { useProjectSessionStore } from '../state/projectSessionStore';
 
@@ -165,10 +165,21 @@ export const ProjectQuickOpenModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={() => setOpen(false)}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Quick Open projects"
         className="mx-auto mt-24 w-full max-w-2xl rounded-2xl border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] text-[color:var(--ui-panel-text)] shadow-[0_24px_48px_rgba(0,0,0,0.45)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="border-b border-[color:var(--ui-border)] p-4">
+        <div className="relative border-b border-[color:var(--ui-border)] p-4">
+          <button
+            type="button"
+            aria-label="Close Quick Open"
+            onClick={() => setOpen(false)}
+            className="absolute right-4 top-4 rounded-lg p-1 text-[color:var(--ui-panel-text)] hover:bg-[color:var(--ui-hover-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--brand-primary)]"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[color:var(--ui-panel-text)]" />
             <input
@@ -178,7 +189,7 @@ export const ProjectQuickOpenModal: React.FC = () => {
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Quick Open projects..."
-              className="ui-input-surface w-full rounded-lg py-2 pl-9 pr-3 text-sm"
+              className="ui-input-surface w-full rounded-lg py-2 pl-9 pr-10 text-sm"
               aria-label="Search recent projects"
             />
           </div>

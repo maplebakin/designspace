@@ -1185,7 +1185,7 @@ test('Quick Open uses the shared replacement guard while live work is dirty', as
   const quickOpenInput = page.getByPlaceholder('Quick Open projects...');
   await expect(quickOpenInput).toBeVisible();
   const quickOpen = page.locator('div.fixed.inset-0.z-50');
-  const projectButton = quickOpen.getByRole('button').first();
+  const projectButton = quickOpen.getByRole('button', { name: /Untitled Project/ }).first();
   await expect(projectButton).toContainText('Untitled Project');
 
   const confirmationCalls = await page.evaluate(() => {
