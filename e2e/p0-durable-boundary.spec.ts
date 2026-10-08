@@ -1288,6 +1288,37 @@ test('live Fabric typing is dirty before blur and blocks a close attempt', async
   await expect(page.getByTestId('unified-save-status')).toHaveText(/unsaved changes/i);
 });
 
+test('browser project download explains why an unsaved editor stays open', async ({ page }) => {
+  await openBlankEditor(page);
+  const canvasBox = await page.locator('canvas.upper-canvas').boundingBox()
+    ?? await page.getByTestId('design-canvas').boundingBox();
+  if (!canvasBox) throw new Error('Canvas bounding box was unavailable');
+
+  await page.getByTestId('tool-textbox').click();
+  await page.mouse.move(canvasBox.x + 180, canvasBox.y + 160);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + 360, canvasBox.y + 260, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.type('save my birthday project');
+  await expect(page.getByTestId('unified-save-status')).toHaveText(/unsaved changes/i);
+
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByTestId('unsaved-navigation-dialog');
+  await expect(dialog).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: 'Download Project File' }).click();
+  await downloadPromise;
+
+  await expect(dialog.getByTestId('browser-download-verification')).toContainText(
+    'cannot confirm that the file was saved'
+  );
+  await expect(page.getByTestId('editor-shell')).toBeVisible();
+  await expect(page.getByTestId('unified-save-status')).toHaveText(/unsaved changes/i);
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+});
+
 test('cancelled browser close leaves live image resources, history, and pages usable', async ({ page }) => {
   await openBlankEditor(page);
   await page.getByTestId('nav-insert').click();

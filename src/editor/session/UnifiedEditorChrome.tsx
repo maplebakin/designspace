@@ -558,6 +558,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
 }) => {
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [showLeaveEditorModal, setShowLeaveEditorModal] = useState(false);
+  const [browserDownloadNeedsVerification, setBrowserDownloadNeedsVerification] = useState(false);
   const isProgrammaticCloseRef = useRef(false);
   const leaveEditorCancelRef = useRef<HTMLButtonElement>(null);
   const clearSession = useProjectSessionStore((state) => state.clearSession);
@@ -575,6 +576,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
 
   const returnToDashboard = useCallback(() => {
     setShowLeaveEditorModal(false);
+    setBrowserDownloadNeedsVerification(false);
     if (commands?.close) {
       void commands.close();
       return;
@@ -631,7 +633,10 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   }, [readDirty]);
 
   useEffect(() => {
-    if (!showLeaveEditorModal) return;
+    if (!showLeaveEditorModal) {
+      setBrowserDownloadNeedsVerification(false);
+      return;
+    }
     leaveEditorCancelRef.current?.focus();
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -674,7 +679,7 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   };
 
   const handleBackToDashboard = () => {
-    if (readDirty() && session?.canClose !== false) {
+    if (readDirty()) {
       setShowLeaveEditorModal(true);
       return;
     }
@@ -691,7 +696,15 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
   };
 
   const handleDownloadAndReturn = async () => {
+    setBrowserDownloadNeedsVerification(false);
     const acknowledgement = await commands?.download();
+    if (acknowledgement?.status === 'browser-download-initiated') {
+      // The browser acknowledged a download click, not a durable file write.
+      // Keep the editor open and tell the user to verify the download before
+      // explicitly choosing to discard the live session.
+      setBrowserDownloadNeedsVerification(true);
+      return;
+    }
     if (
       acknowledgement
       && acknowledgementAllowsDirtyClear(acknowledgement)
@@ -786,6 +799,11 @@ export const UnifiedEditorShell: React.FC<UnifiedEditorShellProps> = ({
             <p id="leave-editor-dialog-description" className="mb-6 text-sm text-[color:var(--ui-panel-text)]/75">
               This project has unsaved changes. Save a browser-library copy, download a portable project file, or explicitly discard the changes before leaving the editor.
             </p>
+            {browserDownloadNeedsVerification && (
+              <p role="status" data-testid="browser-download-verification" className="mb-4 rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-surface-soft)] p-3 text-sm text-[color:var(--ui-text)]">
+                The browser started downloading your project, but Design Space cannot confirm that the file was saved. Check your Downloads folder and open the file if possible. Once you have verified your copy, choose Discard Changes to leave this editing session, or Cancel to keep working.
+              </p>
+            )}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button ref={leaveEditorCancelRef} type="button" onClick={() => setShowLeaveEditorModal(false)} className="ui-button-soft rounded-lg px-4 py-2 text-xs uppercase tracking-widest">Cancel</button>
               <button type="button" onClick={returnToDashboard} className="ui-button-soft rounded-lg border-rose-300/45 bg-rose-200/42 px-4 py-2 text-xs uppercase tracking-widest text-rose-900 hover:bg-rose-200/55">Discard Changes</button>
