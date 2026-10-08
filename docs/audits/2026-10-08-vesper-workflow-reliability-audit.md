@@ -90,6 +90,13 @@ README and `docs/architecture/state-boundary-contracts.md` explicitly state that
 
 **Next step:** Validate this threshold and error policy against realistic large-image libraries and browser privacy restrictions. Differentiate "cannot measure storage" from "library is damaged" without deleting user data.
 
+### R10 — Outdated agent briefings can cause regression by instruction
+**Severity: High for AI-assisted maintenance; confidence: confirmed contradiction.**
+
+`DESIGN-SPACE-BRIEFING.md` (April 12) states that `App` automatically bypasses the dashboard and that the export modal is DEV-only. In current `App.tsx`, dashboard vs editor routing uses explicit `hasActiveSession`; current `ExportModal.tsx` no longer has that DEV guard. `LLM_PROJECT_CONTEXT.md` describes React 18/Fabric 6, while `package.json` currently uses React 19/Fabric 7. A coding agent that follows those files as present-day truth can diagnose nonexistent bugs, remove working features, and reintroduce stale workarounds.
+
+**Resolution in this PR:** Place prominent historical notices at the top of both documents, linking current README, contributor guide, verified state contracts, and this audit. Preserve the original notes as time-stamped evidence. Consider consolidating a single maintained contributor entry point in a later documentation pass.
+
 ## What appears improved, not inherently broken
 
 The October 8 commit brought typed scene snapshots, asset serialization checks, stable persistence acknowledgements, model-specific interaction modes, and tests for history/state handoffs. The prior September forensic audit documented serious image, geometry, history, and ownership problems; current source is materially different. Those historical failures are excellent regression-test ideas, but they should not be represented as current reproductions without a fresh browser test.
