@@ -9,7 +9,7 @@ marked demonstration copy; it is not the finished WitchClick journal.
 
 | Need | Existing implementation | Change in this slice |
 | --- | --- | --- |
-| Start a multipage printable | Dashboard document creation, Letter/A4/custom sizes | Publishing setup applies paper and margins to every page |
+| Start a multipage printable | Dashboard document creation, Letter/A4/custom sizes | Page setup can be copied to every page from the Publishing inspector |
 | Consistent typography | Project-wide named styles and inline overrides | Bundled Cinzel and Cormorant Garamond; one document typography action |
 | Cover and decorative artwork | Editable title/body stories, imported images, positioned images and numeric geometry | Generic starter cover/guide/worksheet pages; block spacing |
 | Writing space | No ruled worksheet element | Editable ruled paragraphs with bounded line count, spacing and colour; editable dividers |
@@ -24,37 +24,42 @@ are imported through the existing image controls and remain independently editab
 
 ## Use the editor
 
-1. On Projects, choose **Create Document Project**. Open **Publishing**.
-2. Choose Letter or A4 and margins, then **Apply paper to all pages**. The action
-   uses white paper. Existing sidebar controls still provide mirrored inner/outer
-   margins and individual page settings.
-3. Choose heading/body fonts and an accent, then **Apply document typography**.
-   Named styles remain editable in the sidebar. Text overrides remain editable in
-   the contextual toolbar.
-4. Use **Add cover design**, **Add guide design** and **Add worksheet design**.
+1. On Projects, choose **Create Document Project**. Publishing stays in the
+   right-side inspector beside the canvas. Its Document, Pages and Writing tabs
+   scroll inside the inspector, so changing sections does not move the page.
+2. Choose Letter, A4 or custom dimensions and adjust margins in Page settings.
+   In Publishing > Document, choose **Apply current page setup to all pages**
+   when you want the same paper size and margins throughout the edition.
+3. In Publishing > Document, choose heading/body fonts and an accent, then
+   **Apply document typography**. This applies a document-wide preset; named
+   styles remain available for fine editing in the settings sidebar, and text
+   overrides remain editable in the contextual toolbar.
+4. In Publishing > Pages, use **Add cover design**, **Add guide design** and
+   **Add worksheet design**.
    A starter fills a blank current page; otherwise it inserts a new page after it.
    Click and edit all titles, prompts and examples directly on the page.
-5. Select a text paragraph and set space before/after to control its vertical
-   rhythm. Click inside a writing area, set line count/spacing/colour and choose
-   **Update selected writing area**. Insert more ruled areas or dividers at the
-   body editor's retained cursor position.
+5. In Publishing > Writing, select a text paragraph and set space before/after
+   to control its vertical rhythm. Click inside a writing area, set line
+   count/spacing/colour and choose **Update selected writing area**. Insert more
+   ruled areas or dividers at the body editor's retained cursor position.
 6. Import artwork using **Add photo**. Choose inline/flow or behind/in front of
    text in the image toolbar. Select positioned artwork from the sidebar to edit
    its numeric X/Y and size controls.
-7. Duplicate pages using the existing navigator or **Duplicate current design**.
-   Rename pages in Publishing. For reuse across documents, enter a layout name and
+7. Duplicate pages using the existing navigator or Publishing > Pages. Rename
+   pages there too. For reuse across documents, enter a layout name and
    choose **Save current page as layout**, then select and **Insert saved layout**.
    Insertion makes a new page; it never replaces current content. The destination
    document's named styles apply. Layouts retain text overrides and embedded art.
-8. **Review all pages** shows committed previews. Select a preview to edit that
-   page. Save to Library; reopen from Projects. Download a portable project file
-   as a separate backup using File.
+8. In Publishing > Document, **Review all pages** shows committed previews.
+   Select a preview to edit that page. Save to Library; reopen from Projects.
+   Download a portable project file as a separate backup using File.
 9. In Export, choose **PDF with embedded fonts** for publishing typography or
    **PDF (raster)** for the existing image-backed output. Grayscale applies to
    downloads and Print / Save PDF without changing authored colours.
-10. Switch paper and apply to all pages to prepare the other edition. Review its
-    wrapping independently; export before switching again. Exports use reading
-    order, not folded-booklet imposition.
+10. Switch the active page to the other paper size in Page settings and apply its
+    setup to all pages. Review wrapping independently; export before switching
+    again. Fit Page recalculates when the canvas or inspector width changes.
+    Exports use reading order, not folded-booklet imposition.
 
 ## Export contract
 
