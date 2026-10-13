@@ -505,7 +505,7 @@ const FLOW_CONTROL_DEFAULT_KEYS = [
   'documentKeepWithNext',
   'documentKeepLinesTogether',
 ] as const;
-const EDITOR_DEFAULT_NULL_KEYS = ['textAlign', 'documentWritingRows', 'documentWritingSpacing', 'documentDivider', 'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx'] as const;
+const EDITOR_DEFAULT_NULL_KEYS = ['textAlign', 'documentWritingRows', 'documentWritingSpacing', 'documentWritingRuleWidthPt', 'documentDivider', 'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx'] as const;
 
 const normalizeEditorComparisonContent = (
   value: JSONContent
