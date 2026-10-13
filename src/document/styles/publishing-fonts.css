@@ -1,0 +1,13 @@
+/* Bundled SIL OFL fonts: see public/fonts/publishing. No network font dependency. */
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 400; font-display: block; src: url("/fonts/publishing/Cinzel-400.ttf") format("truetype"); }
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 500; font-display: block; src: url("/fonts/publishing/Cinzel-500.ttf") format("truetype"); }
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 600; font-display: block; src: url("/fonts/publishing/Cinzel-600.ttf") format("truetype"); }
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 700; font-display: block; src: url("/fonts/publishing/Cinzel-700.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: normal; font-weight: 400; font-display: block; src: url("/fonts/publishing/CormorantGaramond-400.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: normal; font-weight: 500; font-display: block; src: url("/fonts/publishing/CormorantGaramond-500.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: normal; font-weight: 600; font-display: block; src: url("/fonts/publishing/CormorantGaramond-600.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: normal; font-weight: 700; font-display: block; src: url("/fonts/publishing/CormorantGaramond-700.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: italic; font-weight: 400; font-display: block; src: url("/fonts/publishing/CormorantGaramond-Italic-400.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: italic; font-weight: 500; font-display: block; src: url("/fonts/publishing/CormorantGaramond-Italic-500.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: italic; font-weight: 600; font-display: block; src: url("/fonts/publishing/CormorantGaramond-Italic-600.ttf") format("truetype"); }
+@font-face { font-family: "Cormorant Garamond"; font-style: italic; font-weight: 700; font-display: block; src: url("/fonts/publishing/CormorantGaramond-Italic-700.ttf") format("truetype"); }

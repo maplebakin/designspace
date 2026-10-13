@@ -1,3 +1,4 @@
+import { normalizeWritingAttributes } from '../../document/model/documentWriting';
 import type { UnitMode } from '../utils/units';
 import type {
   DocumentContentJson,
@@ -59,7 +60,7 @@ import type { CanonicalSerializedScene } from '../scene/sceneSnapshot';
 
 export const LEGACY_DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v1' as const;
 export const DESIGN_SPACE_PROJECT_SCHEMA_VERSION = 'design-space-project-v2' as const;
-export const CURRENT_DOCUMENT_SCHEMA_VERSION = 6 as const;
+export const CURRENT_DOCUMENT_SCHEMA_VERSION = 7 as const;
 const DOCUMENT_TYPOGRAPHY_SCHEMA_VERSION = 2;
 
 export type DesignSpaceProjectSchemaVersion = typeof DESIGN_SPACE_PROJECT_SCHEMA_VERSION;
@@ -666,6 +667,8 @@ const normalizeDocumentContentNode = (
             delete normalized[key];
           }
         });
+        for (const key of ['documentWritingRows', 'documentWritingSpacing', 'documentDivider', 'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx']) delete normalized[key];
+        Object.assign(normalized, normalizeWritingAttributes(sourceAttrs));
         return normalized;
       })()
     : isImage

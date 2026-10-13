@@ -146,6 +146,7 @@ type DocumentStoreState = {
   selectPage: (index: number) => void;
   addPage: () => void;
   duplicatePage: (index?: number) => void;
+  insertPageLayout: (layout: DocumentProjectPayload) => void;
   removePage: (index?: number) => void;
   reorderPages: (fromIndex: number, toIndex: number) => void;
   updatePage: (
@@ -1508,6 +1509,46 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       isReferenceAdjustMode: false,
       selectedOverlayId: null,
       selectedFlowImageId: null,
+      isOverflowing: false,
+    });
+    markDirty(set);
+  },
+
+  insertPageLayout: (layout) => {
+    flushDocumentLiveDrafts();
+    const project = get().project;
+    if (!project || !layout.pages[0]) return;
+    const assets = { ...project.assets };
+    const assetMetadata = { ...project.assetMetadata };
+    const remap = new Map<string, string>();
+    for (const [id, source] of Object.entries(layout.assets || {})) {
+      const targetId = assets[id] && assets[id] !== source ? uuidv4() : id;
+      assets[targetId] = source;
+      if (layout.assetMetadata?.[id]) assetMetadata[targetId] = layout.assetMetadata[id];
+      remap.set(id, targetId);
+    }
+    const rewrite = (content: DocumentContentJson): DocumentContentJson => ({
+      ...content,
+      ...(content.attrs ? { attrs: { ...content.attrs, ...(typeof content.attrs.assetId === 'string' ? { assetId: remap.get(content.attrs.assetId) || content.attrs.assetId } : {}) } } : {}),
+      ...(content.content ? { content: content.content.map(rewrite) } : {}),
+    });
+    const sourcePage = layout.pages[0];
+    const nextPage = duplicateDocumentPage({
+      ...sourcePage,
+      titleContent: rewrite(sourcePage.titleContent),
+      bodyContent: rewrite(sourcePage.bodyContent),
+      overlayObjects: sourcePage.overlayObjects.map((overlay) => ({ ...overlay, assetId: remap.get(overlay.assetId) || overlay.assetId })),
+      reference: undefined,
+    }, sourcePage.name);
+    const insertIndex = getActivePageIndex(project) + 1;
+    const pages = [...project.pages];
+    pages.splice(insertIndex, 0, nextPage);
+    set({
+      project: withDerivedDocumentPageSize({ ...project, pages, activePageIndex: insertIndex, assets, assetMetadata }),
+      interactionMode: createDocumentIdleMode(get().sessionIdentity, nextPage.id),
+      selectedOverlayId: null,
+      selectedFlowImageId: null,
+      isReferenceAdjustMode: false,
       isOverflowing: false,
     });
     markDirty(set);

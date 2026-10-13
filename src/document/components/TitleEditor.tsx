@@ -1,3 +1,4 @@
+import { DocumentWritingExtension } from '../extensions/DocumentWritingExtension';
 import {
   useEffect,
   useRef,
@@ -107,6 +108,7 @@ export const TitleEditor = ({
           types: ['paragraph'],
         }),
         DocumentTextStyleExtension,
+        DocumentWritingExtension,
         DocumentBlockStyleExtension.configure({
           defaultStyleId: 'article-title',
         }),

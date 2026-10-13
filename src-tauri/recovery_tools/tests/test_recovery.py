@@ -143,6 +143,7 @@ class RecoveryFixtureTest(unittest.TestCase):
         document = {
             "schemaVersion": 4,
             "language": "de",
+            "styles": {"body": {"fontFamilyId": "cormorant-garamond"}},
         }
         page = {
             "kind": "document",
@@ -155,6 +156,7 @@ class RecoveryFixtureTest(unittest.TestCase):
             "bodyContent": {"type": "doc", "content": [
                 {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "photo", "wrap": "span-columns", "verticalAnchor": "page-position"}},
                 {"type": "documentFlowImage", "attrs": {"id": "duplicate", "assetId": "missing", "wrap": "span-columns", "verticalAnchor": "page-position"}},
+                {"type": "paragraph", "attrs": {"documentWritingRows": 14, "documentWritingSpacing": 34, "documentRuleColor": "#9A8B94", "documentSpaceBeforePx": 20}},
             ]},
             "imageGroups": [{"id": "row", "kind": "row", "childImageIds": ["duplicate", "duplicate", "missing"], "gapPx": 900}],
             "overlayObjects": [],
@@ -187,8 +189,11 @@ class RecoveryFixtureTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         recovered_path = next((self.exports / "projects").glob("*.apocaproject.json"))
         recovered = json.loads(recovered_path.read_text())
-        self.assertEqual(recovered["document"]["schemaVersion"], 6)
+        self.assertEqual(recovered["document"]["schemaVersion"], 7)
         self.assertEqual(len(recovered["pages"]), 2)
+        self.assertEqual(recovered["document"]["styles"]["body"]["fontFamilyId"], "cormorant-garamond")
+        self.assertEqual(recovered["pages"][0]["bodyContent"]["content"][2]["attrs"]["documentWritingRows"], 14)
+        self.assertEqual(recovered["pages"][0]["bodyContent"]["content"][2]["attrs"]["documentSpaceBeforePx"], 20)
         ids = []
         for story_key in ("titleContent", "bodyContent"):
             ids.extend(

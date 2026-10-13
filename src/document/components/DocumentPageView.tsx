@@ -137,6 +137,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
     <div
       className="document-page-viewport"
       style={{
+        fontVariantLigatures: Object.values(typographyStyles).some((style) => style.fontFamilyId === 'cinzel' || style.fontFamilyId === 'cormorant-garamond') ? 'none' : undefined,
         width: widthPx * zoom,
         height: heightPx * zoom,
       }}
@@ -293,6 +294,9 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
                 data-folio-side={outsideEdge}
                 aria-label={`Page ${folioNumber}`}
                 style={{
+                  fontFamily: ['cinzel', 'cormorant-garamond'].includes(typographyStyles.body.fontFamilyId) ? 'var(--document-style-body-font-family)' : undefined,
+                  color: ['cinzel', 'cormorant-garamond'].includes(typographyStyles.body.fontFamilyId) ? 'var(--document-style-body-color)' : undefined,
+                  hyphens: 'none',
                   bottom: `${
                     Math.max(
                       12,

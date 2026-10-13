@@ -17,6 +17,8 @@ export const DOCUMENT_FONT_FAMILY_IDS = [
   'classic-serif',
   'humanist-sans',
   'system-sans',
+  'cinzel',
+  'cormorant-garamond',
 ] as const;
 
 export type DocumentFontFamilyId = typeof DOCUMENT_FONT_FAMILY_IDS[number];
@@ -144,6 +146,8 @@ export const DEFAULT_DOCUMENT_DROP_CAP: DocumentDropCapSettings = {
 };
 
 const FONT_FAMILY_CSS: Record<DocumentFontFamilyId, string> = {
+  cinzel: '"Cinzel", serif',
+  'cormorant-garamond': '"Cormorant Garamond", serif',
   'historical-serif': 'Georgia, "Times New Roman", Times, serif',
   'book-serif': 'Palatino, "Palatino Linotype", "Book Antiqua", serif',
   'classic-serif': '"Times New Roman", Times, serif',

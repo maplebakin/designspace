@@ -132,8 +132,8 @@ describe('document image schema v3', () => {
       })
     ) as DocumentProjectPayload;
 
-    expect(normalized.document.schemaVersion).toBe(6);
-    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(6);
+    expect(normalized.document.schemaVersion).toBe(CURRENT_DOCUMENT_SCHEMA_VERSION);
+    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(7);
     const [span, float] = imageNodes(normalized);
 
     expect(span.attrs).toMatchObject({
