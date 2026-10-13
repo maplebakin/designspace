@@ -11,6 +11,7 @@ import { DEFAULT_DOCUMENT_STYLES } from '../src/document/typography/documentTypo
 import { publishingFontFile, publishingFontFromCss } from '../src/document/typography/publishingFonts';
 import { assertPublishingText, publishingPdfColor } from '../src/document/services/publishingPdfService';
 import { documentAuthoredContentDiffers } from '../src/document/services/documentContentObservation';
+import { createCleanDocumentClone } from '../src/document/services/documentExportService';
 
 afterEach(() => useDocumentStore.getState().reset());
 
@@ -19,11 +20,11 @@ describe('printable publishing', () => {
     expect(normalizeWritingAttributes({})).toEqual({});
     expect(normalizeWritingAttributes({ documentWritingRows: Infinity })).toEqual({});
     expect(normalizeWritingAttributes({ documentWritingRows: 200, documentWritingSpacing: 2, documentRuleColor: 'url(secret)' })).toEqual({
-      documentWritingRows: 30, documentWritingSpacing: 20, documentRuleColor: '#9A8B94',
+      documentWritingRows: 30, documentWritingSpacing: 20, documentWritingRuleWidthPt: 0.75, documentRuleColor: '#9A8B94',
     });
     expect(documentAuthoredContentDiffers(
       { type: 'paragraph', attrs: { documentStyleId: 'body', documentStyleFontSizePx: null } },
-      { type: 'paragraph', attrs: { documentStyleId: 'body', documentStyleFontSizePx: null, documentWritingRows: null, documentWritingSpacing: null, documentRuleColor: null, documentDivider: null } },
+      { type: 'paragraph', attrs: { documentStyleId: 'body', documentStyleFontSizePx: null, documentWritingRows: null, documentWritingSpacing: null, documentWritingRuleWidthPt: null, documentRuleColor: null, documentDivider: null } },
     )).toBe(false);
   });
 
@@ -31,7 +32,7 @@ describe('printable publishing', () => {
     const editor = new Editor({
       extensions: [StarterKit, DocumentWritingExtension],
       content: { type: 'doc', content: [
-        { type: 'paragraph', attrs: { documentWritingRows: 8, documentWritingSpacing: 36, documentRuleColor: '#713B59' } },
+        { type: 'paragraph', attrs: { documentWritingRows: 8, documentWritingSpacing: 36, documentWritingRuleWidthPt: 1.5, documentRuleColor: '#000000' } },
         { type: 'paragraph', attrs: { documentDivider: true, documentRuleColor: '#713B59' } },
       ] },
     });
@@ -39,10 +40,41 @@ describe('printable publishing', () => {
       const html = editor.getHTML();
       expect(html).toContain('min-height: 288px');
       expect(html).toContain('repeating-linear-gradient');
+      expect(html).toContain('transparent 34px');
+      expect(html).toContain('#000000 34px,#000000 36px');
       expect(html).toContain('border-top: 1px solid');
       editor.commands.setContent(html);
       expect(editor.getJSON().content?.[0].attrs?.documentWritingRows).toBe('8');
+      expect(editor.getJSON().content?.[0].attrs?.documentWritingRuleWidthPt).toBe('1.5');
       expect(editor.getJSON().content?.[1].attrs?.documentDivider).toBe(true);
+    } finally { editor.destroy(); }
+  });
+
+  it('highlights only the selected ruled paragraph and strips the editor marker from export clones', () => {
+    const editor = new Editor({
+      extensions: [StarterKit, DocumentWritingExtension],
+      content: { type: 'doc', content: [
+        { type: 'paragraph', attrs: { documentWritingRows: 4 } },
+        { type: 'paragraph', attrs: { documentWritingRows: 6, documentRuleColor: '#000000' } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Prompt' }] },
+      ] },
+    });
+    try {
+      editor.commands.setTextSelection(1);
+      expect(editor.view.dom.querySelectorAll('.document-writing-area--selected')).toHaveLength(1);
+      expect(editor.view.dom.querySelector('[data-document-writing-area-selected="true"]')?.getAttribute('data-document-writing-area')).toBe('true');
+
+      editor.commands.setTextSelection(3);
+      const selected = editor.view.dom.querySelectorAll('.document-writing-area--selected');
+      expect(selected).toHaveLength(1);
+      expect(selected[0]?.getAttribute('data-document-writing-area')).toBe('true');
+      const cleanClone = createCleanDocumentClone(editor.view.dom);
+      expect(cleanClone.querySelector('.document-writing-area--selected')).toBeNull();
+      expect(cleanClone.querySelector('[data-document-writing-area-selected]')).toBeNull();
+      expect(cleanClone.querySelectorAll('[data-document-writing-area]')[1]?.style.backgroundImage).toContain('#000000');
+
+      editor.commands.setTextSelection(5);
+      expect(editor.view.dom.querySelector('.document-writing-area--selected')).toBeNull();
     } finally { editor.destroy(); }
   });
 

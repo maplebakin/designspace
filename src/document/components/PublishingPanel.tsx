@@ -16,7 +16,7 @@ import {
 
 type Props = {
   project: DocumentProjectPayload;
-  getBodyEditor: () => Editor | null;
+  bodyEditor: Editor | null;
   getTextEditor: () => Editor | null;
   onCommit: (action: 'modify-document-style-metadata' | 'modify-page-metadata' | 'add-page', pageId: string) => void;
   onReview: () => void;
@@ -24,7 +24,7 @@ type Props = {
   onGrayscaleChange: (value: boolean) => void;
 };
 
-export const PublishingPanel = ({ project, getBodyEditor, getTextEditor, onCommit, onReview, grayscale, onGrayscaleChange }: Props) => {
+export const PublishingPanel = ({ project, bodyEditor, getTextEditor, onCommit, onReview, grayscale, onGrayscaleChange }: Props) => {
   const page = project.pages[project.activePageIndex || 0];
   const [activeTab, setActiveTab] = useState<'document' | 'pages' | 'writing'>('pages');
   const [collapsed, setCollapsed] = useState(false);
@@ -33,7 +33,14 @@ export const PublishingPanel = ({ project, getBodyEditor, getTextEditor, onCommi
   const [bodyFont, setBodyFont] = useState<'cinzel' | 'cormorant-garamond'>('cormorant-garamond');
   const [rows, setRows] = useState(12);
   const [spacing, setSpacing] = useState(32);
+  const [ruleWidth, setRuleWidth] = useState(0.75);
   const [ruleColor, setRuleColor] = useState('#9A8B94');
+  const [selectedWritingArea, setSelectedWritingArea] = useState<{
+    rows: number;
+    spacing: number;
+    ruleWidth: number;
+    color: string;
+  } | null>(null);
   const [spaceBefore, setSpaceBefore] = useState(0);
   const [spaceAfter, setSpaceAfter] = useState(0);
   const [layoutName, setLayoutName] = useState('My page design');
@@ -41,6 +48,41 @@ export const PublishingPanel = ({ project, getBodyEditor, getTextEditor, onCommi
   const [selectedLayout, setSelectedLayout] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!bodyEditor || bodyEditor.isDestroyed) {
+      setSelectedWritingArea(null);
+      return undefined;
+    }
+    const syncSelectedWritingArea = () => {
+      const selectionParent = bodyEditor.state.selection.$from.parent;
+      const attrs = selectionParent.type.name === 'paragraph'
+        ? normalizeWritingAttributes(selectionParent.attrs)
+        : {};
+      if (!attrs.documentWritingRows) {
+        setSelectedWritingArea(null);
+        return;
+      }
+      const selected = {
+        rows: attrs.documentWritingRows,
+        spacing: attrs.documentWritingSpacing || 32,
+        ruleWidth: attrs.documentWritingRuleWidthPt || 0.75,
+        color: attrs.documentRuleColor || '#9A8B94',
+      };
+      setSelectedWritingArea(selected);
+      setRows(selected.rows);
+      setSpacing(selected.spacing);
+      setRuleWidth(selected.ruleWidth);
+      setRuleColor(selected.color);
+    };
+    syncSelectedWritingArea();
+    bodyEditor.on('selectionUpdate', syncSelectedWritingArea);
+    bodyEditor.on('update', syncSelectedWritingArea);
+    return () => {
+      bodyEditor.off('selectionUpdate', syncSelectedWritingArea);
+      bodyEditor.off('update', syncSelectedWritingArea);
+    };
+  }, [bodyEditor, page.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,12 +136,17 @@ export const PublishingPanel = ({ project, getBodyEditor, getTextEditor, onCommi
     setStatus('Document styles updated. Individual text overrides remain editable in the toolbar.');
   };
 
-  const writingAttrs = () => normalizeWritingAttributes({ documentWritingRows: rows, documentWritingSpacing: spacing, documentRuleColor: ruleColor });
+  const writingAttrs = () => normalizeWritingAttributes({
+    documentWritingRows: rows,
+    documentWritingSpacing: spacing,
+    documentWritingRuleWidthPt: ruleWidth,
+    documentRuleColor: ruleColor,
+  });
   const insertBlock = (divider: boolean) => {
-    const editor = getBodyEditor();
+    const editor = bodyEditor;
     if (!editor || editor.isDestroyed) return;
-    if (!divider && (!Number.isFinite(rows) || rows < 1 || rows > 30 || !Number.isFinite(spacing) || spacing < 20 || spacing > 64)) {
-      setStatus('Choose 1–30 lines and spacing between 20 and 64 pixels.'); return;
+    if (!divider && (!Number.isFinite(rows) || rows < 1 || rows > 30 || !Number.isFinite(spacing) || spacing < 20 || spacing > 64 || !Number.isFinite(ruleWidth) || ruleWidth < 0.25 || ruleWidth > 2.5)) {
+      setStatus('Choose 1–30 lines, spacing between 20 and 64 pixels, and a rule weight between 0.25 and 2.5 points.'); return;
     }
     const attrs = divider ? { documentDivider: true, documentRuleColor: accent } : writingAttrs();
     editor.chain().focus().insertContent([
@@ -250,19 +297,30 @@ export const PublishingPanel = ({ project, getBodyEditor, getTextEditor, onCommi
         {activeTab === 'writing' && <>
           <fieldset>
             <legend>Writing area</legend>
+            <p
+              data-testid="selected-writing-area-status"
+              aria-live="polite"
+            >{selectedWritingArea
+              ? `Selected writing area: ${selectedWritingArea.rows} lines · ${selectedWritingArea.spacing} px · ${selectedWritingArea.color} · ${selectedWritingArea.ruleWidth} pt`
+              : 'No writing area selected. These settings will be used for new areas.'}</p>
             <label>Writing lines <input aria-label="Writing line count" type="number" min="1" max="30" value={rows} onChange={(e) => setRows(Number(e.target.value))} /></label>
             <label>Line spacing (px) <input aria-label="Writing line spacing" type="number" min="20" max="64" value={spacing} onChange={(e) => setSpacing(Number(e.target.value))} /></label>
+            <label>Rule weight (pt) <input aria-label="Writing rule weight" type="number" min="0.25" max="2.5" step="0.25" value={ruleWidth} onChange={(e) => setRuleWidth(Number(e.target.value))} /></label>
             <label>Rule colour <input aria-label="Writing rule colour" type="color" value={ruleColor} onChange={(e) => setRuleColor(e.target.value)} /></label>
             <button type="button" onClick={() => insertBlock(false)}>Insert ruled writing area</button>
             <button type="button" onClick={() => {
-              const editor = getBodyEditor();
-              if (!editor?.getAttributes('paragraph').documentWritingRows) {
+              const editor = bodyEditor;
+              const selectedParagraph = editor?.state.selection.$from.parent;
+              const selectedAttributes = selectedParagraph?.type.name === 'paragraph'
+                ? normalizeWritingAttributes(selectedParagraph.attrs)
+                : {};
+              if (!editor || !selectedAttributes.documentWritingRows) {
                 setStatus('Click inside a writing area first.'); return;
               }
               editor.chain().focus().updateAttributes('paragraph', writingAttrs()).run();
               flushDocumentLiveDrafts();
               setStatus('Selected writing area updated.');
-            }}>Update selected writing area</button>
+            }} disabled={!selectedWritingArea}>Update selected writing area</button>
             <button type="button" onClick={() => insertBlock(true)}>Insert decorative divider</button>
           </fieldset>
           <fieldset>

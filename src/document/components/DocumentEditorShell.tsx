@@ -654,6 +654,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const titleEditorRef = useRef<Editor | null>(null);
   const bodyEditorRef = useRef<Editor | null>(null);
+  const [bodyEditorForInspector, setBodyEditorForInspector] = useState<Editor | null>(null);
+  const handleBodyEditorReady = useCallback((editor: Editor | null) => {
+    bodyEditorRef.current = editor;
+    setBodyEditorForInspector(editor);
+  }, []);
   const [publishingGrayscale, setPublishingGrayscale] = useState(false);
   const [reviewProject, setReviewProject] = useState<import('../../editor/project/projectSchema').DocumentProjectPayload | null>(null);
   const documentHistoryRef = useRef<DocumentHistory | null>(null);
@@ -4516,9 +4521,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
                   deferTextSerialization
                   selectedStructuredImageIds={selectedStructuredImageIds}
                   resolveAssetSource={(assetId) => assetSources[assetId]}
-                  onEditorReady={(editor) => {
-                    bodyEditorRef.current = editor;
-                  }}
+                  onEditorReady={handleBodyEditorReady}
                   onFocusChange={(focused, editor) => {
                     if (focused && titleEditorRef.current?.isFocused) return;
                     const selectedImage = getSelectedDocumentImage(editor);
@@ -4619,7 +4622,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         </section>
         <PublishingPanel
           project={project}
-          getBodyEditor={() => bodyEditorRef.current}
+          bodyEditor={bodyEditorForInspector}
           getTextEditor={() => activeTextRegion === 'title' ? titleEditorRef.current : bodyEditorRef.current}
           onCommit={(action, pageId) => notifyCommittedMutation(onCommittedMutation, { action, pageId })}
           grayscale={publishingGrayscale}

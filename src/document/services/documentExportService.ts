@@ -42,6 +42,7 @@ const EDITING_STATE_CLASSES = [
   'is-selected',
   'document-image--selected',
   'document-overlay-image--selected',
+  'document-writing-area--selected',
 ];
 
 const DROP_CAP_SELECTOR = [
@@ -392,6 +393,7 @@ const clearEditingState = (root: HTMLElement) => {
     element.removeAttribute('autocorrect');
     element.removeAttribute('autocapitalize');
     element.removeAttribute('aria-selected');
+    element.removeAttribute('data-document-writing-area-selected');
     element.removeAttribute('draggable');
 
     if (element.hasAttribute('tabindex')) {

@@ -6,6 +6,7 @@ const IMPLICIT_BLOCK_ATTRIBUTE_DEFAULTS = new Set([
   'textAlign',
   'documentWritingRows',
   'documentWritingSpacing',
+  'documentWritingRuleWidthPt',
   'documentDivider',
   'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx',
   'documentColumnBreakBefore',

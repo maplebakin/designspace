@@ -32,7 +32,7 @@ export const publishingPageDesign = (design: PublishingPageDesign): Partial<Docu
     paragraph('Add an optional example here. The worksheet on the next page offers space to respond.', { documentStyleId: 'quotation' }),
   ) : story(
     paragraph('What would you like to remember?', { documentStyleId: 'subsection-heading' }),
-    paragraph('', { documentWritingRows: 12, documentWritingSpacing: 32, documentRuleColor: '#9A8B94' }),
+    paragraph('', { documentWritingRows: 12, documentWritingSpacing: 32, documentWritingRuleWidthPt: 0.75, documentRuleColor: '#9A8B94' }),
   ),
 });
 

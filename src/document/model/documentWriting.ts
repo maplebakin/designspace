@@ -15,6 +15,7 @@ export const normalizeWritingAttributes = (attrs: Record<string, unknown>) => {
     ...(rows > 0 ? {
       documentWritingRows: rows,
       documentWritingSpacing: boundedNumber(attrs.documentWritingSpacing ?? 32, 32, 20, 64),
+      documentWritingRuleWidthPt: boundedNumber(attrs.documentWritingRuleWidthPt ?? 0.75, 0.75, 0.25, 2.5),
     } : {}),
     ...(divider ? { documentDivider: true } : {}),
     ...(rows > 0 || divider ? {

@@ -56,9 +56,67 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await page.getByRole('tab', { name: 'Writing' }).click();
   await page.getByLabel('Writing line count').fill('14');
   await page.getByLabel('Writing line spacing').fill('34');
+  await page.getByLabel('Writing rule weight').fill('1.5');
+  await page.getByLabel('Writing rule colour').fill('#000000');
   await page.getByRole('button', { name: 'Update selected writing area' }).click();
   await expect(rules).toHaveCSS('min-height', '476px');
-  await rules.fill('This writing area remains editable.');
+  await expect(rules).toHaveAttribute('data-document-writing-area-selected', 'true');
+  await expect(rules).toHaveCSS('outline-style', 'solid');
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('14 lines · 34 px · #000000 · 1.5 pt');
+  const rendering = await page.evaluate(async () => {
+    const { createCleanDocumentClone } = await import('/src/document/services/documentExportService.ts');
+    const source = document.querySelector<HTMLElement>('[data-document-export-root]')!;
+    const sourceArea = source.querySelector<HTMLElement>('[data-document-writing-area]')!;
+    const clone = createCleanDocumentClone(source);
+    const cloneArea = clone.querySelector<HTMLElement>('[data-document-writing-area]')!;
+    const liveStyle = getComputedStyle(sourceArea);
+    return {
+      liveRule: liveStyle.backgroundImage,
+      exportRule: cloneArea.style.backgroundImage,
+      liveSize: liveStyle.backgroundSize,
+      exportSize: cloneArea.style.backgroundSize,
+      exportSelectedMarker: cloneArea.hasAttribute('data-document-writing-area-selected'),
+      exportSelectedClass: cloneArea.classList.contains('document-writing-area--selected'),
+    };
+  });
+  expect(rendering.liveRule).toContain('rgb(0, 0, 0)');
+  expect(rendering.exportRule).toBe(rendering.liveRule);
+  expect(rendering.exportSize).toBe(rendering.liveSize);
+  expect(rendering.exportSelectedMarker).toBe(false);
+  expect(rendering.exportSelectedClass).toBe(false);
+
+  await rules.first().click({ position: { x: 10, y: 10 } });
+  await rules.first().fill('This writing area remains editable.');
+
+  // A duplicated worksheet is a second editable writing area; selection and
+  // inspector values must follow it, then return to the original page.
+  await page.getByRole('tab', { name: 'Pages' }).click();
+  await page.getByRole('button', { name: 'Duplicate current page' }).click();
+  await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(4);
+  const secondRules = page.locator('.document-flow-prosemirror').first().locator('[data-document-writing-area]');
+  await secondRules.click({ position: { x: 10, y: 10 } });
+  await page.getByRole('tab', { name: 'Writing' }).click();
+  await expect(secondRules).toHaveAttribute('data-document-writing-area-selected', 'true');
+  await expect(page.getByLabel('Writing line count')).toHaveValue('14');
+  await page.getByLabel('Writing line count').fill('7');
+  await page.getByLabel('Writing line spacing').fill('28');
+  await page.getByLabel('Writing rule weight').fill('0.5');
+  await page.getByLabel('Writing rule colour').fill('#713B59');
+  await page.getByRole('button', { name: 'Update selected writing area' }).click();
+  await expect(page.getByLabel('Writing line count')).toHaveValue('7');
+  await expect(page.getByLabel('Writing line spacing')).toHaveValue('28');
+  await expect(page.getByLabel('Writing rule weight')).toHaveValue('0.5');
+  await expect(page.getByLabel('Writing rule colour')).toHaveValue('#713b59');
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('7 lines · 28 px · #713B59 · 0.5 pt');
+  await page.getByTestId('document-page-tab-2').click();
+  const originalRules = page.locator('.document-flow-prosemirror').first().locator('[data-document-writing-area]');
+  await originalRules.click({ position: { x: 10, y: 10 } });
+  await expect(page.getByLabel('Writing line count')).toHaveValue('14');
+  await expect(page.getByLabel('Writing rule colour')).toHaveValue('#000000');
+  await page.getByTestId('document-page-tab-3').click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByTestId('document-remove-page').click();
+  await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(3);
 
   // A saved layout is a fresh editable page and survives a library reopen.
   await page.getByRole('tab', { name: 'Pages' }).click();
@@ -79,8 +137,11 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await page.getByTestId('dashboard-project-card').filter({ hasText: 'The Things We Carry' }).getByRole('button', { name: /open/i }).click();
   await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(3);
   await page.getByTestId('document-page-tab-2').click();
-  await expect(rules).toHaveCSS('min-height', '476px');
-  await expect(rules).toHaveText('This writing area remains editable.');
+  await expect(rules.first()).toHaveCSS('min-height', '476px');
+  await expect(rules.first()).toHaveText('This writing area remains editable.');
+  await expect(body.locator('[data-document-writing-area]')).toHaveCount(1);
+  await expect(body.locator('[data-document-writing-area]')).toHaveCSS('background-image', /rgb\(0, 0, 0\)/);
+  expect(await rules.first().evaluate((element) => getComputedStyle(element).backgroundImage)).toContain('rgb(0, 0, 0) 32px, rgb(0, 0, 0) 34px');
   await expect(title.locator('p')).toHaveCSS('font-family', 'Cinzel, serif');
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -144,12 +205,26 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
         if (Math.max(red, green, blue) - Math.min(red, green, blue) > 2) colouredPixels += 1;
         if (Math.min(red, green, blue) < 240) inkPixels += 1;
       }
-      const result = { text: text.items.map((item: { str?: string }) => item.str || '').join(''), colouredPixels, inkPixels, preview: canvas.toDataURL('image/png'), grayscale };
+      const worksheet = await document.getPage(3);
+      const worksheetCanvas = window.document.createElement('canvas');
+      const worksheetViewport = worksheet.getViewport({ scale: 1 });
+      worksheetCanvas.width = Math.ceil(worksheetViewport.width);
+      worksheetCanvas.height = Math.ceil(worksheetViewport.height);
+      const worksheetContext = worksheetCanvas.getContext('2d')!;
+      await worksheet.render({ canvasContext: worksheetContext, viewport: worksheetViewport }).promise;
+      const worksheetPixels = worksheetContext.getImageData(0, 0, worksheetCanvas.width, worksheetCanvas.height).data;
+      let rulePixels = 0;
+      for (let offset = 0; offset < worksheetPixels.length; offset += 4) {
+        const [red, green, blue] = worksheetPixels.slice(offset, offset + 3);
+        if (Math.max(red, green, blue) < 96 && Math.max(red, green, blue) - Math.min(red, green, blue) <= 3) rulePixels += 1;
+      }
+      const result = { text: text.items.map((item: { str?: string }) => item.str || '').join(''), colouredPixels, inkPixels, rulePixels, preview: canvas.toDataURL('image/png'), grayscale };
       await document.destroy();
       return result;
     }, { base64: bytes.toString('base64'), grayscale });
     expect(inspected.text.replace(/\s/g, '')).toContain('TheThingsWeCarry');
     expect(inspected.inkPixels).toBeGreaterThan(3000);
+    expect(inspected.rulePixels).toBeGreaterThan(5000);
     if (grayscale) expect(inspected.colouredPixels).toBe(0);
     else expect(inspected.colouredPixels).toBeGreaterThan(1000);
     await writeFile(testInfo.outputPath(grayscale ? 'pdf-gray-preview.png' : 'pdf-colour-preview.png'), Buffer.from(inspected.preview.split(',')[1], 'base64'));

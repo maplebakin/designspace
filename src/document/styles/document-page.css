@@ -1812,6 +1812,13 @@
   margin-bottom: 0;
 }
 
+.document-flow-prosemirror p.document-writing-area--selected,
+.document-spanning-layout p.document-writing-area--selected {
+  outline: 1.5px solid rgba(53, 89, 214, 0.72);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .document-flow-prosemirror [data-document-column-break-before="true"],
 .document-spanning-layout [data-document-column-break-before="true"] {
   break-before: column;
