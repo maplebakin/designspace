@@ -163,11 +163,12 @@ const getErrorMessage = (error: unknown, fallback: string) =>
   recoveryErrorMessage(error, fallback);
 
 const loadTauriDeliveryApis = async () => {
-  const [{ save, open }, { writeFile, rename, remove }] = await Promise.all([
+  const [{ save, open }, { writeFile, rename, remove }, { downloadDir }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/plugin-fs'),
+    import('@tauri-apps/api/path'),
   ]);
-  return { save, open, writeFile, rename, remove };
+  return { save, open, writeFile, rename, remove, downloadDir };
 };
 
 const createDialogFilters = (request: FileDeliveryRequest) => {
@@ -219,6 +220,23 @@ const writeTauriFile = async (
   }
 };
 
+const writeSelectedTauriFile = async (
+  writeFile: (path: string, data: Uint8Array) => Promise<void>,
+  path: string,
+  fileName: string,
+  content: FileDeliveryContent
+) => {
+  try {
+    // The native save dialog grants filesystem access to the exact file the
+    // user selected. A temporary sibling path is outside that scope, so write
+    // directly to the authorized destination.
+    await writeFile(path, await fileContentToBytes(content));
+  } catch (error) {
+    const message = getErrorMessage(error, 'The selected destination could not be written.');
+    throw new Error(`Could not save ${fileName}: ${message}`);
+  }
+};
+
 export const deliverFile = async (request: FileDeliveryRequest): Promise<FileDeliveryResult> => {
   const extension = getRequestedExtension(request);
   const fileName = sanitizeDeliveredFileName(request.fileName, extension);
@@ -228,12 +246,13 @@ export const deliverFile = async (request: FileDeliveryRequest): Promise<FileDel
     return { status: 'initiated', fileName };
   }
 
-  const { save, writeFile, rename, remove } = await loadTauriDeliveryApis();
+  const { save, writeFile, downloadDir } = await loadTauriDeliveryApis();
   let selectedPath: string | null;
   try {
+    const defaultPath = joinDirectoryAndFileName(await downloadDir(), fileName);
     selectedPath = await save({
       title: request.dialogTitle,
-      defaultPath: fileName,
+      defaultPath,
       filters: createDialogFilters(request),
     });
   } catch (error) {
@@ -243,9 +262,8 @@ export const deliverFile = async (request: FileDeliveryRequest): Promise<FileDel
 
   if (!selectedPath) return { status: 'cancelled', fileName };
 
-  const finalPath = ensureFileExtension(selectedPath, extension);
-  await writeTauriFile(writeFile, rename, remove, finalPath, fileName, request.content);
-  return { status: 'saved', fileName, path: finalPath };
+  await writeSelectedTauriFile(writeFile, selectedPath, fileName, request.content);
+  return { status: 'saved', fileName, path: selectedPath };
 };
 
 export const deliverFiles = async (
@@ -271,6 +289,7 @@ export const deliverFiles = async (
       title: options.dialogTitle || 'Choose a folder for the exported pages',
       directory: true,
       multiple: false,
+      recursive: true,
     });
   } catch (error) {
     const message = getErrorMessage(error, 'The folder dialog could not be opened.');

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tauriMocks = vi.hoisted(() => ({
   save: vi.fn(),
@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
   rename: vi.fn(),
   remove: vi.fn(),
+  downloadDir: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -17,6 +18,10 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: tauriMocks.writeFile,
   rename: tauriMocks.rename,
   remove: tauriMocks.remove,
+}));
+
+vi.mock('@tauri-apps/api/path', () => ({
+  downloadDir: tauriMocks.downloadDir,
 }));
 
 import {
@@ -39,6 +44,10 @@ const setTauriRuntime = (enabled: boolean) => {
 };
 
 describe('file delivery service', () => {
+  beforeEach(() => {
+    tauriMocks.downloadDir.mockResolvedValue('/home/test/Downloads');
+  });
+
   afterEach(() => {
     setTauriRuntime(false);
     vi.restoreAllMocks();
@@ -47,6 +56,7 @@ describe('file delivery service', () => {
     tauriMocks.writeFile.mockReset();
     tauriMocks.rename.mockReset();
     tauriMocks.remove.mockReset();
+    tauriMocks.downloadDir.mockReset();
     document.body.innerHTML = '';
   });
 
@@ -79,7 +89,7 @@ describe('file delivery service', () => {
 
   it('opens a Tauri save dialog and reports success only after bytes are written', async () => {
     setTauriRuntime(true);
-    tauriMocks.save.mockResolvedValue('/exports/design-space.jpg');
+    tauriMocks.save.mockResolvedValue('/exports/design-space.png');
     tauriMocks.writeFile.mockResolvedValue(undefined);
     tauriMocks.rename.mockResolvedValue(undefined);
     tauriMocks.remove.mockResolvedValue(undefined);
@@ -92,19 +102,13 @@ describe('file delivery service', () => {
     });
 
     expect(tauriMocks.save).toHaveBeenCalledWith(expect.objectContaining({
-      defaultPath: 'design-space.png',
+      defaultPath: '/home/test/Downloads/design-space.png',
       title: 'Save PNG export',
       filters: [{ name: 'PNG', extensions: ['png'] }],
     }));
-    expect(tauriMocks.writeFile).toHaveBeenCalledWith(
-      expect.stringMatching(/^\/exports\/design-space\.png\.design-space-.+\.tmp$/),
-      expect.any(Uint8Array)
-    );
+    expect(tauriMocks.writeFile).toHaveBeenCalledWith('/exports/design-space.png', expect.any(Uint8Array));
     expect(Array.from(tauriMocks.writeFile.mock.calls[0][1] as Uint8Array)).toEqual([1, 2, 3]);
-    expect(tauriMocks.rename).toHaveBeenCalledWith(
-      expect.stringMatching(/^\/exports\/design-space\.png\.design-space-.+\.tmp$/),
-      '/exports/design-space.png'
-    );
+    expect(tauriMocks.rename).not.toHaveBeenCalled();
     expect(result).toEqual({
       status: 'saved',
       fileName: 'design-space.png',
@@ -138,26 +142,76 @@ describe('file delivery service', () => {
       fileName: 'project.zip',
       extension: 'zip',
     })).rejects.toThrow('Could not save project.zip: permission denied');
-    expect(tauriMocks.remove).toHaveBeenCalledWith(
-      expect.stringMatching(/^\/exports\/project\.zip\.design-space-.+\.tmp$/)
-    );
+    expect(tauriMocks.writeFile).toHaveBeenCalledWith('/exports/project.zip', expect.any(Uint8Array));
+    expect(tauriMocks.rename).not.toHaveBeenCalled();
+    expect(tauriMocks.remove).not.toHaveBeenCalled();
   });
 
-  it('cleans a staged native file when the atomic rename fails', async () => {
+  it('treats a cancelled Tauri folder picker as a non-error and does not write', async () => {
     setTauriRuntime(true);
-    tauriMocks.save.mockResolvedValue('/exports/project.zip');
+    tauriMocks.open.mockResolvedValue(null);
+
+    const result = await deliverFiles([
+      { content: new Uint8Array([1]), fileName: 'page-01.png', extension: 'png' },
+    ]);
+
+    expect(result).toEqual({ status: 'cancelled', files: [] });
+    expect(tauriMocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('surfaces native save-dialog errors without writing a file', async () => {
+    setTauriRuntime(true);
+    tauriMocks.save.mockRejectedValue(new Error('native dialog unavailable'));
+
+    await expect(deliverFile({
+      content: new Uint8Array([4, 5, 6]),
+      fileName: 'printable.pdf',
+      extension: 'pdf',
+    })).rejects.toThrow('Could not save printable.pdf: native dialog unavailable');
+    expect(tauriMocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('cleans up staged batch files when the scoped-directory rename fails', async () => {
+    setTauriRuntime(true);
+    tauriMocks.open.mockResolvedValue('/exports/pages');
     tauriMocks.writeFile.mockResolvedValue(undefined);
     tauriMocks.rename.mockRejectedValue(new Error('destination is locked'));
     tauriMocks.remove.mockResolvedValue(undefined);
 
-    await expect(deliverFile({
-      content: new Uint8Array([4, 5, 6]),
-      fileName: 'project.zip',
-      extension: 'zip',
-    })).rejects.toThrow('Could not save project.zip: destination is locked');
+    const result = await deliverFiles([
+      { content: new Uint8Array([4, 5, 6]), fileName: 'page-01.png', extension: 'png' },
+    ]);
+
+    expect(result).toMatchObject({
+      status: 'partial',
+      files: [],
+      failedFileName: 'page-01.png',
+      error: expect.stringMatching(/destination is locked/i),
+    });
     expect(tauriMocks.remove).toHaveBeenCalledWith(
-      expect.stringMatching(/^\/exports\/project\.zip\.design-space-.+\.tmp$/)
+      expect.stringMatching(/^\/exports\/pages\/page-01\.png\.design-space-.+\.tmp$/)
     );
+  });
+
+  it.each(['pdf', 'png', 'zip'])('uses the user-selected path for %s exports', async (extension) => {
+    setTauriRuntime(true);
+    tauriMocks.save.mockResolvedValue(`/user/selected/printable.${extension}`);
+    tauriMocks.writeFile.mockResolvedValue(undefined);
+
+    const result = await deliverFile({
+      content: new Uint8Array([7, 8, 9]),
+      fileName: `printable.${extension}`,
+      extension,
+    });
+
+    expect(tauriMocks.save).toHaveBeenCalledWith(expect.objectContaining({
+      defaultPath: `/home/test/Downloads/printable.${extension}`,
+    }));
+    expect(tauriMocks.writeFile).toHaveBeenCalledWith(`/user/selected/printable.${extension}`, expect.any(Uint8Array));
+    expect(result).toMatchObject({
+      status: 'saved',
+      path: `/user/selected/printable.${extension}`,
+    });
   });
 
   it('uses one Tauri folder picker and writes numbered all-page files', async () => {
@@ -176,6 +230,7 @@ describe('file delivery service', () => {
       title: 'Choose a folder for the exported PNG pages',
       directory: true,
       multiple: false,
+      recursive: true,
     });
     expect(tauriMocks.writeFile).toHaveBeenCalledTimes(2);
     expect(createObjectURL).not.toHaveBeenCalled();
@@ -231,5 +286,19 @@ describe('file delivery service', () => {
       .toBe('/exports/family-history.png');
     expect(ensureFileExtension('/exports/family-history.apocaproject.json', 'apocaproject.json'))
       .toBe('/exports/family-history.apocaproject.json');
+  });
+
+  it('does not open the save dialog when the Downloads directory cannot be resolved', async () => {
+    setTauriRuntime(true);
+    tauriMocks.downloadDir.mockRejectedValue(new Error('folder lookup failed'));
+
+    await expect(deliverFile({
+      content: new Uint8Array([1]),
+      fileName: 'printable.pdf',
+      extension: 'pdf',
+    })).rejects.toThrow('Could not save printable.pdf: folder lookup failed');
+
+    expect(tauriMocks.save).not.toHaveBeenCalled();
+    expect(tauriMocks.writeFile).not.toHaveBeenCalled();
   });
 });
