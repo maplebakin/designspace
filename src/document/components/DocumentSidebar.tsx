@@ -115,6 +115,8 @@ const STYLE_LABELS: Record<DocumentStyleId, string> = {
 };
 
 const FONT_LABELS = {
+  cinzel: 'Cinzel',
+  'cormorant-garamond': 'Cormorant Garamond',
   'historical-serif': 'Historical serif',
   'book-serif': 'Book serif',
   'classic-serif': 'Classic serif',

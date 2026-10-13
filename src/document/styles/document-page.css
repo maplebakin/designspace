@@ -2502,3 +2502,35 @@
     padding: 20px 20px 70px;
   }
 }
+
+.publishing-panel {
+  flex: 0 0 auto;
+  max-height: 46vh;
+  overflow: auto;
+  border-bottom: 1px solid var(--ui-border, #d7d0d5);
+  padding: 8px 16px;
+  background: var(--ui-surface, #fff);
+  color: var(--ui-text, #302b2f);
+  font-size: 13px;
+}
+.publishing-panel summary { cursor: pointer; font-weight: 600; }
+.publishing-panel summary span { margin-left: 12px; font-weight: 400; opacity: 0.75; }
+.publishing-panel__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding-top: 12px; }
+.publishing-panel fieldset { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--ui-border, #d7d0d5); border-radius: 8px; padding: 12px; min-width: 0; }
+.publishing-panel legend { font-weight: 600; }
+.publishing-panel label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.publishing-panel input:not([type=checkbox]), .publishing-panel select { width: 55%; min-width: 0; padding: 4px; border: 1px solid var(--ui-border, #d7d0d5); border-radius: 4px; background: var(--ui-surface, white); color: inherit; }
+.publishing-panel button { padding: 6px 8px; border: 1px solid var(--ui-border, #d7d0d5); border-radius: 5px; background: var(--ui-surface, white); color: inherit; cursor: pointer; }
+.publishing-panel button:disabled { opacity: 0.5; cursor: default; }
+.publishing-panel__buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.publishing-panel p { margin: 0; font-size: 12px; line-height: 1.5; }
+.publishing-panel__status { padding-top: 8px; }
+.document-review { position: fixed; inset: 0; z-index: 1000; background: rgb(0 0 0 / 45%); padding: 24px; }
+.document-review__content { max-height: 100%; overflow: auto; padding: 20px; border-radius: 12px; background: var(--ui-surface, white); color: var(--ui-text, #302b2f); }
+.document-review__grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
+.document-review__page { display: flex; flex-direction: column; gap: 8px; border: 1px solid #c9c0c6; background: #eee9ec; padding: 12px; cursor: pointer; color: #302b2f; }
+.document-review__page > div { overflow: hidden; background: white; }
+@media (max-width: 900px) {
+  .publishing-panel__grid { grid-template-columns: 1fr; }
+  .publishing-panel summary span { display: none; }
+}

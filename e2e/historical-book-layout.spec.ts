@@ -408,7 +408,7 @@ test.describe('historical book acceptance fixture', () => {
     );
 
     const pdfDownloadPromise = page.waitForEvent('download');
-    const pdfButton = page.getByRole('button', { name: 'PDF', exact: true });
+    const pdfButton = page.getByRole('button', { name: 'Raster PDF', exact: true });
     if (!await pdfButton.isVisible()) {
       await page.getByText('Export', { exact: true }).click();
     }

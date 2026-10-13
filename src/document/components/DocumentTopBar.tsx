@@ -19,7 +19,7 @@ type DocumentTopBarProps = {
   onRenameCommit?: (name: string, initialName: string) => void;
   onSave: () => void;
   onDownloadProject: () => void;
-  onExport: (format: 'png' | 'pdf', scope?: 'current' | 'all') => void;
+  onExport: (format: 'png' | 'pdf' | 'publishing-pdf', scope?: 'current' | 'all') => void;
   onPrint: () => void;
   showProjectControls?: boolean;
 };
@@ -129,14 +129,18 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
             PNG (all pages)
             <span>{pageCount} files · 300 DPI</span>
           </button>
+          <button type="button" aria-label="PDF with embedded fonts" disabled={exportBusy} onClick={() => onExport('publishing-pdf')}>
+            PDF with embedded fonts
+            <span>All pages · Cinzel / Cormorant · selectable text</span>
+          </button>
           <button
             type="button"
-            aria-label="PDF"
+            aria-label="Raster PDF"
             disabled={exportBusy}
             onClick={() => onExport('pdf')}
           >
-            PDF
-            <span>All {pageCount} {pageCount === 1 ? 'page' : 'pages'}</span>
+            PDF (raster)
+            <span>All {pageCount} pages · text is an image</span>
           </button>
         </div>
       </details>
@@ -147,7 +151,7 @@ export const DocumentTopBar: React.FC<DocumentTopBarProps> = ({
         onClick={onPrint}
       >
         <Printer size={16} aria-hidden="true" />
-        Print
+        Print / Save PDF
       </button>
     </div>
   </header>

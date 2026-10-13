@@ -48,3 +48,15 @@ reuse the same `DocumentExportPageSource` and layout contract.
 Mixed-size PDF pages are supported by `exportPdfPagesBlob`. Browser print uses
 one shared print CSS host and should be treated as a same-size page workflow;
 the historical acceptance fixture uses Letter on all four pages.
+
+## Publishing PDFs
+
+The Publishing workflow also offers **PDF with embedded fonts**. This separate
+path uses the same committed page sources, with static bundled Cinzel and
+Cormorant Garamond TrueType faces. `publishingPdfService.ts` emits actual PDF text
+and ToUnicode maps at measured browser glyph positions; artwork and furniture
+remain rasterized. **PDF (raster)** retains the existing jsPDF path described
+above. Unsupported publishing typography/layout fails explicitly and never
+silently falls back to raster output. See
+[`printable-publishing-workflow.md`](../implementation/printable-publishing-workflow.md)
+for font support, grayscale, compatibility and acceptance limits.

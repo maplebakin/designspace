@@ -36,7 +36,7 @@ const pasteImageFile = async (page: Page) => {
 };
 
 const openExportFormat = async (page: Page, format: 'PNG' | 'PDF') => {
-  const formatButton = page.getByRole('button', { name: format, exact: true });
+  const formatButton = page.getByRole('button', { name: format === 'PDF' ? 'Raster PDF' : format, exact: true });
   if (!await formatButton.isVisible()) {
     await page.getByText('Export', { exact: true }).click();
   }

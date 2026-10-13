@@ -4,6 +4,10 @@ import { measureDocumentLiveTextMetric } from './documentLiveTextDiagnostics';
 const IMAGE_NODE_NAMES = new Set<string>(DOCUMENT_IMAGE_NODE_NAMES);
 const IMPLICIT_BLOCK_ATTRIBUTE_DEFAULTS = new Set([
   'textAlign',
+  'documentWritingRows',
+  'documentWritingSpacing',
+  'documentDivider',
+  'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx',
   'documentColumnBreakBefore',
   'documentKeepWithNext',
   'documentKeepLinesTogether',

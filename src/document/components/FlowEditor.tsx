@@ -55,6 +55,8 @@ import type {
   DocumentPasteDispatcher,
 } from './TitleEditor';
 import '../styles/document-page.css';
+import '../styles/publishing-fonts.css';
+import { DocumentWritingExtension } from '../extensions/DocumentWritingExtension';
 import '../styles/document-print.css';
 import {
   measureDocumentPagePositionOriginOffsetPx,
@@ -503,7 +505,7 @@ const FLOW_CONTROL_DEFAULT_KEYS = [
   'documentKeepWithNext',
   'documentKeepLinesTogether',
 ] as const;
-const EDITOR_DEFAULT_NULL_KEYS = ['textAlign'] as const;
+const EDITOR_DEFAULT_NULL_KEYS = ['textAlign', 'documentWritingRows', 'documentWritingSpacing', 'documentDivider', 'documentRuleColor', 'documentSpaceBeforePx', 'documentSpaceAfterPx'] as const;
 
 const normalizeEditorComparisonContent = (
   value: JSONContent
@@ -890,6 +892,7 @@ export const FlowEditor = ({
           defaultStyleId: 'body',
         }),
         DocumentFlowControlExtension,
+        DocumentWritingExtension,
         SanitizedPasteExtension,
         DocumentInlineImageExtension.configure(imageExtensionOptions),
         DocumentFlowImageExtension.configure(imageExtensionOptions),

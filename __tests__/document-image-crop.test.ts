@@ -151,8 +151,8 @@ describe('document image frame and crop state', () => {
       }],
     }) as DocumentProjectPayload;
 
-    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(6);
-    expect(normalized.document.schemaVersion).toBe(6);
+    expect(CURRENT_DOCUMENT_SCHEMA_VERSION).toBe(7);
+    expect(normalized.document.schemaVersion).toBe(CURRENT_DOCUMENT_SCHEMA_VERSION);
     expect(normalized.pages[0].bodyContent.content?.[0]?.attrs).toMatchObject({
       cropMode: 'fit',
       cropFocalX: 0.5,

@@ -1,3 +1,7 @@
+import { PublishingPanel } from './PublishingPanel';
+import { DocumentReview } from './DocumentReview';
+import { deliverFile } from '../../editor/services/fileDeliveryService';
+import { sanitizeExportBaseName } from '../../editor/utils/exportFileName';
 import React, {
   useCallback,
   useEffect,
@@ -650,6 +654,8 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
 
   const titleEditorRef = useRef<Editor | null>(null);
   const bodyEditorRef = useRef<Editor | null>(null);
+  const [publishingGrayscale, setPublishingGrayscale] = useState(false);
+  const [reviewProject, setReviewProject] = useState<import('../../editor/project/projectSchema').DocumentProjectPayload | null>(null);
   const documentHistoryRef = useRef<DocumentHistory | null>(null);
   if (!documentHistoryRef.current) {
     documentHistoryRef.current = createDocumentHistory();
@@ -3610,10 +3616,11 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
   }, [page, setReference]);
 
   const exportDocument = useCallback(async (
-    format: 'png' | 'pdf',
+    format: 'png' | 'pdf' | 'publishing-pdf',
     scope: 'current' | 'all' = 'current'
   ) => {
     if (!page || !project || isExporting) return;
+    const formatLabel = format === 'publishing-pdf' ? 'PDF' : format.toUpperCase();
     flushPendingTextDrafts();
     const currentProject = useDocumentStore.getState().project;
     if (!currentProject) return;
@@ -3629,7 +3636,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
       currentActivePageIndex
     );
     setIsExporting(true);
-    setToastMessage(`Preparing ${format.toUpperCase()} export…`);
+    setToastMessage(`Preparing ${formatLabel} export…`);
     let cleanupExportPages: (() => void) | undefined;
     try {
       const mounted = await mountCommittedDocumentExportPages(currentProject);
@@ -3638,6 +3645,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         ...source,
         options: {
           ...source.options,
+          grayscale: publishingGrayscale,
           onWarning: (warnings: readonly string[]) => {
             if (warnings.length > 0) setToastMessage(warnings[0]);
           },
@@ -3665,6 +3673,14 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           });
           delivery = result.delivery;
         }
+      } else if (format === 'publishing-pdf') {
+        const { exportPublishingPdf } = await import('../services/publishingPdfService');
+        const blob = await exportPublishingPdf(exportSources, publishingGrayscale);
+        delivery = await deliverFile({
+          content: blob,
+          fileName: `${sanitizeExportBaseName(currentProject.projectName)}${publishingGrayscale ? '-grayscale' : ''}-embedded-fonts.pdf`,
+          extension: 'pdf', dialogTitle: 'Save printable PDF', filterName: 'PDF document',
+        });
       } else {
         const result = await documentExportService.downloadPdfPages(
           exportSources,
@@ -3673,13 +3689,13 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         delivery = result.delivery;
       }
       if (delivery?.status === 'cancelled') {
-        setToastMessage(`${format.toUpperCase()} export cancelled.`);
+        setToastMessage(`${formatLabel} export cancelled.`);
         return;
       }
       const location = delivery ? getDeliverySuccessLocation(delivery) : null;
       setToastMessage(location
-        ? `${format.toUpperCase()} export saved to ${location}.`
-        : `${format.toUpperCase()} export downloaded.`);
+        ? `${formatLabel} export saved to ${location}.`
+        : `${formatLabel} export downloaded.`);
     } catch (error) {
       setToastMessage(error instanceof Error ? error.message : 'Document export failed.');
     } finally {
@@ -3690,6 +3706,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
     activePageIndex,
     folioNumber,
     flushPendingTextDrafts,
+    publishingGrayscale,
     isExporting,
     page,
     project,
@@ -3870,7 +3887,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
           const currentProject = useDocumentStore.getState().project;
           if (!currentProject) return;
           void mountCommittedDocumentExportPages(currentProject).then((mounted) => (
-            documentExportService.printPages(mounted.sources).finally(
+            documentExportService.printPages(mounted.sources.map((source) => ({ ...source, options: { ...source.options, grayscale: publishingGrayscale } }))).finally(
               mounted.cleanup
             )
           )).catch((error) => {
@@ -3879,6 +3896,23 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         }}
         showProjectControls={!useSharedChrome}
       />
+
+      <PublishingPanel
+        project={project}
+        getBodyEditor={() => bodyEditorRef.current}
+        getTextEditor={() => activeTextRegion === 'title' ? titleEditorRef.current : bodyEditorRef.current}
+        onCommit={(action, pageId) => notifyCommittedMutation(onCommittedMutation, { action, pageId })}
+        grayscale={publishingGrayscale}
+        onGrayscaleChange={setPublishingGrayscale}
+        onReview={() => {
+          flushPendingTextDrafts();
+          const current = useDocumentStore.getState().project;
+          if (current) setReviewProject(current);
+        }}
+      />
+      {reviewProject && <DocumentReview project={reviewProject} onClose={() => setReviewProject(null)} onSelect={(index) => {
+        setReviewProject(null); selectPage(index);
+      }} />}
 
       <div className="document-editor-layout">
         <DocumentSidebar

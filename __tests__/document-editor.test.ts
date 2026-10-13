@@ -683,7 +683,7 @@ describe('live document editor UI', () => {
     });
     expect(downloadPngPages.mock.calls[0][0]).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Print', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Print / Save PDF', exact: true }));
     await waitFor(() => {
       expect(printPages).toHaveBeenCalledTimes(1);
     });

@@ -1,3 +1,4 @@
+import type { DocumentLayoutRecord } from '../document/services/documentLayoutService';
 import Dexie, { Table } from 'dexie';
 import type { EditorMode } from './project/projectSchema';
 import type { CanonicalSerializedScene } from './scene/sceneSnapshot';
@@ -207,6 +208,7 @@ export class DesignSpaceDB extends Dexie {
   brandKit!: Table<BrandKit>;
   templates!: Table<TemplateRecord, number>;
   projectRecovery!: Table<ProjectRecoveryRecord, string>;
+  documentLayouts!: Table<DocumentLayoutRecord, number>;
 
   constructor() {
     super('DesignSpaceDB');
@@ -246,12 +248,16 @@ export class DesignSpaceDB extends Dexie {
       projectRecovery: 'projectId, quarantinedAt',
     });
 
+    // Add document layouts without rewriting existing projects or canvas templates.
+    this.version(8).stores({ documentLayouts: '++id, name, updatedAt' });
+
     // Create indexes
     this.projects = this.table('projects');
     this.canvasData = this.table('canvasData');
     this.brandKit = this.table('brandKit');
     this.templates = this.table('templates');
     this.projectRecovery = this.table('projectRecovery');
+    this.documentLayouts = this.table('documentLayouts');
   }
 
   private projectListRequest: Promise<Project[]> | null = null;

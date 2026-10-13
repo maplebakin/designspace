@@ -1,3 +1,4 @@
+import { inlinePublishingFonts } from '../typography/publishingFonts';
 import { jsPDF } from 'jspdf';
 import { sanitizeExportBaseName } from '../../editor/utils/exportFileName';
 import {
@@ -57,6 +58,7 @@ export type DocumentPhysicalSize = {
 
 export type DocumentExportOptions = DocumentPhysicalSize & {
   dpi?: number;
+  grayscale?: boolean;
   fileName?: string;
   backgroundColor?: string;
   cssPixelsPerInch?: number;
@@ -707,6 +709,7 @@ export const prepareDocumentExportClone = async (
   );
   const clone = createCleanDocumentClone(source, options);
   await inlineRetainedImages(source, clone, options);
+  await inlinePublishingFonts(source, clone);
 
   const cssDimensions = calculateDocumentCssDimensions(
     size,
@@ -1152,6 +1155,7 @@ export class DocumentExportService {
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = 'high';
+    if (options.grayscale) context.filter = 'grayscale(1)';
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     context.restore();
 
@@ -1409,6 +1413,7 @@ export class DocumentExportService {
       clone.style.width = `${normalizedSize.widthIn}in`;
       clone.style.height = `${normalizedSize.heightIn}in`;
       clone.style.backgroundColor = backgroundColor;
+      if (source.options.grayscale) clone.style.filter = 'grayscale(1)';
       host.appendChild(clone);
     }
 
