@@ -3897,19 +3897,6 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
         showProjectControls={!useSharedChrome}
       />
 
-      <PublishingPanel
-        project={project}
-        getBodyEditor={() => bodyEditorRef.current}
-        getTextEditor={() => activeTextRegion === 'title' ? titleEditorRef.current : bodyEditorRef.current}
-        onCommit={(action, pageId) => notifyCommittedMutation(onCommittedMutation, { action, pageId })}
-        grayscale={publishingGrayscale}
-        onGrayscaleChange={setPublishingGrayscale}
-        onReview={() => {
-          flushPendingTextDrafts();
-          const current = useDocumentStore.getState().project;
-          if (current) setReviewProject(current);
-        }}
-      />
       {reviewProject && <DocumentReview project={reviewProject} onClose={() => setReviewProject(null)} onSelect={(index) => {
         setReviewProject(null); selectPage(index);
       }} />}
@@ -4630,6 +4617,19 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
             onFitPage={fitPage}
           />}
         </section>
+        <PublishingPanel
+          project={project}
+          getBodyEditor={() => bodyEditorRef.current}
+          getTextEditor={() => activeTextRegion === 'title' ? titleEditorRef.current : bodyEditorRef.current}
+          onCommit={(action, pageId) => notifyCommittedMutation(onCommittedMutation, { action, pageId })}
+          grayscale={publishingGrayscale}
+          onGrayscaleChange={setPublishingGrayscale}
+          onReview={() => {
+            flushPendingTextDrafts();
+            const current = useDocumentStore.getState().project;
+            if (current) setReviewProject(current);
+          }}
+        />
       </div>
 
       <input

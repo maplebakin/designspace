@@ -726,7 +726,7 @@ describe('live document editor UI', () => {
     await renderShell();
 
     expect(screen.queryByTestId('document-page-navigation')).not.toBeNull();
-    expect(screen.getAllByRole('tab')).toHaveLength(4);
+    expect(within(screen.getByTestId('document-page-navigation')).getAllByRole('tab')).toHaveLength(4);
     expect(screen.getByTestId('document-page-tab-0').getAttribute(
       'aria-selected'
     )).toBe('true');
@@ -954,7 +954,7 @@ describe('live document editor UI', () => {
     expect(project.pages[2].bodyContent).toEqual(
       project.pages[1].bodyContent
     );
-    expect(screen.getAllByRole('tab')).toHaveLength(5);
+    expect(within(screen.getByTestId('document-page-navigation')).getAllByRole('tab')).toHaveLength(5);
     expect(screen.getByTestId('document-page-tab-2').getAttribute(
       'aria-selected'
     )).toBe('true');
@@ -983,7 +983,7 @@ describe('live document editor UI', () => {
     expect(project.pages).toHaveLength(5);
     expect(project.activePageIndex).toBe(3);
     expect(new Set(project.pages.map((page) => page.id)).size).toBe(5);
-    expect(screen.getAllByRole('tab')).toHaveLength(5);
+    expect(within(screen.getByTestId('document-page-navigation')).getAllByRole('tab')).toHaveLength(5);
     expect(screen.getByTestId('document-page-tab-3').getAttribute(
       'aria-selected'
     )).toBe('true');

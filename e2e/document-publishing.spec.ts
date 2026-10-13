@@ -10,9 +10,11 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await expect(page.getByTestId('document-editor-shell')).toBeVisible();
   await page.getByTestId('document-project-name').fill('The Things We Carry — demonstration');
   await page.getByTestId('document-project-name').press('Tab');
-  await page.locator('.publishing-panel > summary').click();
-  await page.getByRole('button', { name: 'Apply paper to all pages' }).click();
+  await page.getByRole('tab', { name: 'Document' }).click();
+  await page.getByTestId('document-page-preset').selectOption('letter');
+  await page.getByRole('button', { name: 'Apply current page setup to all pages' }).click();
   await page.getByRole('button', { name: 'Apply document typography' }).click();
+  await page.getByRole('tab', { name: 'Pages' }).click();
   await page.getByRole('button', { name: 'Add cover design' }).click();
   const title = page.locator('.document-title-prosemirror');
   const body = page.locator('.document-flow-prosemirror').first();
@@ -20,6 +22,7 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await body.locator('p').first().fill('A remembrance and reflection journal · Demonstration edition');
   await body.locator('p').last().fill('WitchClick · Sample content, not the final manuscript');
   await title.click();
+  await page.getByRole('tab', { name: 'Writing' }).click();
   await page.getByLabel('Space before text block').fill('140');
   await page.getByLabel('Space after text block').fill('20');
   await page.getByRole('button', { name: 'Set selected block spacing' }).click();
@@ -34,6 +37,7 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await page.getByLabel('Overlay Y position').fill('500');
   await page.getByLabel('Overlay Y position').press('Tab');
 
+  await page.getByRole('tab', { name: 'Pages' }).click();
   await page.getByRole('button', { name: 'Add guide design' }).click();
   await title.fill('One thing worth keeping');
   await body.locator('p').nth(0).fill('Choose an ordinary memory');
@@ -49,6 +53,7 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   const rules = body.locator('[data-document-writing-area]');
   await expect(rules).toHaveCount(1);
   await rules.click({ position: { x: 10, y: 10 } });
+  await page.getByRole('tab', { name: 'Writing' }).click();
   await page.getByLabel('Writing line count').fill('14');
   await page.getByLabel('Writing line spacing').fill('34');
   await page.getByRole('button', { name: 'Update selected writing area' }).click();
@@ -56,6 +61,7 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await rules.fill('This writing area remains editable.');
 
   // A saved layout is a fresh editable page and survives a library reopen.
+  await page.getByRole('tab', { name: 'Pages' }).click();
   await page.getByLabel('Saved page layouts').selectOption({ label: 'Reflection guide' });
   await page.getByRole('button', { name: 'Insert saved layout' }).click();
   await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(4);
@@ -81,7 +87,7 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
     if (!document.fonts.check('400 18px "Cormorant Garamond"') || !document.fonts.check('700 38px "Cinzel"')) throw new Error('Publishing fonts are not loaded.');
   });
 
-  await page.locator('.publishing-panel > summary').click();
+  await page.getByRole('tab', { name: 'Document' }).click();
   await page.getByRole('button', { name: 'Review all pages' }).click();
   await expect(page.getByRole('dialog', { name: 'Review document' }).getByRole('button', { name: /Edit page/ })).toHaveCount(3);
   await page.screenshot({ path: testInfo.outputPath('pilot-review.png'), fullPage: true });
@@ -152,8 +158,9 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   };
   await exportPdf(false);
   await exportPdf(true);
-  await page.getByLabel('Publishing paper').selectOption('a4');
-  await page.getByRole('button', { name: 'Apply paper to all pages' }).click();
+  await page.getByTestId('document-page-preset').selectOption('a4');
+  await page.getByRole('tab', { name: 'Document' }).click();
+  await page.getByRole('button', { name: 'Apply current page setup to all pages' }).click();
   expect(await page.getByTestId('document-page').evaluate((element) => parseFloat(getComputedStyle(element).width))).toBeCloseTo(210 / 25.4 * 96, 1);
   await exportPdf(false, 'a4');
 });
