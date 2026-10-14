@@ -111,7 +111,24 @@ test.describe('document reconstruction MVP', () => {
       'data-context',
       'image'
     );
+    await expect(page.getByTestId('document-context-toolbar').getByTestId(
+      'document-font-size'
+    )).toBeVisible();
+    await expect(page.getByTestId('document-context-toolbar').getByLabel(
+      'Text style'
+    )).toBeVisible();
     await expect(page.getByLabel('Image layout mode')).toBeVisible();
+    const toolbarOverflow = await page.getByTestId('document-context-toolbar')
+      .evaluate((element) => element.scrollWidth > element.clientWidth);
+    expect(toolbarOverflow).toBe(true);
+    const toolbar = page.getByTestId('document-context-toolbar');
+    await toolbar.focus();
+    await toolbar.press('End');
+    await expect.poll(() => toolbar.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(0);
+    await toolbar.press('Home');
+    await expect.poll(() => toolbar.evaluate((element) => element.scrollLeft))
+      .toBe(0);
 
     await page.getByTestId('document-reference-file-input').setInputFiles({
       name: 'source-scan.png',
@@ -124,6 +141,12 @@ test.describe('document reconstruction MVP', () => {
       'data-context',
       'reference'
     );
+    await expect(page.getByTestId('document-context-toolbar').getByTestId(
+      'document-font-size'
+    )).toBeVisible();
+    await expect(page.getByTestId('document-context-toolbar').getByLabel(
+      'Text style'
+    )).toBeVisible();
     await page.getByTestId('document-context-toolbar')
       .getByRole('button', { name: 'Finish adjusting' })
       .click();

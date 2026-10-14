@@ -1553,7 +1553,7 @@ describe('live document editor UI', () => {
     ).toBe(true);
   });
 
-  it('switches the contextual toolbar between text, image, and reference adjustment', async () => {
+  it('keeps text formatting available while the contextual inspector switches', async () => {
     const store = useDocumentStore.getState();
     store.addAsset(reference.assetId, 'data:image/png;base64,REFERENCE');
     store.setReference(reference);
@@ -1579,8 +1579,8 @@ describe('live document editor UI', () => {
       expect(contextToolbar.getAttribute('data-context')).toBe('image');
     });
     expect(within(contextToolbar).queryByTestId('document-image-inspector')).not.toBeNull();
-    expect(within(contextToolbar).queryByLabelText('Bold')).toBeNull();
-    expect(within(contextToolbar).queryByTestId('document-font-size')).toBeNull();
+    expect(within(contextToolbar).queryByLabelText('Bold')).not.toBeNull();
+    expect(within(contextToolbar).queryByTestId('document-font-size')).not.toBeNull();
 
     fireEvent.click(screen.getByTestId('document-reference-lock'));
     expect(useDocumentStore.getState().project?.pages[0].reference?.locked)
@@ -1591,8 +1591,8 @@ describe('live document editor UI', () => {
       name: 'Finish adjusting',
     })).not.toBeNull();
     expect(within(contextToolbar).queryByTestId('document-image-inspector')).toBeNull();
-    expect(within(contextToolbar).queryByLabelText('Bold')).toBeNull();
-    expect(within(contextToolbar).queryByTestId('document-font-size')).toBeNull();
+    expect(within(contextToolbar).queryByLabelText('Bold')).not.toBeNull();
+    expect(within(contextToolbar).queryByTestId('document-font-size')).not.toBeNull();
 
     fireEvent.click(within(contextToolbar).getByRole('button', {
       name: 'Finish adjusting',

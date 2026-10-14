@@ -384,6 +384,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
   recordDocumentTypingLatencyCounter('toolbarRenders');
   const imageInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const reference = props.page.reference;
   const context = props.referenceAdjustMode
     ? 'reference'
@@ -401,13 +402,225 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
       ? `span-${props.selectedImage.spanCount === 3 ? 3 : 2}`
       : props.selectedImage?.wrap ?? 'float-left';
 
+  const textToolbar = (
+    <div className="document-context-toolbar__content document-context-toolbar__text">
+      <div className="document-context-heading">
+        <span>Editing</span>
+        <strong>{props.activeTextRegion === 'title' ? 'Title' : 'Body text'}</strong>
+      </div>
+      <div className="document-context-button-group" aria-label="History">
+        <FormatButton
+          label="Undo"
+          disabled={!props.canUndo}
+          onClick={() => props.onFormat('undo')}
+        >
+          <Undo2 size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Redo"
+          disabled={!props.canRedo}
+          onClick={() => props.onFormat('redo')}
+        >
+          <Redo2 size={17} aria-hidden="true" />
+        </FormatButton>
+      </div>
+      <div className="document-context-divider" aria-hidden="true" />
+      {props.activeTextRegion === 'body' && (
+        <label className="document-context-field">
+          <span>Block style</span>
+          <select
+            aria-label="Body block style"
+            data-testid="document-block-style"
+            value={props.textFormatState.blockStyleId}
+            onChange={(event) => props.onBlockStyleChange(
+              event.target.value as DocumentBlockStyleId
+            )}
+          >
+            {props.textFormatState.blockStyleId === 'mixed' && (
+              <option value="mixed" disabled>Mixed</option>
+            )}
+            <option value="body">Body</option>
+            <option value="subsection-heading">Subsection heading</option>
+            <option value="quotation">Quotation / scripture</option>
+            <option value="author-signature">Author / signature</option>
+          </select>
+        </label>
+      )}
+      {props.activeTextRegion === 'body' && (
+        <>
+          <div className="document-context-divider" aria-hidden="true" />
+          <div
+            className="document-context-button-group"
+            aria-label="Paragraph flow controls"
+          >
+            <FormatButton
+              label="Insert column break"
+              active={props.textFormatState.columnBreakBefore}
+              onClick={() => props.onFlowControl?.('column-break')}
+            >
+              <span aria-hidden="true">↪</span>
+            </FormatButton>
+            <FormatButton
+              label="Keep with next"
+              active={props.textFormatState.keepWithNext}
+              onClick={() => props.onFlowControl?.('keep-with-next')}
+            >
+              <span aria-hidden="true">↕</span>
+            </FormatButton>
+            <FormatButton
+              label="Keep lines together"
+              active={props.textFormatState.keepLinesTogether}
+              onClick={() => props.onFlowControl?.('keep-lines-together')}
+            >
+              <span aria-hidden="true">≡</span>
+            </FormatButton>
+          </div>
+          <div className="document-context-divider" aria-hidden="true" />
+        </>
+      )}
+      <label className="document-context-field document-context-field--font-size">
+        <span>
+          {props.activeTextRegion === 'title' ? 'Title size' : 'Body size'}
+        </span>
+        <select
+          aria-label={
+            props.activeTextRegion === 'title'
+              ? 'Title text font size'
+              : 'Body text font size'
+          }
+          data-testid="document-font-size"
+          value={String(fontSizeValue)}
+          onChange={(event) => {
+            const fontSizePt = Number(event.target.value);
+            if (Number.isFinite(fontSizePt)) {
+              props.onFontSizeChange(fontSizePt);
+            }
+          }}
+        >
+          {fontSizeValue === 'mixed' && (
+            <option value="mixed">Mixed</option>
+          )}
+          {!hasPresetFontSize && fontSizeValue !== 'mixed' && (
+            <option value={String(fontSizeValue)}>
+              {fontSizeValue} pt
+            </option>
+          )}
+          {DOCUMENT_FONT_SIZES_PT.map((fontSizePt) => (
+            <option key={fontSizePt} value={fontSizePt}>
+              {fontSizePt} pt
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="document-context-divider" aria-hidden="true" />
+      <div className="document-context-button-group" aria-label="Text style">
+        <FormatButton
+          label="Bold"
+          active={props.textFormatState.bold}
+          onClick={() => props.onFormat('bold')}
+        >
+          <Bold size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Italic"
+          active={props.textFormatState.italic}
+          onClick={() => props.onFormat('italic')}
+        >
+          <Italic size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Underline"
+          active={props.textFormatState.underline}
+          onClick={() => props.onFormat('underline')}
+        >
+          <Underline size={17} aria-hidden="true" />
+        </FormatButton>
+      </div>
+      <div className="document-context-divider" aria-hidden="true" />
+      <div className="document-context-button-group" aria-label="Text alignment">
+        <FormatButton
+          label="Align left"
+          active={props.textFormatState.alignment === 'left'}
+          onClick={() => props.onFormat('align-left')}
+        >
+          <AlignLeft size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Align center"
+          active={props.textFormatState.alignment === 'center'}
+          onClick={() => props.onFormat('align-center')}
+        >
+          <AlignCenter size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Align right"
+          active={props.textFormatState.alignment === 'right'}
+          onClick={() => props.onFormat('align-right')}
+        >
+          <AlignRight size={17} aria-hidden="true" />
+        </FormatButton>
+        <FormatButton
+          label="Justify"
+          active={props.textFormatState.alignment === 'justify'}
+          onClick={() => props.onFormat('align-justify')}
+        >
+          <AlignJustify size={17} aria-hidden="true" />
+        </FormatButton>
+      </div>
+      <div className="document-context-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="document-context-button"
+        onClick={() => imageInputRef.current?.click()}
+      >
+        <ImagePlus size={17} aria-hidden="true" />
+        Add photo
+      </button>
+      <input
+        ref={imageInputRef}
+        className="document-visually-hidden"
+        data-testid="document-context-image-file-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) props.onImportImages(files);
+          event.target.value = '';
+        }}
+      />
+    </div>
+  );
+
   return (
     <div
       className={`document-context-toolbar document-context-toolbar--${context}`}
+      ref={toolbarRef}
+      role="toolbar"
+      aria-label="Document formatting and context tools"
+      aria-orientation="horizontal"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+          event.preventDefault();
+          toolbarRef.current?.scrollBy({
+            left: event.key === 'ArrowRight' ? 240 : -240,
+            behavior: 'smooth',
+          });
+        } else if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault();
+          toolbarRef.current?.scrollTo({
+            left: event.key === 'Home' ? 0 : toolbarRef.current.scrollWidth,
+            behavior: 'smooth',
+          });
+        }
+      }}
       data-document-editor-ui="true"
       data-testid="document-context-toolbar"
       data-context={context}
     >
+      {textToolbar}
       {props.referenceAdjustMode && reference ? (
         <div className="document-context-toolbar__content">
           <div className="document-context-heading">
@@ -1026,195 +1239,7 @@ export const DocumentToolbar: React.FC<DocumentToolbarProps> = (props) => {
             onDistributeSelectedImages={props.onDistributeSelectedImages}
           />
         </div>
-      ) : (
-        <div className="document-context-toolbar__content">
-          <div className="document-context-heading">
-            <span>Editing</span>
-            <strong>{props.activeTextRegion === 'title' ? 'Title' : 'Body text'}</strong>
-          </div>
-          <div className="document-context-button-group" aria-label="History">
-            <FormatButton
-              label="Undo"
-              disabled={!props.canUndo}
-              onClick={() => props.onFormat('undo')}
-            >
-              <Undo2 size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Redo"
-              disabled={!props.canRedo}
-              onClick={() => props.onFormat('redo')}
-            >
-              <Redo2 size={17} aria-hidden="true" />
-            </FormatButton>
-          </div>
-          <div className="document-context-divider" aria-hidden="true" />
-          {props.activeTextRegion === 'body' && (
-            <label className="document-context-field">
-              <span>Block style</span>
-              <select
-                aria-label="Body block style"
-                data-testid="document-block-style"
-                value={props.textFormatState.blockStyleId}
-                onChange={(event) => props.onBlockStyleChange(
-                  event.target.value as DocumentBlockStyleId
-                )}
-              >
-                {props.textFormatState.blockStyleId === 'mixed' && (
-                  <option value="mixed" disabled>Mixed</option>
-                )}
-                <option value="body">Body</option>
-                <option value="subsection-heading">Subsection heading</option>
-                <option value="quotation">Quotation / scripture</option>
-                <option value="author-signature">Author / signature</option>
-              </select>
-            </label>
-          )}
-          {props.activeTextRegion === 'body' && (
-            <>
-              <div className="document-context-divider" aria-hidden="true" />
-              <div
-                className="document-context-button-group"
-                aria-label="Paragraph flow controls"
-              >
-                <FormatButton
-                  label="Insert column break"
-                  active={props.textFormatState.columnBreakBefore}
-                  onClick={() => props.onFlowControl?.('column-break')}
-                >
-                  <span aria-hidden="true">↪</span>
-                </FormatButton>
-                <FormatButton
-                  label="Keep with next"
-                  active={props.textFormatState.keepWithNext}
-                  onClick={() => props.onFlowControl?.('keep-with-next')}
-                >
-                  <span aria-hidden="true">↕</span>
-                </FormatButton>
-                <FormatButton
-                  label="Keep lines together"
-                  active={props.textFormatState.keepLinesTogether}
-                  onClick={() => props.onFlowControl?.('keep-lines-together')}
-                >
-                  <span aria-hidden="true">≡</span>
-                </FormatButton>
-              </div>
-              <div className="document-context-divider" aria-hidden="true" />
-            </>
-          )}
-          <label className="document-context-field document-context-field--font-size">
-            <span>
-              {props.activeTextRegion === 'title' ? 'Title size' : 'Body size'}
-            </span>
-            <select
-              aria-label={
-                props.activeTextRegion === 'title'
-                  ? 'Title text font size'
-                  : 'Body text font size'
-              }
-              data-testid="document-font-size"
-              value={String(fontSizeValue)}
-              onChange={(event) => {
-                const fontSizePt = Number(event.target.value);
-                if (Number.isFinite(fontSizePt)) {
-                  props.onFontSizeChange(fontSizePt);
-                }
-              }}
-            >
-              {fontSizeValue === 'mixed' && (
-                <option value="mixed">Mixed</option>
-              )}
-              {!hasPresetFontSize && fontSizeValue !== 'mixed' && (
-                <option value={String(fontSizeValue)}>
-                  {fontSizeValue} pt
-                </option>
-              )}
-              {DOCUMENT_FONT_SIZES_PT.map((fontSizePt) => (
-                <option key={fontSizePt} value={fontSizePt}>
-                  {fontSizePt} pt
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="document-context-divider" aria-hidden="true" />
-          <div className="document-context-button-group" aria-label="Text style">
-            <FormatButton
-              label="Bold"
-              active={props.textFormatState.bold}
-              onClick={() => props.onFormat('bold')}
-            >
-              <Bold size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Italic"
-              active={props.textFormatState.italic}
-              onClick={() => props.onFormat('italic')}
-            >
-              <Italic size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Underline"
-              active={props.textFormatState.underline}
-              onClick={() => props.onFormat('underline')}
-            >
-              <Underline size={17} aria-hidden="true" />
-            </FormatButton>
-          </div>
-          <div className="document-context-divider" aria-hidden="true" />
-          <div className="document-context-button-group" aria-label="Text alignment">
-            <FormatButton
-              label="Align left"
-              active={props.textFormatState.alignment === 'left'}
-              onClick={() => props.onFormat('align-left')}
-            >
-              <AlignLeft size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Align center"
-              active={props.textFormatState.alignment === 'center'}
-              onClick={() => props.onFormat('align-center')}
-            >
-              <AlignCenter size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Align right"
-              active={props.textFormatState.alignment === 'right'}
-              onClick={() => props.onFormat('align-right')}
-            >
-              <AlignRight size={17} aria-hidden="true" />
-            </FormatButton>
-            <FormatButton
-              label="Justify"
-              active={props.textFormatState.alignment === 'justify'}
-              onClick={() => props.onFormat('align-justify')}
-            >
-              <AlignJustify size={17} aria-hidden="true" />
-            </FormatButton>
-          </div>
-          <div className="document-context-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className="document-context-button"
-            onClick={() => imageInputRef.current?.click()}
-          >
-            <ImagePlus size={17} aria-hidden="true" />
-            Add photo
-          </button>
-          <input
-            ref={imageInputRef}
-            className="document-visually-hidden"
-            data-testid="document-context-image-file-input"
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            multiple
-            onChange={(event) => {
-              const files = Array.from(event.target.files || []);
-              if (files.length) props.onImportImages(files);
-              event.target.value = '';
-            }}
-          />
-        </div>
-      )}
+      ) : null}
     </div>
   );
 };
