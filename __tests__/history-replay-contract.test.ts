@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FabricImage, StaticCanvas, Rect } from 'fabric/node';
+import type { ApocapaletteTheme } from '../src/editor/types/apocapalette';
 import { recordDiff } from '../src/editor/utils/diffSaver';
 import {
   applyAssetRefCounts,
@@ -37,6 +38,36 @@ describe('history replay contract', () => {
     useHistoryStore.getState().resetHistory();
     useHistoryStore.getState().setContext(null as any);
     canvas.dispose();
+  });
+
+  it('replays theme identity with colour changes and preserves it across later object diffs', async () => {
+    let selectedTheme: ApocapaletteTheme | null = null;
+    const context = useHistoryStore.getState()._context!;
+    useHistoryStore.getState().setContext({
+      ...context,
+      getTheme: () => selectedTheme,
+      setTheme: value => { selectedTheme = value; },
+    });
+    const rect = new Rect({ width: 40, height: 40, fill: '#112233' }) as any;
+    rect.id = 'theme-rect';
+    canvas.add(rect);
+    useHistoryStore.getState().takeSnapshot();
+    selectedTheme = { meta: { name: 'Imported pop' }, mode: 'pop', brand: { primary: { value: '#aAbBcC' } } };
+    rect.set('fill', '#aAbBcC');
+    useHistoryStore.getState().saveState({ force: true });
+    rect.set('left', 50);
+    useHistoryStore.getState().saveState({ force: true });
+    await useHistoryStore.getState().undo();
+    expect(selectedTheme?.meta?.name).toBe('Imported pop');
+    await useHistoryStore.getState().undo();
+    expect(selectedTheme).toBeNull();
+    expect(canvas.getObjects()[0].fill).toBe('#112233');
+    await useHistoryStore.getState().redo();
+    expect(selectedTheme?.meta?.name).toBe('Imported pop');
+    expect(canvas.getObjects()[0].fill).toBe('#aAbBcC');
+    await useHistoryStore.getState().redo();
+    expect(selectedTheme?.mode).toBe('pop');
+    expect(canvas.getObjects()[0].left).toBe(50);
   });
 
   it('records complete inverse data for stack order and property removal', () => {

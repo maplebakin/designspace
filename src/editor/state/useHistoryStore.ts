@@ -1,3 +1,4 @@
+import type { ApocapaletteTheme } from '../types/apocapalette';
 import { createWithEqualityFn } from 'zustand/traditional';
 import { debounce } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
@@ -71,6 +72,8 @@ type HistoryContext = {
   syncCanvasToStore?: () => void;
   setSelectedObjectId: (id: string | null) => void;
   clearSelection?: () => void;
+  getTheme?: () => ApocapaletteTheme | null;
+  setTheme?: (theme: ApocapaletteTheme | null) => void;
   getBackground?: () => string | undefined;
   setBackground?: (background: string | null) => void;
   /** Authoritative document dimensions participate in canvas history. */
@@ -98,6 +101,7 @@ export interface HistoryState {
   historyIndex: number;
   lastHistorySnapshot: {
     objects: SerializedObject[];
+    theme?: ApocapaletteTheme | null;
     background?: string;
     canvasSize?: HistoryCanvasSize;
   } | null;
@@ -113,6 +117,7 @@ export interface HistoryState {
   setHistoryIndex: (index: number) => void;
   setLastHistorySnapshot: (snapshot: {
     objects: SerializedObject[];
+    theme?: ApocapaletteTheme | null;
     background?: string;
     canvasSize?: HistoryCanvasSize;
   } | null) => void;
@@ -662,6 +667,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
       const { canvasData: historyCanvasData, imageAssets: nextAssets } =
         prepareCanvasDataForPersistence({
           objects: rawObjects,
+          theme: _context.getTheme?.() ?? null,
           background,
           ...(canvasSize ? { canvasSize } : {}),
         }, _context.getImageAssets());
@@ -672,6 +678,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         snapshot = { type: 'full', data: historyCanvasData };
       } else {
         const diff = recordDiff(lastHistorySnapshot.objects, historyObjects, _context.getDirtyObjectsRef());
+        const themeChanged = JSON.stringify(lastHistorySnapshot.theme ?? null) !== JSON.stringify(historyCanvasData.theme ?? null);
         const backgroundChanged = lastHistorySnapshot.background !== historyCanvasData.background;
         const canvasSizeChanged = !areHistoryCanvasSizesEqual(
           lastHistorySnapshot.canvasSize,
@@ -682,6 +689,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
           && diff.removed.length === 0
           && diff.changed.length === 0
           && !diff.order
+          && !themeChanged
           && !backgroundChanged
           && !canvasSizeChanged
         ) {
@@ -691,7 +699,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         // objects.  Keep the patch contract object-only and promote any size
         // change to a full checkpoint so replay can restore dimensions and
         // content atomically.
-        snapshot = backgroundChanged || canvasSizeChanged || diffRequiresFullSnapshot(diff)
+        snapshot = themeChanged || backgroundChanged || canvasSizeChanged || diffRequiresFullSnapshot(diff)
           ? { type: 'full', data: historyCanvasData }
           : { type: 'diff', data: diff };
       }
@@ -749,6 +757,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
       set({
         lastHistorySnapshot: {
           objects: historyObjects,
+          theme: historyCanvasData.theme as ApocapaletteTheme | null,
           background: historyCanvasData.background,
           ...(canvasSize ? { canvasSize } : {}),
         },
@@ -940,6 +949,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         const { canvasData: historyCanvasData, imageAssets: nextAssets } =
           prepareCanvasDataForPersistence({
             objects: rawObjects,
+            theme: _context.getTheme?.() ?? null,
             background,
             ...(canvasSize ? { canvasSize } : {}),
           }, _context.getImageAssets());
@@ -1001,6 +1011,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
         set({
           lastHistorySnapshot: {
             objects: historyObjects,
+            theme: historyCanvasData.theme as ApocapaletteTheme | null,
             background: historyCanvasData.background,
             ...(canvasSize ? { canvasSize } : {}),
           },
@@ -1065,6 +1076,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               _context.setCanvasSize?.(targetCanvasSize);
             }
             if (!isCurrentReplay()) return false;
+            _context.setTheme?.((targetState?.theme as ApocapaletteTheme | null) ?? null);
             _context.setBackground?.(typeof targetState?.background === 'string' ? targetState.background : null);
             canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();
@@ -1072,6 +1084,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               historyIndex: targetIndex,
               lastHistorySnapshot: {
                 objects: historyObjects,
+                theme: targetState?.theme as ApocapaletteTheme | null,
                 background: targetState?.background,
                 ...(targetCanvasSize ? { canvasSize: targetCanvasSize } : {}),
               },
@@ -1131,6 +1144,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({
                 objects: rawObjects,
+                theme: _context.getTheme?.() ?? null,
                 background,
                 ...(canvasSize ? { canvasSize } : {}),
               }, imageAssets);
@@ -1139,6 +1153,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               historyIndex: targetIndex,
               lastHistorySnapshot: {
                 objects: historyObjects,
+                theme: historyCanvasData.theme as ApocapaletteTheme | null,
                 background: historyCanvasData.background,
                 ...(canvasSize ? { canvasSize } : {}),
               },
@@ -1206,6 +1221,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               _context.setCanvasSize?.(targetCanvasSize);
             }
             if (!isCurrentReplay()) return false;
+            _context.setTheme?.((snapshot.data?.theme as ApocapaletteTheme | null) ?? null);
             _context.setBackground?.(typeof snapshot.data?.background === 'string' ? snapshot.data.background : null);
             canvas.backgroundColor = 'transparent';
             canvas.requestRenderAll();
@@ -1213,6 +1229,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               historyIndex: targetIndex,
               lastHistorySnapshot: {
                 objects: historyObjects,
+                theme: snapshot.data?.theme as ApocapaletteTheme | null,
                 background: snapshot.data?.background,
                 ...(targetCanvasSize ? { canvasSize: targetCanvasSize } : {}),
               },
@@ -1273,6 +1290,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
             const { canvasData: historyCanvasData, imageAssets: nextAssets } =
               prepareCanvasDataForPersistence({
                 objects: rawObjects,
+                theme: _context.getTheme?.() ?? null,
                 background,
                 ...(canvasSize ? { canvasSize } : {}),
               }, imageAssets);
@@ -1281,6 +1299,7 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
               historyIndex: targetIndex,
               lastHistorySnapshot: {
                 objects: historyObjects,
+                theme: historyCanvasData.theme as ApocapaletteTheme | null,
                 background: historyCanvasData.background,
                 ...(canvasSize ? { canvasSize } : {}),
               },

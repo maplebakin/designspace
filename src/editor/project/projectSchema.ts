@@ -1,3 +1,4 @@
+import { validateDesignSpaceTheme, type DesignSpaceTheme } from '../../utils/designSpaceTheme';
 import { normalizeWritingAttributes } from '../../document/model/documentWriting';
 import type { UnitMode } from '../utils/units';
 import type {
@@ -102,6 +103,7 @@ export type ProjectPageSize = {
 };
 
 export type ProjectDocument = {
+  bridgeTheme?: DesignSpaceTheme;
   schemaVersion?: number;
   language?: string;
   styles?: DocumentNamedStyleRegistry;
@@ -458,10 +460,23 @@ const normalizeDocument = (
     };
   }
 
+  let bridgeTheme: DesignSpaceTheme | undefined;
+  if (document.bridgeTheme !== undefined) {
+    bridgeTheme = validateDesignSpaceTheme(document.bridgeTheme);
+  }
+  const styles = normalizeDocumentStyleRegistry(document.styles, legacyStyles);
+  // Preserve exact imported strings only when they still match the authored styles.
+  if (bridgeTheme) {
+    for (const id of Object.keys(styles) as Array<keyof typeof styles>) {
+      const original = document.styles?.[id]?.color;
+      if (Object.values(bridgeTheme.colors).includes(original)) styles[id].color = original;
+    }
+  }
   return {
+    bridgeTheme,
     pageSize,
     language: normalizeDocumentLanguage(document.language),
-    styles: normalizeDocumentStyleRegistry(document.styles, legacyStyles),
+    styles,
     background: backgroundValue
       ? {
           tokenRole: safeString(backgroundCandidate?.tokenRole),
@@ -1119,10 +1134,12 @@ export const normalizeDesignSpaceProjectPayload = <TPage = ExistingProjectPage>(
           : normalizedDocument.pageSize,
         background: {
           ...normalizedDocument.background,
-          value: normalizeDocumentPaperColor(
-            normalizedDocument.background?.value,
-            options.defaultBackground || DEFAULT_BACKGROUND
-          ),
+          value: normalizedDocument.bridgeTheme?.colors.background === normalizedDocument.background?.value
+            ? normalizedDocument.background?.value ?? DEFAULT_BACKGROUND
+            : normalizeDocumentPaperColor(
+                normalizedDocument.background?.value,
+                options.defaultBackground || DEFAULT_BACKGROUND
+              ),
         },
         schemaVersion: CURRENT_DOCUMENT_SCHEMA_VERSION,
         folios,

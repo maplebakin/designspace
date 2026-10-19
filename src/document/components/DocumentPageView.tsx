@@ -40,6 +40,7 @@ type DocumentPageViewProps = {
   page: DocumentPage;
   assetSources: Record<string, string>;
   paperColor: string;
+  themeMutedColor?: string;
   folioNumber: number;
   showFolio: boolean;
   documentLanguage: string;
@@ -66,6 +67,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
   page,
   assetSources,
   paperColor,
+  themeMutedColor,
   folioNumber,
   showFolio,
   documentLanguage,
@@ -295,7 +297,7 @@ export const DocumentPageView: React.FC<DocumentPageViewProps> = ({
                 aria-label={`Page ${folioNumber}`}
                 style={{
                   fontFamily: ['cinzel', 'cormorant-garamond'].includes(typographyStyles.body.fontFamilyId) ? 'var(--document-style-body-font-family)' : undefined,
-                  color: ['cinzel', 'cormorant-garamond'].includes(typographyStyles.body.fontFamilyId) ? 'var(--document-style-body-color)' : undefined,
+                  color: themeMutedColor || (['cinzel', 'cormorant-garamond'].includes(typographyStyles.body.fontFamilyId) ? 'var(--document-style-body-color)' : undefined),
                   hyphens: 'none',
                   bottom: `${
                     Math.max(

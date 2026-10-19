@@ -29,7 +29,7 @@ type ExportPageSurfaceProps = {
   onRootReady: (pageIndex: number, root: HTMLDivElement) => void;
 };
 
-const ExportPageSurface = ({
+export const ExportPageSurface = ({
   page,
   pageIndex,
   project,
@@ -81,6 +81,7 @@ const ExportPageSurface = ({
       paperColor={
         project.document.background?.value || DEFAULT_DOCUMENT_PAPER_COLOR
       }
+      themeMutedColor={project.document.bridgeTheme?.colors.mutedText}
       folioNumber={folioNumber}
       showFolio={project.document.folios.visible}
       documentLanguage={project.document.language}

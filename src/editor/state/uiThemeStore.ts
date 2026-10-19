@@ -274,6 +274,8 @@ export const useUiThemeStore = createWithEqualityFn<UiThemeState>()(
         }),
       applyThemeFromTokens: (theme) =>
         set(() => {
+          // A creator bridge colours project content, even when project/UI sync is enabled.
+          if (theme.bridgeTheme) return {};
           const nextVars = mapThemeToVars(theme);
           applyCssVars(nextVars);
           return {
