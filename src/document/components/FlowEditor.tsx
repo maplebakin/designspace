@@ -771,6 +771,14 @@ export const FlowEditor = ({
         )
         || rootRef.current?.querySelector<HTMLElement>('.ProseMirror');
       if (!proseMirror) return;
+      // A normal ProseMirror surface can grow to its full intrinsic content
+      // height, so comparing its scrollHeight with its own clientHeight hides
+      // vertical overflow. Compare content against the fixed body region that
+      // represents the printable page's available viewport instead.
+      const pageBody = rootRef.current?.closest<HTMLElement>(
+        '[data-testid="document-body-region"]'
+      );
+      const viewport = pageBody || proseMirror;
       const structuredHeight = Number(
         proseMirror.dataset.layoutContentHeightPx
       );
@@ -781,8 +789,8 @@ export const FlowEditor = ({
             ? false
             : undefined;
       const overflowing = isDocumentFlowOverflowing({
-        clientHeight: proseMirror.clientHeight,
-        clientWidth: proseMirror.clientWidth,
+        clientHeight: viewport.clientHeight,
+        clientWidth: viewport.clientWidth,
         scrollHeight: proseMirror.scrollHeight,
         scrollWidth: proseMirror.scrollWidth,
         structuredContentHeightPx: structuredHeight,
@@ -794,11 +802,10 @@ export const FlowEditor = ({
 
   const scheduleOverflowMeasure = useCallback(() => {
     if (typeof window === 'undefined') return;
-    // While the live ProseMirror surface owns text feedback, the canonical
-    // structured layout and its overflow status are intentionally frozen.
-    // Mutation/resize callbacks can be noisy during typing; remember that a
-    // measurement is needed and perform one when text editing ends.
-    if (editingStructuredTextRef.current) {
+    // Structured pages keep their canonical layout frozen while the live
+    // ProseMirror surface owns typing. Defer that more expensive measurement,
+    // but continue measuring ordinary pages against the fixed page viewport.
+    if (editingStructuredTextRef.current && hasStructuredSpanRef.current) {
       overflowMeasurePendingRef.current = true;
       return;
     }

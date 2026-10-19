@@ -12,6 +12,7 @@ import { publishingFontFile, publishingFontFromCss } from '../src/document/typog
 import { assertPublishingText, publishingPdfColor } from '../src/document/services/publishingPdfService';
 import { documentAuthoredContentDiffers } from '../src/document/services/documentContentObservation';
 import { createCleanDocumentClone } from '../src/document/services/documentExportService';
+import { updateSelectedWritingArea } from '../src/document/services/documentWritingCommands';
 
 afterEach(() => useDocumentStore.getState().reset());
 
@@ -93,6 +94,71 @@ describe('printable publishing', () => {
     store.hydrateProject(reopened);
     store.updatePage({ name: 'Independent copy' });
     expect(useDocumentStore.getState().project?.pages[0].name).toBe('Worksheet');
+  });
+
+  it('preserves multiple distinct writing blocks through duplicate and save/reopen', () => {
+    const store = useDocumentStore.getState();
+    store.createBlankProject('Worksheet with multiple areas');
+    const worksheet = publishingPageDesign('worksheet');
+    store.updatePage({
+      ...worksheet,
+      bodyContent: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Keep this prompt.' }] },
+          { type: 'paragraph', attrs: { documentWritingRows: 12, documentWritingSpacing: 32, documentWritingRuleWidthPt: 0.75, documentRuleColor: '#000000' } },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Second prompt stays below the first area.' }] },
+          { type: 'paragraph', attrs: { documentWritingRows: 22, documentWritingSpacing: 32, documentWritingRuleWidthPt: 0.75, documentRuleColor: '#9A8B94' } },
+        ],
+      },
+    });
+    store.duplicatePage();
+    const original = useDocumentStore.getState().project!;
+    const reopened = normalizeDesignSpaceProjectPayload(
+      JSON.parse(JSON.stringify(original)),
+      { editorMode: 'document' }
+    );
+    expect(reopened.pages[0].bodyContent.content?.map((node) => node.type)).toEqual([
+      'paragraph', 'paragraph', 'paragraph', 'paragraph',
+    ]);
+    expect(reopened.pages[0].bodyContent.content?.[1]?.attrs).toMatchObject({
+      documentWritingRows: 12,
+      documentRuleColor: '#000000',
+    });
+    expect(reopened.pages[0].bodyContent.content?.[3]?.attrs).toMatchObject({
+      documentWritingRows: 22,
+      documentRuleColor: '#9A8B94',
+    });
+    expect(reopened.pages[1].bodyContent).toEqual(reopened.pages[0].bodyContent);
+
+    store.hydrateProject(reopened);
+    const editor = new Editor({
+      extensions: [StarterKit, DocumentWritingExtension],
+      content: reopened.pages[1].bodyContent,
+    });
+    try {
+      let secondAreaPosition = -1;
+      editor.state.doc.forEach((_node, position, index) => {
+        if (index === 3) secondAreaPosition = position;
+      });
+      editor.commands.setTextSelection(secondAreaPosition + 1);
+      expect(updateSelectedWritingArea(editor, {
+        documentWritingRows: 18,
+        documentWritingSpacing: 30,
+        documentWritingRuleWidthPt: 1,
+        documentRuleColor: '#713B59',
+      })).toBe(true);
+      expect(editor.getJSON().content?.[1]?.attrs).toMatchObject({
+        documentWritingRows: 12,
+        documentRuleColor: '#000000',
+      });
+      expect(editor.getJSON().content?.[3]?.attrs).toMatchObject({
+        documentWritingRows: 18,
+        documentRuleColor: '#713B59',
+      });
+      expect(editor.getText()).toContain('Keep this prompt.');
+      expect(editor.getText()).toContain('Second prompt stays below the first area.');
+    } finally { editor.destroy(); }
   });
 
   it('reuses layouts across documents without losing artwork or colliding with destination IDs', () => {

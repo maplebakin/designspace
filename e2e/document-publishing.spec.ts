@@ -63,6 +63,19 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await expect(rules).toHaveAttribute('data-document-writing-area-selected', 'true');
   await expect(rules).toHaveCSS('outline-style', 'solid');
   await expect(page.getByTestId('selected-writing-area-status')).toContainText('14 lines · 34 px · #000000 · 1.5 pt');
+
+  // Oversized ruled blocks are counted as authored layout height and surfaced
+  // as page overflow; reducing the block clears the warning without removing
+  // or rewriting any of the worksheet text.
+  await page.getByLabel('Writing line count').fill('30');
+  await page.getByLabel('Writing line spacing').fill('64');
+  await page.getByRole('button', { name: 'Update selected writing area' }).click();
+  await expect(page.getByTestId('document-overflow-warning')).toBeVisible();
+  await page.getByLabel('Writing line count').fill('14');
+  await page.getByLabel('Writing line spacing').fill('34');
+  await page.getByRole('button', { name: 'Update selected writing area' }).click();
+  await expect(page.getByTestId('document-overflow-warning')).toBeHidden();
+
   const rendering = await page.evaluate(async () => {
     const { createCleanDocumentClone } = await import('/src/document/services/documentExportService.ts');
     const source = document.querySelector<HTMLElement>('[data-document-export-root]')!;
@@ -85,8 +98,34 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   expect(rendering.exportSelectedMarker).toBe(false);
   expect(rendering.exportSelectedClass).toBe(false);
 
-  await rules.first().click({ position: { x: 10, y: 10 } });
-  await rules.first().fill('This writing area remains editable.');
+  // Inserting while prompt text is selected must preserve that text. The new
+  // area is a separate ordinary paragraph and can be selected independently.
+  await body.locator('p').first().evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+  });
+  await page.getByLabel('Writing line count').fill('9');
+  await page.getByLabel('Writing line spacing').fill('29');
+  await page.getByLabel('Writing rule weight').fill('0.5');
+  await page.getByLabel('Writing rule colour').fill('#713B59');
+  await page.getByRole('button', { name: 'Insert ruled writing area' }).click();
+  await expect(body.locator('[data-document-writing-area]')).toHaveCount(2);
+  await expect(body.locator('p').first()).toContainText('Demonstration prompt: What small detail comes back to you?');
+  const insertedArea = body.locator('[data-document-writing-area]').first();
+  await insertedArea.click({ position: { x: 10, y: 10 } });
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('9 lines · 29 px · #713B59 · 0.5 pt');
+  await page.getByLabel('Writing line count').fill('7');
+  await page.getByLabel('Writing line spacing').fill('28');
+  await page.getByRole('button', { name: 'Update selected writing area' }).click();
+  await expect(insertedArea).toHaveAttribute('data-document-writing-area-selected', 'true');
+  await expect(insertedArea).toHaveCSS('min-height', '196px');
+  await body.locator('[data-document-writing-area]').nth(1).click({ position: { x: 10, y: 10 } });
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('14 lines · 34 px · #000000 · 1.5 pt');
+
+  await rules.nth(1).click({ position: { x: 10, y: 10 } });
+  await rules.nth(1).fill('This writing area remains editable.');
 
   // A duplicated worksheet is a second editable writing area; selection and
   // inspector values must follow it, then return to the original page.
@@ -94,25 +133,30 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await page.getByRole('button', { name: 'Duplicate current page' }).click();
   await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(4);
   const secondRules = page.locator('.document-flow-prosemirror').first().locator('[data-document-writing-area]');
-  await secondRules.click({ position: { x: 10, y: 10 } });
+  await expect(secondRules).toHaveCount(2);
+  await secondRules.nth(0).click({ position: { x: 10, y: 10 } });
   await page.getByRole('tab', { name: 'Writing' }).click();
-  await expect(secondRules).toHaveAttribute('data-document-writing-area-selected', 'true');
-  await expect(page.getByLabel('Writing line count')).toHaveValue('14');
-  await page.getByLabel('Writing line count').fill('7');
-  await page.getByLabel('Writing line spacing').fill('28');
+  await expect(secondRules.nth(0)).toHaveAttribute('data-document-writing-area-selected', 'true');
+  await expect(page.getByLabel('Writing line count')).toHaveValue('7');
+  await page.getByLabel('Writing line count').fill('5');
+  await page.getByLabel('Writing line spacing').fill('26');
   await page.getByLabel('Writing rule weight').fill('0.5');
   await page.getByLabel('Writing rule colour').fill('#713B59');
   await page.getByRole('button', { name: 'Update selected writing area' }).click();
-  await expect(page.getByLabel('Writing line count')).toHaveValue('7');
-  await expect(page.getByLabel('Writing line spacing')).toHaveValue('28');
+  await expect(page.getByLabel('Writing line count')).toHaveValue('5');
+  await expect(page.getByLabel('Writing line spacing')).toHaveValue('26');
   await expect(page.getByLabel('Writing rule weight')).toHaveValue('0.5');
   await expect(page.getByLabel('Writing rule colour')).toHaveValue('#713b59');
-  await expect(page.getByTestId('selected-writing-area-status')).toContainText('7 lines · 28 px · #713B59 · 0.5 pt');
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('5 lines · 26 px · #713B59 · 0.5 pt');
   await page.getByTestId('document-page-tab-2').click();
   const originalRules = page.locator('.document-flow-prosemirror').first().locator('[data-document-writing-area]');
-  await originalRules.click({ position: { x: 10, y: 10 } });
+  await expect(originalRules).toHaveCount(2);
+  await originalRules.nth(1).click({ position: { x: 10, y: 10 } });
   await expect(page.getByLabel('Writing line count')).toHaveValue('14');
   await expect(page.getByLabel('Writing rule colour')).toHaveValue('#000000');
+  await originalRules.nth(0).click({ position: { x: 10, y: 10 } });
+  await expect(page.getByLabel('Writing line count')).toHaveValue('7');
+  await expect(page.getByLabel('Writing rule colour')).toHaveValue('#713b59');
   await page.getByTestId('document-page-tab-3').click();
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByTestId('document-remove-page').click();
@@ -137,11 +181,17 @@ test('create, edit, reuse, save/reopen and export the three-page printable pilot
   await page.getByTestId('dashboard-project-card').filter({ hasText: 'The Things We Carry' }).getByRole('button', { name: /open/i }).click();
   await expect(page.getByTestId('document-page-navigation').getByRole('tab')).toHaveCount(3);
   await page.getByTestId('document-page-tab-2').click();
-  await expect(rules.first()).toHaveCSS('min-height', '476px');
-  await expect(rules.first()).toHaveText('This writing area remains editable.');
-  await expect(body.locator('[data-document-writing-area]')).toHaveCount(1);
-  await expect(body.locator('[data-document-writing-area]')).toHaveCSS('background-image', /rgb\(0, 0, 0\)/);
-  expect(await rules.first().evaluate((element) => getComputedStyle(element).backgroundImage)).toContain('rgb(0, 0, 0) 32px, rgb(0, 0, 0) 34px');
+  await expect(body.locator('[data-document-writing-area]')).toHaveCount(2);
+  await expect(rules.nth(1)).toHaveCSS('min-height', '476px');
+  await expect(rules.nth(1)).toHaveText('This writing area remains editable.');
+  await expect(body.locator('[data-document-writing-area]').nth(1)).toHaveCSS('background-image', /rgb\(0, 0, 0\)/);
+  await expect(body.locator('[data-document-writing-area]').first()).toHaveCSS('min-height', '196px');
+  expect(await rules.nth(1).evaluate((element) => getComputedStyle(element).backgroundImage)).toContain('rgb(0, 0, 0) 32px, rgb(0, 0, 0) 34px');
+  await page.getByRole('tab', { name: 'Writing' }).click();
+  await rules.first().click({ position: { x: 10, y: 10 } });
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('7 lines · 28 px · #713B59 · 0.5 pt');
+  await rules.nth(1).click({ position: { x: 10, y: 10 } });
+  await expect(page.getByTestId('selected-writing-area-status')).toContainText('14 lines · 34 px · #000000 · 1.5 pt');
   await expect(title.locator('p')).toHaveCSS('font-family', 'Cinzel, serif');
   await page.evaluate(async () => {
     await document.fonts.ready;

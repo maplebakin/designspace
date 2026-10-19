@@ -10,6 +10,10 @@ import { hasMeaningfulDocumentContent } from './DocumentPageView';
 import { DOCUMENT_STYLE_IDS } from '../typography/documentTypography';
 import { normalizeWritingAttributes } from '../model/documentWriting';
 import {
+  insertDocumentWritingBlock,
+  updateSelectedWritingArea,
+} from '../services/documentWritingCommands';
+import {
   createDocumentLayout, deleteDocumentLayout, listDocumentLayouts, saveDocumentLayout,
   type DocumentLayoutRecord,
 } from '../services/documentLayoutService';
@@ -149,9 +153,7 @@ export const PublishingPanel = ({ project, bodyEditor, getTextEditor, onCommit, 
       setStatus('Choose 1–30 lines, spacing between 20 and 64 pixels, and a rule weight between 0.25 and 2.5 points.'); return;
     }
     const attrs = divider ? { documentDivider: true, documentRuleColor: accent } : writingAttrs();
-    editor.chain().focus().insertContent([
-      { type: 'paragraph', attrs }, { type: 'paragraph' },
-    ]).run();
+    insertDocumentWritingBlock(editor, attrs);
     flushDocumentLiveDrafts();
     setStatus(divider ? 'Divider inserted in the body.' : 'Writing area inserted. Click inside it to edit or update its rules.');
   };
@@ -310,14 +312,9 @@ export const PublishingPanel = ({ project, bodyEditor, getTextEditor, onCommit, 
             <button type="button" onClick={() => insertBlock(false)}>Insert ruled writing area</button>
             <button type="button" onClick={() => {
               const editor = bodyEditor;
-              const selectedParagraph = editor?.state.selection.$from.parent;
-              const selectedAttributes = selectedParagraph?.type.name === 'paragraph'
-                ? normalizeWritingAttributes(selectedParagraph.attrs)
-                : {};
-              if (!editor || !selectedAttributes.documentWritingRows) {
+              if (!editor || !updateSelectedWritingArea(editor, writingAttrs())) {
                 setStatus('Click inside a writing area first.'); return;
               }
-              editor.chain().focus().updateAttributes('paragraph', writingAttrs()).run();
               flushDocumentLiveDrafts();
               setStatus('Selected writing area updated.');
             }} disabled={!selectedWritingArea}>Update selected writing area</button>

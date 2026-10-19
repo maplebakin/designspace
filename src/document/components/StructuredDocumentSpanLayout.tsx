@@ -872,7 +872,22 @@ const estimateElementHeight = (element: Element, widthPx: number) => {
     Math.floor(widthPx / Math.max(4, fontSize * 0.52))
   );
   const lineCount = Math.max(1, Math.ceil(textLength / charactersPerLine));
-  return lineCount * fontSize * 1.42 + fontSize * 0.72;
+  const textHeight = lineCount * fontSize * 1.42;
+  const inlineMinimumHeight = Number.parseFloat(
+    (element as HTMLElement).style?.minHeight || ''
+  );
+  const rows = Number(element.getAttribute('data-documentWritingRows'));
+  const spacing = Number(
+    element.getAttribute('data-documentWritingSpacing') || 32
+  );
+  const writingHeight = Number.isFinite(rows) && rows > 0
+    && Number.isFinite(spacing) && spacing > 0
+    ? rows * spacing
+    : 0;
+  const minimumHeight = Number.isFinite(inlineMinimumHeight)
+    ? inlineMinimumHeight
+    : writingHeight;
+  return Math.max(textHeight, minimumHeight) + fontSize * 0.72;
 };
 
 type StructuredMeasurementDiagnostics = {
@@ -2272,6 +2287,39 @@ const resolveStructuredBandPositionAtPoint = (
   const hit = typeof root.ownerDocument.elementFromPoint === 'function'
     ? root.ownerDocument.elementFromPoint(clientX, clientY)
     : null;
+  // Empty writing areas render as large ruled paragraphs with no text nodes.
+  // Character-based hit testing below skips those paragraphs, then can map a
+  // click to a nearby prompt (or another writing block). Their block range is
+  // already annotated from the ProseMirror document, so use it directly.
+  const emptyWritingArea = hit instanceof Element
+    ? hit.closest<HTMLElement>('[data-document-writing-area]')
+    : null;
+  if (
+    emptyWritingArea
+    && root.contains(emptyWritingArea)
+    && !emptyWritingArea.textContent?.trim()
+  ) {
+    const blockRange = readDocumentAttributeRange(
+      emptyWritingArea,
+      DOCUMENT_BLOCK_FROM_ATTRIBUTE,
+      DOCUMENT_BLOCK_TO_ATTRIBUTE
+    );
+    const fragmentRange = readDocumentAttributeRange(
+      emptyWritingArea,
+      DOCUMENT_FRAGMENT_FROM_ATTRIBUTE,
+      DOCUMENT_FRAGMENT_TO_ATTRIBUTE
+    );
+    const sourceRange = fragmentRange || blockRange
+      || readDocumentTextRange(emptyWritingArea);
+    if (sourceRange) {
+      return {
+        position: clampStructuredDocumentPosition(editor, sourceRange.from),
+        fragmentId: emptyWritingArea.getAttribute(
+          DOCUMENT_FRAGMENT_ID_ATTRIBUTE
+        ),
+      };
+    }
+  }
   const hitFragment = hit instanceof Element
     ? hit.closest<HTMLElement>(fragmentSelector)
     : null;

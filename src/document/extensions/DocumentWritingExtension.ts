@@ -28,8 +28,30 @@ export const DocumentWritingExtension = Extension.create({
           const target = event.target instanceof Element ? event.target.closest('[data-document-writing-area]') : null;
           if (!target || !view.dom.contains(target) || target.textContent?.trim()) return false;
           // Empty ruled paragraphs have a large visual box but no text glyphs.
-          // Clicking any line must select that paragraph, not the preceding prompt.
-          const position = view.posAtDOM(target, 0);
+          // posAtDOM can resolve an empty paragraph's start to a neighboring
+          // block after other edits. Map its top-level DOM element back to the
+          // corresponding ProseMirror child so each ruled block stays distinct.
+          let blockElement: Element = target;
+          while (
+            blockElement.parentElement
+            && blockElement.parentElement !== view.dom
+          ) {
+            blockElement = blockElement.parentElement;
+          }
+          const blockIndex = Array.from(view.dom.children).indexOf(blockElement);
+          let position: number | null = null;
+          if (blockIndex >= 0) {
+            view.state.doc.forEach((node, offset, index) => {
+              if (
+                index === blockIndex
+                && node.type.name === 'paragraph'
+                && normalizeWritingAttributes(node.attrs).documentWritingRows
+              ) {
+                position = offset + 1;
+              }
+            });
+          }
+          position ??= view.posAtDOM(target, 0);
           view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, position)));
           view.focus();
           event.preventDefault();

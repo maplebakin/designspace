@@ -2620,6 +2620,12 @@ describe('live document editor UI', () => {
         scrollWidth: 720,
         structuredOverflowing: true,
       })).toBe(true);
+      expect(isDocumentFlowOverflowing({
+        clientHeight: 870,
+        clientWidth: 691,
+        scrollHeight: 1983,
+        scrollWidth: 691,
+      })).toBe(true);
     }
   );
 
@@ -2739,6 +2745,50 @@ describe('live document editor UI', () => {
         `SPAN3-LOWER-${index}`
       )).toBe(1);
     }
+  });
+
+  it('counts ruled line geometry when paginating structured worksheet content', async () => {
+    let editor: Editor | null = null;
+    const image = {
+      ...spanningBodyContent(2, 1).content![1],
+      attrs: {
+        ...spanningBodyContent(2, 1).content![1].attrs,
+        widthPx: 120,
+        heightPx: 75,
+        naturalWidth: 1200,
+        naturalHeight: 750,
+        yPx: 0,
+        verticalAnchor: 'page-position',
+      },
+    };
+    const content: JSONContent = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Worksheet prompt.' }] },
+        image,
+        { type: 'paragraph', attrs: {
+          documentWritingRows: 30,
+          documentWritingSpacing: 64,
+          documentWritingRuleWidthPt: 0.75,
+          documentRuleColor: '#9A8B94',
+        } },
+      ],
+    };
+    render(React.createElement(FlowEditor, {
+      content,
+      columnCount: 2,
+      columnGapPx: 24,
+      dropCap: false,
+      resolveAssetSource: () => 'data:image/png;base64,SPAN',
+      onEditorReady: (readyEditor: Editor | null) => { editor = readyEditor; },
+    }));
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    const model = buildMultiDocumentSpanLayoutModel(editor!, 2, 24, 720, 720)!;
+    expect(model.overflowing).toBe(true);
+    expect(model.layoutContentHeightPx).toBeGreaterThan(720);
+    expect(readColumnMajorModelHtml(model)).toContain('data-document-writing-area="true"');
+    expect(editor!.getText()).toContain('Worksheet prompt.');
   });
 
   it('moves a structured span image by one paragraph without changing its data', async () => {
