@@ -4404,6 +4404,7 @@ export const DocumentEditorShell: React.FC<DocumentEditorShellProps> = ({
               page={page}
               assetSources={assetSources}
               paperColor={paperColor}
+              themeMutedColor={project.document.bridgeTheme?.colors.mutedText}
               folioNumber={folioNumber}
               showFolio={project.document.folios.visible}
               documentLanguage={project.document.language}

@@ -1,0 +1,26 @@
+{
+  "format": "design-space-theme",
+  "version": 1,
+  "name": "Orchard at dusk",
+  "mode": "pop",
+  "colors": {
+    "background": "#18221b",
+    "surface": "#243329",
+    "heading": "#f3F1db",
+    "text": "#e1e6d6",
+    "mutedText": "#aabbac",
+    "accent": "#debe78",
+    "cta": "#8cba93",
+    "ctaForeground": "#111827",
+    "border": "#526759"
+  },
+  "metadata": {
+    "source": "apocapalette",
+    "sourceSurface": "tasting-room",
+    "exportedAt": "2026-10-18T12:00:00.000Z",
+    "seedColor": "#426f55",
+    "harmony": "Analogous",
+    "lockedRoles": ["accent"],
+    "adjustedRoles": ["text"]
+  }
+}

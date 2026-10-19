@@ -1,3 +1,5 @@
+import { bridgeThemeTokens, visitBridgeObjects } from '../services/themeBridge';
+import type { DesignSpaceTheme } from '../../utils/designSpaceTheme';
 import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import * as fabric from 'fabric';
@@ -1568,6 +1570,7 @@ interface EditorState {
   // Theme Actions
   addThemeToVault: (jsonString: string) => void;
   setActiveBrandCollectionId: (id:string) => void;
+  applyBridgeTheme: (theme: DesignSpaceTheme) => void;
   applyTheme: (theme: ApocapaletteTheme, options?: { observe?: boolean }) => void;
   resetTheme: () => void;
   toggleMovementLock: (layerId: string) => void;
@@ -1829,6 +1832,8 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
             },
             setSelectedObjectId: (id) => set({ selectedObjectId: id }),
             clearSelection: () => get().clearSelection(),
+            getTheme: () => useThemeStore.getState().themeData,
+            setTheme: (theme) => useThemeStore.getState().setThemeData(theme),
             getBackground: () => getSerializedPageBackground(),
             setBackground: (background) => useThemeStore.getState().setCanvasBackgroundColor(background),
             getCanvasSize: () => getDocumentCanvasSize(),
@@ -4143,6 +4148,25 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         }
     },
 
+    applyBridgeTheme: (theme) => {
+        const tokens = bridgeThemeTokens(theme);
+        const state = get();
+        if (!state.canvas || state.canvasReadyState !== 'ready') return;
+        useHistoryStore.getState().flushPendingSave();
+        // Take an immediate baseline; the theme/background/object change is one checkpoint.
+        useHistoryStore.getState().saveState({ force: true });
+        useHistoryStore.getState().flushPendingSave();
+        useThemeStore.getState().setThemeData(tokens);
+        useThemeStore.setState({ canvasBackgroundColor: theme.colors.background });
+        visitBridgeObjects(state.canvas.getObjects(), tokens, true);
+        state.canvas.requestRenderAll();
+        state.syncCanvasToStore();
+        state.requestLayerSync();
+        state.saveState({ force: true });
+        useHistoryStore.getState().flushPendingSave();
+        observeSemanticMutation({ action: 'apply-freeform-theme', pageScope: true });
+    },
+
     applyTheme: (theme, options) => {
         useThemeStore.getState().setThemeData(theme);
         // Apply theme to canvas if ready
@@ -5465,7 +5489,7 @@ export const sanityCheckCanvas = (canvas: fabric.Canvas, themeData: Apocapalette
             target.tokenRole = null;
             changed = true;
         }
-        if (themeData && tokenRole != null) {
+        if (themeData && !themeData.bridgeTheme && tokenRole != null) {
             if (typeof tokenRole !== 'string' || !getValueByPath(themeData, tokenRole)) {
                 target.tokenRole = null;
                 report.invalidRoles += 1;

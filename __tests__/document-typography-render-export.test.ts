@@ -343,3 +343,32 @@ describe('document typography page and export rendering', () => {
     }
   });
 });
+
+describe('theme bridge committed export', () => {
+  it('uses imported paper and named style colours on every export page without changing fonts', async () => {
+    const { default: fixture } = await import('./fixtures/design-space-theme-v1.json');
+    const { validateDesignSpaceTheme } = await import('../src/utils/designSpaceTheme');
+    const { projectDocumentTheme } = await import('../src/document/services/documentThemeBridge');
+    const base = createBlankDocumentProject('Bridge export');
+    base.pages.push(createBlankDocumentPage('Second'));
+    base.document.styles.body.fontFamilyId = 'book-serif';
+    base.document.folios.visible = true;
+    const themed = projectDocumentTheme(base, validateDesignSpaceTheme(fixture)).project;
+    let promise!: ReturnType<typeof mountCommittedDocumentExportPages>;
+    act(() => { promise = mountCommittedDocumentExportPages(themed); });
+    const mounted = await promise;
+    try {
+      expect(mounted.project.document.bridgeTheme).toEqual(fixture);
+      expect(mounted.sources).toHaveLength(2);
+      for (const source of mounted.sources) {
+        expect(source.options.backgroundColor).toBe(fixture.colors.background);
+        expect(source.element.style.backgroundColor).toBe('rgb(24, 34, 27)');
+        expect(source.element.style.getPropertyValue('--document-style-article-title-color')).toBe(fixture.colors.heading);
+        expect(source.element.style.getPropertyValue('--document-style-body-color')).toBe(fixture.colors.text);
+        expect(source.element.style.getPropertyValue('--document-style-caption-color')).toBe(fixture.colors.mutedText);
+        expect((source.element.querySelector('[data-testid=document-folio]') as HTMLElement).style.color).toBe('rgb(170, 187, 172)');
+        expect(source.element.style.getPropertyValue('--document-style-body-font-family')).toContain('Palatino');
+      }
+    } finally { mounted.cleanup(); }
+  });
+});

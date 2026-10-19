@@ -1,3 +1,5 @@
+import type { DesignSpaceTheme } from '../../utils/designSpaceTheme';
+import { projectDocumentTheme } from '../services/documentThemeBridge';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -136,6 +138,7 @@ type DocumentStoreState = {
   downloadProjectFile: () => Promise<FileDeliveryResult | null>;
   downloadProjectFileWithAcknowledgement: () => Promise<PersistenceAcknowledgement | null>;
   renameProject: (name: string) => void;
+  applyBridgeTheme: (theme: DesignSpaceTheme) => void;
   updateDocumentBackground: (value: string) => void;
   updateDocumentLanguage: (language: string) => void;
   updateDocumentStyle: (
@@ -1320,6 +1323,14 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
     markDirty(set);
   },
 
+  applyBridgeTheme: (theme) => {
+    flushDocumentLiveDrafts();
+    const project = get().project;
+    if (!project) return;
+    set({ project: projectDocumentTheme(project, theme).project });
+    markDirty(set);
+  },
+
   updateDocumentBackground: (value) => {
     flushDocumentLiveDrafts();
     const project = get().project;
@@ -1377,6 +1388,8 @@ export const useDocumentStore = create<DocumentStoreState>((set, get) => ({
       { ...current, ...update },
       current
     );
+    // Editing fonts/layout must not recase an exact imported colour string.
+    if (update.color === undefined) next.color = current.color;
     if (JSON.stringify(next) === JSON.stringify(current)) return;
     set({
       project: {

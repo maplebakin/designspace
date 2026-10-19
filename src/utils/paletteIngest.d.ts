@@ -1,4 +1,6 @@
+import type { DesignSpaceTheme } from './designSpaceTheme';
 export interface IngestedPalette {
+    bridgeTheme?: DesignSpaceTheme;
   name: string;
   mode: string;
   categories: {

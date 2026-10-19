@@ -1,3 +1,5 @@
+import { DESIGN_SPACE_COLOR_ROLES } from '../../utils/designSpaceTheme';
+import { ThemeBridgePanel } from './ThemeBridgePanel';
 
 import React, { useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
@@ -140,7 +142,7 @@ export const ThemeSidebar: React.FC = () => {
         } catch (err) {
             console.error('Failed to import Apocapalette JSON', err);
             setImportedPalette(null);
-            setImportError('Could not import palette JSON.');
+            setImportError(err instanceof Error ? err.message : 'Could not import palette JSON.');
         }
     };
 
@@ -164,7 +166,8 @@ export const ThemeSidebar: React.FC = () => {
 
 
 
-    const coreTokens = themeData ? [
+    const bridge = themeData?.bridgeTheme;
+    const coreTokens = bridge ? DESIGN_SPACE_COLOR_ROLES.map(role => ({ name: role, role: `colors.${role}.value`, value: bridge.colors[role] })) : themeData ? [
 
         { name: 'Primary', role: 'brand.primary.value', value: themeData.brand?.primary?.value },
 
@@ -199,6 +202,7 @@ export const ThemeSidebar: React.FC = () => {
     return (
 
         <div className="p-4 space-y-6">
+            <ThemeBridgePanel />
 
             {selectedLayerIds.length > 0 && themeData && (
 
@@ -292,7 +296,7 @@ export const ThemeSidebar: React.FC = () => {
                         <p className="text-[11px] text-rose-300">{importError}</p>
                     )}
 
-                    {importedPalette && (
+                    {importedPalette && !importedPalette.bridgeTheme && (
                         <div className="space-y-2 rounded-lg border border-white/10 bg-white/5 p-3">
                             <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">

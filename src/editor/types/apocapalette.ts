@@ -1,3 +1,5 @@
+import type { DesignSpaceTheme } from '../../utils/designSpaceTheme';
+
 export interface DesignSpacePalette {
   canvasBackground: string;
   panelBackground: string;
@@ -93,6 +95,7 @@ export interface ThemeMeta {
 }
 
 export interface ApocapaletteTheme {
+  bridgeTheme?: DesignSpaceTheme;
   meta?: ThemeMeta;
   mode?: string;
   brand?: BrandTokens;

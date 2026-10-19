@@ -1,3 +1,5 @@
+import { visitBridgeObjects } from '../services/themeBridge';
+import type { DesignSpaceTheme } from '../../utils/designSpaceTheme';
 import { createWithEqualityFn } from 'zustand/traditional';
 import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
@@ -32,6 +34,7 @@ export interface ColorPalette {
 }
 
 export interface IngestedPalette {
+    bridgeTheme?: DesignSpaceTheme;
     name: string;
     mode: string;
     categories: {
@@ -85,7 +88,9 @@ const rgbToHex = (rgb: string): string => {
         .toUpperCase()}`;
 };
 
-const normalizeCanvasBackgroundColor = (color: string | null): string | null => {
+const normalizeCanvasBackgroundColor = (color: string | null, theme?: ApocapaletteTheme | null): string | null => {
+    const bridge = theme?.bridgeTheme;
+    if (color && bridge?.colors.background === color) return color;
     if (!color) return null;
     const trimmed = color.trim();
     if (!trimmed || trimmed.toLowerCase() === 'transparent') return null;
@@ -215,7 +220,7 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
             setActiveBrandCollectionId: (id) => set({ activeBrandCollectionId: id }),
 
             setCanvasBackgroundColor: (color) =>
-                set({ canvasBackgroundColor: normalizeCanvasBackgroundColor(color) }),
+                set({ canvasBackgroundColor: normalizeCanvasBackgroundColor(color, get().themeData) }),
 
             setBrushColor: (color) => set({ brushColor: color }),
 
@@ -465,7 +470,8 @@ export const useThemeStore = createWithEqualityFn<ThemeState>()(
                     ...currentState,
                     ...persisted,
                     canvasBackgroundColor: normalizeCanvasBackgroundColor(
-                        persisted.canvasBackgroundColor ?? currentState.canvasBackgroundColor
+                        persisted.canvasBackgroundColor ?? currentState.canvasBackgroundColor,
+                        persisted.themeData
                     ),
                 };
             },
@@ -544,7 +550,12 @@ export const applyThemeToCanvas = (
             }
         };
 
-        canvas.getObjects().forEach(applyThemeToObject);
+        if (themeData.bridgeTheme) {
+            const report = visitBridgeObjects(canvas.getObjects(), themeData, true);
+            objectsChanged = report.linked > 0;
+        } else {
+            canvas.getObjects().forEach(applyThemeToObject);
+        }
 
         if (objectsChanged) {
             commitCanvasMutation(canvas, callbacks);

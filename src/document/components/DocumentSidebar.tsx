@@ -1,3 +1,4 @@
+import { ThemeBridgePanel } from '../../editor/components/ThemeBridgePanel';
 import React, { useRef, useState } from 'react';
 import {
   ChevronLeft,
@@ -216,6 +217,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = (props) => {
       </div>
 
       <div className="document-sidebar__scroll">
+        <section className="document-sidebar-section"><h2>Theme</h2><ThemeBridgePanel documentMode /></section>
         <section className="document-sidebar-section" aria-labelledby="document-page-settings">
           <h2 id="document-page-settings">Page</h2>
           <label className="document-field">

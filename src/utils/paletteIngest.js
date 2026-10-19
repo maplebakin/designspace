@@ -1,4 +1,13 @@
+import { validateDesignSpaceTheme } from './designSpaceTheme.js';
+
 function ingestApocapalette(rawPalette) {
+  if (!rawPalette || typeof rawPalette !== 'object' || Array.isArray(rawPalette)) {
+    throw new Error('Palette must be a JSON object.');
+  }
+  if ('format' in rawPalette || 'version' in rawPalette) {
+    const theme = validateDesignSpaceTheme(rawPalette);
+    return { name: theme.name, mode: theme.mode, categories: {}, bridgeTheme: theme };
+  }
   const result = {
     name: rawPalette.name,
     mode: rawPalette.mode,

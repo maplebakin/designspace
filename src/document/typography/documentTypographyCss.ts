@@ -33,7 +33,11 @@ export const getDocumentTypographyCssVariables = (
       style.fontFamilyId
     );
     variables[`${prefix}-font-size`] = `${style.fontSizePx}px`;
-    variables[`${prefix}-color`] = style.color;
+    // Keep validated six-digit authored strings exact (including bridge casing).
+    const authoredColor = value?.[styleId]?.color;
+    variables[`${prefix}-color`] = typeof authoredColor === 'string' && /^#[0-9a-f]{6}$/i.test(authoredColor)
+      ? authoredColor
+      : style.color;
     variables[`${prefix}-line-height`] = String(style.lineHeight);
     variables[`${prefix}-paragraph-spacing`] =
       `${style.paragraphSpacingPx}px`;
