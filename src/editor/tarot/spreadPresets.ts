@@ -98,7 +98,7 @@ export const makeTarotPositions = (presetId: TarotPresetId, customCount = 3): Ta
           0.5 + (row - (rows - 1) / 2) * 0.19,
         );
       })
-      : PRESETS[presetId];
+      : PRESETS[presetId as keyof typeof PRESETS];
 
   return seeds.map((seed, index) => ({ ...seed, number: index + 1 }));
 };
