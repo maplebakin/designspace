@@ -3,6 +3,7 @@ export const SYSTEM_OBJECT_FLAGS = [
   'isSmartGuide',
   'isDocumentPaper',
   'isPageBorder',
+  'isTarotPageStyle',
   'isSafeZoneOverlay',
   'isPersistentGuide',
   'excludeFromExport',

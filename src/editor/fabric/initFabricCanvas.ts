@@ -132,6 +132,13 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
   if (target.slotId === undefined) target.slotId = serialized?.slotId ?? undefined;
   if (target.semanticRole === undefined) target.semanticRole = serialized?.semanticRole ?? undefined;
   if (target.borderSettings === undefined) target.borderSettings = serialized?.borderSettings ?? undefined;
+  if (target.isTarotPageStyle === undefined) target.isTarotPageStyle = serialized?.isTarotPageStyle ?? false;
+  if (target.tarotPageStyle === undefined) target.tarotPageStyle = serialized?.tarotPageStyle ?? undefined;
+  if (target.tarotFooterField === undefined) target.tarotFooterField = serialized?.tarotFooterField ?? undefined;
+  if (target.tarotCardStyle === undefined) target.tarotCardStyle = serialized?.tarotCardStyle ?? undefined;
+  if (target.tarotLabelPlacement === undefined) target.tarotLabelPlacement = serialized?.tarotLabelPlacement ?? undefined;
+  if (target.tarotPositionLabelFor === undefined) target.tarotPositionLabelFor = serialized?.tarotPositionLabelFor ?? undefined;
+  if (target.tarotOrnamentSize === undefined) target.tarotOrnamentSize = serialized?.tarotOrnamentSize ?? undefined;
   if (target.zIndex === undefined) target.zIndex = serialized?.zIndex ?? serialized?.__zIndex ?? undefined;
   if (target.__zIndex === undefined) target.__zIndex = serialized?.zIndex ?? serialized?.__zIndex ?? undefined;
 

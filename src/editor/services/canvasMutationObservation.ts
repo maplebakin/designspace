@@ -323,6 +323,7 @@ export const isCanvasObjectObservationTarget = (object: any): object is {
     || object.isSmartGuide
     || object.isDocumentPaper
     || object.isPageBorder
+    || object.isTarotPageStyle
     || object.isSafeZoneOverlay
     || object.isPersistentGuide
     || object.isPlaceholder

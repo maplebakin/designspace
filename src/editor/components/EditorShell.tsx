@@ -278,6 +278,11 @@ export const EditorShell: React.FC<EditorShellProps> = ({
                 ? ((object as any).getSrc?.() ?? (object as any).src ?? null)
                 : null,
               isEditing: (object as any).isEditing ?? false,
+              semanticRole: (object as any).semanticRole ?? null,
+              tarotPosition: (object as any).tarotPosition ?? null,
+              tarotPageStyle: (object as any).tarotPageStyle ?? null,
+              isTarotPageStyle: !!(object as any).isTarotPageStyle,
+              tarotFooterField: (object as any).tarotFooterField ?? null,
               corners: (() => {
                 object.setCoords();
                 return object.getCoords().map((point) => ({ x: point.x, y: point.y }));

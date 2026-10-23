@@ -5,6 +5,7 @@ import { useCanvasStore } from '../state/useCanvasStore';
 import { toSerializableObject } from '../utils/serialization';
 import { withManifestZIndex, ZIndexLayer } from '../fabric/zIndexManifest';
 import type { TarotPosition, TarotPresetId } from './spreadPresets';
+import { createTarotPageStyleMarker, DEFAULT_TAROT_PAGE_STYLE, getTarotPageStyleMarker } from './pageStyle';
 
 export interface TarotPositionMetadata {
   spreadId: string;
@@ -36,16 +37,19 @@ const makeCard = (
     rx: 9, ry: 9, fill: '#302935', stroke: BORDER_COLOR,
     strokeWidth: 2, strokeUniform: true,
   });
+  (face as any).semanticRole = 'tarot-card-face';
   const inset = new fabric.Rect({
     left: 0, top: 0, width: CARD_WIDTH - 20, height: CARD_HEIGHT - 20,
     originX: 'center', originY: 'center',
     rx: 6, ry: 6, fill: 'transparent', stroke: '#7C647F',
     strokeWidth: 1, strokeUniform: true,
   });
+  (inset as any).semanticRole = 'tarot-card-inset';
   const number = new fabric.Text(String(position.number), {
     left: 0, top: -72, originX: 'center', originY: 'center',
     fontFamily: 'Georgia', fontSize: 75, fill: TEXT_COLOR,
   });
+  (number as any).semanticRole = 'tarot-card-number';
   const label = new fabric.Textbox(position.label.slice(0, 52), {
     left: 0, top: 46, width: CARD_WIDTH - 32,
     originX: 'center', originY: 'top',
@@ -68,7 +72,8 @@ const makeCard = (
     scaleY: scale,
   });
   (group as any).id = uuidv4();
-  (group as any).name = `Tarot · ${position.number}: ${position.label}`;
+  (group as any).name = `Card ${position.number}: ${position.label}`;
+  (group as any).semanticRole = 'tarot-card';
   (group as any).tarotPosition = {
     spreadId,
     number: position.number,
@@ -115,6 +120,15 @@ export const insertTarotSpread = (
   const scale = Math.min(maxCardWidth / CARD_WIDTH, maxCardHeight / CARD_HEIGHT);
 
   const objects: fabric.Object[] = [];
+  if (!getTarotPageStyleMarker(store.canvas)) {
+    objects.push(createTarotPageStyleMarker({
+      ...DEFAULT_TAROT_PAGE_STYLE,
+      header: {
+        ...DEFAULT_TAROT_PAGE_STYLE.header,
+        titleText: title.trim(),
+      },
+    }));
+  }
   if (title.trim()) {
     const heading = new fabric.Textbox(title.trim(), {
       left: width / 2,
@@ -129,7 +143,8 @@ export const insertTarotSpread = (
       fill: '#302935',
     });
     (heading as any).id = uuidv4();
-    (heading as any).name = `Tarot spread title: ${title.trim()}`;
+    (heading as any).name = 'Spread Title';
+    (heading as any).semanticRole = 'tarot-page-title';
     objects.push(heading);
   }
 
@@ -147,7 +162,7 @@ export const updateTarotGroupContents = (
   metadata: TarotPositionMetadata,
 ): void => {
   (group as any).tarotPosition = metadata;
-  (group as any).name = `Tarot · ${metadata.number}: ${metadata.label}`;
+  (group as any).name = `Card ${metadata.number}: ${metadata.label}`;
   const child = group.getObjects().find(
     (object) => (object as any).semanticRole === 'tarot-position-label'
   );

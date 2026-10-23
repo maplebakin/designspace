@@ -15,6 +15,7 @@ import { LayersPanel } from './LayersPanel';
 import { PageBorderPopover } from './PageBorderPopover';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ThemeSidebar } from './ThemeSidebar';
+import { TarotPageStylePanel } from './TarotPageStylePanel';
 import { INTERNAL_PRODUCT_FORGE_ENABLED } from '../config/internalCapabilities';
 
 export type InspectorTab = 'product' | 'page' | 'object' | 'theme' | 'layers';
@@ -129,6 +130,9 @@ const PagePanel: React.FC = () => {
       <div className="design-space-inspector-card mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
         <p className="mb-3 text-[11px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Page Style</p>
         <PageBorderPopover />
+      </div>
+      <div className="design-space-inspector-card mt-4 rounded-xl border border-[color:var(--brand-primary)]/30 bg-white/5 p-3">
+        <TarotPageStylePanel />
       </div>
     </div>
   );
