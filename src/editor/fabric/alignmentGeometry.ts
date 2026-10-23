@@ -89,3 +89,40 @@ export const calculateDistributionDeltas = (
 
   return deltas;
 };
+
+/**
+ * Returns scene-space translations that set a requested visual gap between
+ * every adjacent rectangle. The first rectangle in visual order is anchored;
+ * unlike distribution, the final rectangle is allowed to move.
+ */
+export const calculateExactGapDeltas = (
+  rects: RectLike[],
+  gap: number,
+  axis: DistributionAxis,
+): Delta[] => {
+  const deltas = rects.map(() => ({ dx: 0, dy: 0 }));
+  if (rects.length < 2 || !Number.isFinite(gap) || gap < 0) return deltas;
+
+  const horizontal = axis === 'horizontal';
+  const indexed: IndexedRect[] = rects.map((rect, index) => ({ ...rect, index }));
+  indexed.sort((a, b) => {
+    const primary = horizontal ? a.left - b.left : a.top - b.top;
+    return primary || a.index - b.index;
+  });
+
+  let cursor = horizontal
+    ? indexed[0].left + indexed[0].width + gap
+    : indexed[0].top + indexed[0].height + gap;
+
+  indexed.slice(1).forEach((rect) => {
+    if (horizontal) {
+      deltas[rect.index] = { dx: cursor - rect.left, dy: 0 };
+      cursor += rect.width + gap;
+    } else {
+      deltas[rect.index] = { dx: 0, dy: cursor - rect.top };
+      cursor += rect.height + gap;
+    }
+  });
+
+  return deltas;
+};

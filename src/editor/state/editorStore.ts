@@ -22,6 +22,8 @@ import {
     alignBottom,
     distributeHorizontally,
     distributeVertically,
+    spaceWithExactHorizontalGap,
+    spaceWithExactVerticalGap,
 } from '../fabric/alignment';
 import { groupObjects, ungroupObjects } from '../fabric/grouping';
 import { resizeCanvas, fitCanvasToViewport } from '../fabric/canvasUtils';
@@ -1413,6 +1415,10 @@ interface EditorState {
   removeSelectedObject: () => void;
   alignSelectedObjects: (direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => void;
   distributeSelectedObjects: (direction: 'horizontal' | 'vertical') => void;
+  spaceSelectedObjectsWithExactGap: (
+    direction: 'horizontal' | 'vertical',
+    gap: number,
+  ) => void;
   groupSelectedObjects: () => void;
   ungroupSelectedObjects: () => void;
   /** Reports the one narrow inspector style command proven by Phase 1M. */
@@ -2642,6 +2648,31 @@ export const useEditorStore = createWithEqualityFn<EditorState>()(
         } else {
             distributeVertically(canvas);
         }
+        get().reportCommittedCanvasPageGeometry(
+            before,
+            readCanvasGeometryFingerprints(canvas),
+        );
+    },
+    spaceSelectedObjectsWithExactGap: (direction, gap) => {
+        const { canvas, unitMode } = get();
+        if (!canvas) {
+            set({ toastMessage: 'Editor canvas is not ready. Please try again.' });
+            return;
+        }
+        if (!Number.isFinite(gap) || gap < 0) {
+            set({ toastMessage: 'Enter a non-negative finite gap value.' });
+            return;
+        }
+
+        const gapInCanvasUnits = gap * unitScaleMap[unitMode];
+        const before = readCanvasGeometryFingerprints(canvas);
+        get().startBatch();
+        if (direction === 'horizontal') {
+            spaceWithExactHorizontalGap(canvas, gapInCanvasUnits);
+        } else {
+            spaceWithExactVerticalGap(canvas, gapInCanvasUnits);
+        }
+        get().endBatch();
         get().reportCommittedCanvasPageGeometry(
             before,
             readCanvasGeometryFingerprints(canvas),
