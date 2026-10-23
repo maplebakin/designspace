@@ -158,25 +158,25 @@ export const SelectionToolbar: React.FC = () => {
       <div className="h-6 w-px bg-indigo-500/30" />
 
       <div className="flex items-center gap-1">
-        <ToolbarButton label="Align Left" disabled={!canAlign} onClick={() => alignSelectedObjects('left')}>
+        <ToolbarButton label="Align Left Edges" disabled={!canAlign} onClick={() => alignSelectedObjects('left')}>
           <AlignLeft className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
-        <ToolbarButton label="Align Center" disabled={!canAlign} onClick={() => alignSelectedObjects('center')}>
+        <ToolbarButton label="Align Centers Horizontally" disabled={!canAlign} onClick={() => alignSelectedObjects('center')}>
           <AlignCenter className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
-        <ToolbarButton label="Align Right" disabled={!canAlign} onClick={() => alignSelectedObjects('right')}>
+        <ToolbarButton label="Align Right Edges" disabled={!canAlign} onClick={() => alignSelectedObjects('right')}>
           <AlignRight className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
       </div>
 
       <div className="flex items-center gap-1">
-        <ToolbarButton label="Align Top" disabled={!canAlign} onClick={() => alignSelectedObjects('top')}>
+        <ToolbarButton label="Align Top Edges" disabled={!canAlign} onClick={() => alignSelectedObjects('top')}>
           <AlignStartVertical className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
-        <ToolbarButton label="Align Middle" disabled={!canAlign} onClick={() => alignSelectedObjects('middle')}>
+        <ToolbarButton label="Align Centers Vertically" disabled={!canAlign} onClick={() => alignSelectedObjects('middle')}>
           <AlignCenterVertical className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
-        <ToolbarButton label="Align Bottom" disabled={!canAlign} onClick={() => alignSelectedObjects('bottom')}>
+        <ToolbarButton label="Align Bottom Edges" disabled={!canAlign} onClick={() => alignSelectedObjects('bottom')}>
           <AlignEndVertical className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
       </div>
@@ -185,14 +185,14 @@ export const SelectionToolbar: React.FC = () => {
 
       <div className="flex items-center gap-1">
         <ToolbarButton
-          label="Distribute Horizontal"
+          label="Space Evenly Horizontally"
           disabled={!canDistribute}
           onClick={() => distributeSelectedObjects('horizontal')}
         >
           <AlignHorizontalDistributeCenter className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
         <ToolbarButton
-          label="Distribute Vertical"
+          label="Space Evenly Vertically"
           disabled={!canDistribute}
           onClick={() => distributeSelectedObjects('vertical')}
         >
