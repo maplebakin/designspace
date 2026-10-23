@@ -2,7 +2,9 @@
  * Editable tarot layouts in normalized document coordinates.
  * Positions and interpretations are authored data, not baked into an image.
  */
-export type TarotPresetId = 'three-card' | 'four-card' | 'five-card' | 'celtic-cross' | 'circle' | 'custom';
+import { NUMBERED_TAROT_TEMPLATES, type NumberedTarotPresetId } from './spreadTemplates';
+
+export type TarotPresetId = NumberedTarotPresetId | 'three-card' | 'four-card' | 'five-card' | 'celtic-cross' | 'circle' | 'custom';
 
 export interface TarotPosition {
   number: number;
@@ -15,14 +17,23 @@ export interface TarotPosition {
 
 type PositionSeed = Omit<TarotPosition, 'number'>;
 
-export const TAROT_PRESETS: { id: TarotPresetId; label: string; description: string }[] = [
-  { id: 'three-card', label: 'Three cards', description: 'A simple past / present / possibility line' },
-  { id: 'four-card', label: 'Four-card cross', description: 'A centered, four-direction reflection' },
-  { id: 'five-card', label: 'Five-card arc', description: 'An unfolding story across five cards' },
-  { id: 'celtic-cross', label: 'Celtic Cross', description: 'Traditional ten-position arrangement' },
-  { id: 'circle', label: 'Circle', description: 'Six positions around a central question' },
-  { id: 'custom', label: 'Custom grid', description: 'Start with 1–12 positions and rearrange freely' },
+export const TAROT_PRESETS: { id: TarotPresetId; label: string; description: string; cardCount: number | null }[] = [
+  ...NUMBERED_TAROT_TEMPLATES.map((template) => ({
+    id: template.id,
+    label: template.label,
+    description: template.description,
+    cardCount: template.positions.length,
+  })),
+  { id: 'three-card', label: 'Past / Present / Possibility', description: 'A classic three-card line', cardCount: 3 },
+  { id: 'four-card', label: 'Four-card cross', description: 'A centered, four-direction reflection', cardCount: 4 },
+  { id: 'five-card', label: 'Five-card arc', description: 'An unfolding story across five cards', cardCount: 5 },
+  { id: 'celtic-cross', label: 'Celtic Cross', description: 'Traditional ten-position arrangement', cardCount: 10 },
+  { id: 'circle', label: 'Circle', description: 'Six positions around a central question', cardCount: 6 },
+  { id: 'custom', label: 'Blank grid', description: 'Empty positions to rename and rearrange freely', cardCount: null },
 ];
+
+export const getTarotPresetsForCount = (count: number) =>
+  TAROT_PRESETS.filter((preset) => preset.cardCount === count || preset.id === 'custom');
 
 const pos = (label: string, prompt: string, x: number, y: number, angle = 0): PositionSeed =>
   ({ label, prompt, x, y, angle });
@@ -72,19 +83,22 @@ const PRESETS: Record<Exclude<TarotPresetId, 'custom'>, PositionSeed[]> = {
 
 export const makeTarotPositions = (presetId: TarotPresetId, customCount = 3): TarotPosition[] => {
   const count = Math.min(12, Math.max(1, Math.floor(Number.isFinite(customCount) ? customCount : 3)));
-  const seeds: PositionSeed[] = presetId === 'custom'
-    ? Array.from({ length: count }, (_, index) => {
-      const columns = Math.min(4, count);
-      const rows = Math.ceil(count / columns);
-      const col = index % columns;
-      const row = Math.floor(index / columns);
-      return pos(
-        `Position ${index + 1}`, '',
-        0.5 + (col - (columns - 1) / 2) * (columns === 4 ? 0.21 : 0.24),
-        0.5 + (row - (rows - 1) / 2) * 0.19,
-      );
-    })
-    : PRESETS[presetId];
+  const authoredTemplate = NUMBERED_TAROT_TEMPLATES.find((template) => template.id === presetId);
+  const seeds: PositionSeed[] = authoredTemplate
+    ? authoredTemplate.positions
+    : presetId === 'custom'
+      ? Array.from({ length: count }, (_, index) => {
+        const columns = Math.min(4, count);
+        const rows = Math.ceil(count / columns);
+        const col = index % columns;
+        const row = Math.floor(index / columns);
+        return pos(
+          `Position ${index + 1}`, '',
+          0.5 + (col - (columns - 1) / 2) * (columns === 4 ? 0.21 : 0.24),
+          0.5 + (row - (rows - 1) / 2) * 0.19,
+        );
+      })
+      : PRESETS[presetId];
 
   return seeds.map((seed, index) => ({ ...seed, number: index + 1 }));
 };
