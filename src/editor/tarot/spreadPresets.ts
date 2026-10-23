@@ -38,7 +38,7 @@ export const getTarotPresetsForCount = (count: number) =>
 const pos = (label: string, prompt: string, x: number, y: number, angle = 0): PositionSeed =>
   ({ label, prompt, x, y, angle });
 
-const PRESETS: Record<Exclude<TarotPresetId, 'custom'>, PositionSeed[]> = {
+const PRESETS: Record<Exclude<TarotPresetId, 'custom' | NumberedTarotPresetId>, PositionSeed[]> = {
   'three-card': [
     pos('What led here', 'What has shaped the present situation?', 0.26, 0.48),
     pos('What is here', 'What deserves attention right now?', 0.50, 0.48),
