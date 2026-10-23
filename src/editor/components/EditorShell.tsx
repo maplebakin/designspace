@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as fabric from 'fabric';
 import { shallow } from 'zustand/shallow';
+import publishingFontsCss from '../../document/styles/publishing-fonts.css?inline';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
   MousePointer2,
@@ -95,6 +96,22 @@ export const EditorShell: React.FC<EditorShellProps> = ({
   onCommittedCanvasMutation,
 }) => {
   useKeyboardShortcuts();
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.dataset.designSpaceTarotFonts = 'true';
+    style.textContent = publishingFontsCss;
+    document.head.appendChild(style);
+
+    if (typeof document.fonts?.load === 'function') {
+      void Promise.all([
+        document.fonts.load('400 16px "Cinzel"'),
+        document.fonts.load('400 16px "Cormorant Garamond"'),
+      ]);
+    }
+
+    return () => style.remove();
+  }, []);
+
   const {
     toastMessage,
     toast,
