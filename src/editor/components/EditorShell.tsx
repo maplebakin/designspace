@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as fabric from 'fabric';
 import { shallow } from 'zustand/shallow';
+import publishingFontsCss from '../../document/styles/publishing-fonts.css?inline';
 import { CanvasSettingsPopover } from './CanvasSettingsPopover';
 import {
   MousePointer2,
@@ -95,6 +96,22 @@ export const EditorShell: React.FC<EditorShellProps> = ({
   onCommittedCanvasMutation,
 }) => {
   useKeyboardShortcuts();
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.dataset.designSpaceTarotFonts = 'true';
+    style.textContent = publishingFontsCss;
+    document.head.appendChild(style);
+
+    if (typeof document.fonts?.load === 'function') {
+      void Promise.all([
+        document.fonts.load('400 16px "Cinzel"'),
+        document.fonts.load('400 16px "Cormorant Garamond"'),
+      ]);
+    }
+
+    return () => style.remove();
+  }, []);
+
   const {
     toastMessage,
     toast,
@@ -278,6 +295,11 @@ export const EditorShell: React.FC<EditorShellProps> = ({
                 ? ((object as any).getSrc?.() ?? (object as any).src ?? null)
                 : null,
               isEditing: (object as any).isEditing ?? false,
+              semanticRole: (object as any).semanticRole ?? null,
+              tarotPosition: (object as any).tarotPosition ?? null,
+              tarotPageStyle: (object as any).tarotPageStyle ?? null,
+              isTarotPageStyle: !!(object as any).isTarotPageStyle,
+              tarotFooterField: (object as any).tarotFooterField ?? null,
               corners: (() => {
                 object.setCoords();
                 return object.getCoords().map((point) => ({ x: point.x, y: point.y }));

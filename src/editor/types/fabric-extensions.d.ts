@@ -122,6 +122,17 @@ interface CustomObjectProps {
   isPageBorder?: boolean;
   /** Serialized page border settings */
   borderSettings?: any;
+  /** Marks the persistent tarot style metadata object. */
+  isTarotPageStyle?: boolean;
+  /** Durable tarot page style configuration. */
+  tarotPageStyle?: any;
+  /** Footer field key used by tarot page styling. */
+  tarotFooterField?: string;
+  /** Card style metadata used by tarot page styling. */
+  tarotCardStyle?: any;
+  tarotLabelPlacement?: 'inside' | 'below' | 'hidden';
+  tarotPositionLabelFor?: string;
+  tarotOrnamentSize?: number;
 }
 
 // ============================================================================

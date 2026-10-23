@@ -1,5 +1,6 @@
 import * as fabric from 'fabric';
 import { useCanvasStore } from '../state/useCanvasStore';
+import { refitTarotPageBorder } from '../tarot/pageStyle';
 
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export type CornerStyle = 'bracket' | 'flourish' | 'diamond' | 'cross' | 'rounded' | 'leaf';
@@ -343,6 +344,10 @@ export const applyPageBorder = (canvas: fabric.Canvas, settings: PageBorderSetti
 export const refitPageBorder = (canvas: fabric.Canvas) => {
   const group = getPageBorderGroup(canvas);
   if (!group) return;
+  if ((group as any).semanticRole === 'tarot-page-border') {
+    refitTarotPageBorder(canvas);
+    return;
+  }
   const settings = (group as any).borderSettings as PageBorderSettings | undefined;
   if (!settings) return;
   applyPageBorder(canvas, settings);
