@@ -51,7 +51,7 @@ const makeCard = (
     originX: 'center', originY: 'top',
     fontFamily: 'Georgia', fontSize: 17,
     fill: TEXT_COLOR, textAlign: 'center',
-    breakWords: true, lineHeight: 1.1,
+    lineHeight: 1.1,
   });
   (label as any).semanticRole = 'tarot-position-label';
   [face, inset, number, label].forEach((child) => {
@@ -95,7 +95,7 @@ export const insertTarotSpread = (
 
   const spreadId = uuidv4();
   const maxCardWidth = width * (presetId === 'celtic-cross' ? 0.115 : presetId === 'custom' && positions.length > 3 ? 0.16 : 0.165);
-  const maxCardHeight = height * (presetId === 'celtic-cross' ? 0.155 : 0.22);
+  const maxCardHeight = height * (presetId === 'celtic-cross' ? 0.155 : presetId === 'custom' && positions.length > 4 ? 0.15 : 0.22);
   const scale = Math.min(maxCardWidth / CARD_WIDTH, maxCardHeight / CARD_HEIGHT);
 
   const objects: fabric.Object[] = [];
