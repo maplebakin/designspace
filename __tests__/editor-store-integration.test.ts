@@ -1969,9 +1969,12 @@ describe('mounted store editor integration', () => {
 
     useEditorStore.getState().alignSelectedObjects('left');
     await flushLayerAndHistory();
-    expect(['shape-1', 'shape-2', 'shape-3'].map((id) => Math.round(objectById(harness.canvas, id)?.getBoundingRect().left ?? -1))).toEqual([0, 0, 0]);
+    const alignedLefts = ['shape-1', 'shape-2', 'shape-3']
+      .map((id) => Math.round(objectById(harness.canvas, id)?.getBoundingRect().left ?? -1));
+    expect(new Set(alignedLefts).size).toBe(1);
+    expect(alignedLefts[0]).toBe(Math.min(...originalLefts));
     expect(objectById(harness.canvas, 'guide')?.left).toBe(90);
-    expect(useEditorStore.getState().selectedLayerIds).toEqual([]);
+    expect(useEditorStore.getState().selectedLayerIds).toEqual(['shape-1', 'shape-2', 'shape-3']);
 
     await useEditorStore.getState().undo();
     await flushPromises();
@@ -1982,6 +1985,14 @@ describe('mounted store editor integration', () => {
     useEditorStore.getState().selectObjectsByIds(['shape-1', 'shape-2', 'shape-3']);
     useEditorStore.getState().distributeSelectedObjects('horizontal');
     await flushLayerAndHistory();
+    const distributedRects = ['shape-1', 'shape-2', 'shape-3']
+      .map((id) => objectById(harness.canvas, id)?.getBoundingRect())
+      .filter((rect): rect is NonNullable<typeof rect> => !!rect)
+      .sort((a, b) => a.left - b.left);
+    const firstGap = distributedRects[1].left - (distributedRects[0].left + distributedRects[0].width);
+    const secondGap = distributedRects[2].left - (distributedRects[1].left + distributedRects[1].width);
+    expect(firstGap).toBeCloseTo(secondGap, 5);
+    expect(useEditorStore.getState().selectedLayerIds).toEqual(['shape-1', 'shape-2', 'shape-3']);
     expect(useEditorStore.getState().canvasObjects.map((object) => object.id)).toEqual(
       harness.canvas.getObjects().filter(isUserObject).map((object) => (object as any).id)
     );
