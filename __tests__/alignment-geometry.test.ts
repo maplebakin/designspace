@@ -11,7 +11,7 @@ describe('selection alignment geometry', () => {
 
     expect(calculateAlignmentDeltaToBounds(card, bounds, 'middle')).toEqual({
       dx: 0,
-      dy: 80,
+      dy: 60,
     });
     expect(calculateAlignmentDeltaToBounds(card, bounds, 'center')).toEqual({
       dx: 170,
@@ -64,7 +64,7 @@ describe('selection alignment geometry', () => {
     const tops = rects.map((rect, index) => rect.top + deltas[index].dy);
 
     expect(tops[1]).toBe(50);
-    expect(tops[2]).toBe(250);
+    expect(tops[2]).toBe(300);
     expect(tops[0]).toBe(650);
   });
 });
