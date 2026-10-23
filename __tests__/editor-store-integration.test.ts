@@ -1998,6 +1998,40 @@ describe('mounted store editor integration', () => {
     );
   });
 
+  it('applies unit-converted exact gaps as one undoable selection mutation', async () => {
+    useEditorStore.getState().setUnitMode('in');
+    useEditorStore.getState().addObjects([
+      rectObject('gap-left', { left: 120, top: 100, width: 100, height: 80 }),
+      rectObject('gap-right', { left: 360, top: 140, width: 60, height: 80 }),
+    ], { save: true, selectLast: false });
+    await flushLayerAndHistory();
+
+    useEditorStore.getState().selectObjectsByIds(['gap-left', 'gap-right']);
+    const leftBefore = objectById(harness.canvas, 'gap-left')!.getBoundingRect();
+    const rightBefore = objectById(harness.canvas, 'gap-right')!.getBoundingRect();
+    useEditorStore.getState().spaceSelectedObjectsWithExactGap('horizontal', 0.25);
+    await flushLayerAndHistory();
+
+    const spacedLeft = objectById(harness.canvas, 'gap-left')!.getBoundingRect();
+    const spacedRight = objectById(harness.canvas, 'gap-right')!.getBoundingRect();
+    expect(spacedLeft.left).toBeCloseTo(leftBefore.left, 5);
+    expect(spacedRight.left - (spacedLeft.left + spacedLeft.width)).toBeCloseTo(75, 5);
+    expect(spacedRight.top).toBeCloseTo(rightBefore.top, 5);
+    expect(useEditorStore.getState().selectedLayerIds).toEqual(['gap-left', 'gap-right']);
+
+    await useEditorStore.getState().undo();
+    await flushPromises();
+    const undoneRight = objectById(harness.canvas, 'gap-right')!.getBoundingRect();
+    expect(undoneRight.left).toBeCloseTo(rightBefore.left, 5);
+    expect(useHistoryStore.getState().canRedo()).toBe(true);
+
+    await useEditorStore.getState().redo();
+    await flushPromises();
+    const redoneLeft = objectById(harness.canvas, 'gap-left')!.getBoundingRect();
+    const redoneRight = objectById(harness.canvas, 'gap-right')!.getBoundingRect();
+    expect(redoneRight.left - (redoneLeft.left + redoneLeft.width)).toBeCloseTo(75, 5);
+  });
+
   it('inserts text, syncs layer/selection/history, and preserves serialized text properties', async () => {
     addIText(harness.canvas, {
       text: 'Headline',

@@ -9,6 +9,7 @@ type QaObject = {
   top?: number;
   width?: number;
   height?: number;
+  strokeWidth?: number;
   scaleX?: number;
   scaleY?: number;
   visible?: boolean;
@@ -17,6 +18,7 @@ type QaObject = {
   lockMovementX?: boolean;
   fill?: unknown;
   opacity?: number;
+  corners?: Array<{ x: number; y: number }>;
   text?: string | null;
   isEditing?: boolean;
 };
@@ -450,6 +452,55 @@ test.describe('browser Fabric editor smoke', () => {
     await page.mouse.click(lockPoint.x, lockPoint.y);
     await expect.poll(async () => (await snapshot(page)).activeObjectId).not.toBe(lockTargetId);
     expect(lockedBeforeHide).toBeTruthy();
+    expect(fatalConsole).toEqual([]);
+  });
+
+  test('applies an exact horizontal gap from the multi-selection toolbar', async ({ page }) => {
+    const fatalConsole = installFatalConsoleCollector(page);
+    await page.goto('/');
+    await page.getByTestId('dashboard-new-project').click();
+    await page.getByTestId('project-preset-us-letter').click();
+    await expect(page.getByTestId('editor-shell')).toBeVisible();
+    await page.waitForFunction(() => (window as any).__DESIGN_SPACE_QA__?.snapshot().canvasReady === true);
+
+    await page.getByTestId('nav-insert').click();
+    const panel = page.locator('.design-space-left-content');
+    await panel.getByRole('button', { name: 'Tarot Spreads' }).click();
+    await panel.getByTestId('tarot-card-count').selectOption('2');
+    await panel.getByTestId('insert-tarot-spread').click();
+    await expect.poll(async () => (await snapshot(page)).objects.filter((object) => object.type === 'group').length).toBe(2);
+    const inserted = await snapshot(page);
+    const [firstId, secondId] = inserted.objects
+      .filter((object) => object.type === 'group')
+      .map((object) => object.id)
+      .filter((id): id is string => !!id);
+    if (!firstId || !secondId) throw new Error('Two tarot cards were not inserted');
+
+    const firstPoint = await canvasPointForObject(page, firstId);
+    const secondPoint = await canvasPointForObject(page, secondId);
+    await page.mouse.click(firstPoint.x, firstPoint.y);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(secondPoint.x, secondPoint.y);
+    await page.keyboard.up('Shift');
+    await expect.poll(async () => (await snapshot(page)).selectedLayerIds.length).toBe(2);
+
+    await page.getByRole('button', { name: 'IN', exact: true }).click();
+    await page.getByRole('button', { name: 'Gap spacing' }).click();
+    await page.getByLabel('Gap spacing value').fill('0.25');
+    await page.getByRole('button', { name: 'Apply horizontal gap spacing' }).click();
+    await expect.poll(async () => (await snapshot(page)).selectedLayerIds.length).toBe(2);
+
+    const state = await snapshot(page);
+    const selected = state.objects
+      .filter((object) => object.id === firstId || object.id === secondId)
+      .sort((a, b) => (a.left ?? 0) - (b.left ?? 0));
+    expect(selected).toHaveLength(2);
+    const first = selected[0];
+    const second = selected[1];
+    const firstRight = Math.max(...(first.corners ?? []).map((corner) => corner.x));
+    const secondLeft = Math.min(...(second.corners ?? []).map((corner) => corner.x));
+    const visualGap = secondLeft - firstRight;
+    expect(visualGap).toBeCloseTo(75, 1);
     expect(fatalConsole).toEqual([]);
   });
 

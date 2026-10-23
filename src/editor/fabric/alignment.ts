@@ -12,9 +12,11 @@ import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { isActiveSelection } from '../utils/typeGuards';
+import { isUserObject } from '../utils/objectUtils';
 import {
     calculateAlignmentDeltaToBounds,
     calculateDistributionDeltas,
+    calculateExactGapDeltas,
     type AlignmentDirection,
     type DistributionAxis,
 } from './alignmentGeometry';
@@ -178,6 +180,37 @@ const distributeSelection = (
     finalizeAlignment(canvas);
 };
 
+const spaceSelectionWithExactGap = (
+    canvas: fabric.Canvas,
+    axis: DistributionAxis,
+    gap: number,
+) => {
+    const selection = getActiveSelection(canvas);
+    if (!selection || !Number.isFinite(gap) || gap < 0) return;
+
+    const objects = [...selection.getObjects()];
+    const movableObjects = objects.filter(isUserObject);
+    if (movableObjects.length < 2) return;
+
+    // Capture visual/page-space bounds before detaching the ActiveSelection.
+    // This keeps scaled, rotated, grouped, and center-origin objects on the
+    // same geometry path as the existing alignment/distribution commands.
+    const rects = movableObjects.map((object) => object.getBoundingRect());
+    const deltas = calculateExactGapDeltas(rects, gap, axis);
+    if (!deltas.some(({ dx, dy }) => dx !== 0 || dy !== 0)) return;
+    canvas.discardActiveObject();
+
+    movableObjects.forEach((object, index) => {
+        const { dx, dy } = deltas[index];
+        if (dx || dy) {
+            applyObjectDelta(object, dx, dy);
+        }
+    });
+
+    restoreSelection(canvas, objects);
+    finalizeAlignment(canvas);
+};
+
 /**
  * Distributes 3+ selected objects horizontally with equal visual gaps while
  * keeping the leftmost and rightmost selection edges anchored.
@@ -191,3 +224,17 @@ export const distributeHorizontally = (canvas: fabric.Canvas) =>
  */
 export const distributeVertically = (canvas: fabric.Canvas) =>
     distributeSelection(canvas, 'vertical');
+
+/**
+ * Spaces 2+ selected objects horizontally by an exact visual gap, anchoring
+ * the leftmost object and preserving every object's vertical position.
+ */
+export const spaceWithExactHorizontalGap = (canvas: fabric.Canvas, gap: number) =>
+    spaceSelectionWithExactGap(canvas, 'horizontal', gap);
+
+/**
+ * Spaces 2+ selected objects vertically by an exact visual gap, anchoring
+ * the topmost object and preserving every object's horizontal position.
+ */
+export const spaceWithExactVerticalGap = (canvas: fabric.Canvas, gap: number) =>
+    spaceSelectionWithExactGap(canvas, 'vertical', gap);

@@ -16,6 +16,7 @@ import {
   Trash2,
   ArrowUpToLine,
   ArrowDownToLine,
+  Ruler,
 } from 'lucide-react';
 import { useEditorStore } from '../state/editorStore';
 import { isActiveSelection as isActiveSelectionObject } from '../utils/typeGuards';
@@ -50,6 +51,8 @@ export const SelectionToolbar: React.FC = () => {
     selectedLayerIds,
     alignSelectedObjects,
     distributeSelectedObjects,
+    spaceSelectedObjectsWithExactGap,
+    unitMode,
     groupSelectedObjects,
     ungroupSelectedObjects,
     removeSelectedObject,
@@ -60,12 +63,27 @@ export const SelectionToolbar: React.FC = () => {
       selectedLayerIds: state.selectedLayerIds,
       alignSelectedObjects: state.alignSelectedObjects,
       distributeSelectedObjects: state.distributeSelectedObjects,
+      spaceSelectedObjectsWithExactGap: state.spaceSelectedObjectsWithExactGap,
+      unitMode: state.unitMode,
       groupSelectedObjects: state.groupSelectedObjects,
       ungroupSelectedObjects: state.ungroupSelectedObjects,
       removeSelectedObject: state.removeSelectedObject,
     }),
     shallow
   );
+
+  const defaultGapValue = unitMode === 'px'
+    ? 75
+    : unitMode === 'in'
+      ? 0.25
+      : unitMode === 'cm'
+        ? 0.635
+        : 6.35;
+  const [gapMenuOpen, setGapMenuOpen] = React.useState(false);
+  const [gapValue, setGapValue] = React.useState(String(defaultGapValue));
+  React.useEffect(() => {
+    setGapValue(String(defaultGapValue));
+  }, [unitMode, defaultGapValue]);
 
   if (!canvas) return null;
   const selectedObjects = selectedLayerIds
@@ -84,6 +102,13 @@ export const SelectionToolbar: React.FC = () => {
   const canUngroup = isGroup && selectionCount === 1;
   const canAlign = isActiveSelection;
   const canDistribute = isActiveSelection && selectionCount >= 3;
+  const canGap = isActiveSelection && selectionCount >= 2;
+  const applyGap = (direction: 'horizontal' | 'vertical') => {
+    if (gapValue.trim().length === 0) return;
+    const parsed = Number(gapValue);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    spaceSelectedObjectsWithExactGap(direction, parsed);
+  };
 
   const handleGroupToggle = () => {
     if (canUngroup) {
@@ -179,6 +204,52 @@ export const SelectionToolbar: React.FC = () => {
         <ToolbarButton label="Align Bottom Edges" disabled={!canAlign} onClick={() => alignSelectedObjects('bottom')}>
           <AlignEndVertical className="h-4 w-4 stroke-[1.5]" />
         </ToolbarButton>
+      </div>
+
+      <div className="relative">
+        <ToolbarButton
+          label="Gap spacing"
+          disabled={!canGap}
+          onClick={() => setGapMenuOpen((open) => !open)}
+        >
+          <Ruler className="h-4 w-4 stroke-[1.5]" />
+        </ToolbarButton>
+        {gapMenuOpen && canGap && (
+          <div className="absolute right-0 top-10 z-50 flex min-w-52 flex-col gap-2 rounded-xl border border-indigo-500/30 bg-[color:var(--ui-panel-opaque)] p-3 text-left normal-case tracking-normal shadow-[0_12px_30px_rgba(0,0,0,0.45)] backdrop-blur-md">
+            <label className="text-[10px] uppercase tracking-widest text-indigo-100/80" htmlFor="selection-gap-value">
+              Gap spacing ({unitMode})
+            </label>
+            <input
+              id="selection-gap-value"
+              aria-label="Gap spacing value"
+              type="number"
+              min="0"
+              step="any"
+              inputMode="decimal"
+              value={gapValue}
+              onChange={(event) => setGapValue(event.target.value)}
+              className="h-8 w-full rounded-md border border-indigo-400/30 bg-black/20 px-2 text-sm text-indigo-50 outline-none focus:border-indigo-300"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                aria-label="Apply horizontal gap spacing"
+                onClick={() => applyGap('horizontal')}
+                className="flex-1 rounded-md border border-indigo-400/30 px-2 py-1 text-[10px] uppercase tracking-wider text-indigo-100 hover:bg-indigo-500/10"
+              >
+                Horizontal
+              </button>
+              <button
+                type="button"
+                aria-label="Apply vertical gap spacing"
+                onClick={() => applyGap('vertical')}
+                className="flex-1 rounded-md border border-indigo-400/30 px-2 py-1 text-[10px] uppercase tracking-wider text-indigo-100 hover:bg-indigo-500/10"
+              >
+                Vertical
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="h-6 w-px bg-indigo-500/30" />
