@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import * as fabric from 'fabric';
+import { isActiveSelection } from '../src/editor/utils/typeGuards';
 
 const storeMocks = vi.hoisted(() => ({
   syncCanvasToStore: vi.fn(),
@@ -68,7 +69,7 @@ describe('Fabric multi-selection alignment', () => {
 
     expect(centers[0]).toBeCloseTo(centers[1], 5);
     expect(centers[1]).toBeCloseTo(centers[2], 5);
-    expect(canvas.getActiveObject()?.type).toBe('activeselection');
+    expect(isActiveSelection(canvas.getActiveObject())).toBe(true);
     expect((canvas.getActiveObject() as fabric.ActiveSelection).getObjects()).toHaveLength(3);
     expect(storeMocks.syncSelectionFromCanvas).toHaveBeenCalled();
     expect(storeMocks.saveState).toHaveBeenCalled();
@@ -90,7 +91,7 @@ describe('Fabric multi-selection alignment', () => {
     const secondGap = cards[2].left - (cards[1].left + cards[1].width);
 
     expect(firstGap).toBeCloseTo(secondGap, 5);
-    expect(canvas.getActiveObject()?.type).toBe('activeselection');
+    expect(isActiveSelection(canvas.getActiveObject())).toBe(true);
     expect((canvas.getActiveObject() as fabric.ActiveSelection).getObjects()).toHaveLength(3);
   });
 });
