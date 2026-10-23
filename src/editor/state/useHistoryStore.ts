@@ -1061,6 +1061,18 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
 
             const imageAssets = _context.getImageAssets();
 
+            // Undo already clears selection after replay. Clear it before
+            // replay as well so ActiveSelection-local child coordinates never
+            // leak into hydration/diff application while the sync lock is
+            // owned. This matters after commands that intentionally keep a
+            // multi-selection live for follow-up alignment operations.
+            if (_context.clearSelection) {
+              _context.clearSelection();
+            } else {
+              canvas.discardActiveObject();
+              _context.setSelectedObjectId(null);
+            }
+
             if (snapshot.type === 'full') {
             const targetState = resolveHistoryStateAtIndex(get()._snapshots, targetIndex);
             if (!targetState) return false;
@@ -1207,6 +1219,15 @@ export const useHistoryStore = createWithEqualityFn<HistoryState>()(
           if (!snapshot) return false;
 
           const imageAssets = _context.getImageAssets();
+
+          // Match undo: replay always ends deselected, so detach an active
+          // multi-selection before applying restored page-space geometry.
+          if (_context.clearSelection) {
+            _context.clearSelection();
+          } else {
+            canvas.discardActiveObject();
+            _context.setSelectedObjectId(null);
+          }
 
           if (snapshot.type === 'full') {
             const hydratedState = hydrateCanvasDataWithAssets(snapshot.data, imageAssets);

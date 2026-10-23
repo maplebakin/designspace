@@ -178,7 +178,7 @@ export const TarotSpreadPanel: React.FC = () => {
             Insert editable spread
           </button>
           <p className="text-[10px] text-[color:var(--ui-panel-text)]">
-            Each numbered card becomes its own movable layer. Select a card to change its label or question in Properties.
+            Each numbered card becomes its own movable layer. Shift-click multiple cards to align them or space them evenly from the floating toolbar.
           </p>
         </div>
       )}

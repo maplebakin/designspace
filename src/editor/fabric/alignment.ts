@@ -1,8 +1,9 @@
 /**
  * Alignment Utilities
  *
- * Provides functions to align objects to the canvas/document bounds.
- * All alignment operations use the document dimensions from useCanvasStore.
+ * Single objects align to the document bounds. Multi-selections align to their
+ * own selection bounds, which gives design-tool semantics such as lining up
+ * card centers without throwing the entire row to the page edge.
  *
  * @module alignment
  */
@@ -11,11 +12,16 @@ import * as fabric from 'fabric';
 import { useEditorStore } from '../state/editorStore';
 import { useCanvasStore } from '../state/useCanvasStore';
 import { isActiveSelection } from '../utils/typeGuards';
+import {
+    calculateAlignmentDeltaToBounds,
+    calculateDistributionDeltas,
+    type AlignmentDirection,
+    type DistributionAxis,
+} from './alignmentGeometry';
 
 /**
- * Gets the document bounds for alignment.
- * Always uses the document dimensions from the store (0, 0, width, height).
- * This ensures alignment is relative to the actual document, not the viewport.
+ * Gets the document bounds for single-object alignment.
+ * Always uses authored document coordinates, never viewport dimensions.
  */
 const getDocumentBounds = () => {
     const { width: docWidth, height: docHeight } = useCanvasStore.getState();
@@ -43,6 +49,22 @@ const applyObjectDelta = (object: fabric.Object, deltaX: number, deltaY: number)
     object.setCoords();
 };
 
+/**
+ * Alignment commands should not destroy the user's multi-selection. Rebuild
+ * the ActiveSelection after applying scene-space deltas so they can align and
+ * distribute repeatedly without reselecting every object.
+ */
+const restoreSelection = (canvas: fabric.Canvas, objects: fabric.Object[]) => {
+    if (objects.length === 0) return;
+    if (objects.length === 1) {
+        canvas.setActiveObject(objects[0]);
+    } else {
+        canvas.setActiveObject(new fabric.ActiveSelection(objects, { canvas }));
+    }
+    canvas.getActiveObject()?.setCoords();
+    useEditorStore.getState().syncSelectionFromCanvas(canvas);
+};
+
 const finalizeAlignment = (canvas: fabric.Canvas) => {
     canvas.requestRenderAll();
     const { syncCanvasToStore, saveState } = useEditorStore.getState();
@@ -51,100 +73,64 @@ const finalizeAlignment = (canvas: fabric.Canvas) => {
 };
 
 /**
- * Calculates the delta needed to align an object to the document bounds.
- */
-const calculateAlignmentDelta = (
-    rect: { left: number; top: number; width: number; height: number },
-    direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
-): { dx: number; dy: number } => {
-    const { left: docLeft, top: docTop, width: docWidth, height: docHeight } = getDocumentBounds();
-    let dx = 0;
-    let dy = 0;
-
-    switch (direction) {
-        case 'left':
-            // Align left edge of object to left edge of document
-            dx = docLeft - rect.left;
-            break;
-        case 'center':
-            // Align center of object to horizontal center of document
-            dx = docLeft + docWidth / 2 - (rect.left + rect.width / 2);
-            break;
-        case 'right':
-            // Align right edge of object to right edge of document
-            dx = docLeft + docWidth - (rect.left + rect.width);
-            break;
-        case 'top':
-            // Align top edge of object to top edge of document
-            dy = docTop - rect.top;
-            break;
-        case 'middle':
-            // Align center of object to vertical center of document
-            dy = docTop + docHeight / 2 - (rect.top + rect.height / 2);
-            break;
-        case 'bottom':
-            // Align bottom edge of object to bottom edge of document
-            dy = docTop + docHeight - (rect.top + rect.height);
-            break;
-    }
-
-    return { dx, dy };
-};
-
-/**
  * Aligns a single object to the document bounds.
  */
 const alignSingleObject = (
     canvas: fabric.Canvas,
     object: fabric.Object,
-    direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+    direction: AlignmentDirection,
 ) => {
     const rect = object.getBoundingRect();
-    const { dx, dy } = calculateAlignmentDelta(rect, direction);
+    const { dx, dy } = calculateAlignmentDeltaToBounds(
+        rect,
+        getDocumentBounds(),
+        direction,
+    );
 
     if (dx || dy) {
         applyObjectDelta(object, dx, dy);
-        object.setCoords();
     }
     finalizeAlignment(canvas);
 };
 
 /**
- * Aligns multiple objects to the document bounds.
- * Each object is aligned independently to the document edge/center.
+ * Aligns multiple objects to each other, using the current selection bounds as
+ * the reference. Example: Align Middle gives every selected card the same
+ * vertical center while keeping the row where the user placed it.
  */
 const alignMultipleObjects = (
     canvas: fabric.Canvas,
     selection: fabric.ActiveSelection,
-    direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+    direction: AlignmentDirection,
 ) => {
-    const objects = selection.getObjects();
+    const objects = [...selection.getObjects()];
     if (objects.length === 0) return;
+
+    const selectionBounds = selection.getBoundingRect();
     canvas.discardActiveObject();
 
-    // Align each object to the document bounds
     objects.forEach((object) => {
         const rect = object.getBoundingRect();
-        const { dx, dy } = calculateAlignmentDelta(rect, direction);
-
+        const { dx, dy } = calculateAlignmentDeltaToBounds(
+            rect,
+            selectionBounds,
+            direction,
+        );
         if (dx || dy) {
             applyObjectDelta(object, dx, dy);
         }
     });
 
-    useEditorStore.getState().syncSelectionFromCanvas(canvas);
+    restoreSelection(canvas, objects);
     finalizeAlignment(canvas);
 };
 
 /**
- * Aligns the selected object(s) to the document bounds.
- *
- * @param canvas - The fabric.Canvas instance
- * @param direction - The alignment direction
+ * Aligns one object to the page, or a multi-selection to itself.
  */
 const alignObjects = (
     canvas: fabric.Canvas,
-    direction: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+    direction: AlignmentDirection,
 ) => {
     const activeObject = canvas.getActiveObject();
     if (!activeObject) return;
@@ -156,134 +142,52 @@ const alignObjects = (
     }
 };
 
-/**
- * Aligns selected object(s) to the left edge of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignLeft = (canvas: fabric.Canvas) => alignObjects(canvas, 'left');
-
-/**
- * Aligns selected object(s) to the horizontal center of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignCenter = (canvas: fabric.Canvas) => alignObjects(canvas, 'center');
-
-/**
- * Aligns selected object(s) to the right edge of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignRight = (canvas: fabric.Canvas) => alignObjects(canvas, 'right');
-
-/**
- * Aligns selected object(s) to the top edge of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignTop = (canvas: fabric.Canvas) => alignObjects(canvas, 'top');
-
-/**
- * Aligns selected object(s) to the vertical center of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignMiddle = (canvas: fabric.Canvas) => alignObjects(canvas, 'middle');
-
-/**
- * Aligns selected object(s) to the bottom edge of the document.
- * @param canvas - The fabric.Canvas instance
- */
 export const alignBottom = (canvas: fabric.Canvas) => alignObjects(canvas, 'bottom');
 
-/**
- * Distributes selected objects horizontally with equal spacing.
- * Assumes at least 3 objects are selected.
- * @param canvas The fabric.Canvas instance.
- */
-export const distributeHorizontally = (canvas: fabric.Canvas) => {
-    const activeSelection = getActiveSelection(canvas);
-    if (!activeSelection) return;
-    const selectedObjects = activeSelection.getObjects() as fabric.Object[];
+const distributeSelection = (
+    canvas: fabric.Canvas,
+    axis: DistributionAxis,
+) => {
+    const selection = getActiveSelection(canvas);
+    if (!selection) return;
 
-    if (selectedObjects.length < 3) {
-        return;
-    }
+    const objects = [...selection.getObjects()];
+    if (objects.length < 3) return;
+
+    const selectionBounds = selection.getBoundingRect();
     canvas.discardActiveObject();
 
-    // Sort objects by their left position
-    selectedObjects.sort((a, b) => (a.left || 0) - (b.left || 0));
+    // Use visual bounding rectangles rather than obj.left/obj.top. Tarot cards
+    // use centered origins, and other objects may be rotated or scaled.
+    const rects = objects.map((object) => object.getBoundingRect());
+    const deltas = calculateDistributionDeltas(rects, selectionBounds, axis);
 
-    // Get the bounding box of the entire selection
-    const boundingBox = activeSelection.getBoundingRect();
-
-    // Calculate total width taken by objects (sum of their widths)
-    const totalObjectsWidth = selectedObjects.reduce((sum: number, obj: fabric.Object) => sum + (obj.getScaledWidth() || 0), 0);
-
-    // Calculate the available space for gaps
-    const availableGapSpace = boundingBox.width - totalObjectsWidth;
-
-    // Calculate the size of each gap
-    const numGaps = selectedObjects.length - 1;
-    const uniformGap = numGaps > 0 ? availableGapSpace / numGaps : 0;
-
-    let currentX = boundingBox.left;
-    selectedObjects.forEach((obj: fabric.Object, index: number) => {
-        if (index === 0) {
-            // The first object stays at its leftmost position in the bounding box
-            obj.set({ left: currentX });
-        } else {
-            // Position subsequent objects based on previous object's width and the uniform gap
-            currentX += (selectedObjects[index - 1].getScaledWidth() || 0) + uniformGap;
-            obj.set({ left: currentX });
+    objects.forEach((object, index) => {
+        const { dx, dy } = deltas[index];
+        if (dx || dy) {
+            applyObjectDelta(object, dx, dy);
         }
-        obj.setCoords(); // Update object's controls
     });
 
-    useEditorStore.getState().syncSelectionFromCanvas(canvas);
+    restoreSelection(canvas, objects);
     finalizeAlignment(canvas);
 };
 
 /**
- * Distributes selected objects vertically with equal spacing.
- * Assumes at least 3 objects are selected.
- * @param canvas The fabric.Canvas instance.
+ * Distributes 3+ selected objects horizontally with equal visual gaps while
+ * keeping the leftmost and rightmost selection edges anchored.
  */
-export const distributeVertically = (canvas: fabric.Canvas) => {
-    const activeSelection = getActiveSelection(canvas);
-    if (!activeSelection) return;
-    const selectedObjects = activeSelection.getObjects() as fabric.Object[];
+export const distributeHorizontally = (canvas: fabric.Canvas) =>
+    distributeSelection(canvas, 'horizontal');
 
-    if (selectedObjects.length < 3) {
-        return;
-    }
-    canvas.discardActiveObject();
-
-    // Sort objects by their top position
-    selectedObjects.sort((a, b) => (a.top || 0) - (b.top || 0));
-
-    // Get the bounding box of the entire selection
-    const boundingBox = activeSelection.getBoundingRect();
-
-    // Calculate total height taken by objects (sum of their heights)
-    const totalObjectsHeight = selectedObjects.reduce((sum: number, obj: fabric.Object) => sum + (obj.getScaledHeight() || 0), 0);
-
-    // Calculate the available space for gaps
-    const availableGapSpace = boundingBox.height - totalObjectsHeight;
-
-    // Calculate the size of each gap
-    const numGaps = selectedObjects.length - 1;
-    const uniformGap = numGaps > 0 ? availableGapSpace / numGaps : 0;
-
-    let currentY = boundingBox.top;
-    selectedObjects.forEach((obj: fabric.Object, index: number) => {
-        if (index === 0) {
-            // The first object stays at its topmost position in the bounding box
-            obj.set({ top: currentY });
-        } else {
-            // Position subsequent objects based on previous object's height and the uniform gap
-            currentY += (selectedObjects[index - 1].getScaledHeight() || 0) + uniformGap;
-            obj.set({ top: currentY });
-        }
-        obj.setCoords(); // Update object's controls
-    });
-
-    useEditorStore.getState().syncSelectionFromCanvas(canvas);
-    finalizeAlignment(canvas);
-};
+/**
+ * Distributes 3+ selected objects vertically with equal visual gaps while
+ * keeping the topmost and bottommost selection edges anchored.
+ */
+export const distributeVertically = (canvas: fabric.Canvas) =>
+    distributeSelection(canvas, 'vertical');
