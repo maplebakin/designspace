@@ -126,6 +126,7 @@ export const reviveCustomFabricProps: FabricReviver = (serialized, instance) => 
   if (target.frameType === undefined) target.frameType = serialized?.frameType ?? undefined;
   if (target.isPageBorder === undefined) target.isPageBorder = serialized?.isPageBorder ?? false;
   if (target.name === undefined) target.name = serialized?.name ?? undefined;
+  if (target.tarotPosition === undefined) target.tarotPosition = serialized?.tarotPosition ?? undefined;
   if (target.recipeId === undefined) target.recipeId = serialized?.recipeId ?? undefined;
   if (target.recipePageId === undefined) target.recipePageId = serialized?.recipePageId ?? undefined;
   if (target.slotId === undefined) target.slotId = serialized?.slotId ?? undefined;
