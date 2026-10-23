@@ -4,6 +4,7 @@ import { useEditorStore } from '../state/editorStore';
 import { insertTarotSpread } from '../tarot/spreadCanvas';
 import {
   makeTarotPositions,
+  getTarotPresetsForCount,
   TAROT_PRESETS,
   updateTarotPosition,
   type TarotPresetId,
@@ -11,21 +12,26 @@ import {
 
 export const TarotSpreadPanel: React.FC = () => {
   const [open, setOpen] = useState(false);
-  const [preset, setPreset] = useState<TarotPresetId>('three-card');
-  const [customCount, setCustomCount] = useState(3);
-  const [title, setTitle] = useState('A moment of clarity');
-  const [positions, setPositions] = useState(() => makeTarotPositions('three-card'));
+  const [preset, setPreset] = useState<TarotPresetId>('template-3');
+  const [cardCount, setCardCount] = useState(3);
+  const [title, setTitle] = useState('The Fork in the Road');
+  const [positions, setPositions] = useState(() => makeTarotPositions('template-3'));
   const canvasReady = useEditorStore((state) => !!state.canvas);
 
-  const choosePreset = (value: TarotPresetId) => {
+  const choosePreset = (value: TarotPresetId, count = cardCount) => {
+    const previousDefaultTitle = TAROT_PRESETS.find((item) => item.id === preset)?.label;
+    const nextDefaultTitle = TAROT_PRESETS.find((item) => item.id === value)?.label ?? '';
     setPreset(value);
-    setPositions(makeTarotPositions(value, customCount));
+    setPositions(makeTarotPositions(value, count));
+    // Preserve a title the user wrote; follow the chosen template only while
+    // they are still using the automatic template title.
+    setTitle((current) => current === previousDefaultTitle ? nextDefaultTitle : current);
   };
 
   const chooseCount = (nextValue: number) => {
     const count = Math.min(12, Math.max(1, Math.trunc(nextValue || 1)));
-    setCustomCount(count);
-    setPositions(makeTarotPositions('custom', count));
+    setCardCount(count);
+    choosePreset(`template-${count}` as TarotPresetId, count);
   };
 
   const insert = () => {
@@ -58,14 +64,28 @@ export const TarotSpreadPanel: React.FC = () => {
             Start with a layout, customize each position, then arrange the cards on the page.
           </p>
           <label className="block space-y-1">
-            <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Arrangement</span>
+            <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Number of cards</span>
+            <select
+              data-testid="tarot-card-count"
+              aria-label="Number of tarot cards"
+              value={cardCount}
+              onChange={(event) => chooseCount(Number(event.target.value))}
+              className="w-full rounded-md border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-2 text-xs text-[color:var(--ui-text)]"
+            >
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((count) => (
+                <option key={count} value={count}>{count} {count === 1 ? 'card' : 'cards'}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Spread template</span>
             <select
               data-testid="tarot-spread-preset"
               className="w-full rounded-md border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-2 text-xs text-[color:var(--ui-text)]"
               value={preset}
               onChange={(event) => choosePreset(event.target.value as TarotPresetId)}
             >
-              {TAROT_PRESETS.map((option) => (
+              {getTarotPresetsForCount(cardCount).map((option) => (
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
             </select>
@@ -73,20 +93,7 @@ export const TarotSpreadPanel: React.FC = () => {
           <p className="text-[10px] text-[color:var(--ui-panel-text)]">
             {TAROT_PRESETS.find((option) => option.id === preset)?.description}
           </p>
-          {preset === 'custom' && (
-            <label className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--ui-text)]">
-              Number of cards
-              <input
-                type="number"
-                min={1}
-                max={12}
-                aria-label="Number of tarot cards"
-                value={customCount}
-                onChange={(event) => chooseCount(Number(event.target.value))}
-                className="w-16 rounded-md border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-1.5 text-xs"
-              />
-            </label>
-          )}
+
           <label className="block space-y-1">
             <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Spread title</span>
             <input
@@ -98,6 +105,32 @@ export const TarotSpreadPanel: React.FC = () => {
               className="w-full rounded-md border border-[color:var(--ui-border)] bg-[color:var(--ui-panel)] p-2 text-xs text-[color:var(--ui-text)]"
             />
           </label>
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">Layout preview</span>
+            <div
+              data-testid="tarot-spread-preview"
+              role="img"
+              aria-label={`${positions.length}-card spread preview`}
+              className="relative mx-auto h-44 w-36 overflow-hidden rounded-lg border border-[color:var(--ui-border)] bg-[color:var(--ui-bg)]"
+            >
+              {positions.map((position) => (
+                <span
+                  key={position.number}
+                  title={`${position.number}. ${position.label}`}
+                  className="absolute flex items-center justify-center rounded-sm border border-[#B98F9D] bg-[#302935] text-[8px] font-semibold text-[#EADFCB]"
+                  style={{
+                    left: `${position.x * 100}%`,
+                    top: `${position.y * 100}%`,
+                    width: positions.length >= 9 ? 16 : 20,
+                    height: positions.length >= 9 ? 24 : 31,
+                    transform: `translate(-50%, -50%) rotate(${position.angle}deg)`,
+                  }}
+                >
+                  {position.number}
+                </span>
+              ))}
+            </div>
+          </div>
           <div className="space-y-1">
             <span className="text-[10px] uppercase tracking-widest text-[color:var(--ui-panel-text)]">
               Positions ({positions.length})
