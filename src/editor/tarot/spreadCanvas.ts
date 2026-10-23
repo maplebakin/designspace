@@ -94,8 +94,24 @@ export const insertTarotSpread = (
   if (width <= 0 || height <= 0) return false;
 
   const spreadId = uuidv4();
-  const maxCardWidth = width * (presetId === 'celtic-cross' ? 0.115 : presetId === 'custom' && positions.length > 3 ? 0.16 : 0.165);
-  const maxCardHeight = height * (presetId === 'celtic-cross' ? 0.155 : presetId === 'custom' && positions.length > 4 ? 0.15 : 0.22);
+  // Fit denser templates to the document without sacrificing independent,
+  // editable Fabric objects. The crossing pair in a Celtic Cross intentionally
+  // overlaps; the remaining templates have enough room between card centers.
+  const cardCount = positions.length;
+  const maxCardWidth = width * (
+    presetId === 'celtic-cross' ? 0.115
+      : cardCount >= 10 ? 0.12
+      : cardCount >= 7 ? 0.14
+      : cardCount >= 4 ? 0.16
+      : 0.165
+  );
+  const maxCardHeight = height * (
+    presetId === 'celtic-cross' ? 0.155
+      : cardCount >= 10 ? 0.145
+      : cardCount >= 7 ? 0.16
+      : cardCount >= 4 ? 0.19
+      : 0.22
+  );
   const scale = Math.min(maxCardWidth / CARD_WIDTH, maxCardHeight / CARD_HEIGHT);
 
   const objects: fabric.Object[] = [];
