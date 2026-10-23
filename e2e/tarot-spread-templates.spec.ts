@@ -26,7 +26,7 @@ test('tarot spread templates cover 1–12 cards and insert editable positions', 
   await expect(template).toHaveValue('template-12');
   await expect(panel.getByTestId('tarot-spread-preview').locator('span')).toHaveCount(12);
   await expect(panel.locator('details')).toHaveCount(12);
-  await expect(panel.getByText('January', { exact: true })).toBeVisible();
+  await expect(panel.getByText('1. January', { exact: true })).toBeVisible();
 
   await panel.getByTestId('insert-tarot-spread').click();
   await expect.poll(async () => {
