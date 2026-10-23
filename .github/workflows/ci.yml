@@ -46,7 +46,9 @@ jobs:
           path: coverage
 
   browser-smoke:
-    runs-on: ubuntu-latest
+    # Playwright 1.59 Chromium installers don't support Ubuntu 26.04 yet.
+    # Pin the browser runner to the last supported LTS instead of ubuntu-latest.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout

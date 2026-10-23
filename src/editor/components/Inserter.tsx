@@ -8,6 +8,7 @@ import { MaskFrame } from './MaskFrame';
 import { loadPdfAsBackground } from '../fabric/pdfUtils';
 import { StickerTab } from './StickerTab';
 import { TemplateBrowser } from './TemplateBrowser';
+import { TarotSpreadPanel } from './TarotSpreadPanel';
 import { ChevronDown, Square, Circle, Triangle, Star, Heading1, Heading2, Pilcrow, FileImage, FileUp, FileText, LayoutTemplate, Sticker, LayoutGrid } from 'lucide-react';
 import * as fabric from 'fabric';
 import { SAFE_MARGIN_PX } from '../utils/units';
@@ -111,6 +112,7 @@ const DesignTab: React.FC = () => {
                 ]}
             />
             <LayoutsDropdown />
+            <TarotSpreadPanel />
             <UploadsDropdown />
         </div>
     );
