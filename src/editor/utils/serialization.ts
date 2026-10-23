@@ -31,6 +31,7 @@ const CUSTOM_PROPS = [
   'recipePageId',
   'slotId',
   'semanticRole',
+  'tarotPosition',
   'assetId',
   'isPageBorder',
   'borderSettings',
