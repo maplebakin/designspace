@@ -27,6 +27,8 @@ import { useEditorStore, DEFAULT_CANVAS_BACKGROUND } from '../state/editorStore'
 import { useCanvasStore } from '../state/useCanvasStore';
 import { useVisionPalette, useThemeStore } from '../state/useThemeStore';
 import { ThemeSidebar } from './ThemeSidebar';
+import { TarotPositionInspector } from './TarotPositionInspector';
+import { isTarotPosition } from '../tarot/spreadCanvas';
 import type {
   CanvasStyleCommitKind,
   CanvasStyleValue,
@@ -1468,6 +1470,13 @@ export const PropertiesPanel: React.FC = () => {
           )
         ) : (
           <>
+            {isTarotPosition(selectedObject) && (
+              <TarotPositionInspector
+                object={selectedObject}
+                onUpdate={updateSelectedObject}
+              />
+            )}
+
             {isShape && (
               <ShapeProperties
                 object={selectedObject}
